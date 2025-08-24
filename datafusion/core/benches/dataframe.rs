@@ -32,7 +32,7 @@ use tokio::runtime::Runtime;
 fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionContext>> {
     let mut fields = vec![];
     for i in 0..field_count {
-        fields.push(Field::new(format!("str{}", i), DataType::Utf8, true))
+        fields.push(Field::new(format!("str{i}"), DataType::Utf8, true))
     }
 
     let schema = Arc::new(Schema::new(fields));
@@ -44,15 +44,13 @@ fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionCont
     Ok(Arc::new(ctx))
 }
 
-fn run(column_count: u32, ctx: Arc<SessionContext>) {
-    let rt = Runtime::new().unwrap();
-
+fn run(column_count: u32, ctx: Arc<SessionContext>, rt: &Runtime) {
     criterion::black_box(rt.block_on(async {
         let mut data_frame = ctx.table("t").await.unwrap();
 
         for i in 0..column_count {
-            let field_name = &format!("str{}", i);
-            let new_field_name = &format!("newstr{}", i);
+            let field_name = &format!("str{i}");
+            let new_field_name = &format!("newstr{i}");
 
             data_frame = data_frame
                 .with_column_renamed(field_name, new_field_name)
@@ -67,11 +65,13 @@ fn run(column_count: u32, ctx: Arc<SessionContext>) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
     for column_count in [10, 100, 200, 500] {
         let ctx = create_context(column_count).unwrap();
 
         c.bench_function(&format!("with_column_{column_count}"), |b| {
-            b.iter(|| run(column_count, ctx.clone()))
+            b.iter(|| run(column_count, ctx.clone(), &rt))
         });
     }
 }

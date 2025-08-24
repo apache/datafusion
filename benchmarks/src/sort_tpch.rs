@@ -40,7 +40,7 @@ use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
 #[derive(Debug, StructOpt)]
 pub struct RunOpt {
@@ -50,7 +50,7 @@ pub struct RunOpt {
 
     /// Sort query number. If not specified, runs all queries
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Path to data files (lineitem). Only parquet format is supported
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
@@ -63,12 +63,19 @@ pub struct RunOpt {
     /// Load the data into a MemTable before executing the query
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
+
+    /// Mark the first column of each table as sorted in ascending order.
+    /// The tables should have been created with the `--sort` option for this to have any effect.
+    #[structopt(short = "t", long = "sorted")]
+    sorted: bool,
+
+    /// Append a `LIMIT n` clause to the query
+    #[structopt(short = "l", long = "limit")]
+    limit: Option<usize>,
 }
 
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
-}
+pub const SORT_TPCH_QUERY_START_ID: usize = 1;
+pub const SORT_TPCH_QUERY_END_ID: usize = 11;
 
 impl RunOpt {
     const SORT_TABLES: [&'static str; 1] = ["lineitem"];
@@ -92,7 +99,7 @@ impl RunOpt {
     /// Payload Columns:
     /// - Thin variant: `l_partkey` column with `BIGINT` type (1 column)
     /// - Wide variant: all columns except for possible key columns (12 columns)
-    const SORT_QUERIES: [&'static str; 10] = [
+    const SORT_QUERIES: [&'static str; 11] = [
         // Q1: 1 sort key (type: INTEGER, cardinality: 7) + 1 payload column
         r#"
         SELECT l_linenumber, l_partkey
@@ -159,35 +166,49 @@ impl RunOpt {
         FROM lineitem
         ORDER BY l_orderkey, l_suppkey, l_linenumber, l_comment
         "#,
+        // Q11: 1 sort key (type: VARCHAR, cardinality: 4.5M) + 1 payload column
+        r#"
+        SELECT l_shipmode, l_comment, l_partkey
+        FROM lineitem
+        ORDER BY l_shipmode
+        "#,
     ];
 
     /// If query is specified from command line, run only that query.
     /// Otherwise, run all queries.
     pub async fn run(&self) -> Result<()> {
-        let mut benchmark_run = BenchmarkRun::new();
+        let mut benchmark_run: BenchmarkRun = BenchmarkRun::new();
 
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
-            None => 1..=Self::SORT_QUERIES.len(),
+            None => SORT_TPCH_QUERY_START_ID..=SORT_TPCH_QUERY_END_ID,
         };
 
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("{query_id}"));
 
-            let query_results = self.benchmark_query(query_id).await?;
-            for iter in query_results {
-                benchmark_run.write_iter(iter.elapsed, iter.row_count);
+            let query_results = self.benchmark_query(query_id).await;
+            match query_results {
+                Ok(query_results) => {
+                    for iter in query_results {
+                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                    }
+                }
+                Err(e) => {
+                    benchmark_run.mark_failed();
+                    eprintln!("Query {query_id} failed: {e}");
+                }
             }
         }
 
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
-
+        benchmark_run.maybe_print_failures();
         Ok(())
     }
 
     /// Benchmark query `query_id` in `SORT_QUERIES`
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
-        let config = self.common.config();
+        let config = self.common.config()?;
         let rt_builder = self.common.runtime_env_builder()?;
         let state = SessionStateBuilder::new()
             .with_config(config)
@@ -206,22 +227,30 @@ impl RunOpt {
             let start = Instant::now();
 
             let query_idx = query_id - 1; // 1-indexed -> 0-indexed
-            let sql = Self::SORT_QUERIES[query_idx];
+            let base_sql = Self::SORT_QUERIES[query_idx].to_string();
+            let sql = if let Some(limit) = self.limit {
+                format!("{base_sql} LIMIT {limit}")
+            } else {
+                base_sql
+            };
 
-            let row_count = self.execute_query(&ctx, sql).await?;
+            let row_count = self.execute_query(&ctx, sql.as_str()).await?;
 
             let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
 
             println!(
-                "Q{query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
             query_results.push(QueryResult { elapsed, row_count });
         }
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-        println!("Q{query_id} avg time: {avg:.2} ms");
+        println!("Query {query_id} avg time: {avg:.2} ms");
+
+        // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
+        print_memory_stats();
 
         Ok(query_results)
     }
@@ -274,7 +303,7 @@ impl RunOpt {
 
         let mut stream = execute_stream(physical_plan.clone(), state.task_ctx())?;
         while let Some(batch) = stream.next().await {
-            row_count += batch.unwrap().num_rows();
+            row_count += batch?.num_rows();
         }
 
         if debug {
@@ -309,8 +338,18 @@ impl RunOpt {
             .with_collect_stat(state.config().collect_statistics());
 
         let table_path = ListingTableUrl::parse(path)?;
-        let config = ListingTableConfig::new(table_path).with_listing_options(options);
-        let config = config.infer_schema(&state).await?;
+        let schema = options.infer_schema(&state, &table_path).await?;
+        let options = if self.sorted {
+            let key_column_name = schema.fields()[0].name();
+            options
+                .with_file_sort_order(vec![vec![col(key_column_name).sort(true, false)]])
+        } else {
+            options
+        };
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(options)
+            .with_schema(schema);
 
         Ok(Arc::new(ListingTable::try_new(config)?))
     }
@@ -322,6 +361,6 @@ impl RunOpt {
     fn partitions(&self) -> usize {
         self.common
             .partitions
-            .unwrap_or(get_available_parallelism())
+            .unwrap_or_else(get_available_parallelism)
     }
 }

@@ -42,6 +42,7 @@ impl AggregateStatistics {
 
 impl PhysicalOptimizerRule for AggregateStatistics {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    #[allow(clippy::only_used_in_recursion)] // See https://github.com/rust-lang/rust-clippy/issues/14566
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -52,7 +53,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 .as_any()
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = partial_agg_exec.input().statistics()?;
+            let stats = partial_agg_exec.input().partition_statistics(None)?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 let field = expr.field();

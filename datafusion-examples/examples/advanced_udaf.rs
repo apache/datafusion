@@ -25,6 +25,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{ArrowNativeTypeOp, ArrowPrimitiveType, Float64Type, UInt32Type};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::FieldRef;
 use datafusion::common::{cast::as_float64_array, ScalarValue};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
@@ -40,7 +41,7 @@ use datafusion::prelude::*;
 /// a function `accumulator` that returns the `Accumulator` instance.
 ///
 /// To do so, we must implement the `AggregateUDFImpl` trait.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct GeoMeanUdaf {
     signature: Signature,
 }
@@ -92,10 +93,10 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     }
 
     /// This is the description of the state. accumulator's state() must match the types here.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
-            Field::new("prod", args.return_type.clone(), true),
-            Field::new("n", DataType::UInt32, true),
+            Field::new("prod", args.return_type().clone(), true).into(),
+            Field::new("n", DataType::UInt32, true).into(),
         ])
     }
 
@@ -367,7 +368,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
 
 /// This example shows how to use the AggregateUDFImpl::simplify API to simplify/replace user
 /// defined aggregate function with a different expression which is defined in the `simplify` method.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SimplifiedGeoMeanUdaf {
     signature: Signature,
 }
@@ -401,7 +402,7 @@ impl AggregateUDFImpl for SimplifiedGeoMeanUdaf {
         unimplemented!("should not be invoked")
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         unimplemented!("should not be invoked")
     }
 
@@ -482,7 +483,7 @@ async fn main() -> Result<()> {
         ctx.register_udaf(udf.clone());
 
         let sql_df = ctx
-            .sql(&format!("SELECT {}(a) FROM t GROUP BY b", udf_name))
+            .sql(&format!("SELECT {udf_name}(a) FROM t GROUP BY b"))
             .await?;
         sql_df.show().await?;
 

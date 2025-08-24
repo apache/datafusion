@@ -75,16 +75,17 @@ cargo insta review
 In addition to the standard CI test suite that is run on all PRs prior to merge,
 DataFusion has "extended" tests (defined in [extended.yml]) that are run on each
 commit to `main`. These tests rarely fail but take significantly longer to run
-than the standard test suite and add important test coverage such as that the
-code works when there are hash collisions as well as running the relevant
-portions of the entire [sqlite test suite].
+than the standard test suite and add important test coverage such as ensuring
+correctness when there are hash collisions and running the relevant portions of
+the entire [sqlite test suite]. You can run the extended tests
+locally by following the [instructions in the documentation].
 
-[extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 [sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
+[instructions in the documentation]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite
 
 ## Rust Integration Tests
 
-There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
+There are several public interface tests for the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
 
 You can run these tests individually using `cargo` as normal command such as
 

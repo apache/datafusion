@@ -20,12 +20,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
+use itertools::Itertools;
+
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
+use crate::filter_pushdown::{
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
+};
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec,
@@ -39,6 +45,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
@@ -46,17 +53,19 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::{lit, BinaryExpr, Column};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
-    ExprBoundaries, PhysicalExpr,
+    analyze, conjunction, split_conjunction, AcrossPartitions, AnalysisContext,
+    ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
+
+const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
@@ -84,7 +93,7 @@ impl FilterExec {
     ) -> Result<Self> {
         match predicate.data_type(input.schema().as_ref())? {
             DataType::Boolean => {
-                let default_selectivity = 20;
+                let default_selectivity = FILTER_EXEC_DEFAULT_SELECTIVITY;
                 let cache = Self::compute_properties(
                     &input,
                     &predicate,
@@ -170,12 +179,11 @@ impl FilterExec {
 
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity (either default, or estimated) to input statistics.
     fn statistics_helper(
-        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
     ) -> Result<Statistics> {
-        let input_stats = input.statistics()?;
-        let schema = input.schema();
         if !check_support(predicate, &schema) {
             let selectivity = default_selectivity as f64 / 100.0;
             let mut stats = input_stats.to_inexact();
@@ -189,7 +197,7 @@ impl FilterExec {
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
         let input_analysis_ctx = AnalysisContext::try_from_statistics(
-            &input.schema(),
+            &schema,
             &input_stats.column_statistics,
         )?;
 
@@ -223,24 +231,18 @@ impl FilterExec {
             if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
                 if binary.op() == &Operator::Eq {
                     // Filter evaluates to single value for all partitions
-                    if input_eqs.is_expr_constant(binary.left()) {
-                        let (expr, across_parts) = (
-                            binary.right(),
-                            input_eqs.get_expr_constant_value(binary.right()),
-                        );
-                        res_constants.push(
-                            ConstExpr::new(Arc::clone(expr))
-                                .with_across_partitions(across_parts),
-                        );
-                    } else if input_eqs.is_expr_constant(binary.right()) {
-                        let (expr, across_parts) = (
-                            binary.left(),
-                            input_eqs.get_expr_constant_value(binary.left()),
-                        );
-                        res_constants.push(
-                            ConstExpr::new(Arc::clone(expr))
-                                .with_across_partitions(across_parts),
-                        );
+                    if input_eqs.is_expr_constant(binary.left()).is_some() {
+                        let across = input_eqs
+                            .is_expr_constant(binary.right())
+                            .unwrap_or_default();
+                        res_constants
+                            .push(ConstExpr::new(Arc::clone(binary.right()), across));
+                    } else if input_eqs.is_expr_constant(binary.right()).is_some() {
+                        let across = input_eqs
+                            .is_expr_constant(binary.left())
+                            .unwrap_or_default();
+                        res_constants
+                            .push(ConstExpr::new(Arc::clone(binary.left()), across));
                     }
                 }
             }
@@ -256,11 +258,16 @@ impl FilterExec {
     ) -> Result<PlanProperties> {
         // Combine the equal predicates with the input equivalence properties
         // to construct the equivalence properties:
-        let stats = Self::statistics_helper(input, predicate, default_selectivity)?;
+        let stats = Self::statistics_helper(
+            input.schema(),
+            input.partition_statistics(None)?,
+            predicate,
+            default_selectivity,
+        )?;
         let mut eq_properties = input.equivalence_properties().clone();
         let (equal_pairs, _) = collect_columns_from_predicate(predicate);
         for (lhs, rhs) in equal_pairs {
-            eq_properties.add_equal_conditions(lhs, rhs)?
+            eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
         }
         // Add the columns that have only one viable value (singleton) after
         // filtering to constants.
@@ -272,15 +279,13 @@ impl FilterExec {
                     .min_value
                     .get_value();
                 let expr = Arc::new(column) as _;
-                ConstExpr::new(expr)
-                    .with_across_partitions(AcrossPartitions::Uniform(value.cloned()))
+                ConstExpr::new(expr, AcrossPartitions::Uniform(value.cloned()))
             });
         // This is for statistics
-        eq_properties = eq_properties.with_constants(constants);
+        eq_properties.add_constants(constants)?;
         // This is for logical constant (for example: a = '1', then a could be marked as a constant)
         // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
-        eq_properties =
-            eq_properties.with_constants(Self::extend_constants(input, predicate));
+        eq_properties.add_constants(Self::extend_constants(input, predicate))?;
 
         let mut output_partitioning = input.output_partitioning().clone();
         // If contains projection, update the PlanProperties.
@@ -396,8 +401,14 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let input_stats = self.input.partition_statistics(partition)?;
         let stats = Self::statistics_helper(
-            &self.input,
+            self.schema(),
+            input_stats,
             self.predicate(),
             self.default_selectivity,
         )?;
@@ -432,6 +443,119 @@ impl ExecutionPlan for FilterExec {
             }
         }
         try_embed_projection(projection, self)
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        if !matches!(phase, FilterPushdownPhase::Pre) {
+            // For non-pre phase, filters pass through unchanged
+            let filter_supports = parent_filters
+                .into_iter()
+                .map(PushedDownPredicate::supported)
+                .collect();
+            return Ok(FilterDescription::new().with_child(ChildFilterDescription {
+                parent_filters: filter_supports,
+                self_filters: vec![],
+            }));
+        }
+
+        let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
+            .with_self_filters(
+                split_conjunction(&self.predicate)
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+            );
+
+        Ok(FilterDescription::new().with_child(child))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        if !matches!(phase, FilterPushdownPhase::Pre) {
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
+        // We absorb any parent filters that were not handled by our children
+        let unsupported_parent_filters =
+            child_pushdown_result.parent_filters.iter().filter_map(|f| {
+                matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
+            });
+        let unsupported_self_filters = child_pushdown_result
+            .self_filters
+            .first()
+            .expect("we have exactly one child")
+            .iter()
+            .filter_map(|f| match f.discriminant {
+                PushedDown::Yes => None,
+                PushedDown::No => Some(&f.predicate),
+            })
+            .cloned();
+
+        let unhandled_filters = unsupported_parent_filters
+            .into_iter()
+            .chain(unsupported_self_filters)
+            .collect_vec();
+
+        // If we have unhandled filters, we need to create a new FilterExec
+        let filter_input = Arc::clone(self.input());
+        let new_predicate = conjunction(unhandled_filters);
+        let updated_node = if new_predicate.eq(&lit(true)) {
+            // FilterExec is no longer needed, but we may need to leave a projection in place
+            match self.projection() {
+                Some(projection_indices) => {
+                    let filter_child_schema = filter_input.schema();
+                    let proj_exprs = projection_indices
+                        .iter()
+                        .map(|p| {
+                            let field = filter_child_schema.field(*p).clone();
+                            (
+                                Arc::new(Column::new(field.name(), *p))
+                                    as Arc<dyn PhysicalExpr>,
+                                field.name().to_string(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
+                        as Arc<dyn ExecutionPlan>)
+                }
+                None => {
+                    // No projection needed, just return the input
+                    Some(filter_input)
+                }
+            }
+        } else if new_predicate.eq(&self.predicate) {
+            // The new predicate is the same as our current predicate
+            None
+        } else {
+            // Create a new FilterExec with the new predicate
+            let new = FilterExec {
+                predicate: Arc::clone(&new_predicate),
+                input: Arc::clone(&filter_input),
+                metrics: self.metrics.clone(),
+                default_selectivity: self.default_selectivity,
+                cache: Self::compute_properties(
+                    &filter_input,
+                    &new_predicate,
+                    self.default_selectivity,
+                    self.projection.as_ref(),
+                )?,
+                projection: None,
+            };
+            Some(Arc::new(new) as _)
+        };
+
+        Ok(FilterPushdownPropagation {
+            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
+            updated_node,
+        })
     }
 }
 
@@ -592,7 +716,9 @@ impl RecordBatchStream for FilterExecStream {
 }
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
-fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
+pub fn collect_columns_from_predicate(
+    predicate: &'_ Arc<dyn PhysicalExpr>,
+) -> EqualAndNonEqual<'_> {
     let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
     let mut ne_predicate_columns = Vec::<PhysicalExprPairRef>::new();
 
@@ -703,7 +829,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
 
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
         assert_eq!(statistics.num_rows, Precision::Inexact(25));
         assert_eq!(
             statistics.total_byte_size,
@@ -753,7 +879,7 @@ mod tests {
             sub_filter,
         )?);
 
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
         assert_eq!(statistics.num_rows, Precision::Inexact(16));
         assert_eq!(
             statistics.column_statistics,
@@ -813,7 +939,7 @@ mod tests {
             binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
             b_gt_5,
         )?);
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
         // On a uniform distribution, only fifteen rows will satisfy the
         // filter that 'a' proposed (a >= 10 AND a <= 25) (15/100) and only
         // 5 rows will satisfy the filter that 'b' proposed (b > 45) (5/50).
@@ -858,7 +984,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
 
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
         assert_eq!(statistics.num_rows, Precision::Absent);
 
         Ok(())
@@ -931,7 +1057,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
         // 0.5 (from a) * 0.333333... (from b) * 0.798387... (from c) ≈ 0.1330...
         // num_rows after ceil => 133.0... => 134
         // total_byte_size after ceil => 532.0... => 533
@@ -1027,10 +1153,10 @@ mod tests {
             )),
         ));
         // Since filter predicate passes all entries, statistics after filter shouldn't change.
-        let expected = input.statistics()?.column_statistics;
+        let expected = input.partition_statistics(None)?.column_statistics;
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(1000));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(4000));
@@ -1083,7 +1209,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(0));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(0));
@@ -1143,7 +1269,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(490));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1960));
@@ -1193,7 +1319,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let filter_statistics = filter.statistics()?;
+        let filter_statistics = filter.partition_statistics(None)?;
 
         let expected_filter_statistics = Statistics {
             num_rows: Precision::Absent,
@@ -1227,7 +1353,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let filter_statistics = filter.statistics()?;
+        let filter_statistics = filter.partition_statistics(None)?;
         // First column is "a", and it is a column with only one value after the filter.
         assert!(filter_statistics.column_statistics[0].is_singleton());
 
@@ -1274,11 +1400,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Decimal128(Some(10), 10, 10))),
         ));
         let filter = FilterExec::try_new(predicate, input)?;
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
         assert_eq!(statistics.num_rows, Precision::Inexact(200));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(800));
         let filter = filter.with_default_selectivity(40)?;
-        let statistics = filter.statistics()?;
+        let statistics = filter.partition_statistics(None)?;
         assert_eq!(statistics.num_rows, Precision::Inexact(400));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
         Ok(())
@@ -1312,7 +1438,7 @@ mod tests {
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
         )?;
 
-        exec.statistics().unwrap();
+        exec.partition_statistics(None).unwrap();
 
         Ok(())
     }

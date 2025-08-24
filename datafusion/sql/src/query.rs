@@ -22,14 +22,15 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::stack::StackGuard;
 use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
-use datafusion_expr::select_expr::SelectExpr;
+
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Distinct, LogicalPlan, LogicalPlanBuilder,
+    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Offset as SQLOffset, OrderBy, OrderByExpr, OrderByKind, Query,
+    Expr as SQLExpr, Ident, LimitClause, OrderBy, OrderByExpr, OrderByKind, Query,
     SelectInto, SetExpr,
 };
+use sqlparser::tokenizer::Span;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an SQL query/subquery
@@ -53,8 +54,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let select_into = select.into.take();
                 let plan =
                     self.select_to_plan(*select, query.order_by, planner_context)?;
-                let plan =
-                    self.limit(plan, query.offset, query.limit, planner_context)?;
+                let plan = self.limit(plan, query.limit_clause, planner_context)?;
                 // Process the `SELECT INTO` after `LIMIT`.
                 self.select_into(plan, select_into)
             }
@@ -76,7 +76,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None,
                 )?;
                 let plan = self.order_by(plan, order_by_rex)?;
-                self.limit(plan, query.offset, query.limit, planner_context)
+                self.limit(plan, query.limit_clause, planner_context)
             }
         }
     }
@@ -85,23 +85,53 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn limit(
         &self,
         input: LogicalPlan,
-        skip: Option<SQLOffset>,
-        fetch: Option<SQLExpr>,
+        limit_clause: Option<LimitClause>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        let Some(limit_clause) = limit_clause else {
+            return Ok(input);
+        };
+
+        let empty_schema = DFSchema::empty();
+
+        let (skip, fetch, limit_by_exprs) = match limit_clause {
+            LimitClause::LimitOffset {
+                limit,
+                offset,
+                limit_by,
+            } => {
+                let skip = offset
+                    .map(|o| self.sql_to_expr(o.value, &empty_schema, planner_context))
+                    .transpose()?;
+
+                let fetch = limit
+                    .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
+                    .transpose()?;
+
+                let limit_by_exprs = limit_by
+                    .into_iter()
+                    .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
+                    .collect::<Result<Vec<_>>>()?;
+
+                (skip, fetch, limit_by_exprs)
+            }
+            LimitClause::OffsetCommaLimit { offset, limit } => {
+                let skip =
+                    Some(self.sql_to_expr(offset, &empty_schema, planner_context)?);
+                let fetch =
+                    Some(self.sql_to_expr(limit, &empty_schema, planner_context)?);
+                (skip, fetch, vec![])
+            }
+        };
+
+        if !limit_by_exprs.is_empty() {
+            return not_impl_err!("LIMIT BY clause is not supported yet");
+        }
+
         if skip.is_none() && fetch.is_none() {
             return Ok(input);
         }
 
-        // skip and fetch expressions are not allowed to reference columns from the input plan
-        let empty_schema = DFSchema::empty();
-
-        let skip = skip
-            .map(|o| self.sql_to_expr(o.value, &empty_schema, planner_context))
-            .transpose()?;
-        let fetch = fetch
-            .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
-            .transpose()?;
         LogicalPlanBuilder::from(input)
             .limit_by_expr(skip, fetch)?
             .build()
@@ -137,7 +167,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(into) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                 CreateMemoryTable {
                     name: self.object_name_to_table_reference(into.name)?,
-                    constraints: Constraints::empty(),
+                    constraints: Constraints::default(),
                     input: Arc::new(plan),
                     if_not_exists: false,
                     or_replace: false,
@@ -158,7 +188,7 @@ fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
 /// Returns the order by expressions from the query with the select expressions.
 pub(crate) fn to_order_by_exprs_with_select(
     order_by: Option<OrderBy>,
-    _select_exprs: Option<&Vec<SelectExpr>>, // TODO: ORDER BY ALL
+    select_exprs: Option<&Vec<Expr>>,
 ) -> Result<Vec<OrderByExpr>> {
     let Some(OrderBy { kind, interpolate }) = order_by else {
         // If no order by, return an empty array.
@@ -168,7 +198,30 @@ pub(crate) fn to_order_by_exprs_with_select(
         return not_impl_err!("ORDER BY INTERPOLATE is not supported");
     }
     match kind {
-        OrderByKind::All(_) => not_impl_err!("ORDER BY ALL is not supported"),
+        OrderByKind::All(order_by_options) => {
+            let Some(exprs) = select_exprs else {
+                return Ok(vec![]);
+            };
+            let order_by_exprs = exprs
+                .iter()
+                .map(|select_expr| match select_expr {
+                    Expr::Column(column) => Ok(OrderByExpr {
+                        expr: SQLExpr::Identifier(Ident {
+                            value: column.name.clone(),
+                            quote_style: None,
+                            span: Span::empty(),
+                        }),
+                        options: order_by_options.clone(),
+                        with_fill: None,
+                    }),
+                    // TODO: Support other types of expressions
+                    _ => not_impl_err!(
+                        "ORDER BY ALL is not supported for non-column expressions"
+                    ),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(order_by_exprs)
+        }
         OrderByKind::Expressions(order_by_exprs) => Ok(order_by_exprs),
     }
 }

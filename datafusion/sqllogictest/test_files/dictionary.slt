@@ -450,3 +450,10 @@ query I
 select dense_rank() over (order by arrow_cast('abc', 'Dictionary(UInt16, Utf8)'));
 ----
 1
+
+# Test dictionary encoded column to partition column casting
+statement ok
+CREATE TABLE test0 AS VALUES ('foo',1), ('bar',2), ('foo',3);
+
+statement ok
+COPY (SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS column1, column2 FROM test0) TO 'test_files/scratch/dictionary/part_dict_test' STORED AS PARQUET PARTITIONED BY (column1);

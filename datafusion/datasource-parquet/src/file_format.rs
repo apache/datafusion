@@ -18,73 +18,76 @@
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
 use std::any::Any;
-use std::fmt;
+use std::cell::RefCell;
 use std::fmt::Debug;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
-
-use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, FilePushdownSupport,
+use datafusion_datasource::write::{
+    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
+
+use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
-use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
+#[cfg(feature = "parquet_encryption")]
+use datafusion_common::encryption::map_config_decryption_to_decryption;
+use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, ColumnStatistics,
-    DataFusionError, GetExt, Result, DEFAULT_PARQUET_EXTENSION,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
+    HashSet, Result, DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::Expr;
-use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::Accumulator;
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_session::Session;
 
+use crate::reader::CachedParquetFileReaderFactory;
+use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use log::debug;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn, ArrowWriterOptions,
 };
 use parquet::arrow::async_reader::MetadataFetch;
-use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
+use parquet::arrow::{ArrowSchemaConverter, AsyncArrowWriter};
+use parquet::basic::Type;
+
+use crate::metadata::DFParquetMetadata;
+use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-
-use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::ParquetSource;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -270,6 +273,15 @@ impl ParquetFormat {
         self.options.global.binary_as_string = binary_as_string;
         self
     }
+
+    pub fn coerce_int96(&self) -> Option<String> {
+        self.options.global.coerce_int96.clone()
+    }
+
+    pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
+        self.options.global.coerce_int96 = time_unit;
+        self
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -289,14 +301,37 @@ fn clear_metadata(
     })
 }
 
-async fn fetch_schema_with_location(
-    store: &dyn ObjectStore,
-    file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
-) -> Result<(Path, Schema)> {
-    let loc_path = file.location.clone();
-    let schema = fetch_schema(store, file, metadata_size_hint).await?;
-    Ok((loc_path, schema))
+#[cfg(feature = "parquet_encryption")]
+fn get_file_decryption_properties(
+    state: &dyn Session,
+    options: &TableParquetOptions,
+    file_path: &Path,
+) -> Result<Option<FileDecryptionProperties>> {
+    let file_decryption_properties: Option<FileDecryptionProperties> =
+        match &options.crypto.file_decryption {
+            Some(cfd) => Some(map_config_decryption_to_decryption(cfd)),
+            None => match &options.crypto.factory_id {
+                Some(factory_id) => {
+                    let factory =
+                        state.runtime_env().parquet_encryption_factory(factory_id)?;
+                    factory.get_file_decryption_properties(
+                        &options.crypto.factory_options,
+                        file_path,
+                    )?
+                }
+                None => None,
+            },
+        };
+    Ok(file_decryption_properties)
+}
+
+#[cfg(not(feature = "parquet_encryption"))]
+fn get_file_decryption_properties(
+    _state: &dyn Session,
+    _options: &TableParquetOptions,
+    _file_path: &Path,
+) -> Result<Option<FileDecryptionProperties>> {
+    Ok(None)
 }
 
 #[async_trait]
@@ -320,21 +355,42 @@ impl FileFormat for ParquetFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
+        let coerce_int96 = match self.coerce_int96() {
+            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
+            None => None,
+        };
+
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+
         let mut schemas: Vec<_> = futures::stream::iter(objects)
-            .map(|object| {
-                fetch_schema_with_location(
-                    store.as_ref(),
-                    object,
-                    self.metadata_size_hint(),
-                )
+            .map(|object| async {
+                let file_decryption_properties = get_file_decryption_properties(
+                    state,
+                    &self.options,
+                    &object.location,
+                )?;
+                let result = DFParquetMetadata::new(store.as_ref(), object)
+                    .with_metadata_size_hint(self.metadata_size_hint())
+                    .with_decryption_properties(file_decryption_properties.as_ref())
+                    .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+                    .with_coerce_int96(coerce_int96)
+                    .fetch_schema_with_location()
+                    .await?;
+                Ok::<_, DataFusionError>(result)
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
+            // fetch schemas concurrently, if requested
             .buffered(state.config_options().execution.meta_fetch_concurrency)
             .try_collect()
             .await?;
@@ -375,51 +431,58 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        let stats = fetch_statistics(
-            store.as_ref(),
-            table_schema,
-            object,
-            self.metadata_size_hint(),
-        )
-        .await?;
-        Ok(stats)
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties.as_ref())
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_statistics(&table_schema)
+            .await
     }
 
     async fn create_physical_plan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut predicate = None;
         let mut metadata_size_hint = None;
 
-        // If enable pruning then combine the filters to build the predicate.
-        // If disable pruning then set the predicate to None, thus readers
-        // will not prune data based on the statistics.
-        if self.enable_pruning() {
-            if let Some(pred) = filters.cloned() {
-                predicate = Some(pred);
-            }
-        }
         if let Some(metadata) = self.metadata_size_hint() {
             metadata_size_hint = Some(metadata);
         }
 
         let mut source = ParquetSource::new(self.options.clone());
 
-        if let Some(predicate) = predicate {
-            source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
-        }
+        // Use the CachedParquetFileReaderFactory
+        let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
+        let store = state
+            .runtime_env()
+            .object_store(conf.object_store_url.clone())?;
+        let cached_parquet_read_factory =
+            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+        source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
+
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
-        Ok(conf.with_source(Arc::new(source)).build())
+
+        source = self.set_source_encryption_factory(source, state)?;
+
+        // Apply schema adapter factory before building the new config
+        let file_source = source.apply_schema_adapter(&conf)?;
+
+        let conf = FileScanConfigBuilder::from(conf)
+            .with_source(file_source)
+            .build();
+        Ok(DataSourceExec::from_data_source(conf))
     }
 
     async fn create_writer_physical_plan(
@@ -438,29 +501,43 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn supports_filters_pushdown(
-        &self,
-        file_schema: &Schema,
-        table_schema: &Schema,
-        filters: &[&Expr],
-    ) -> Result<FilePushdownSupport> {
-        if !self.options().global.pushdown_filters {
-            return Ok(FilePushdownSupport::NoSupport);
-        }
-
-        let all_supported = filters.iter().all(|filter| {
-            can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema)
-        });
-
-        Ok(if all_supported {
-            FilePushdownSupport::Supported
-        } else {
-            FilePushdownSupport::NotSupportedForFilter
-        })
-    }
-
     fn file_source(&self) -> Arc<dyn FileSource> {
         Arc::new(ParquetSource::default())
+    }
+}
+
+#[cfg(feature = "parquet_encryption")]
+impl ParquetFormat {
+    fn set_source_encryption_factory(
+        &self,
+        source: ParquetSource,
+        state: &dyn Session,
+    ) -> Result<ParquetSource> {
+        if let Some(encryption_factory_id) = &self.options.crypto.factory_id {
+            Ok(source.with_encryption_factory(
+                state
+                    .runtime_env()
+                    .parquet_encryption_factory(encryption_factory_id)?,
+            ))
+        } else {
+            Ok(source)
+        }
+    }
+}
+
+#[cfg(not(feature = "parquet_encryption"))]
+impl ParquetFormat {
+    fn set_source_encryption_factory(
+        &self,
+        source: ParquetSource,
+        _state: &dyn Session,
+    ) -> Result<ParquetSource> {
+        if let Some(encryption_factory_id) = &self.options.crypto.factory_id {
+            Err(DataFusionError::Configuration(
+                format!("Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled")))
+        } else {
+            Ok(source)
+        }
     }
 }
 
@@ -565,6 +642,194 @@ pub fn apply_file_schema_type_coercions(
         transformed_fields,
         file_schema.metadata.clone(),
     ))
+}
+
+/// Coerces the file schema's Timestamps to the provided TimeUnit if Parquet schema contains INT96.
+pub fn coerce_int96_to_resolution(
+    parquet_schema: &SchemaDescriptor,
+    file_schema: &Schema,
+    time_unit: &TimeUnit,
+) -> Option<Schema> {
+    // Traverse the parquet_schema columns looking for int96 physical types. If encountered, insert
+    // the field's full path into a set.
+    let int96_fields: HashSet<_> = parquet_schema
+        .columns()
+        .iter()
+        .filter(|f| f.physical_type() == Type::INT96)
+        .map(|f| f.path().string())
+        .collect();
+
+    if int96_fields.is_empty() {
+        // The schema doesn't contain any int96 fields, so skip the remaining logic.
+        return None;
+    }
+
+    // Do a DFS into the schema using a stack, looking for timestamp(nanos) fields that originated
+    // as int96 to coerce to the provided time_unit.
+
+    type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
+    type StackContext<'a> = (
+        Vec<&'a str>, // The Parquet column path (e.g., "c0.list.element.c1") for the current field.
+        &'a FieldRef, // The current field to be processed.
+        NestedFields, // The parent's fields that this field will be (possibly) type-coerced and
+        // inserted into. All fields have a parent, so this is not an Option type.
+        Option<NestedFields>, // Nested types need to create their own vector of fields for their
+                              // children. For primitive types this will remain None. For nested
+                              // types it is None the first time they are processed. Then, we
+                              // instantiate a vector for its children, push the field back onto the
+                              // stack to be processed again, and DFS into its children. The next
+                              // time we process the field, we know we have DFS'd into the children
+                              // because this field is Some.
+    );
+
+    // This is our top-level fields from which we will construct our schema. We pass this into our
+    // initial stack context as the parent fields, and the DFS populates it.
+    let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
+
+    // TODO: It might be possible to only DFS into nested fields that we know contain an int96 if we
+    // use some sort of LPM data structure to check if we're currently DFS'ing nested types that are
+    // in a column path that contains an int96. That can be a future optimization for large schemas.
+    let transformed_schema = {
+        // Populate the stack with our top-level fields.
+        let mut stack: Vec<StackContext> = file_schema
+            .fields()
+            .iter()
+            .rev()
+            .map(|f| (vec![f.name().as_str()], f, Rc::clone(&fields), None))
+            .collect();
+
+        // Pop fields to DFS into until we have exhausted the stack.
+        while let Some((parquet_path, current_field, parent_fields, child_fields)) =
+            stack.pop()
+        {
+            match (current_field.data_type(), child_fields) {
+                (DataType::Struct(unprocessed_children), None) => {
+                    // This is the first time popping off this struct. We don't yet know the
+                    // correct types of its children (i.e., if they need coercing) so we create
+                    // a vector for child_fields, push the struct node back onto the stack to be
+                    // processed again (see below) after processing all its children.
+                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(
+                        unprocessed_children.len(),
+                    )));
+                    // Note that here we push the struct back onto the stack with its
+                    // parent_fields in the same position, now with Some(child_fields).
+                    stack.push((
+                        parquet_path.clone(),
+                        current_field,
+                        parent_fields,
+                        Some(Rc::clone(&child_fields)),
+                    ));
+                    // Push all the children in reverse to maintain original schema order due to
+                    // stack processing.
+                    for child in unprocessed_children.into_iter().rev() {
+                        let mut child_path = parquet_path.clone();
+                        // Build up a normalized path that we'll use as a key into the original
+                        // int96_fields set above to test if this originated as int96.
+                        child_path.push(".");
+                        child_path.push(child.name());
+                        // Note that here we push the field onto the stack using the struct's
+                        // new child_fields vector as the field's parent_fields.
+                        stack.push((child_path, child, Rc::clone(&child_fields), None));
+                    }
+                }
+                (DataType::Struct(unprocessed_children), Some(processed_children)) => {
+                    // This is the second time popping off this struct. The child_fields vector
+                    // now contains each field that has been DFS'd into, and we can construct
+                    // the resulting struct with correct child types.
+                    let processed_children = processed_children.borrow();
+                    assert_eq!(processed_children.len(), unprocessed_children.len());
+                    let processed_struct = Field::new_struct(
+                        current_field.name(),
+                        processed_children.as_slice(),
+                        current_field.is_nullable(),
+                    );
+                    parent_fields.borrow_mut().push(Arc::new(processed_struct));
+                }
+                (DataType::List(unprocessed_child), None) => {
+                    // This is the first time popping off this list. See struct docs above.
+                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
+                    stack.push((
+                        parquet_path.clone(),
+                        current_field,
+                        parent_fields,
+                        Some(Rc::clone(&child_fields)),
+                    ));
+                    let mut child_path = parquet_path.clone();
+                    // Spark uses a definition for arrays/lists that results in a group
+                    // named "list" that is not maintained when parsing to Arrow. We just push
+                    // this name into the path.
+                    child_path.push(".list.");
+                    child_path.push(unprocessed_child.name());
+                    stack.push((
+                        child_path.clone(),
+                        unprocessed_child,
+                        Rc::clone(&child_fields),
+                        None,
+                    ));
+                }
+                (DataType::List(_), Some(processed_children)) => {
+                    // This is the second time popping off this list. See struct docs above.
+                    let processed_children = processed_children.borrow();
+                    assert_eq!(processed_children.len(), 1);
+                    let processed_list = Field::new_list(
+                        current_field.name(),
+                        Arc::clone(&processed_children[0]),
+                        current_field.is_nullable(),
+                    );
+                    parent_fields.borrow_mut().push(Arc::new(processed_list));
+                }
+                (DataType::Map(unprocessed_child, _), None) => {
+                    // This is the first time popping off this map. See struct docs above.
+                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
+                    stack.push((
+                        parquet_path.clone(),
+                        current_field,
+                        parent_fields,
+                        Some(Rc::clone(&child_fields)),
+                    ));
+                    let mut child_path = parquet_path.clone();
+                    child_path.push(".");
+                    child_path.push(unprocessed_child.name());
+                    stack.push((
+                        child_path.clone(),
+                        unprocessed_child,
+                        Rc::clone(&child_fields),
+                        None,
+                    ));
+                }
+                (DataType::Map(_, sorted), Some(processed_children)) => {
+                    // This is the second time popping off this map. See struct docs above.
+                    let processed_children = processed_children.borrow();
+                    assert_eq!(processed_children.len(), 1);
+                    let processed_map = Field::new(
+                        current_field.name(),
+                        DataType::Map(Arc::clone(&processed_children[0]), *sorted),
+                        current_field.is_nullable(),
+                    );
+                    parent_fields.borrow_mut().push(Arc::new(processed_map));
+                }
+                (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
+                    if int96_fields.contains(parquet_path.concat().as_str()) =>
+                // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
+                // time_unit.
+                {
+                    parent_fields.borrow_mut().push(field_with_new_type(
+                        current_field,
+                        DataType::Timestamp(*time_unit, None),
+                    ));
+                }
+                // Other types can be cloned as they are.
+                _ => parent_fields.borrow_mut().push(Arc::clone(current_field)),
+            }
+        }
+        assert_eq!(fields.borrow().len(), file_schema.fields.len());
+        Schema::new_with_metadata(
+            fields.borrow_mut().clone(),
+            file_schema.metadata.clone(),
+        )
+    };
+
+    Some(transformed_schema)
 }
 
 /// Coerces the file schema if the table schema uses a view type.
@@ -721,22 +986,19 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
 }
 
 /// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
-struct ObjectStoreFetch<'a> {
+pub struct ObjectStoreFetch<'a> {
     store: &'a dyn ObjectStore,
     meta: &'a ObjectMeta,
 }
 
 impl<'a> ObjectStoreFetch<'a> {
-    fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
+    pub fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
         Self { store, meta }
     }
 }
 
 impl MetadataFetch for ObjectStoreFetch<'_> {
-    fn fetch(
-        &mut self,
-        range: Range<usize>,
-    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
         async {
             self.store
                 .get_range(&self.meta.location, range)
@@ -753,212 +1015,57 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
 /// through [`ParquetFileReaderFactory`].
 ///
 /// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
+#[deprecated(
+    since = "50.0.0",
+    note = "Use `DFParquetMetadata::fetch_metadata` instead"
+)]
 pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
-    meta: &ObjectMeta,
+    object_meta: &ObjectMeta,
     size_hint: Option<usize>,
-) -> Result<ParquetMetaData> {
-    let file_size = meta.size;
-    let fetch = ObjectStoreFetch::new(store, meta);
-
-    ParquetMetaDataReader::new()
-        .with_prefetch_hint(size_hint)
-        .load_and_finish(fetch, file_size)
+    #[allow(unused)] decryption_properties: Option<&FileDecryptionProperties>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+) -> Result<Arc<ParquetMetaData>> {
+    DFParquetMetadata::new(store, object_meta)
+        .with_metadata_size_hint(size_hint)
+        .with_decryption_properties(decryption_properties)
+        .with_file_metadata_cache(file_metadata_cache)
+        .fetch_metadata()
         .await
-        .map_err(DataFusionError::from)
-}
-
-/// Read and parse the schema of the Parquet file at location `path`
-async fn fetch_schema(
-    store: &dyn ObjectStore,
-    file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
-) -> Result<Schema> {
-    let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
-    let file_metadata = metadata.file_metadata();
-    let schema = parquet_to_arrow_schema(
-        file_metadata.schema_descr(),
-        file_metadata.key_value_metadata(),
-    )?;
-    Ok(schema)
 }
 
 /// Read and parse the statistics of the Parquet file at location `path`
 ///
 /// See [`statistics_from_parquet_meta_calc`] for more details
+#[deprecated(
+    since = "50.0.0",
+    note = "Use `DFParquetMetadata::fetch_statistics` instead"
+)]
 pub async fn fetch_statistics(
     store: &dyn ObjectStore,
     table_schema: SchemaRef,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    decryption_properties: Option<&FileDecryptionProperties>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Statistics> {
-    let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
-    statistics_from_parquet_meta_calc(&metadata, table_schema)
+    DFParquetMetadata::new(store, file)
+        .with_metadata_size_hint(metadata_size_hint)
+        .with_decryption_properties(decryption_properties)
+        .with_file_metadata_cache(file_metadata_cache)
+        .fetch_statistics(&table_schema)
+        .await
 }
 
-/// Convert statistics in [`ParquetMetaData`] into [`Statistics`] using [`StatisticsConverter`]
-///
-/// The statistics are calculated for each column in the table schema
-/// using the row group statistics in the parquet metadata.
-///
-/// # Key behaviors:
-///
-/// 1. Extracts row counts and byte sizes from all row groups
-/// 2. Applies schema type coercions to align file schema with table schema
-/// 3. Collects and aggregates statistics across row groups when available
-///
-/// # When there are no statistics:
-///
-/// If the Parquet file doesn't contain any statistics (has_statistics is false), the function returns a Statistics object with:
-/// - Exact row count
-/// - Exact byte size
-/// - All column statistics marked as unknown via Statistics::unknown_column(&table_schema)
-/// # When only some columns have statistics:
-///
-/// For columns with statistics:
-/// - Min/max values are properly extracted and represented as Precision::Exact
-/// - Null counts are calculated by summing across row groups
-///
-/// For columns without statistics,
-/// - For min/max, there are two situations:
-///     1. The column isn't in arrow schema, then min/max values are set to Precision::Absent
-///     2. The column is in arrow schema, but not in parquet schema due to schema revolution, min/max values are set to Precision::Exact(null)
-/// - Null counts are set to Precision::Exact(num_rows) (conservatively assuming all values could be null)
+#[deprecated(
+    since = "50.0.0",
+    note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
+)]
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
-    let row_groups_metadata = metadata.row_groups();
-
-    let mut statistics = Statistics::new_unknown(&table_schema);
-    let mut has_statistics = false;
-    let mut num_rows = 0_usize;
-    let mut total_byte_size = 0_usize;
-    for row_group_meta in row_groups_metadata {
-        num_rows += row_group_meta.num_rows() as usize;
-        total_byte_size += row_group_meta.total_byte_size() as usize;
-
-        if !has_statistics {
-            has_statistics = row_group_meta
-                .columns()
-                .iter()
-                .any(|column| column.statistics().is_some());
-        }
-    }
-    statistics.num_rows = Precision::Exact(num_rows);
-    statistics.total_byte_size = Precision::Exact(total_byte_size);
-
-    let file_metadata = metadata.file_metadata();
-    let mut file_schema = parquet_to_arrow_schema(
-        file_metadata.schema_descr(),
-        file_metadata.key_value_metadata(),
-    )?;
-
-    if let Some(merged) = apply_file_schema_type_coercions(&table_schema, &file_schema) {
-        file_schema = merged;
-    }
-
-    statistics.column_statistics = if has_statistics {
-        let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
-        let mut null_counts_array =
-            vec![Precision::Exact(0); table_schema.fields().len()];
-
-        table_schema
-            .fields()
-            .iter()
-            .enumerate()
-            .for_each(|(idx, field)| {
-                match StatisticsConverter::try_new(
-                    field.name(),
-                    &file_schema,
-                    file_metadata.schema_descr(),
-                ) {
-                    Ok(stats_converter) => {
-                        summarize_min_max_null_counts(
-                            &mut min_accs,
-                            &mut max_accs,
-                            &mut null_counts_array,
-                            idx,
-                            num_rows,
-                            &stats_converter,
-                            row_groups_metadata,
-                        )
-                        .ok();
-                    }
-                    Err(e) => {
-                        debug!("Failed to create statistics converter: {}", e);
-                        null_counts_array[idx] = Precision::Exact(num_rows);
-                    }
-                }
-            });
-
-        get_col_stats(
-            &table_schema,
-            null_counts_array,
-            &mut max_accs,
-            &mut min_accs,
-        )
-    } else {
-        Statistics::unknown_column(&table_schema)
-    };
-
-    Ok(statistics)
-}
-
-fn get_col_stats(
-    schema: &Schema,
-    null_counts: Vec<Precision<usize>>,
-    max_values: &mut [Option<MaxAccumulator>],
-    min_values: &mut [Option<MinAccumulator>],
-) -> Vec<ColumnStatistics> {
-    (0..schema.fields().len())
-        .map(|i| {
-            let max_value = match max_values.get_mut(i).unwrap() {
-                Some(max_value) => max_value.evaluate().ok(),
-                None => None,
-            };
-            let min_value = match min_values.get_mut(i).unwrap() {
-                Some(min_value) => min_value.evaluate().ok(),
-                None => None,
-            };
-            ColumnStatistics {
-                null_count: null_counts[i],
-                max_value: max_value.map(Precision::Exact).unwrap_or(Precision::Absent),
-                min_value: min_value.map(Precision::Exact).unwrap_or(Precision::Absent),
-                sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
-            }
-        })
-        .collect()
-}
-
-fn summarize_min_max_null_counts(
-    min_accs: &mut [Option<MinAccumulator>],
-    max_accs: &mut [Option<MaxAccumulator>],
-    null_counts_array: &mut [Precision<usize>],
-    arrow_schema_index: usize,
-    num_rows: usize,
-    stats_converter: &StatisticsConverter,
-    row_groups_metadata: &[RowGroupMetaData],
-) -> Result<()> {
-    let max_values = stats_converter.row_group_maxes(row_groups_metadata)?;
-    let min_values = stats_converter.row_group_mins(row_groups_metadata)?;
-    let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
-
-    if let Some(max_acc) = &mut max_accs[arrow_schema_index] {
-        max_acc.update_batch(&[max_values])?;
-    }
-
-    if let Some(min_acc) = &mut min_accs[arrow_schema_index] {
-        min_acc.update_batch(&[min_values])?;
-    }
-
-    null_counts_array[arrow_schema_index] = Precision::Exact(match sum(&null_counts) {
-        Some(null_count) => null_count as usize,
-        None => num_rows,
-    });
-
-    Ok(())
+    DFParquetMetadata::statistics_from_parquet_metadata(metadata, &table_schema)
 }
 
 /// Implements [`DataSink`] for writing to a parquet file.
@@ -983,7 +1090,7 @@ impl DisplayAs for ParquetSink {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ParquetSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
@@ -1012,7 +1119,11 @@ impl ParquetSink {
 
     /// Create writer properties based upon configuration settings,
     /// including partitioning and the inclusion of arrow schema metadata.
-    fn create_writer_props(&self) -> Result<WriterProperties> {
+    fn create_writer_props(
+        &self,
+        runtime: &Arc<RuntimeEnv>,
+        path: &Path,
+    ) -> Result<WriterProperties> {
         let schema = if self.parquet_options.global.allow_single_file_parallelism {
             // If parallelizing writes, we may be also be doing hive style partitioning
             // into multiple files which impacts the schema per file.
@@ -1029,7 +1140,15 @@ impl ParquetSink {
             parquet_opts.arrow_schema(schema);
         }
 
-        Ok(WriterPropertiesBuilder::try_from(&parquet_opts)?.build())
+        let mut builder = WriterPropertiesBuilder::try_from(&parquet_opts)?;
+        builder = set_writer_encryption_properties(
+            builder,
+            runtime,
+            &parquet_opts,
+            schema,
+            path,
+        )?;
+        Ok(builder.build())
     }
 
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore
@@ -1038,9 +1157,18 @@ impl ParquetSink {
         &self,
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
+        context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
     ) -> Result<AsyncArrowWriter<BufWriter>> {
-        let buf_writer = BufWriter::new(object_store, location.clone());
+        let buf_writer = BufWriter::with_capacity(
+            object_store,
+            location.clone(),
+            context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size,
+        );
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
@@ -1059,6 +1187,48 @@ impl ParquetSink {
     }
 }
 
+#[cfg(feature = "parquet_encryption")]
+fn set_writer_encryption_properties(
+    builder: WriterPropertiesBuilder,
+    runtime: &Arc<RuntimeEnv>,
+    parquet_opts: &TableParquetOptions,
+    schema: &Arc<Schema>,
+    path: &Path,
+) -> Result<WriterPropertiesBuilder> {
+    if let Some(file_encryption_properties) = &parquet_opts.crypto.file_encryption {
+        // Encryption properties have been specified directly
+        return Ok(builder
+            .with_file_encryption_properties(file_encryption_properties.clone().into()));
+    } else if let Some(encryption_factory_id) = &parquet_opts.crypto.factory_id.as_ref() {
+        // Encryption properties will be generated by an encryption factory
+        let encryption_factory =
+            runtime.parquet_encryption_factory(encryption_factory_id)?;
+        let file_encryption_properties = encryption_factory
+            .get_file_encryption_properties(
+                &parquet_opts.crypto.factory_options,
+                schema,
+                path,
+            )?;
+        if let Some(file_encryption_properties) = file_encryption_properties {
+            return Ok(
+                builder.with_file_encryption_properties(file_encryption_properties)
+            );
+        }
+    }
+    Ok(builder)
+}
+
+#[cfg(not(feature = "parquet_encryption"))]
+fn set_writer_encryption_properties(
+    builder: WriterPropertiesBuilder,
+    _runtime: &Arc<RuntimeEnv>,
+    _parquet_opts: &TableParquetOptions,
+    _schema: &Arc<Schema>,
+    _path: &Path,
+) -> Result<WriterPropertiesBuilder> {
+    Ok(builder)
+}
+
 #[async_trait]
 impl FileSink for ParquetSink {
     fn config(&self) -> &FileSinkConfig {
@@ -1073,14 +1243,22 @@ impl FileSink for ParquetSink {
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
         let parquet_opts = &self.parquet_options;
-        let allow_single_file_parallelism =
+        let mut allow_single_file_parallelism =
             parquet_opts.global.allow_single_file_parallelism;
+
+        if parquet_opts.crypto.file_encryption.is_some()
+            || parquet_opts.crypto.factory_id.is_some()
+        {
+            // For now, arrow-rs does not support parallel writes with encryption
+            // See https://github.com/apache/arrow-rs/issues/7359
+            allow_single_file_parallelism = false;
+        }
 
         let mut file_write_tasks: JoinSet<
             std::result::Result<(Path, FileMetaData), DataFusionError>,
         > = JoinSet::new();
 
-        let parquet_props = self.create_writer_props()?;
+        let runtime = context.runtime_env();
         let parallel_options = ParallelParquetWriterOptions {
             max_parallel_row_groups: parquet_opts
                 .global
@@ -1091,17 +1269,18 @@ impl FileSink for ParquetSink {
         };
 
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
+            let parquet_props = self.create_writer_props(&runtime, &path)?;
             if !allow_single_file_parallelism {
                 let mut writer = self
                     .create_async_arrow_writer(
                         &path,
                         Arc::clone(&object_store),
+                        context,
                         parquet_props.clone(),
                     )
                     .await?;
-                let mut reservation =
-                    MemoryConsumer::new(format!("ParquetSink[{}]", path))
-                        .register(context.memory_pool());
+                let mut reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
+                    .register(context.memory_pool());
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
                         writer.write(&batch).await?;
@@ -1110,18 +1289,25 @@ impl FileSink for ParquetSink {
                     let file_metadata = writer
                         .close()
                         .await
-                        .map_err(DataFusionError::ParquetError)?;
+                        .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
                     Ok((path, file_metadata))
                 });
             } else {
-                let writer = create_writer(
+                let writer = ObjectWriterBuilder::new(
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
                     &path,
                     Arc::clone(&object_store),
                 )
-                .await?;
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
                 let schema = get_writer_schema(&self.config);
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();
@@ -1166,7 +1352,7 @@ impl FileSink for ParquetSink {
         demux_task
             .join_unwind()
             .await
-            .map_err(DataFusionError::ExecutionJoin)??;
+            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
         Ok(row_count as u64)
     }
@@ -1294,7 +1480,7 @@ fn spawn_rg_join_and_finalize_task(
             let (writer, _col_reservation) = task
                 .join_unwind()
                 .await
-                .map_err(DataFusionError::ExecutionJoin)??;
+                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
             let encoded_size = writer.get_estimated_total_bytes();
             rg_reservation.grow(encoded_size);
             finalized_rg.push(writer.close()?);
@@ -1431,7 +1617,7 @@ async fn concatenate_parallel_row_groups(
         let result = task.join_unwind().await;
         let mut rg_out = parquet_writer.next_row_group()?;
         let (serialized_columns, mut rg_reservation, _cnt) =
-            result.map_err(DataFusionError::ExecutionJoin)??;
+            result.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
         for chunk in serialized_columns {
             chunk.append_to_row_group(&mut rg_out)?;
             rg_reservation.free();
@@ -1498,38 +1684,224 @@ async fn output_single_parquet_file_parallelized(
     launch_serialization_task
         .join_unwind()
         .await
-        .map_err(DataFusionError::ExecutionJoin)??;
+        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
     Ok(file_metadata)
 }
 
-/// Min/max aggregation can take Dictionary encode input but always produces unpacked
-/// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
-/// The reason min/max aggregate produces unpacked output because there is only one
-/// min/max value per group; there is no needs to keep them Dictionary encode
-fn min_max_aggregate_data_type(input_type: &DataType) -> &DataType {
-    if let DataType::Dictionary(_, value_type) = input_type {
-        value_type.as_ref()
-    } else {
-        input_type
-    }
-}
+#[cfg(test)]
+mod tests {
+    use parquet::arrow::parquet_to_arrow_schema;
+    use std::sync::Arc;
 
-fn create_max_min_accs(
-    schema: &Schema,
-) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
-    let max_values: Vec<Option<MaxAccumulator>> = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            MaxAccumulator::try_new(min_max_aggregate_data_type(field.data_type())).ok()
-        })
-        .collect();
-    let min_values: Vec<Option<MinAccumulator>> = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            MinAccumulator::try_new(min_max_aggregate_data_type(field.data_type())).ok()
-        })
-        .collect();
-    (max_values, min_values)
+    use super::*;
+
+    use arrow::datatypes::DataType;
+    use parquet::schema::parser::parse_message_type;
+
+    #[test]
+    fn coerce_int96_to_resolution_with_mixed_timestamps() {
+        // Unclear if Spark (or other writer) could generate a file with mixed timestamps like this,
+        // but we want to test the scenario just in case since it's at least a valid schema as far
+        // as the Parquet spec is concerned.
+        let spark_schema = "
+        message spark_schema {
+          optional int96 c0;
+          optional int64 c1 (TIMESTAMP(NANOS,true));
+          optional int64 c2 (TIMESTAMP(NANOS,false));
+          optional int64 c3 (TIMESTAMP(MILLIS,true));
+          optional int64 c4 (TIMESTAMP(MILLIS,false));
+          optional int64 c5 (TIMESTAMP(MICROS,true));
+          optional int64 c6 (TIMESTAMP(MICROS,false));
+        }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        let result =
+            coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
+                .unwrap();
+
+        // Only the first field (c0) should be converted to a microsecond timestamp because it's the
+        // only timestamp that originated from an INT96.
+        let expected_schema = Schema::new(vec![
+            Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new(
+                "c1",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c2", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            Field::new(
+                "c3",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c4", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new(
+                "c5",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c6", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        ]);
+
+        assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_with_nested_types() {
+        // This schema is derived from Comet's CometFuzzTestSuite ParquetGenerator only using int96
+        // primitive types with generateStruct, generateArray, and generateMap set to true, with one
+        // additional field added to c4's struct to make sure all fields in a struct get modified.
+        // https://github.com/apache/datafusion-comet/blob/main/spark/src/main/scala/org/apache/comet/testing/ParquetGenerator.scala
+        let spark_schema = "
+        message spark_schema {
+          optional int96 c0;
+          optional group c1 {
+            optional int96 c0;
+          }
+          optional group c2 {
+            optional group c0 (LIST) {
+              repeated group list {
+                optional int96 element;
+              }
+            }
+          }
+          optional group c3 (LIST) {
+            repeated group list {
+              optional int96 element;
+            }
+          }
+          optional group c4 (LIST) {
+            repeated group list {
+              optional group element {
+                optional int96 c0;
+                optional int96 c1;
+              }
+            }
+          }
+          optional group c5 (MAP) {
+            repeated group key_value {
+              required int96 key;
+              optional int96 value;
+            }
+          }
+          optional group c6 (LIST) {
+            repeated group list {
+              optional group element (MAP) {
+                repeated group key_value {
+                  required int96 key;
+                  optional int96 value;
+                }
+              }
+            }
+          }
+        }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        let result =
+            coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
+                .unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new_struct(
+                "c1",
+                vec![Field::new(
+                    "c0",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_struct(
+                "c2",
+                vec![Field::new_list(
+                    "c0",
+                    Field::new(
+                        "element",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_list(
+                "c3",
+                Field::new(
+                    "element",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                true,
+            ),
+            Field::new_list(
+                "c4",
+                Field::new_struct(
+                    "element",
+                    vec![
+                        Field::new(
+                            "c0",
+                            DataType::Timestamp(TimeUnit::Microsecond, None),
+                            true,
+                        ),
+                        Field::new(
+                            "c1",
+                            DataType::Timestamp(TimeUnit::Microsecond, None),
+                            true,
+                        ),
+                    ],
+                    true,
+                ),
+                true,
+            ),
+            Field::new_map(
+                "c5",
+                "key_value",
+                Field::new(
+                    "key",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    false,
+                ),
+                Field::new(
+                    "value",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                false,
+                true,
+            ),
+            Field::new_list(
+                "c6",
+                Field::new_map(
+                    "element",
+                    "key_value",
+                    Field::new(
+                        "key",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        false,
+                    ),
+                    Field::new(
+                        "value",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    false,
+                    true,
+                ),
+                true,
+            ),
+        ]);
+
+        assert_eq!(result, expected_schema);
+    }
 }

@@ -33,6 +33,7 @@ use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
+use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
@@ -106,7 +107,7 @@ pub trait OptimizerConfig {
     /// Return alias generator used to generate unique aliases for subqueries
     fn alias_generator(&self) -> &Arc<AliasGenerator>;
 
-    fn options(&self) -> &ConfigOptions;
+    fn options(&self) -> Arc<ConfigOptions>;
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
         None
@@ -124,7 +125,7 @@ pub struct OptimizerContext {
     /// Alias generator used to generate unique aliases for subqueries
     alias_generator: Arc<AliasGenerator>,
 
-    options: ConfigOptions,
+    options: Arc<ConfigOptions>,
 }
 
 impl OptimizerContext {
@@ -136,13 +137,15 @@ impl OptimizerContext {
         Self {
             query_execution_start_time: Utc::now(),
             alias_generator: Arc::new(AliasGenerator::new()),
-            options,
+            options: Arc::new(options),
         }
     }
 
     /// Specify whether to enable the filter_null_keys rule
     pub fn filter_null_keys(mut self, filter_null_keys: bool) -> Self {
-        self.options.optimizer.filter_null_join_keys = filter_null_keys;
+        Arc::make_mut(&mut self.options)
+            .optimizer
+            .filter_null_join_keys = filter_null_keys;
         self
     }
 
@@ -159,13 +162,13 @@ impl OptimizerContext {
     /// Specify whether the optimizer should skip rules that produce
     /// errors, or fail the query
     pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
-        self.options.optimizer.skip_failed_rules = b;
+        Arc::make_mut(&mut self.options).optimizer.skip_failed_rules = b;
         self
     }
 
     /// Specify how many times to attempt to optimize the plan
     pub fn with_max_passes(mut self, v: u8) -> Self {
-        self.options.optimizer.max_passes = v as usize;
+        Arc::make_mut(&mut self.options).optimizer.max_passes = v as usize;
         self
     }
 }
@@ -186,8 +189,8 @@ impl OptimizerConfig for OptimizerContext {
         &self.alias_generator
     }
 
-    fn options(&self) -> &ConfigOptions {
-        &self.options
+    fn options(&self) -> Arc<ConfigOptions> {
+        Arc::clone(&self.options)
     }
 }
 
@@ -226,11 +229,11 @@ impl Optimizer {
             Arc::new(EliminateJoin::new()),
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
+            Arc::new(DecorrelateLateralJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
-            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
             // Must be after PropagateEmptyRelation
@@ -243,9 +246,8 @@ impl Optimizer {
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateGroupByConstant::new()),
+            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(OptimizeProjections::new()),
         ];
 
@@ -415,7 +417,7 @@ impl Optimizer {
                 previous_plans.insert(LogicalPlanSignature::new(&new_plan));
             if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
-                debug!("optimizer pass {} did not make changes", i);
+                debug!("optimizer pass {i} did not make changes");
                 break;
             }
             i += 1;
@@ -508,8 +510,11 @@ mod tests {
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
 
-        // Simplify assert to check the error message contains the expected message, which is only the schema length mismatch
-        assert_contains!(err.strip_backtrace(), "Schema mismatch: the schema length are not same Expected schema length: 3, got: 0");
+        // Simplify assert to check the error message contains the expected message
+        assert_contains!(
+            err.strip_backtrace(),
+            "Failed due to a difference in schemas: original schema: DFSchema"
+        );
     }
 
     #[test]

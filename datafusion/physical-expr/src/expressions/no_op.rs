@@ -21,12 +21,11 @@ use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::PhysicalExpr;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 

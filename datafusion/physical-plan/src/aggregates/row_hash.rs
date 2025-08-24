@@ -21,6 +21,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
+use super::order::GroupOrdering;
+use super::AggregateExec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
@@ -29,29 +31,24 @@ use crate::aggregates::{
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
-use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
+use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
+use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
+use crate::{aggregates, metrics, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
-
-use super::order::GroupOrdering;
-use super::AggregateExec;
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -91,6 +88,9 @@ struct SpillState {
     /// GROUP BY expressions for merging spilled data
     merging_group_by: PhysicalGroupBy,
 
+    /// Manages the process of spilling and reading back intermediate data
+    spill_manager: SpillManager,
+
     // ========================================================================
     // STATES:
     // Fields changes during execution. Can be buffer, or state flags that
@@ -98,7 +98,7 @@ struct SpillState {
     // ========================================================================
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
-    spills: Vec<RefCountedTempFile>,
+    spills: Vec<SortedSpillFile>,
 
     /// true when streaming merge is in progress
     is_stream_merging: bool,
@@ -109,12 +109,7 @@ struct SpillState {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
-    /// count of spill files during the execution of the operator
-    spill_count: metrics::Count,
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: metrics::Count,
-    /// total spilled rows during the execution of the operator
-    spilled_rows: metrics::Count,
+    // Metrics related to spilling are managed inside `spill_manager`
 }
 
 /// Tracks if the aggregate should skip partial aggregations
@@ -435,9 +430,6 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
-
-    /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
-    runtime: Arc<RuntimeEnv>,
 }
 
 impl GroupedHashAggregateStream {
@@ -513,36 +505,54 @@ impl GroupedHashAggregateStream {
             AggregateMode::Partial,
         )?;
 
-        let partial_agg_schema = Arc::new(partial_agg_schema);
-
-        let spill_expr = group_schema
-            .fields
-            .into_iter()
+        // Need to update the GROUP BY expressions to point to the correct column after schema change
+        let merging_group_by_expr = agg_group_by
+            .expr
+            .iter()
             .enumerate()
-            .map(|(idx, field)| PhysicalSortExpr {
-                expr: Arc::new(Column::new(field.name().as_str(), idx)) as _,
-                options: SortOptions::default(),
+            .map(|(idx, (_, name))| {
+                (Arc::new(Column::new(name.as_str(), idx)) as _, name.clone())
             })
             .collect();
 
-        let name = format!("GroupedHashAggregateStream[{partition}]");
+        let partial_agg_schema = Arc::new(partial_agg_schema);
+
+        let spill_expr =
+            group_schema
+                .fields
+                .into_iter()
+                .enumerate()
+                .map(|(idx, field)| {
+                    PhysicalSortExpr::new_default(Arc::new(Column::new(
+                        field.name().as_str(),
+                        idx,
+                    )) as _)
+                });
+        let Some(spill_expr) = LexOrdering::new(spill_expr) else {
+            return internal_err!("Spill expression is empty");
+        };
+
+        let agg_fn_names = aggregate_exprs
+            .iter()
+            .map(|expr| expr.human_display())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
         let reservation = MemoryConsumer::new(name)
             .with_can_spill(true)
             .register(context.memory_pool());
-        let (ordering, _) = agg
-            .properties()
-            .equivalence_properties()
-            .find_longest_permutation(&agg_group_by.output_exprs());
-        let group_ordering = GroupOrdering::try_new(
-            &group_schema,
-            &agg.input_order_mode,
-            ordering.as_ref(),
-        )?;
-
+        let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
         let group_values = new_group_values(group_schema, &group_ordering)?;
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
+
+        let spill_manager = SpillManager::new(
+            context.runtime_env(),
+            metrics::SpillMetrics::new(&agg.metrics, partition),
+            Arc::clone(&partial_agg_schema),
+        )
+        .with_compression_type(context.session_config().spill_compression());
 
         let spill_state = SpillState {
             spills: vec![],
@@ -550,12 +560,10 @@ impl GroupedHashAggregateStream {
             spill_schema: partial_agg_schema,
             is_stream_merging: false,
             merging_aggregate_arguments,
-            merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
+            merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
                 .gauge("peak_mem_used", partition),
-            spill_count: MetricBuilder::new(&agg.metrics).spill_count(partition),
-            spilled_bytes: MetricBuilder::new(&agg.metrics).spilled_bytes(partition),
-            spilled_rows: MetricBuilder::new(&agg.metrics).spilled_rows(partition),
+            spill_manager,
         };
 
         // Skip aggregation is supported if:
@@ -604,7 +612,6 @@ impl GroupedHashAggregateStream {
             batch_size,
             group_ordering,
             input_done: false,
-            runtime: context.runtime_env(),
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
@@ -968,7 +975,7 @@ impl GroupedHashAggregateStream {
     /// memory. Currently only [`GroupOrdering::None`] is supported for spilling.
     fn spill_previous_if_necessary(&mut self, batch: &RecordBatch) -> Result<()> {
         // TODO: support group_ordering for spilling
-        if self.group_values.len() > 0
+        if !self.group_values.is_empty()
             && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
             && !self.spill_state.is_stream_merging
@@ -981,28 +988,38 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    /// Emit all rows, sort them, and store them on disk.
+    /// Emit all intermediate aggregation states, sort them, and store them on disk.
+    /// This process helps in reducing memory pressure by allowing the data to be
+    /// read back with streaming merge.
     fn spill(&mut self) -> Result<()> {
+        // Emit and sort intermediate aggregation state
         let Some(emit) = self.emit(EmitTo::All, true)? else {
             return Ok(());
         };
-        let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
-        let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
-        // TODO: slice large `sorted` and write to multiple files in parallel
-        spill_record_batch_by_size(
-            &sorted,
-            spillfile.path().into(),
-            sorted.schema(),
-            self.batch_size,
-        )?;
-        self.spill_state.spills.push(spillfile);
+        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
 
-        // Update metrics
-        self.spill_state.spill_count.add(1);
-        self.spill_state
-            .spilled_bytes
-            .add(sorted.get_array_memory_size());
-        self.spill_state.spilled_rows.add(sorted.num_rows());
+        // Spill sorted state to disk
+        let spillfile = self
+            .spill_state
+            .spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &sorted,
+                "HashAggSpill",
+                self.batch_size,
+            )?;
+        match spillfile {
+            Some((spillfile, max_record_batch_memory)) => {
+                self.spill_state.spills.push(SortedSpillFile {
+                    file: spillfile,
+                    max_record_batch_memory,
+                })
+            }
+            None => {
+                return internal_err!(
+                    "Calling spill with no intermediate batch to spill"
+                );
+            }
+        }
 
         Ok(())
     }
@@ -1054,18 +1071,17 @@ impl GroupedHashAggregateStream {
         streams.push(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::once(futures::future::lazy(move |_| {
-                sort_batch(&batch, expr.as_ref(), None)
+                sort_batch(&batch, &expr, None)
             })),
         )));
-        for spill in self.spill_state.spills.drain(..) {
-            let stream = read_spill_as_stream(spill, Arc::clone(&schema), 2)?;
-            streams.push(stream);
-        }
+
         self.spill_state.is_stream_merging = true;
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(schema)
-            .with_expressions(self.spill_state.spill_expr.as_ref())
+            .with_spill_manager(self.spill_state.spill_manager.clone())
+            .with_sorted_spill_files(std::mem::take(&mut self.spill_state.spills))
+            .with_expressions(&self.spill_state.spill_expr)
             .with_metrics(self.baseline_metrics.clone())
             .with_batch_size(self.batch_size)
             .with_reservation(self.reservation.new_empty())

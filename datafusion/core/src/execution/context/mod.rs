@@ -17,13 +17,13 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
-use datafusion_catalog::memory::MemorySchemaProvider;
-use datafusion_catalog::MemoryCatalogProvider;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
+use crate::datasource::dynamic_file::DynamicListTableFactory;
+use crate::execution::session_state::SessionStateBuilder;
 use crate::{
     catalog::listing_schema::ListingSchemaProvider,
     catalog::{
@@ -35,7 +35,11 @@ use crate::{
     },
     datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
-    execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
+    execution::{
+        options::ArrowReadOptions,
+        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
+        FunctionRegistry,
+    },
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
     logical_expr::{
@@ -49,39 +53,40 @@ use crate::{
     variable::{VarProvider, VarType},
 };
 
+// backwards compatibility
+pub use crate::execution::session_state::SessionState;
+
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_catalog::memory::MemorySchemaProvider;
+use datafusion_catalog::MemoryCatalogProvider;
+use datafusion_catalog::{
+    DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
+};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
+pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
+pub use datafusion_execution::TaskContext;
+pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
-
-// backwards compatibility
-pub use crate::execution::session_state::SessionState;
-
-use crate::datasource::dynamic_file::DynamicListTableFactory;
-use crate::execution::session_state::SessionStateBuilder;
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_catalog::{
-    DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
-};
-use datafusion_common::config::ConfigOptions;
-pub use datafusion_execution::config::SessionConfig;
-pub use datafusion_execution::TaskContext;
-pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+use datafusion_session::SessionStore;
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -221,7 +226,7 @@ where
 /// # use datafusion::execution::SessionStateBuilder;
 /// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 /// // Configure a 4k batch size
-/// let config = SessionConfig::new() .with_batch_size(4 * 1024);
+/// let config = SessionConfig::new().with_batch_size(4 * 1024);
 ///
 /// // configure a memory limit of 1GB with 20%  slop
 ///  let runtime_env = RuntimeEnvBuilder::new()
@@ -909,7 +914,7 @@ impl SessionContext {
             ..
         } = cmd;
 
-        // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
+        // sqlparser doesn't accept database / catalog as parameter to CREATE SCHEMA
         // so for now, we default to default catalog
         let tokens: Vec<&str> = schema_name.split('.').collect();
         let (catalog, schema_name) = match tokens.len() {
@@ -1035,11 +1040,78 @@ impl SessionContext {
             variable, value, ..
         } = stmt;
 
-        let mut state = self.state.write();
-        state.config_mut().options_mut().set(&variable, &value)?;
-        drop(state);
+        // Check if this is a runtime configuration
+        if variable.starts_with("datafusion.runtime.") {
+            self.set_runtime_variable(&variable, &value)?;
+        } else {
+            let mut state = self.state.write();
+            state.config_mut().options_mut().set(&variable, &value)?;
+            drop(state);
+        }
 
         self.return_empty_dataframe()
+    }
+
+    fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
+        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
+
+        let mut state = self.state.write();
+
+        let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
+        builder = match key {
+            "memory_limit" => {
+                let memory_limit = Self::parse_memory_limit(value)?;
+                builder.with_memory_limit(memory_limit, 1.0)
+            }
+            "max_temp_directory_size" => {
+                let directory_size = Self::parse_memory_limit(value)?;
+                builder.with_max_temp_directory_size(directory_size as u64)
+            }
+            "temp_directory" => builder.with_temp_file_path(value),
+            "metadata_cache_limit" => {
+                let limit = Self::parse_memory_limit(value)?;
+                builder.with_metadata_cache_limit(limit)
+            }
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unknown runtime configuration: {variable}"
+                )))
+            }
+        };
+
+        *state = SessionStateBuilder::from(state.clone())
+            .with_runtime_env(Arc::new(builder.build()?))
+            .build();
+
+        Ok(())
+    }
+
+    /// Parse memory limit from string to number of bytes
+    /// Supports formats like '1.5G', '100M', '512K'
+    ///
+    /// # Examples
+    /// ```
+    /// use datafusion::execution::context::SessionContext;
+    ///
+    /// assert_eq!(SessionContext::parse_memory_limit("1M").unwrap(), 1024 * 1024);
+    /// assert_eq!(SessionContext::parse_memory_limit("1.5G").unwrap(), (1.5 * 1024.0 * 1024.0 * 1024.0) as usize);
+    /// ```
+    pub fn parse_memory_limit(limit: &str) -> Result<usize> {
+        let (number, unit) = limit.split_at(limit.len() - 1);
+        let number: f64 = number.parse().map_err(|_| {
+            DataFusionError::Plan(format!(
+                "Failed to parse number from memory limit '{limit}'"
+            ))
+        })?;
+
+        match unit {
+            "K" => Ok((number * 1024.0) as usize),
+            "M" => Ok((number * 1024.0 * 1024.0) as usize),
+            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            _ => Err(DataFusionError::Plan(format!(
+                "Unsupported unit '{unit}' in memory limit '{limit}'"
+            ))),
+        }
     }
 
     async fn create_custom_table(
@@ -1152,7 +1224,7 @@ impl SessionContext {
         let mut params: Vec<ScalarValue> = parameters
             .into_iter()
             .map(|e| match e {
-                Expr::Literal(scalar) => Ok(scalar),
+                Expr::Literal(scalar, _) => Ok(scalar),
                 _ => not_impl_err!("Unsupported parameter type: {}", e),
             })
             .collect::<Result<_>>()?;
@@ -1578,7 +1650,7 @@ impl SessionContext {
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
         let mut state = self.state.read().clone();
-        state.execution_props_mut().start_execution();
+        state.mark_start_execution();
         state
     }
 
@@ -1646,7 +1718,7 @@ impl FunctionRegistry for SessionContext {
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
-        self.state.read().expr_planners()
+        self.state.read().expr_planners().to_vec()
     }
 
     fn register_expr_planner(
@@ -1832,7 +1904,6 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
-    use std::env;
     use std::error::Error;
     use std::path::PathBuf;
 

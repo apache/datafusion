@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::size_of;
+
 use arrow::array::ArrayRef;
-use arrow::datatypes::Schema;
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use std::mem::size_of;
 
 mod full;
 mod partial;
@@ -42,15 +41,11 @@ pub enum GroupOrdering {
 
 impl GroupOrdering {
     /// Create a `GroupOrdering` for the specified ordering
-    pub fn try_new(
-        input_schema: &Schema,
-        mode: &InputOrderMode,
-        ordering: &LexOrdering,
-    ) -> Result<Self> {
+    pub fn try_new(mode: &InputOrderMode) -> Result<Self> {
         match mode {
             InputOrderMode::Linear => Ok(GroupOrdering::None),
             InputOrderMode::PartiallySorted(order_indices) => {
-                GroupOrderingPartial::try_new(input_schema, order_indices, ordering)
+                GroupOrderingPartial::try_new(order_indices.clone())
                     .map(GroupOrdering::Partial)
             }
             InputOrderMode::Sorted => Ok(GroupOrdering::Full(GroupOrderingFull::new())),

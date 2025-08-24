@@ -53,7 +53,7 @@ query I
 select * from (select * from topk limit 8) order by x limit 3;
 ----
 0
-1
+2
 2
 
 
@@ -233,3 +233,165 @@ d 1 -98 y7C453hRWd4E7ImjNDWlpexB8nUqjh y7C453hRWd4E7ImjNDWlpexB8nUqjh
 e 2 52 xipQ93429ksjNcXPX5326VSg1xJZcW xipQ93429ksjNcXPX5326VSg1xJZcW
 d 1 -72 wwXqSGKLyBQyPkonlzBNYUJTCo4LRS wwXqSGKLyBQyPkonlzBNYUJTCo4LRS
 a 1 -5 waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs
+
+#####################################
+## Test TopK with Partially Sorted Inputs
+#####################################
+
+
+# Create an external table where data is pre-sorted by (number DESC, letter ASC) only.
+statement ok
+CREATE EXTERNAL TABLE partial_sorted (
+    number INT,
+    letter VARCHAR,
+    age INT
+)
+STORED AS parquet
+LOCATION 'test_files/scratch/topk/partial_sorted/1.parquet'
+WITH ORDER (number DESC, letter ASC);
+
+# Insert test data into the external table.
+query I
+COPY (
+  SELECT *
+  FROM (
+    VALUES
+      (1, 'F', 100),
+      (1, 'B', 50),
+      (2, 'C', 70),
+      (2, 'D', 80),
+      (3, 'A', 60),
+      (3, 'E', 90)
+  ) AS t(number, letter, age)
+  ORDER BY number DESC, letter ASC
+)
+TO 'test_files/scratch/topk/partial_sorted/1.parquet';
+----
+6
+
+## explain physical_plan only
+statement ok
+set datafusion.explain.physical_plan_only = true
+
+## batch size smaller than number of rows in the table and result
+statement ok
+set datafusion.execution.batch_size = 2
+
+# Run a TopK query that orders by all columns.
+# Although the table is only guaranteed to be sorted by (number DESC, letter ASC),
+# DataFusion should use the common prefix optimization
+# and return the correct top 3 rows when ordering by all columns.
+query ITI
+select number, letter, age from partial_sorted order by number desc, letter asc, age desc limit 3;
+----
+3 A 60
+3 E 90
+2 C 70
+
+# A more complex example with a projection that includes an expression (see further down for the explained plan)
+query IIITI
+select
+  number + 1 as number_plus,
+  number,
+  number + 1 as other_number_plus,
+  letter,
+  age
+from partial_sorted
+order by
+  number_plus desc,
+  number desc,
+  other_number_plus desc,
+  letter asc,
+  age desc
+limit 3;
+----
+4 3 4 A 60
+4 3 4 E 90
+3 2 3 C 70
+
+# Verify that the physical plan includes the sort prefix.
+# The output should display a "sort_prefix" in the SortExec node.
+query TT
+explain select number, letter, age from partial_sorted order by number desc, letter asc, age desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[number@0 DESC, letter@1 ASC NULLS LAST, age@2 DESC], preserve_partitioning=[false], sort_prefix=[number@0 DESC, letter@1 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], output_ordering=[number@0 DESC, letter@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+
+
+# Explain variations of the above query with different orderings, and different sort prefixes.
+# The "sort_prefix" in the  SortExec node should only be present if the TopK's ordering starts with either (number DESC, letter ASC) or just (number DESC).
+query TT
+explain select number, letter, age from partial_sorted order by age desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[age@2 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], output_ordering=[number@0 DESC, letter@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+
+query TT
+explain select number, letter, age from partial_sorted order by number desc, letter desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[number@0 DESC, letter@1 DESC], preserve_partitioning=[false], sort_prefix=[number@0 DESC]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], output_ordering=[number@0 DESC, letter@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+
+query TT
+explain select number, letter, age from partial_sorted order by number asc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[number@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], output_ordering=[number@0 DESC, letter@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+
+query TT
+explain select number, letter, age from partial_sorted order by letter asc, number desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[letter@1 ASC NULLS LAST, number@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], output_ordering=[number@0 DESC, letter@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+
+# Explicit NULLS ordering cases (reversing the order of the NULLS on the number and letter orderings)
+query TT
+explain select number, letter, age from partial_sorted order by number desc, letter asc NULLS FIRST limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[number@0 DESC, letter@1 ASC], preserve_partitioning=[false], sort_prefix=[number@0 DESC]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], output_ordering=[number@0 DESC, letter@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+
+query TT
+explain select number, letter, age from partial_sorted order by number desc NULLS LAST, letter asc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[number@0 DESC NULLS LAST, letter@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], output_ordering=[number@0 DESC, letter@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+
+
+# Verify that the sort prefix is correctly computed on the normalized ordering (removing redundant aliased columns)
+query TT
+explain select number, letter, age, number as column4, letter as column5 from partial_sorted order by number desc, column4 desc, letter asc, column5 asc, age desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[number@0 DESC, letter@1 ASC NULLS LAST, age@2 DESC], preserve_partitioning=[false], sort_prefix=[number@0 DESC, letter@1 ASC NULLS LAST]
+02)--ProjectionExec: expr=[number@0 as number, letter@1 as letter, age@2 as age, number@0 as column4, letter@1 as column5]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], output_ordering=[number@0 DESC, letter@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+
+# Verify that the sort prefix is correctly computed over normalized, order-maintaining projections (number + 1, number, number + 1, age)
+query TT
+explain select number + 1 as number_plus, number, number + 1 as other_number_plus, age from partial_sorted order by number_plus desc, number desc, other_number_plus desc, age asc limit 3;
+----
+physical_plan
+01)SortPreservingMergeExec: [number_plus@0 DESC, number@1 DESC, other_number_plus@2 DESC, age@3 ASC NULLS LAST], fetch=3
+02)--SortExec: TopK(fetch=3), expr=[number_plus@0 DESC, number@1 DESC, age@3 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[number_plus@0 DESC, number@1 DESC]
+03)----ProjectionExec: expr=[__common_expr_1@0 as number_plus, number@1 as number, __common_expr_1@0 as other_number_plus, age@2 as age]
+04)------ProjectionExec: expr=[CAST(number@0 AS Int64) + 1 as __common_expr_1, number@0 as number, age@1 as age]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, age], output_ordering=[number@0 DESC], file_type=parquet
+
+# Cleanup
+statement ok
+DROP TABLE partial_sorted;
+
+statement ok
+set datafusion.explain.physical_plan_only = false
+
+statement ok
+set datafusion.execution.batch_size = 8192

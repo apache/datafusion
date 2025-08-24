@@ -16,14 +16,14 @@
 // under the License.
 
 use arrow::array::Array;
-use arrow::datatypes::{DataType, FieldRef, UnionFields};
+use arrow::datatypes::{DataType, Field, FieldRef, UnionFields};
 use datafusion_common::cast::as_union_array;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, ScalarValue,
 };
 use datafusion_doc::Documentation;
-use datafusion_expr::{ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
@@ -49,7 +49,7 @@ use datafusion_macros::user_doc;
         description = "String expression to operate on. Must be a constant."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UnionExtractFun {
     signature: Signature,
 }
@@ -82,35 +82,35 @@ impl ScalarUDFImpl for UnionExtractFun {
     }
 
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        // should be using return_type_from_args and not calling the default implementation
+        // should be using return_field_from_args and not calling the default implementation
         internal_err!("union_extract should return type from args")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        if args.arg_types.len() != 2 {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() != 2 {
             return exec_err!(
                 "union_extract expects 2 arguments, got {} instead",
-                args.arg_types.len()
+                args.arg_fields.len()
             );
         }
 
-        let DataType::Union(fields, _) = &args.arg_types[0] else {
+        let DataType::Union(fields, _) = &args.arg_fields[0].data_type() else {
             return exec_err!(
                 "union_extract first argument must be a union, got {} instead",
-                args.arg_types[0]
+                args.arg_fields[0].data_type()
             );
         };
 
         let Some(ScalarValue::Utf8(Some(field_name))) = &args.scalar_arguments[1] else {
             return exec_err!(
                 "union_extract second argument must be a non-null string literal, got {} instead",
-                args.arg_types[1]
+                args.arg_fields[1].data_type()
             );
         };
 
         let field = find_field(fields, field_name)?.1;
 
-        Ok(ReturnInfo::new_nullable(field.data_type().clone()))
+        Ok(Field::new(self.name(), field.data_type().clone(), true).into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -169,10 +169,11 @@ fn find_field<'a>(fields: &'a UnionFields, name: &str) -> Result<(i8, &'a FieldR
 
 #[cfg(test)]
 mod tests {
-
     use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use std::sync::Arc;
 
     use super::UnionExtractFun;
 
@@ -189,47 +190,70 @@ mod tests {
             ],
         );
 
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Union(
+                None,
+                fields.clone(),
+                UnionMode::Dense,
+            )),
+            ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
+        ];
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
+            .collect::<Vec<_>>();
+
         let result = fun.invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Union(
-                    None,
-                    fields.clone(),
-                    UnionMode::Dense,
-                )),
-                ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
-            ],
+            args,
+            arg_fields,
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
 
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Union(
+                Some((3, Box::new(ScalarValue::Int32(Some(42))))),
+                fields.clone(),
+                UnionMode::Dense,
+            )),
+            ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
+        ];
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
+            .collect::<Vec<_>>();
+
         let result = fun.invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Union(
-                    Some((3, Box::new(ScalarValue::Int32(Some(42))))),
-                    fields.clone(),
-                    UnionMode::Dense,
-                )),
-                ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
-            ],
+            args,
+            arg_fields,
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
 
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Union(
+                Some((1, Box::new(ScalarValue::new_utf8("42")))),
+                fields.clone(),
+                UnionMode::Dense,
+            )),
+            ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
+        ];
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
+            .collect::<Vec<_>>();
         let result = fun.invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Union(
-                    Some((1, Box::new(ScalarValue::new_utf8("42")))),
-                    fields.clone(),
-                    UnionMode::Dense,
-                )),
-                ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
-            ],
+            args,
+            arg_fields,
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         assert_scalar(result, ScalarValue::new_utf8("42"));

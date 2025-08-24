@@ -37,6 +37,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
+use insta::assert_snapshot;
 use std::hash::Hash;
 use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
@@ -111,11 +112,7 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         &self.empty_schema
     }
 
-    fn check_invariants(
-        &self,
-        _check: InvariantLevel,
-        _plan: &LogicalPlan,
-    ) -> Result<()> {
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
         Ok(())
     }
 
@@ -188,13 +185,16 @@ async fn simple_select() -> Result<()> {
 
 #[tokio::test]
 async fn wildcard_select() -> Result<()> {
-    assert_expected_plan_unoptimized(
-        "SELECT * FROM data",
-        "Projection: data.a, data.b, data.c, data.d, data.e, data.f\
-        \n  TableScan: data",
-        true,
-    )
-    .await
+    let plan = generate_plan_from_sql("SELECT * FROM data", true, false).await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: data.a, data.b, data.c, data.d, data.e, data.f
+      TableScan: data
+    "#
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -299,24 +299,42 @@ async fn aggregate_grouping_sets() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_grouping_rollup() -> Result<()> {
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
-        "Projection: data.a, data.c, data.e, avg(data.b)\
-        \n  Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
-        \n    TableScan: data projection=[a, b, c, e]",
-        true
-    ).await
+        true,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+        Projection: data.a, data.c, data.e, avg(data.b)
+          Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]
+            TableScan: data projection=[a, b, c, e]
+        "#
+    );
+    Ok(())
 }
 
 #[tokio::test]
 async fn multilayer_aggregate() -> Result<()> {
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "SELECT a, sum(partial_count_b) FROM (SELECT a, count(b) as partial_count_b FROM data GROUP BY a) GROUP BY a",
-        "Aggregate: groupBy=[[data.a]], aggr=[[sum(count(data.b)) AS sum(partial_count_b)]]\
-        \n  Aggregate: groupBy=[[data.a]], aggr=[[count(data.b)]]\
-        \n    TableScan: data projection=[a, b]",
-        true
-    ).await
+        true,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Aggregate: groupBy=[[data.a]], aggr=[[sum(count(data.b)) AS sum(partial_count_b)]]
+      Aggregate: groupBy=[[data.a]], aggr=[[count(data.b)]]
+        TableScan: data projection=[a, b]
+    "#
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -326,7 +344,7 @@ async fn decimal_literal() -> Result<()> {
 
 #[tokio::test]
 async fn null_decimal_literal() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE b = NULL").await
+    roundtrip("SELECT *, CAST(NULL AS decimal(10, 2)) FROM data").await
 }
 
 #[tokio::test]
@@ -404,6 +422,41 @@ async fn simple_scalar_function_substr() -> Result<()> {
     roundtrip("SELECT SUBSTR(f, 1, 3) FROM data").await
 }
 
+// Test that DataFusion functions gets correctly mapped to Substrait names (when the names are diferent)
+// Follows the same structure as existing roundtrip tests, but more explicitly tests for name mappings
+async fn test_substrait_to_df_name_mapping(
+    substrait_name: &str,
+    sql: &str,
+) -> Result<()> {
+    let ctx = create_context().await?;
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+    let function_name = match proto.extensions[0].mapping_type.as_ref().unwrap() {
+        MappingType::ExtensionFunction(ext_f) => &ext_f.name,
+        _ => unreachable!("Expected function extension"),
+    };
+
+    assert_eq!(function_name, substrait_name);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    let plan1str = format!("{plan}");
+    let plan2str = format!("{plan2}");
+    assert_eq!(plan1str, plan2str);
+
+    assert_eq!(plan.schema(), plan2.schema());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn scalar_function_is_nan_mapping() -> Result<()> {
+    test_substrait_to_df_name_mapping("is_nan", "SELECT ISNAN(a) FROM data").await
+}
+
 #[tokio::test]
 async fn simple_scalar_function_is_null() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a IS NULL").await
@@ -454,13 +507,21 @@ async fn try_cast_decimal_to_string() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_case() -> Result<()> {
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "SELECT sum(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
-        "Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END) AS sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE NULL END)]]\
-         \n  TableScan: data projection=[a]",
-        true
+        true,
+        true,
     )
-        .await
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END) AS sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE NULL END)]]
+      TableScan: data projection=[a]
+    "#
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -493,18 +554,27 @@ async fn roundtrip_inlist_4() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_inlist_5() -> Result<()> {
     // on roundtrip there is an additional projection during TableScan which includes all column of the table,
-    // using assert_expected_plan here as a workaround
-    assert_expected_plan(
+    // using assert_and_generate_plan and assert_snapshot! here as a workaround
+    let plan = generate_plan_from_sql(
         "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
+        true,
+        true,
+    )
+    .await?;
 
-        "Projection: data.a, data.f\
-        \n  Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data2.mark\
-        \n    LeftMark Join: data.a = data2.a\
-        \n      TableScan: data projection=[a, f]\
-        \n      Projection: data2.a\
-        \n        Filter: data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")\
-        \n          TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")]",
-    true).await
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: data.a, data.f
+      Filter: data.f = Utf8("a") OR data.f = Utf8("b") OR data.f = Utf8("c") OR data2.mark
+        LeftMark Join: data.a = data2.a
+          TableScan: data projection=[a, f]
+          Projection: data2.a
+            Filter: data2.f = Utf8("b") OR data2.f = Utf8("c") OR data2.f = Utf8("d")
+              TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8("b") OR data2.f = Utf8("c") OR data2.f = Utf8("d")]
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
@@ -535,27 +605,44 @@ async fn roundtrip_non_equi_join() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_exists_filter() -> Result<()> {
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "SELECT b FROM data d1 WHERE EXISTS (SELECT * FROM data2 d2 WHERE d2.a = d1.a AND d2.e != d1.e)",
-        "Projection: data.b\
-        \n  LeftSemi Join: data.a = data2.a Filter: data2.e != CAST(data.e AS Int64)\
-        \n    TableScan: data projection=[a, b, e]\
-        \n    TableScan: data2 projection=[a, e]",
-        false // "d1" vs "data" field qualifier
-    ).await
+        false,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: data.b
+      LeftSemi Join: data.a = data2.a Filter: data2.e != CAST(data.e AS Int64)
+        TableScan: data projection=[a, b, e]
+        TableScan: data2 projection=[a, e]
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
 async fn inner_join() -> Result<()> {
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "SELECT data.a FROM data JOIN data2 ON data.a = data2.a",
-        "Projection: data.a\
-         \n  Inner Join: data.a = data2.a\
-         \n    TableScan: data projection=[a]\
-         \n    TableScan: data2 projection=[a]",
+        true,
         true,
     )
-    .await
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: data.a
+      Inner Join: data.a = data2.a
+        TableScan: data projection=[a]
+        TableScan: data2 projection=[a]
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
@@ -592,17 +679,25 @@ async fn roundtrip_self_implicit_cross_join() -> Result<()> {
 
 #[tokio::test]
 async fn self_join_introduces_aliases() -> Result<()> {
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.b = d2.b",
-        "Projection: left.b, right.c\
-        \n  Inner Join: left.b = right.b\
-        \n    SubqueryAlias: left\
-        \n      TableScan: data projection=[b]\
-        \n    SubqueryAlias: right\
-        \n      TableScan: data projection=[b, c]",
         false,
+        true,
     )
-    .await
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: left.b, right.c
+      Inner Join: left.b = right.b
+        SubqueryAlias: left
+          TableScan: data projection=[b]
+        SubqueryAlias: right
+          TableScan: data projection=[b, c]
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
@@ -699,7 +794,7 @@ async fn simple_intersect() -> Result<()> {
         let expected_plan_str = format!(
             "Projection: count(Int64(1)) AS {syntax}\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
-        \n    Projection: \
+        \n    Projection:\
         \n      LeftSemi Join: data.a = data2.a\
         \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
         \n          TableScan: data projection=[a]\
@@ -716,7 +811,7 @@ async fn simple_intersect() -> Result<()> {
     async fn check_constant(sql_syntax: &str, plan_expr: &str) -> Result<()> {
         let expected_plan_str = format!(
             "Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
-        \n  Projection: \
+        \n  Projection:\
         \n    LeftSemi Join: data.a = data2.a\
         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
         \n        TableScan: data projection=[a]\
@@ -747,12 +842,15 @@ async fn aggregate_wo_projection_consume() -> Result<()> {
     let proto_plan =
         read_json("tests/testdata/test_plans/aggregate_no_project.substrait.json");
 
-    assert_expected_plan_substrait(
-        proto_plan,
-        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
-        \n  TableScan: data projection=[a]",
-    )
-    .await
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+            Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]
+              TableScan: data projection=[a]
+            "#
+        );
+    Ok(())
 }
 
 #[tokio::test]
@@ -760,12 +858,15 @@ async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
     let proto_plan =
         read_json("tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json");
 
-    assert_expected_plan_substrait(
-        proto_plan,
-        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
-        \n  TableScan: data projection=[a]",
-    )
-    .await
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+            Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]
+              TableScan: data projection=[a]
+            "#
+        );
+    Ok(())
 }
 
 #[tokio::test]
@@ -773,12 +874,31 @@ async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
     let proto_plan =
         read_json("tests/testdata/test_plans/aggregate_sorted_no_project.substrait.json");
 
-    assert_expected_plan_substrait(
-        proto_plan,
-        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]\
-        \n  TableScan: data projection=[a]",
-    )
-    .await
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+    Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]
+      TableScan: data projection=[a]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_identical_grouping_expressions() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_identical_grouping_expressions.substrait.json");
+
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+    Aggregate: groupBy=[[Int32(1) AS grouping_col_1, Int32(1) AS grouping_col_2]], aggr=[[]]
+      TableScan: data projection=[]
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
@@ -869,7 +989,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
         let expected_plan_str = format!(
             "Projection: count(Int64(1)) AS {syntax}\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
-        \n    Projection: \
+        \n    Projection:\
         \n      LeftSemi Join: left.a = right.a\
         \n        SubqueryAlias: left\
         \n          Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -888,7 +1008,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     async fn check_constant(sql_syntax: &str, plan_expr: &str) -> Result<()> {
         let expected_plan_str = format!(
             "Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
-        \n  Projection: \
+        \n  Projection:\
         \n    LeftSemi Join: left.a = right.a\
         \n      SubqueryAlias: left\
         \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -986,19 +1106,67 @@ async fn roundtrip_literal_list() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_literal_struct() -> Result<()> {
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "SELECT STRUCT(1, true, CAST(NULL AS STRING)) FROM data",
-        "Projection: Struct({c0:1,c1:true,c2:}) AS struct(Int64(1),Boolean(true),NULL)\
-        \n  TableScan: data projection=[]",
-        false, // "Struct(..)" vs "struct(..)"
+        true,
+        true,
     )
-    .await
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: Struct({c0:1,c1:true,c2:}) AS struct(Int64(1),Boolean(true),NULL)
+      TableScan: data projection=[]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_literal_named_struct() -> Result<()> {
+    let plan = generate_plan_from_sql(
+        "SELECT STRUCT(1 as int_field, true as boolean_field, CAST(NULL AS STRING) as string_field) FROM data",
+        true,
+        true,
+    )
+        .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: Struct({int_field:1,boolean_field:true,string_field:}) AS named_struct(Utf8("int_field"),Int64(1),Utf8("boolean_field"),Boolean(true),Utf8("string_field"),NULL)
+      TableScan: data projection=[]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_literal_renamed_struct() -> Result<()> {
+    // This test aims to hit a case where the struct column itself has the expected name, but its
+    // inner field needs to be renamed.
+    let plan = generate_plan_from_sql(
+        "SELECT CAST((STRUCT(1)) AS Struct<\"int_field\"Int>) AS 'Struct({c0:1})' FROM data",
+        true,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: Struct({int_field:1}) AS Struct({c0:1})
+      TableScan: data projection=[]
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
 async fn roundtrip_values() -> Result<()> {
     // TODO: would be nice to have a struct inside the LargeList, but arrow_cast doesn't support that currently
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "VALUES \
             (\
                 1, \
@@ -1009,17 +1177,18 @@ async fn roundtrip_values() -> Result<()> {
                 [STRUCT(STRUCT('a' AS string_field) AS struct_field), STRUCT(STRUCT('b' AS string_field) AS struct_field)]\
             ), \
             (NULL, NULL, NULL, NULL, NULL, NULL)",
-        "Values: \
-            (\
-                Int64(1), \
-                Utf8(\"a\"), \
-                List([[-213.1, , 5.5, 2.0, 1.0], []]), \
-                LargeList([1, 2, 3]), \
-                Struct({c0:true,int_field:1,c2:}), \
-                List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])\
-            ), \
-            (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
-    true).await
+        true,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Values: (Int64(1), Utf8("a"), List([[-213.1, , 5.5, 2.0, 1.0], []]), LargeList([1, 2, 3]), Struct({c0:true,int_field:1,c2:}), List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])), (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1061,14 +1230,22 @@ async fn duplicate_column() -> Result<()> {
     // only. DataFusion however, is strict about not having duplicate column names appear in the plan.
     // This test confirms that we generate aliases for columns in the plan which would otherwise have
     // colliding names.
-    assert_expected_plan(
+    let plan = generate_plan_from_sql(
         "SELECT a + 1 as sum_a, a + 1 as sum_a_2 FROM data",
-        "Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2\
-            \n  Projection: data.a + Int64(1)\
-            \n    TableScan: data projection=[a]",
+        true,
         true,
     )
-    .await
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2
+      Projection: data.a + Int64(1)
+        TableScan: data projection=[a]
+    "#
+        );
+    Ok(())
 }
 
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
@@ -1374,30 +1551,32 @@ async fn assert_read_filter_count(
     Ok(())
 }
 
-async fn assert_expected_plan_unoptimized(
+async fn generate_plan_from_sql(
     sql: &str,
-    expected_plan_str: &str,
     assert_schema: bool,
-) -> Result<()> {
+    optimized: bool,
+) -> Result<LogicalPlan> {
     let ctx = create_context().await?;
-    let df = ctx.sql(sql).await?;
-    let plan = df.into_unoptimized_plan();
+    let df: DataFrame = ctx.sql(sql).await?;
+
+    let plan = if optimized {
+        df.into_optimized_plan()?
+    } else {
+        df.into_unoptimized_plan()
+    };
     let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-
-    println!("{plan}");
-    println!("{plan2}");
-
-    println!("{proto:?}");
+    let plan2 = if optimized {
+        let temp = from_substrait_plan(&ctx.state(), &proto).await?;
+        ctx.state().optimize(&temp)?
+    } else {
+        from_substrait_plan(&ctx.state(), &proto).await?
+    };
 
     if assert_schema {
         assert_eq!(plan.schema(), plan2.schema());
     }
 
-    let plan2str = format!("{plan2}");
-    assert_eq!(expected_plan_str, &plan2str);
-
-    Ok(())
+    Ok(plan2)
 }
 
 async fn assert_expected_plan(
@@ -1412,11 +1591,6 @@ async fn assert_expected_plan(
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
-    println!("{plan}");
-    println!("{plan2}");
-
-    println!("{proto:?}");
-
     if assert_schema {
         assert_eq!(plan.schema(), plan2.schema());
     }
@@ -1427,20 +1601,14 @@ async fn assert_expected_plan(
     Ok(())
 }
 
-async fn assert_expected_plan_substrait(
-    substrait_plan: Plan,
-    expected_plan_str: &str,
-) -> Result<()> {
+async fn generate_plan_from_substrait(substrait_plan: Plan) -> Result<LogicalPlan> {
     let ctx = create_context().await?;
 
     let plan = from_substrait_plan(&ctx.state(), &substrait_plan).await?;
 
     let plan = ctx.state().optimize(&plan)?;
 
-    let planstr = format!("{plan}");
-    assert_eq!(planstr, expected_plan_str);
-
-    Ok(())
+    Ok(plan)
 }
 
 async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
@@ -1491,9 +1659,6 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx.state())?;
     let plan = from_substrait_plan(&ctx.state(), &proto).await?;
 
-    println!("{plan_with_alias}");
-    println!("{plan}");
-
     let plan1str = format!("{plan_with_alias}");
     let plan2str = format!("{plan}");
     assert_eq!(plan1str, plan2str);
@@ -1509,11 +1674,6 @@ async fn roundtrip_logical_plan_with_ctx(
     let proto = to_substrait_plan(&plan, &ctx.state())?;
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
-
-    println!("{plan}");
-    println!("{plan2}");
-
-    println!("{proto:?}");
 
     let plan1str = format!("{plan}");
     let plan2str = format!("{plan2}");

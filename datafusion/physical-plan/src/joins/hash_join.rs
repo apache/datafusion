@@ -20,7 +20,7 @@
 use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::task::Poll;
 use std::{any::Any, vec};
 
@@ -32,7 +32,13 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode, SharedBitmapBuilder,
 };
+use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
+use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
@@ -40,17 +46,16 @@ use crate::projection::{
 use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
 use crate::{
-    coalesce_partitions::CoalescePartitionsExec,
     common::can_project,
     handle_state,
     hash_utils::create_hashes,
+    joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
-        build_batch_from_indices, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, need_produce_result_in_final,
+        build_batch_empty_build_side, build_batch_from_indices, build_join_schema,
+        check_join_is_valid, estimate_join_statistics, need_produce_result_in_final,
         symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
-        JoinFilter, JoinHashMap, JoinHashMapOffset, JoinHashMapType, JoinOn, JoinOnRef,
-        StatefulStreamResult,
+        JoinFilter, JoinHashMapType, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -67,29 +72,299 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
-    JoinSide, JoinType, Result,
+    internal_datafusion_err, internal_err, plan_err, project_schema, JoinSide, JoinType,
+    NullEquality, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
+use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
+use itertools::Itertools;
 use parking_lot::Mutex;
+
+/// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
+const HASH_JOIN_SEED: RandomState =
+    RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+
+/// Represents the minimum and maximum values for a specific column.
+/// Used in dynamic filter pushdown to establish value boundaries.
+#[derive(Debug, Clone, PartialEq)]
+struct ColumnBounds {
+    /// The minimum value observed for this column
+    min: ScalarValue,
+    /// The maximum value observed for this column  
+    max: ScalarValue,
+}
+
+impl ColumnBounds {
+    fn new(min: ScalarValue, max: ScalarValue) -> Self {
+        Self { min, max }
+    }
+}
+
+/// Represents the bounds for all join key columns from a single partition.
+/// This contains the min/max values computed from one partition's build-side data.
+#[derive(Debug, Clone)]
+struct PartitionBounds {
+    /// Partition identifier for debugging and determinism (not strictly necessary)
+    partition: usize,
+    /// Min/max bounds for each join key column in this partition.
+    /// Index corresponds to the join key expression index.
+    column_bounds: Vec<ColumnBounds>,
+}
+
+impl PartitionBounds {
+    fn new(partition: usize, column_bounds: Vec<ColumnBounds>) -> Self {
+        Self {
+            partition,
+            column_bounds,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.column_bounds.len()
+    }
+
+    fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
+        self.column_bounds.get(index)
+    }
+}
+
+/// Coordinates dynamic filter bounds collection across multiple partitions
+///
+/// This structure ensures that dynamic filters are built with complete information from all
+/// relevant partitions before being applied to probe-side scans. Incomplete filters would
+/// incorrectly eliminate valid join results.
+///
+/// ## Synchronization Strategy
+///
+/// 1. Each partition computes bounds from its build-side data
+/// 2. Bounds are stored in the shared HashMap (indexed by partition_id)  
+/// 3. A counter tracks how many partitions have reported their bounds
+/// 4. When the last partition reports (completed == total), bounds are merged and filter is updated
+///
+/// ## Partition Counting
+///
+/// The `total_partitions` count represents how many times `collect_build_side` will be called:
+/// - **CollectLeft**: Number of output partitions (each accesses shared build data)
+/// - **Partitioned**: Number of input partitions (each builds independently)
+///
+/// ## Thread Safety
+///
+/// All fields use a single mutex to ensure correct coordination between concurrent
+/// partition executions.
+struct SharedBoundsAccumulator {
+    /// Shared state protected by a single mutex to avoid ordering concerns
+    inner: Mutex<SharedBoundsState>,
+    /// Total number of partitions.
+    /// Need to know this so that we can update the dynamic filter once we are done
+    /// building *all* of the hash tables.
+    total_partitions: usize,
+    /// Dynamic filter for pushdown to probe side
+    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    /// Right side join expressions needed for creating filter bounds
+    on_right: Vec<PhysicalExprRef>,
+}
+
+/// State protected by SharedBoundsAccumulator's mutex
+struct SharedBoundsState {
+    /// Bounds from completed partitions.
+    /// Each element represents the column bounds computed by one partition.
+    bounds: Vec<PartitionBounds>,
+    /// Number of partitions that have reported completion.
+    completed_partitions: usize,
+}
+
+impl SharedBoundsAccumulator {
+    /// Creates a new SharedBoundsAccumulator configured for the given partition mode
+    ///
+    /// This method calculates how many times `collect_build_side` will be called based on the
+    /// partition mode's execution pattern. This count is critical for determining when we have
+    /// complete information from all partitions to build the dynamic filter.
+    ///
+    /// ## Partition Mode Execution Patterns
+    ///
+    /// - **CollectLeft**: Build side is collected ONCE from partition 0 and shared via `OnceFut`
+    ///   across all output partitions. Each output partition calls `collect_build_side` to access
+    ///   the shared build data. Expected calls = number of output partitions.
+    ///
+    /// - **Partitioned**: Each partition independently builds its own hash table by calling
+    ///   `collect_build_side` once. Expected calls = number of build partitions.
+    ///
+    /// - **Auto**: Placeholder mode resolved during optimization. Uses 1 as safe default since
+    ///   the actual mode will be determined and a new bounds_accumulator created before execution.
+    ///
+    /// ## Why This Matters
+    ///
+    /// We cannot build a partial filter from some partitions - it would incorrectly eliminate
+    /// valid join results. We must wait until we have complete bounds information from ALL
+    /// relevant partitions before updating the dynamic filter.
+    fn new_from_partition_mode(
+        partition_mode: PartitionMode,
+        left_child: &dyn ExecutionPlan,
+        right_child: &dyn ExecutionPlan,
+        dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+        on_right: Vec<PhysicalExprRef>,
+    ) -> Self {
+        // Troubleshooting: If partition counts are incorrect, verify this logic matches
+        // the actual execution pattern in collect_build_side()
+        let expected_calls = match partition_mode {
+            // Each output partition accesses shared build data
+            PartitionMode::CollectLeft => {
+                right_child.output_partitioning().partition_count()
+            }
+            // Each partition builds its own data
+            PartitionMode::Partitioned => {
+                left_child.output_partitioning().partition_count()
+            }
+            // Default value, will be resolved during optimization (does not exist once `execute()` is called; will be replaced by one of the other two)
+            PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
+        };
+        Self {
+            inner: Mutex::new(SharedBoundsState {
+                bounds: Vec::with_capacity(expected_calls),
+                completed_partitions: 0,
+            }),
+            total_partitions: expected_calls,
+            dynamic_filter,
+            on_right,
+        }
+    }
+
+    /// Create a filter expression from individual partition bounds using OR logic.
+    ///
+    /// This creates a filter where each partition's bounds form a conjunction (AND)
+    /// of column range predicates, and all partitions are combined with OR.
+    ///
+    /// For example, with 2 partitions and 2 columns:
+    /// ((col0 >= p0_min0 AND col0 <= p0_max0 AND col1 >= p0_min1 AND col1 <= p0_max1)
+    ///  OR
+    ///  (col0 >= p1_min0 AND col0 <= p1_max0 AND col1 >= p1_min1 AND col1 <= p1_max1))
+    fn create_filter_from_partition_bounds(
+        &self,
+        bounds: &[PartitionBounds],
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if bounds.is_empty() {
+            return Ok(lit(true));
+        }
+
+        // Create a predicate for each partition
+        let mut partition_predicates = Vec::with_capacity(bounds.len());
+
+        for partition_bounds in bounds.iter().sorted_by_key(|b| b.partition) {
+            // Create range predicates for each join key in this partition
+            let mut column_predicates = Vec::with_capacity(partition_bounds.len());
+
+            for (col_idx, right_expr) in self.on_right.iter().enumerate() {
+                if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
+                    // Create predicate: col >= min AND col <= max
+                    let min_expr = Arc::new(BinaryExpr::new(
+                        Arc::clone(right_expr),
+                        Operator::GtEq,
+                        lit(column_bounds.min.clone()),
+                    )) as Arc<dyn PhysicalExpr>;
+                    let max_expr = Arc::new(BinaryExpr::new(
+                        Arc::clone(right_expr),
+                        Operator::LtEq,
+                        lit(column_bounds.max.clone()),
+                    )) as Arc<dyn PhysicalExpr>;
+                    let range_expr =
+                        Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
+                            as Arc<dyn PhysicalExpr>;
+                    column_predicates.push(range_expr);
+                }
+            }
+
+            // Combine all column predicates for this partition with AND
+            if !column_predicates.is_empty() {
+                let partition_predicate = column_predicates
+                    .into_iter()
+                    .reduce(|acc, pred| {
+                        Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                            as Arc<dyn PhysicalExpr>
+                    })
+                    .unwrap();
+                partition_predicates.push(partition_predicate);
+            }
+        }
+
+        // Combine all partition predicates with OR
+        let combined_predicate = partition_predicates
+            .into_iter()
+            .reduce(|acc, pred| {
+                Arc::new(BinaryExpr::new(acc, Operator::Or, pred))
+                    as Arc<dyn PhysicalExpr>
+            })
+            .unwrap_or_else(|| lit(true));
+
+        Ok(combined_predicate)
+    }
+
+    /// Report bounds from a completed partition and update dynamic filter if all partitions are done
+    ///
+    /// This method coordinates the dynamic filter updates across all partitions. It stores the
+    /// bounds from the current partition, increments the completion counter, and when all
+    /// partitions have reported, creates an OR'd filter from individual partition bounds.
+    ///
+    /// # Arguments
+    /// * `partition_bounds` - The bounds computed by this partition (if any)
+    ///
+    /// # Returns
+    /// * `Result<()>` - Ok if successful, Err if filter update failed
+    fn report_partition_bounds(
+        &self,
+        partition: usize,
+        partition_bounds: Option<Vec<ColumnBounds>>,
+    ) -> Result<()> {
+        let mut inner = self.inner.lock();
+
+        // Store bounds in the accumulator - this runs once per partition
+        if let Some(bounds) = partition_bounds {
+            // Only push actual bounds if they exist
+            inner.bounds.push(PartitionBounds::new(partition, bounds));
+        }
+
+        // Increment the completion counter
+        // Even empty partitions must report to ensure proper termination
+        inner.completed_partitions += 1;
+        let completed = inner.completed_partitions;
+        let total_partitions = self.total_partitions;
+
+        // Critical synchronization point: Only update the filter when ALL partitions are complete
+        // Troubleshooting: If you see "completed > total_partitions", check partition
+        // count calculation in new_from_partition_mode() - it may not match actual execution calls
+        if completed == total_partitions && !inner.bounds.is_empty() {
+            let filter_expr = self.create_filter_from_partition_bounds(&inner.bounds)?;
+            self.dynamic_filter.update(filter_expr)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Debug for SharedBoundsAccumulator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SharedBoundsAccumulator")
+    }
+}
 
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {
     /// The hash table with indices into `batch`
-    hash_map: JoinHashMap,
+    hash_map: Box<dyn JoinHashMapType>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
@@ -104,17 +379,20 @@ struct JoinLeftData {
     /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
     /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
     _reservation: MemoryReservation,
+    /// Bounds computed from the build side for dynamic filter pushdown
+    bounds: Option<Vec<ColumnBounds>>,
 }
 
 impl JoinLeftData {
     /// Create a new `JoinLeftData` from its parts
     fn new(
-        hash_map: JoinHashMap,
+        hash_map: Box<dyn JoinHashMapType>,
         batch: RecordBatch,
         values: Vec<ArrayRef>,
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
+        bounds: Option<Vec<ColumnBounds>>,
     ) -> Self {
         Self {
             hash_map,
@@ -123,12 +401,13 @@ impl JoinLeftData {
             visited_indices_bitmap,
             probe_threads_counter,
             _reservation: reservation,
+            bounds,
         }
     }
 
     /// return a reference to the hash map
-    fn hash_map(&self) -> &JoinHashMap {
-        &self.hash_map
+    fn hash_map(&self) -> &dyn JoinHashMapType {
+        &*self.hash_map
     }
 
     /// returns a reference to the build side batch
@@ -317,7 +596,6 @@ impl JoinLeftData {
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
 /// loading of the left side with the processing in each output stream.
 /// Therefore it can not be [`Clone`]
-#[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
     pub left: Arc<dyn ExecutionPlan>,
@@ -338,7 +616,7 @@ pub struct HashJoinExec {
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
-    left_fut: OnceAsync<JoinLeftData>,
+    left_fut: Arc<OnceAsync<JoinLeftData>>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
@@ -349,13 +627,39 @@ pub struct HashJoinExec {
     pub projection: Option<Vec<usize>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    /// Null matching behavior: If `null_equals_null` is true, rows that have
-    /// `null`s in both left and right equijoin columns will be matched.
-    /// Otherwise, rows that have `null`s in the join columns will not be
-    /// matched and thus will not appear in the output.
-    pub null_equals_null: bool,
+    /// The equality null-handling behavior of the join algorithm.
+    pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Dynamic filter for pushing down to the probe side
+    /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result
+    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    /// Shared bounds accumulator for coordinating dynamic filter updates across partitions
+    /// Only created when dynamic filter pushdown is enabled.
+    /// Lazily initialized at execution time to use actual runtime partition counts
+    bounds_accumulator: Option<OnceLock<Arc<SharedBoundsAccumulator>>>,
+}
+
+impl fmt::Debug for HashJoinExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HashJoinExec")
+            .field("left", &self.left)
+            .field("right", &self.right)
+            .field("on", &self.on)
+            .field("filter", &self.filter)
+            .field("join_type", &self.join_type)
+            .field("join_schema", &self.join_schema)
+            .field("left_fut", &self.left_fut)
+            .field("random_state", &self.random_state)
+            .field("mode", &self.mode)
+            .field("metrics", &self.metrics)
+            .field("projection", &self.projection)
+            .field("column_indices", &self.column_indices)
+            .field("null_equality", &self.null_equality)
+            .field("cache", &self.cache)
+            // Explicitly exclude dynamic_filter to avoid runtime state differences in tests
+            .finish()
+    }
 }
 
 impl HashJoinExec {
@@ -372,7 +676,7 @@ impl HashJoinExec {
         join_type: &JoinType,
         projection: Option<Vec<usize>>,
         partition_mode: PartitionMode,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -385,7 +689,7 @@ impl HashJoinExec {
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = HASH_JOIN_SEED;
 
         let join_schema = Arc::new(join_schema);
 
@@ -402,6 +706,9 @@ impl HashJoinExec {
             projection.as_ref(),
         )?;
 
+        // Initialize both dynamic filter and bounds accumulator to None
+        // They will be set later if dynamic filtering is enabled
+
         Ok(HashJoinExec {
             left,
             right,
@@ -415,9 +722,19 @@ impl HashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             projection,
             column_indices,
-            null_equals_null,
+            null_equality,
             cache,
+            dynamic_filter: None,
+            bounds_accumulator: None,
         })
+    }
+
+    fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
+        // Extract the right-side keys (probe side keys) from the `on` clauses
+        // Dynamic filter will be created from build side values (left side) and applied to probe side (right side)
+        let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
+        // Initialize with a placeholder expression (true) that will be updated when the hash table is built
+        Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
     }
 
     /// left (build) side which gets hashed
@@ -456,9 +773,9 @@ impl HashJoinExec {
         &self.mode
     }
 
-    /// Get null_equals_null
-    pub fn null_equals_null(&self) -> bool {
-        self.null_equals_null
+    /// Get null_equality
+    pub fn null_equality(&self) -> NullEquality {
+        self.null_equality
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -471,6 +788,7 @@ impl HashJoinExec {
                     | JoinType::Right
                     | JoinType::RightAnti
                     | JoinType::RightSemi
+                    | JoinType::RightMark
             ),
         ]
     }
@@ -505,7 +823,7 @@ impl HashJoinExec {
             &self.join_type,
             projection,
             self.mode,
-            self.null_equals_null,
+            self.null_equality,
         )
     }
 
@@ -528,17 +846,17 @@ impl HashJoinExec {
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
-        );
+        )?;
 
         let mut output_partitioning = match mode {
             PartitionMode::CollectLeft => {
-                asymmetric_join_output_partitioning(left, right, &join_type)
+                asymmetric_join_output_partitioning(left, right, &join_type)?
             }
             PartitionMode::Auto => Partitioning::UnknownPartitioning(
                 right.output_partitioning().partition_count(),
             ),
             PartitionMode::Partitioned => {
-                symmetric_join_output_partitioning(left, right, &join_type)
+                symmetric_join_output_partitioning(left, right, &join_type)?
             }
         };
 
@@ -552,7 +870,8 @@ impl HashJoinExec {
                 | JoinType::LeftSemi
                 | JoinType::RightSemi
                 | JoinType::Right
-                | JoinType::RightAnti => EmissionType::Incremental,
+                | JoinType::RightAnti
+                | JoinType::RightMark => EmissionType::Incremental,
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
                 JoinType::Left
@@ -613,7 +932,7 @@ impl HashJoinExec {
                 self.join_type(),
             ),
             partition_mode,
-            self.null_equals_null(),
+            self.null_equality(),
         )?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
@@ -660,13 +979,13 @@ impl DisplayAs for HashJoinExec {
                 let on = self
                     .on
                     .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
                 write!(
                     f,
                     "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
-                    self.mode, self.join_type, on, display_filter, display_projections
+                    self.mode, self.join_type, on, display_filter, display_projections,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -682,7 +1001,14 @@ impl DisplayAs for HashJoinExec {
                 if *self.join_type() != JoinType::Inner {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
-                writeln!(f, "on={}", on)
+
+                writeln!(f, "on={on}")?;
+
+                if let Some(filter) = self.filter.as_ref() {
+                    writeln!(f, "filter={filter}")?;
+                }
+
+                Ok(())
             }
         }
     }
@@ -749,20 +1075,65 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    /// Creates a new HashJoinExec with different children while preserving configuration.
+    ///
+    /// This method is called during query optimization when the optimizer creates new
+    /// plan nodes. Importantly, it creates a fresh bounds_accumulator via `try_new`
+    /// rather than cloning the existing one because partitioning may have changed.
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(HashJoinExec::try_new(
-            Arc::clone(&children[0]),
-            Arc::clone(&children[1]),
-            self.on.clone(),
-            self.filter.clone(),
-            &self.join_type,
-            self.projection.clone(),
-            self.mode,
-            self.null_equals_null,
-        )?))
+        Ok(Arc::new(HashJoinExec {
+            left: Arc::clone(&children[0]),
+            right: Arc::clone(&children[1]),
+            on: self.on.clone(),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            left_fut: Arc::clone(&self.left_fut),
+            random_state: self.random_state.clone(),
+            mode: self.mode,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projection: self.projection.clone(),
+            column_indices: self.column_indices.clone(),
+            null_equality: self.null_equality,
+            cache: Self::compute_properties(
+                &children[0],
+                &children[1],
+                Arc::clone(&self.join_schema),
+                self.join_type,
+                &self.on,
+                self.mode,
+                self.projection.as_ref(),
+            )?,
+            // Keep the dynamic filter, bounds accumulator will be reset
+            dynamic_filter: self.dynamic_filter.clone(),
+            bounds_accumulator: None,
+        }))
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(HashJoinExec {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            on: self.on.clone(),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            // Reset the left_fut to allow re-execution
+            left_fut: Arc::new(OnceAsync::default()),
+            random_state: self.random_state.clone(),
+            mode: self.mode,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projection: self.projection.clone(),
+            column_indices: self.column_indices.clone(),
+            null_equality: self.null_equality,
+            cache: self.cache.clone(),
+            // Reset dynamic filter and bounds accumulator to initial state
+            dynamic_filter: None,
+            bounds_accumulator: None,
+        }))
     }
 
     fn execute(
@@ -775,11 +1146,6 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|on| Arc::clone(&on.0))
             .collect::<Vec<_>>();
-        let on_right = self
-            .on
-            .iter()
-            .map(|on| Arc::clone(&on.1))
-            .collect::<Vec<_>>();
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
 
@@ -791,38 +1157,50 @@ impl ExecutionPlan for HashJoinExec {
             );
         }
 
+        if self.mode == PartitionMode::CollectLeft && left_partitions != 1 {
+            return internal_err!(
+                "Invalid HashJoinExec, the output partition count of the left child must be 1 in CollectLeft mode,\
+                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
+            );
+        }
+
+        let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
+
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.once(|| {
+            PartitionMode::CollectLeft => self.left_fut.try_once(|| {
+                let left_stream = self.left.execute(0, Arc::clone(&context))?;
+
                 let reservation =
                     MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
-                collect_left_input(
-                    None,
+
+                Ok(collect_left_input(
                     self.random_state.clone(),
-                    Arc::clone(&self.left),
+                    left_stream,
                     on_left.clone(),
-                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                )
-            }),
+                    enable_dynamic_filter_pushdown,
+                ))
+            })?,
             PartitionMode::Partitioned => {
+                let left_stream = self.left.execute(partition, Arc::clone(&context))?;
+
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
 
                 OnceFut::new(collect_left_input(
-                    Some(partition),
                     self.random_state.clone(),
-                    Arc::clone(&self.left),
+                    left_stream,
                     on_left.clone(),
-                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
+                    enable_dynamic_filter_pushdown,
                 ))
             }
             PartitionMode::Auto => {
@@ -834,6 +1212,34 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         let batch_size = context.session_config().batch_size();
+
+        // Initialize bounds_accumulator lazily with runtime partition counts (only if enabled)
+        let bounds_accumulator = if enable_dynamic_filter_pushdown
+            && self.dynamic_filter.is_some()
+        {
+            if let Some(ref bounds_accumulator_oncelock) = self.bounds_accumulator {
+                let dynamic_filter = Arc::clone(self.dynamic_filter.as_ref().unwrap());
+                let on_right = self
+                    .on
+                    .iter()
+                    .map(|(_, right_expr)| Arc::clone(right_expr))
+                    .collect::<Vec<_>>();
+
+                Some(Arc::clone(bounds_accumulator_oncelock.get_or_init(|| {
+                    Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
+                        self.mode,
+                        self.left.as_ref(),
+                        self.right.as_ref(),
+                        dynamic_filter,
+                        on_right,
+                    ))
+                })))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -848,7 +1254,14 @@ impl ExecutionPlan for HashJoinExec {
             None => self.column_indices.clone(),
         };
 
+        let on_right = self
+            .on
+            .iter()
+            .map(|(_, right_expr)| Arc::clone(right_expr))
+            .collect::<Vec<_>>();
+
         Ok(Box::pin(HashJoinStream {
+            partition,
             schema: self.schema(),
             on_right,
             filter: self.filter.clone(),
@@ -857,12 +1270,13 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: column_indices_after_projection,
             random_state: self.random_state.clone(),
             join_metrics,
-            null_equals_null: self.null_equals_null,
+            null_equality: self.null_equality,
             state: HashJoinStreamState::WaitBuildSide,
             build_side: BuildSide::Initial(BuildSideInitialState { left_fut }),
             batch_size,
             hashes_buffer: vec![],
             right_side_ordered: self.right.output_ordering().is_some(),
+            bounds_accumulator,
         }))
     }
 
@@ -871,12 +1285,19 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         let stats = estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
+            self.left.partition_statistics(None)?,
+            self.right.partition_statistics(None)?,
             self.on.clone(),
             &self.join_type,
             &self.join_schema,
@@ -919,46 +1340,178 @@ impl ExecutionPlan for HashJoinExec {
                 // Returned early if projection is not None
                 None,
                 *self.partition_mode(),
-                self.null_equals_null,
+                self.null_equality,
             )?)))
         } else {
             try_embed_projection(projection, self)
         }
     }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+        // For now we don't support them.
+        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+        // See https://github.com/apache/datafusion/issues/16973 for tracking.
+        if self.join_type != JoinType::Inner {
+            return Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &self.children(),
+            ));
+        }
+
+        // Get basic filter descriptions for both children
+        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+            &parent_filters,
+            self.left(),
+        )?;
+        let mut right_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+            &parent_filters,
+            self.right(),
+        )?;
+
+        // Add dynamic filters in Post phase if enabled
+        if matches!(phase, FilterPushdownPhase::Post)
+            && config.optimizer.enable_dynamic_filter_pushdown
+        {
+            // Add actual dynamic filter to right side (probe side)
+            let dynamic_filter = Self::create_dynamic_filter(&self.on);
+            right_child = right_child.with_self_filter(dynamic_filter);
+        }
+
+        Ok(FilterDescription::new()
+            .with_child(left_child)
+            .with_child(right_child))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
+        // non-inner joins in `gather_filters_for_pushdown`.
+        // However it's a cheap check and serves to inform future devs touching this function that they need to be really
+        // careful pushing down filters through non-inner joins.
+        if self.join_type != JoinType::Inner {
+            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+            // For now we don't support them.
+            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+            return Ok(FilterPushdownPropagation::all_unsupported(
+                child_pushdown_result,
+            ));
+        }
+
+        let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
+        assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
+        let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
+                                                                               // We expect 0 or 1 self filters
+        if let Some(filter) = right_child_self_filters.first() {
+            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
+            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
+            let predicate = Arc::clone(&filter.predicate);
+            if let Ok(dynamic_filter) =
+                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
+            {
+                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
+                let new_node = Arc::new(HashJoinExec {
+                    left: Arc::clone(&self.left),
+                    right: Arc::clone(&self.right),
+                    on: self.on.clone(),
+                    filter: self.filter.clone(),
+                    join_type: self.join_type,
+                    join_schema: Arc::clone(&self.join_schema),
+                    left_fut: Arc::clone(&self.left_fut),
+                    random_state: self.random_state.clone(),
+                    mode: self.mode,
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    projection: self.projection.clone(),
+                    column_indices: self.column_indices.clone(),
+                    null_equality: self.null_equality,
+                    cache: self.cache.clone(),
+                    dynamic_filter: Some(dynamic_filter),
+                    bounds_accumulator: Some(OnceLock::new()),
+                });
+                result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
+            }
+        }
+        Ok(result)
+    }
 }
 
-/// Reads the left (build) side of the input, buffering it in memory, to build a
-/// hash table (`LeftJoinData`)
-#[allow(clippy::too_many_arguments)]
+/// Compute min/max bounds for each column in the given arrays
+fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<ColumnBounds>> {
+    arrays
+        .iter()
+        .map(|array| {
+            if array.is_empty() {
+                // Return NULL values for empty arrays
+                return Ok(ColumnBounds::new(
+                    ScalarValue::try_from(array.data_type())?,
+                    ScalarValue::try_from(array.data_type())?,
+                ));
+            }
+
+            // Use Arrow kernels for efficient min/max computation
+            let min_val = min_batch(array)?;
+            let max_val = max_batch(array)?;
+
+            Ok(ColumnBounds::new(min_val, max_val))
+        })
+        .collect()
+}
+
+#[expect(clippy::too_many_arguments)]
+/// Collects all batches from the left (build) side stream and creates a hash map for joining.
+///
+/// This function is responsible for:
+/// 1. Consuming the entire left stream and collecting all batches into memory
+/// 2. Building a hash map from the join key columns for efficient probe operations
+/// 3. Computing bounds for dynamic filter pushdown (if enabled)
+/// 4. Preparing visited indices bitmap for certain join types
+///
+/// # Parameters
+/// * `random_state` - Random state for consistent hashing across partitions
+/// * `left_stream` - Stream of record batches from the build side
+/// * `on_left` - Physical expressions for the left side join keys
+/// * `metrics` - Metrics collector for tracking memory usage and row counts
+/// * `reservation` - Memory reservation tracker for the hash table and data
+/// * `with_visited_indices_bitmap` - Whether to track visited indices (for outer joins)
+/// * `probe_threads_count` - Number of threads that will probe this hash table
+/// * `should_compute_bounds` - Whether to compute min/max bounds for dynamic filtering
+///
+/// # Dynamic Filter Coordination
+/// When `should_compute_bounds` is true, this function computes the min/max bounds
+/// for each join key column but does NOT update the dynamic filter. Instead, the
+/// bounds are stored in the returned `JoinLeftData` and later coordinated by
+/// `SharedBoundsAccumulator` to ensure all partitions contribute their bounds
+/// before updating the filter exactly once.
+///
+/// # Returns
+/// `JoinLeftData` containing the hash map, consolidated batch, join key values,
+/// visited indices bitmap, and computed bounds (if requested).
 async fn collect_left_input(
-    partition: Option<usize>,
     random_state: RandomState,
-    left: Arc<dyn ExecutionPlan>,
+    left_stream: SendableRecordBatchStream,
     on_left: Vec<PhysicalExprRef>,
-    context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
+    should_compute_bounds: bool,
 ) -> Result<JoinLeftData> {
-    let schema = left.schema();
-
-    let (left_input, left_input_partition) = if let Some(partition) = partition {
-        (left, partition)
-    } else if left.output_partitioning().partition_count() != 1 {
-        (Arc::new(CoalescePartitionsExec::new(left)) as _, 0)
-    } else {
-        (left, 0)
-    };
-
-    // Depending on partition argument load single partition or whole left side in memory
-    let stream = left_input.execute(left_input_partition, Arc::clone(&context))?;
+    let schema = left_stream.schema();
 
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
     // 2. stores the batches in a vector.
     let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, mut reservation) = stream
+    let (batches, num_rows, metrics, mut reservation) = left_stream
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = get_record_batch_memory_size(&batch);
             // Reserve memory for incoming batch
@@ -977,14 +1530,25 @@ async fn collect_left_input(
 
     // Estimation of memory size, required for hashtable, prior to allocation.
     // Final result can be verified using `RawTable.allocation_info()`
-    let fixed_size = size_of::<JoinHashMap>();
-    let estimated_hashtable_size =
-        estimate_memory_size::<(u64, u64)>(num_rows, fixed_size)?;
+    let fixed_size_u32 = size_of::<JoinHashMapU32>();
+    let fixed_size_u64 = size_of::<JoinHashMapU64>();
 
-    reservation.try_grow(estimated_hashtable_size)?;
-    metrics.build_mem_used.add(estimated_hashtable_size);
+    // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
+    // `u64` indice variant
+    let mut hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
+        let estimated_hashtable_size =
+            estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;
+        reservation.try_grow(estimated_hashtable_size)?;
+        metrics.build_mem_used.add(estimated_hashtable_size);
+        Box::new(JoinHashMapU64::with_capacity(num_rows))
+    } else {
+        let estimated_hashtable_size =
+            estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?;
+        reservation.try_grow(estimated_hashtable_size)?;
+        metrics.build_mem_used.add(estimated_hashtable_size);
+        Box::new(JoinHashMapU32::with_capacity(num_rows))
+    };
 
-    let mut hashmap = JoinHashMap::with_capacity(num_rows);
     let mut hashes_buffer = Vec::new();
     let mut offset = 0;
 
@@ -996,7 +1560,7 @@ async fn collect_left_input(
         update_hash(
             &on_left,
             batch,
-            &mut hashmap,
+            &mut *hashmap,
             offset,
             &random_state,
             &mut hashes_buffer,
@@ -1029,13 +1593,21 @@ async fn collect_left_input(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Compute bounds for dynamic filter if enabled
+    let bounds = if should_compute_bounds && num_rows > 0 {
+        Some(compute_bounds(&left_values)?)
+    } else {
+        None
+    };
+
     let data = JoinLeftData::new(
         hashmap,
         single_batch,
-        left_values,
+        left_values.clone(),
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,
+        bounds,
     );
 
     Ok(data)
@@ -1048,19 +1620,16 @@ async fn collect_left_input(
 /// which allows to keep either first (if set to true) or last (if set to false) row index
 /// as a chain head for rows with equal hash values.
 #[allow(clippy::too_many_arguments)]
-pub fn update_hash<T>(
+pub fn update_hash(
     on: &[PhysicalExprRef],
     batch: &RecordBatch,
-    hash_map: &mut T,
+    hash_map: &mut dyn JoinHashMapType,
     offset: usize,
     random_state: &RandomState,
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: usize,
     fifo_hashmap: bool,
-) -> Result<()>
-where
-    T: JoinHashMapType,
-{
+) -> Result<()> {
     // evaluate the keys
     let keys_values = on
         .iter()
@@ -1080,9 +1649,9 @@ where
         .map(|(i, val)| (i + offset, val));
 
     if fifo_hashmap {
-        hash_map.update_from_iter(hash_values_iter.rev(), deleted_offset);
+        hash_map.update_from_iter(Box::new(hash_values_iter.rev()), deleted_offset);
     } else {
-        hash_map.update_from_iter(hash_values_iter, deleted_offset);
+        hash_map.update_from_iter(Box::new(hash_values_iter), deleted_offset);
     }
 
     Ok(())
@@ -1208,6 +1777,8 @@ impl ProcessProbeBatchState {
 /// 2. Streams [RecordBatch]es as they arrive from the right input (probe) and joins
 ///    them with the contents of the hash table
 struct HashJoinStream {
+    /// Partition identifier for debugging and determinism
+    partition: usize,
     /// Input schema
     schema: Arc<Schema>,
     /// equijoin columns from the right (probe side)
@@ -1224,8 +1795,8 @@ struct HashJoinStream {
     join_metrics: BuildProbeJoinMetrics,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    /// If null_equals_null is true, null == null else null != null
-    null_equals_null: bool,
+    /// Defines the null equality for the join.
+    null_equality: NullEquality,
     /// State of the stream
     state: HashJoinStreamState,
     /// Build side
@@ -1236,6 +1807,8 @@ struct HashJoinStream {
     hashes_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
+    /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
+    bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -1294,16 +1867,16 @@ impl RecordBatchStream for HashJoinStream {
 /// ```
 #[allow(clippy::too_many_arguments)]
 fn lookup_join_hashmap(
-    build_hashmap: &JoinHashMap,
+    build_hashmap: &dyn JoinHashMapType,
     build_side_values: &[ArrayRef],
     probe_side_values: &[ArrayRef],
-    null_equals_null: bool,
+    null_equality: NullEquality,
     hashes_buffer: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
-    let (probe_indices, build_indices, next_offset) = build_hashmap
-        .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
+    let (probe_indices, build_indices, next_offset) =
+        build_hashmap.get_matched_indices_with_limit_offset(hashes_buffer, limit, offset);
 
     let build_indices: UInt64Array = build_indices.into();
     let probe_indices: UInt32Array = probe_indices.into();
@@ -1313,7 +1886,7 @@ fn lookup_join_hashmap(
         &probe_indices,
         build_side_values,
         probe_side_values,
-        null_equals_null,
+        null_equality,
     )?;
 
     Ok((build_indices, probe_indices, next_offset))
@@ -1323,22 +1896,21 @@ fn lookup_join_hashmap(
 fn eq_dyn_null(
     left: &dyn Array,
     right: &dyn Array,
-    null_equals_null: bool,
+    null_equality: NullEquality,
 ) -> Result<BooleanArray, ArrowError> {
     // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
     // implementation
     // <https://github.com/apache/datafusion/issues/10749>
     if left.data_type().is_nested() {
-        let op = if null_equals_null {
-            Operator::IsNotDistinctFrom
-        } else {
-            Operator::Eq
+        let op = match null_equality {
+            NullEquality::NullEqualsNothing => Operator::Eq,
+            NullEquality::NullEqualsNull => Operator::IsNotDistinctFrom,
         };
         return Ok(compare_op_for_nested(op, &left, &right)?);
     }
-    match (left.data_type(), right.data_type()) {
-        _ if null_equals_null => not_distinct(&left, &right),
-        _ => eq(&left, &right),
+    match null_equality {
+        NullEquality::NullEqualsNothing => eq(&left, &right),
+        NullEquality::NullEqualsNull => not_distinct(&left, &right),
     }
 }
 
@@ -1347,20 +1919,18 @@ pub fn equal_rows_arr(
     indices_right: &UInt32Array,
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
-    null_equals_null: bool,
+    null_equality: NullEquality,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
-    let (first_left, first_right) = iter.next().ok_or_else(|| {
-        DataFusionError::Internal(
-            "At least one array should be provided for both left and right".to_string(),
-        )
-    })?;
+    let Some((first_left, first_right)) = iter.next() else {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    };
 
     let arr_left = take(first_left.as_ref(), indices_left, None)?;
     let arr_right = take(first_right.as_ref(), indices_right, None)?;
 
-    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
+    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
 
     // Use map and try_fold to iterate over the remaining pairs of arrays.
     // In each iteration, take is used on the pair of arrays and their equality is determined.
@@ -1369,7 +1939,7 @@ pub fn equal_rows_arr(
         .map(|(left, right)| {
             let arr_left = take(left.as_ref(), indices_left, None)?;
             let arr_right = take(right.as_ref(), indices_right, None)?;
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
+            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)
         })
         .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
 
@@ -1400,10 +1970,12 @@ impl HashJoinStream {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 HashJoinStreamState::ProcessProbeBatch(_) => {
-                    handle_state!(self.process_probe_batch())
+                    let poll = handle_state!(self.process_probe_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 HashJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                    let poll = handle_state!(self.process_unmatched_build_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 HashJoinStreamState::Completed => Poll::Ready(None),
             };
@@ -1425,6 +1997,15 @@ impl HashJoinStream {
             .left_fut
             .get_shared(cx))?;
         build_timer.done();
+
+        // Handle dynamic filter bounds accumulation
+        //
+        // Dynamic filter coordination between partitions:
+        // Report bounds to the accumulator which will handle synchronization and filter updates
+        if let Some(ref bounds_accumulator) = self.bounds_accumulator {
+            bounds_accumulator
+                .report_partition_bounds(self.partition, left_data.bounds.clone())?;
+        }
 
         self.state = HashJoinStreamState::FetchProbeBatch;
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
@@ -1484,12 +2065,29 @@ impl HashJoinStream {
 
         let timer = self.join_metrics.join_time.timer();
 
+        // if the left side is empty, we can skip the (potentially expensive) join operation
+        if build_side.left_data.hash_map.is_empty() && self.filter.is_none() {
+            let result = build_batch_empty_build_side(
+                &self.schema,
+                build_side.left_data.batch(),
+                &state.batch,
+                &self.column_indices,
+                self.join_type,
+            )?;
+            self.join_metrics.output_batches.add(1);
+            timer.done();
+
+            self.state = HashJoinStreamState::FetchProbeBatch;
+
+            return Ok(StatefulStreamResult::Ready(Some(result)));
+        }
+
         // get the matched by join keys indices
         let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
             build_side.left_data.hash_map(),
             build_side.left_data.values(),
             &state.values,
-            self.null_equals_null,
+            self.null_equality,
             &self.hashes_buffer,
             self.batch_size,
             state.offset,
@@ -1504,6 +2102,7 @@ impl HashJoinStream {
                 right_indices,
                 filter,
                 JoinSide::Left,
+                None,
             )?
         } else {
             (left_indices, right_indices)
@@ -1556,18 +2155,29 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
-        let result = build_batch_from_indices(
-            &self.schema,
-            build_side.left_data.batch(),
-            &state.batch,
-            &left_indices,
-            &right_indices,
-            &self.column_indices,
-            JoinSide::Left,
-        )?;
+        let result = if self.join_type == JoinType::RightMark {
+            build_batch_from_indices(
+                &self.schema,
+                &state.batch,
+                build_side.left_data.batch(),
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Right,
+            )?
+        } else {
+            build_batch_from_indices(
+                &self.schema,
+                build_side.left_data.batch(),
+                &state.batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Left,
+            )?
+        };
 
         self.join_metrics.output_batches.add(1);
-        self.join_metrics.output_rows.add(result.num_rows());
         timer.done();
 
         if next_offset.is_none() {
@@ -1624,7 +2234,6 @@ impl HashJoinStream {
             self.join_metrics.input_rows.add(batch.num_rows());
 
             self.join_metrics.output_batches.add(1);
-            self.join_metrics.output_rows.add(batch.num_rows());
         }
         timer.done();
 
@@ -1654,7 +2263,8 @@ impl EmbeddedProjection for HashJoinExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::TestMemoryExec;
+    use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::test::{assert_join_metrics, TestMemoryExec};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
         test::exec::MockExec,
@@ -1706,7 +2316,7 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<HashJoinExec> {
         HashJoinExec::try_new(
             left,
@@ -1716,7 +2326,7 @@ mod tests {
             join_type,
             None,
             PartitionMode::CollectLeft,
-            null_equals_null,
+            null_equality,
         )
     }
 
@@ -1726,7 +2336,7 @@ mod tests {
         on: JoinOn,
         filter: JoinFilter,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<HashJoinExec> {
         HashJoinExec::try_new(
             left,
@@ -1736,7 +2346,7 @@ mod tests {
             join_type,
             None,
             PartitionMode::CollectLeft,
-            null_equals_null,
+            null_equality,
         )
     }
 
@@ -1745,16 +2355,17 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        let join = join(left, right, on, join_type, null_equals_null)?;
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
+        let join = join(left, right, on, join_type, null_equality)?;
         let columns_header = columns(&join.schema());
 
         let stream = join.execute(0, context)?;
         let batches = common::collect(stream).await?;
+        let metrics = join.metrics().unwrap();
 
-        Ok((columns_header, batches))
+        Ok((columns_header, batches, metrics))
     }
 
     async fn partitioned_join_collect(
@@ -1762,16 +2373,16 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         join_collect_with_partition_mode(
             left,
             right,
             on,
             join_type,
             PartitionMode::Partitioned,
-            null_equals_null,
+            null_equality,
             context,
         )
         .await
@@ -1783,9 +2394,9 @@ mod tests {
         on: JoinOn,
         join_type: &JoinType,
         partition_mode: PartitionMode,
-        null_equals_null: bool,
+        null_equality: NullEquality,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let partition_count = 4;
 
         let (left_expr, right_expr) = on
@@ -1833,7 +2444,7 @@ mod tests {
             join_type,
             None,
             partition_mode,
-            null_equals_null,
+            null_equality,
         )?;
 
         let columns = columns(&join.schema());
@@ -1849,8 +2460,9 @@ mod tests {
                     .collect::<Vec<_>>(),
             );
         }
+        let metrics = join.metrics().unwrap();
 
-        Ok((columns, batches))
+        Ok((columns, batches, metrics))
     }
 
     #[apply(batch_sizes)]
@@ -1873,12 +2485,12 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -1897,6 +2509,8 @@ mod tests {
                 +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -1920,12 +2534,12 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
+        let (columns, batches, metrics) = partitioned_join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -1943,6 +2557,8 @@ mod tests {
                 +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -1965,8 +2581,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -1982,6 +2605,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -2004,8 +2629,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -2022,6 +2654,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 4);
 
         Ok(())
     }
@@ -2051,8 +2685,15 @@ mod tests {
             ),
         ];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -2084,6 +2725,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -2104,6 +2747,7 @@ mod tests {
         let left =
             TestMemoryExec::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
                 .unwrap();
+        let left = Arc::new(CoalescePartitionsExec::new(left));
 
         let right = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -2121,8 +2765,15 @@ mod tests {
             ),
         ];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -2154,6 +2805,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -2176,6 +2829,7 @@ mod tests {
         let left =
             TestMemoryExec::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
                 .unwrap();
+        let left = Arc::new(CoalescePartitionsExec::new(left));
         let right = build_table(
             ("a2", &vec![20, 30, 10]),
             ("b2", &vec![5, 6, 4]),
@@ -2186,8 +2840,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -2204,6 +2865,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 4);
 
         Ok(())
     }
@@ -2236,7 +2899,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Inner, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -2329,7 +2998,14 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Left, false).unwrap();
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Left,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -2372,7 +3048,14 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Full, false).unwrap();
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
@@ -2413,7 +3096,14 @@ mod tests {
         )];
         let schema = right.schema();
         let right = TestMemoryExec::try_new_exec(&[vec![right]], schema, None).unwrap();
-        let join = join(left, right, on, &JoinType::Left, false).unwrap();
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Left,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -2450,7 +3140,14 @@ mod tests {
         )];
         let schema = right.schema();
         let right = TestMemoryExec::try_new_exec(&[vec![right]], schema, None).unwrap();
-        let join = join(left, right, on, &JoinType::Full, false).unwrap();
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
@@ -2490,15 +3187,16 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             &JoinType::Left,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
@@ -2512,6 +3210,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -2535,15 +3235,16 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
+        let (columns, batches, metrics) = partitioned_join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             &JoinType::Left,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
@@ -2557,6 +3258,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -2593,7 +3296,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::LeftSemi, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::LeftSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
@@ -2655,7 +3364,7 @@ mod tests {
             on.clone(),
             filter,
             &JoinType::LeftSemi,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let columns_header = columns(&join.schema());
@@ -2688,7 +3397,14 @@ mod tests {
             Arc::new(intermediate_schema),
         );
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::LeftSemi, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::LeftSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
@@ -2722,7 +3438,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::RightSemi, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
@@ -2784,7 +3506,7 @@ mod tests {
             on.clone(),
             filter,
             &JoinType::RightSemi,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let columns = columns(&join.schema());
@@ -2819,8 +3541,14 @@ mod tests {
             Arc::new(intermediate_schema.clone()),
         );
 
-        let join =
-            join_with_filter(left, right, on, filter, &JoinType::RightSemi, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
@@ -2851,7 +3579,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::LeftAnti, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::LeftAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
@@ -2910,7 +3644,7 @@ mod tests {
             on.clone(),
             filter,
             &JoinType::LeftAnti,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let columns_header = columns(&join.schema());
@@ -2947,7 +3681,14 @@ mod tests {
             Arc::new(intermediate_schema),
         );
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::LeftAnti, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::LeftAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
@@ -2984,7 +3725,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::RightAnti, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
@@ -3044,7 +3791,7 @@ mod tests {
             on.clone(),
             filter,
             &JoinType::RightAnti,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let columns_header = columns(&join.schema());
@@ -3085,8 +3832,14 @@ mod tests {
             Arc::new(intermediate_schema),
         );
 
-        let join =
-            join_with_filter(left, right, on, filter, &JoinType::RightAnti, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a2", "b2", "c2"]);
@@ -3130,8 +3883,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Right, false, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Right,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -3146,6 +3906,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3169,9 +3931,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            partitioned_join_collect(left, right, on, &JoinType::Right, false, task_ctx)
-                .await?;
+        let (columns, batches, metrics) = partitioned_join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Right,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -3186,6 +3954,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3209,7 +3979,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Full, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
@@ -3252,15 +4028,16 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             &JoinType::LeftMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
         allow_duplicates! {
@@ -3274,6 +4051,8 @@ mod tests {
             +----+----+----+-------+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3297,15 +4076,16 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
+        let (columns, batches, metrics) = partitioned_join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             &JoinType::LeftMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
         allow_duplicates! {
@@ -3320,12 +4100,109 @@ mod tests {
                 "#);
         }
 
+        assert_join_metrics!(metrics, 3);
+
+        Ok(())
+    }
+
+    #[apply(batch_sizes)]
+    #[tokio::test]
+    async fn join_right_mark(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]), // 6 does not exist on the left
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightMark,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a2", "b1", "c2", "mark"]);
+
+        let expected = [
+            "+----+----+----+-------+",
+            "| a2 | b1 | c2 | mark  |",
+            "+----+----+----+-------+",
+            "| 10 | 4  | 70 | true  |",
+            "| 20 | 5  | 80 | true  |",
+            "| 30 | 6  | 90 | false |",
+            "+----+----+----+-------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        assert_join_metrics!(metrics, 3);
+
+        Ok(())
+    }
+
+    #[apply(batch_sizes)]
+    #[tokio::test]
+    async fn partitioned_join_right_mark(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 4, 5, 6]), // 6 does not exist on the left
+            ("c2", &vec![60, 70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = partitioned_join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightMark,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a2", "b1", "c2", "mark"]);
+
+        let expected = [
+            "+----+----+----+-------+",
+            "| a2 | b1 | c2 | mark  |",
+            "+----+----+----+-------+",
+            "| 10 | 4  | 60 | true  |",
+            "| 20 | 4  | 70 | true  |",
+            "| 30 | 5  | 80 | true  |",
+            "| 40 | 6  | 90 | false |",
+            "+----+----+----+-------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        assert_join_metrics!(metrics, 4);
+
         Ok(())
     }
 
     #[test]
-    fn join_with_hash_collision() -> Result<()> {
-        let mut hashmap_left = HashTable::with_capacity(2);
+    fn join_with_hash_collisions_64() -> Result<()> {
+        let mut hashmap_left = HashTable::with_capacity(4);
         let left = build_table_i32(
             ("a", &vec![10, 20]),
             ("x", &vec![100, 200]),
@@ -3340,9 +4217,15 @@ mod tests {
             hashes_buff,
         )?;
 
-        // Create hash collisions (same hashes)
+        // Maps both values to both indices (1 and 2, representing input 0 and 1)
+        // 0 -> (0, 1)
+        // 1 -> (0, 2)
+        // The equality check will make sure only hashes[0] maps to 0 and hashes[1] maps to 1
         hashmap_left.insert_unique(hashes[0], (hashes[0], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 2), |(h, _)| *h);
+
         hashmap_left.insert_unique(hashes[1], (hashes[1], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 2), |(h, _)| *h);
 
         let next = vec![2, 0];
 
@@ -3355,7 +4238,7 @@ mod tests {
         // Join key column for both join sides
         let key_column: PhysicalExprRef = Arc::new(Column::new("a", 0)) as _;
 
-        let join_hash_map = JoinHashMap::new(hashmap_left, next);
+        let join_hash_map = JoinHashMapU64::new(hashmap_left, next);
 
         let left_keys_values = key_column.evaluate(&left)?.into_array(left.num_rows())?;
         let right_keys_values =
@@ -3371,7 +4254,7 @@ mod tests {
             &join_hash_map,
             &[left_keys_values],
             &[right_keys_values],
-            false,
+            NullEquality::NullEqualsNothing,
             &hashes_buffer,
             8192,
             (0, None),
@@ -3383,6 +4266,70 @@ mod tests {
 
         assert_eq!(left_ids, l);
 
+        assert_eq!(right_ids, r);
+
+        Ok(())
+    }
+
+    #[test]
+    fn join_with_hash_collisions_u32() -> Result<()> {
+        let mut hashmap_left = HashTable::with_capacity(4);
+        let left = build_table_i32(
+            ("a", &vec![10, 20]),
+            ("x", &vec![100, 200]),
+            ("y", &vec![200, 300]),
+        );
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; left.num_rows()];
+        let hashes = create_hashes(
+            &[Arc::clone(&left.columns()[0])],
+            &random_state,
+            hashes_buff,
+        )?;
+
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 1u32), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 2u32), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 1u32), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 2u32), |(h, _)| *h);
+
+        let next: Vec<u32> = vec![2, 0];
+
+        let right = build_table_i32(
+            ("a", &vec![10, 20]),
+            ("b", &vec![0, 0]),
+            ("c", &vec![30, 40]),
+        );
+
+        let key_column: PhysicalExprRef = Arc::new(Column::new("a", 0)) as _;
+
+        let join_hash_map = JoinHashMapU32::new(hashmap_left, next);
+
+        let left_keys_values = key_column.evaluate(&left)?.into_array(left.num_rows())?;
+        let right_keys_values =
+            key_column.evaluate(&right)?.into_array(right.num_rows())?;
+        let mut hashes_buffer = vec![0; right.num_rows()];
+        create_hashes(
+            &[Arc::clone(&right_keys_values)],
+            &random_state,
+            &mut hashes_buffer,
+        )?;
+
+        let (l, r, _) = lookup_join_hashmap(
+            &join_hash_map,
+            &[left_keys_values],
+            &[right_keys_values],
+            NullEquality::NullEqualsNothing,
+            &hashes_buffer,
+            8192,
+            (0, None),
+        )?;
+
+        // We still expect to match rows 0 and 1 on both sides
+        let left_ids: UInt64Array = vec![0, 1].into();
+        let right_ids: UInt32Array = vec![0, 1].into();
+
+        assert_eq!(left_ids, l);
         assert_eq!(right_ids, r);
 
         Ok(())
@@ -3407,7 +4354,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Inner, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3477,7 +4430,14 @@ mod tests {
         )];
         let filter = prepare_join_filter();
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Inner, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3519,7 +4479,14 @@ mod tests {
         )];
         let filter = prepare_join_filter();
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Left, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::Left,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3564,7 +4531,14 @@ mod tests {
         )];
         let filter = prepare_join_filter();
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Right, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::Right,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3608,7 +4582,14 @@ mod tests {
         )];
         let filter = prepare_join_filter();
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Full, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3745,6 +4726,15 @@ mod tests {
             "| 3  | 7  | 9  | false |",
             "+----+----+----+-------+",
         ];
+        let expected_right_mark = vec![
+            "+----+----+----+-------+",
+            "| a2 | b2 | c2 | mark  |",
+            "+----+----+----+-------+",
+            "| 10 | 4  | 70 | true  |",
+            "| 20 | 5  | 80 | true  |",
+            "| 30 | 6  | 90 | false |",
+            "+----+----+----+-------+",
+        ];
 
         let test_cases = vec![
             (JoinType::Inner, expected_inner),
@@ -3756,20 +4746,22 @@ mod tests {
             (JoinType::RightSemi, expected_right_semi),
             (JoinType::RightAnti, expected_right_anti),
             (JoinType::LeftMark, expected_left_mark),
+            (JoinType::RightMark, expected_right_mark),
         ];
 
         for (join_type, expected) in test_cases {
-            let (_, batches) = join_collect_with_partition_mode(
+            let (_, batches, metrics) = join_collect_with_partition_mode(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 on.clone(),
                 &join_type,
                 PartitionMode::CollectLeft,
-                false,
+                NullEquality::NullEqualsNothing,
                 Arc::clone(&task_ctx),
             )
             .await?;
             assert_batches_sorted_eq!(expected, &batches);
+            assert_join_metrics!(metrics, expected.len() - 4);
         }
 
         Ok(())
@@ -3797,7 +4789,13 @@ mod tests {
             Arc::new(Column::new_with_schema("date", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Inner, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let task_ctx = Arc::new(TaskContext::default());
         let stream = join.execute(0, task_ctx)?;
@@ -3856,7 +4854,7 @@ mod tests {
                 Arc::clone(&right_input) as Arc<dyn ExecutionPlan>,
                 on.clone(),
                 &join_type,
-                false,
+                NullEquality::NullEqualsNothing,
             )
             .unwrap();
             let task_ctx = Arc::new(TaskContext::default());
@@ -3970,7 +4968,7 @@ mod tests {
                     Arc::clone(&right),
                     on.clone(),
                     &join_type,
-                    false,
+                    NullEquality::NullEqualsNothing,
                 )
                 .unwrap();
 
@@ -3993,10 +4991,7 @@ mod tests {
                 assert_eq!(
                     batches.len(),
                     expected_batch_count,
-                    "expected {} output batches for {} join with batch_size = {}",
-                    expected_batch_count,
-                    join_type,
-                    batch_size
+                    "expected {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}"
                 );
 
                 let expected = match join_type {
@@ -4038,6 +5033,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::RightAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
         ];
 
         for join_type in join_types {
@@ -4052,7 +5048,7 @@ mod tests {
                 Arc::clone(&right),
                 on.clone(),
                 &join_type,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let stream = join.execute(0, task_ctx)?;
@@ -4061,12 +5057,12 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput"
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120 bytes for HashJoinInput"
+                "Failed to allocate additional 120.0 B for HashJoinInput"
             );
         }
 
@@ -4133,7 +5129,7 @@ mod tests {
                 &join_type,
                 None,
                 PartitionMode::Partitioned,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let stream = join.execute(1, task_ctx)?;
@@ -4142,13 +5138,13 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
 
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120 bytes for HashJoinInput[1]"
+                "Failed to allocate additional 120.0 B for HashJoinInput[1]"
             );
         }
 
@@ -4193,8 +5189,15 @@ mod tests {
             Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["n1", "n2"]);
 
@@ -4209,6 +5212,8 @@ mod tests {
             +--------+--------+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -4225,12 +5230,12 @@ mod tests {
             Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
         )];
 
-        let (_, batches_null_eq) = join_collect(
+        let (_, batches_null_eq, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
-            true,
+            NullEquality::NullEqualsNull,
             Arc::clone(&task_ctx),
         )
         .await?;
@@ -4245,8 +5250,19 @@ mod tests {
                 "#);
         }
 
-        let (_, batches_null_neq) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        assert_join_metrics!(metrics, 1);
+
+        let (_, batches_null_neq, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_join_metrics!(metrics, 0);
 
         let expected_null_neq =
             ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];

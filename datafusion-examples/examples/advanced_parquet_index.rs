@@ -30,7 +30,7 @@ use datafusion::common::{
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    FileMeta, FileScanConfig, ParquetFileReaderFactory, ParquetSource,
+    FileMeta, FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -55,6 +55,7 @@ use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::datasource::memory::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
@@ -494,17 +495,19 @@ impl TableProvider for IndexTableProvider {
             ParquetSource::default()
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
-                .with_predicate(Arc::clone(&schema), predicate)
+                .with_predicate(predicate)
                 // provide the factory to create parquet reader without re-reading metadata
                 .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
-        let file_scan_config = FileScanConfig::new(object_store_url, schema, file_source)
-            .with_limit(limit)
-            .with_projection(projection.cloned())
-            .with_file(partitioned_file);
+        let file_scan_config =
+            FileScanConfigBuilder::new(object_store_url, schema, file_source)
+                .with_limit(limit)
+                .with_projection(projection.cloned())
+                .with_file(partitioned_file)
+                .build();
 
         // Finally, put it all together into a DataSourceExec
-        Ok(file_scan_config.build())
+        Ok(DataSourceExec::from_data_source(file_scan_config))
     }
 
     /// Tell DataFusion to push filters down to the scan method
@@ -568,7 +571,9 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             .to_string();
 
         let object_store = Arc::clone(&self.object_store);
-        let mut inner = ParquetObjectReader::new(object_store, file_meta.object_meta);
+        let mut inner =
+            ParquetObjectReader::new(object_store, file_meta.object_meta.location)
+                .with_file_size(file_meta.object_meta.size);
 
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)
@@ -596,7 +601,7 @@ struct ParquetReaderWithCache {
 impl AsyncFileReader for ParquetReaderWithCache {
     fn get_bytes(
         &mut self,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
         println!("get_bytes: {} Reading range {:?}", self.filename, range);
         self.inner.get_bytes(range)
@@ -604,7 +609,7 @@ impl AsyncFileReader for ParquetReaderWithCache {
 
     fn get_byte_ranges(
         &mut self,
-        ranges: Vec<Range<usize>>,
+        ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
         println!(
             "get_byte_ranges: {} Reading ranges {:?}",
@@ -615,6 +620,7 @@ impl AsyncFileReader for ParquetReaderWithCache {
 
     fn get_metadata(
         &mut self,
+        _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
         println!("get_metadata: {} returning cached metadata", self.filename);
 

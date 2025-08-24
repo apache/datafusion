@@ -78,7 +78,7 @@ impl FileStream {
         file_opener: Arc<dyn FileOpener>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let (projected_schema, ..) = config.project();
+        let projected_schema = config.projected_schema();
         let pc_projector = PartitionColumnProjector::new(
             Arc::clone(&projected_schema),
             &config
@@ -88,10 +88,10 @@ impl FileStream {
                 .collect::<Vec<_>>(),
         );
 
-        let files = config.file_groups[partition].clone();
+        let file_group = config.file_groups[partition].clone();
 
         Ok(Self {
-            file_iter: files.into(),
+            file_iter: file_group.into_inner().into_iter().collect(),
             projected_schema,
             remain: config.limit,
             file_opener,
@@ -120,16 +120,17 @@ impl FileStream {
         let part_file = self.file_iter.pop_front()?;
 
         let file_meta = FileMeta {
-            object_meta: part_file.object_meta,
-            range: part_file.range,
-            extensions: part_file.extensions,
+            object_meta: part_file.object_meta.clone(),
+            range: part_file.range.clone(),
+            extensions: part_file.extensions.clone(),
             metadata_size_hint: part_file.metadata_size_hint,
         };
 
+        let partition_values = part_file.partition_values.clone();
         Some(
             self.file_opener
-                .open(file_meta)
-                .map(|future| (future, part_file.partition_values)),
+                .open(file_meta, part_file)
+                .map(|future| (future, partition_values)),
         )
     }
 
@@ -367,7 +368,7 @@ impl Default for OnError {
 pub trait FileOpener: Unpin + Send + Sync {
     /// Asynchronously open the specified file and return a stream
     /// of [`RecordBatch`]
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture>;
+    fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture>;
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll
@@ -435,7 +436,7 @@ impl StartableTime {
 /// (not cpu time) so they include time spent waiting on I/O as well
 /// as other operators.
 ///
-/// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_stream.rs>
+/// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
 pub struct FileStreamMetrics {
     /// Wall clock time elapsed for file opening.
     ///
@@ -446,13 +447,13 @@ pub struct FileStreamMetrics {
     /// will open the next file in the background while scanning the
     /// current file. This metric will only capture time spent opening
     /// while not also scanning.
-    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_stream.rs>
+    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
     pub time_opening: StartableTime,
     /// Wall clock time elapsed for file scanning + first record batch of decompression + decoding
     ///
     /// Time between when the [`FileStream`] requests data from the
     /// stream and when the first [`RecordBatch`] is produced.
-    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_stream.rs>
+    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
     pub time_scanning_until_data: StartableTime,
     /// Total elapsed wall clock time for scanning + record batch decompression / decoding
     ///
@@ -522,7 +523,7 @@ impl FileStreamMetrics {
 
 #[cfg(test)]
 mod tests {
-    use crate::file_scan_config::FileScanConfig;
+    use crate::file_scan_config::FileScanConfigBuilder;
     use crate::tests::make_partition;
     use crate::PartitionedFile;
     use arrow::error::ArrowError;
@@ -555,7 +556,11 @@ mod tests {
     }
 
     impl FileOpener for TestOpener {
-        fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
+        fn open(
+            &self,
+            _file_meta: FileMeta,
+            _file: PartitionedFile,
+        ) -> Result<FileOpenFuture> {
             let idx = self.current_idx.fetch_add(1, Ordering::SeqCst);
 
             if self.error_opening_idx.contains(&idx) {
@@ -656,13 +661,14 @@ mod tests {
 
             let on_error = self.on_error;
 
-            let config = FileScanConfig::new(
+            let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema,
                 Arc::new(MockSource::default()),
             )
             .with_file_group(file_group)
-            .with_limit(self.limit);
+            .with_limit(self.limit)
+            .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream =
                 FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)

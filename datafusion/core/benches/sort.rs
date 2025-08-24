@@ -68,13 +68,12 @@
 
 use std::sync::Arc;
 
+use arrow::array::StringViewArray;
 use arrow::{
     array::{DictionaryArray, Float64Array, Int64Array, StringArray},
-    compute::SortOptions,
     datatypes::{Int32Type, Schema},
     record_batch::RecordBatch,
 };
-
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::{
     execution::context::TaskContext,
@@ -114,11 +113,24 @@ fn criterion_benchmark(c: &mut Criterion) {
         ("f64", &f64_streams),
         ("utf8 low cardinality", &utf8_low_cardinality_streams),
         ("utf8 high cardinality", &utf8_high_cardinality_streams),
+        (
+            "utf8 view low cardinality",
+            &utf8_view_low_cardinality_streams,
+        ),
+        (
+            "utf8 view high cardinality",
+            &utf8_view_high_cardinality_streams,
+        ),
         ("utf8 tuple", &utf8_tuple_streams),
+        ("utf8 view tuple", &utf8_view_tuple_streams),
         ("utf8 dictionary", &dictionary_streams),
         ("utf8 dictionary tuple", &dictionary_tuple_streams),
         ("mixed dictionary tuple", &mixed_dictionary_tuple_streams),
         ("mixed tuple", &mixed_tuple_streams),
+        (
+            "mixed tuple with utf8 view",
+            &mixed_tuple_with_utf8_view_streams,
+        ),
     ];
 
     for (name, f) in cases {
@@ -259,14 +271,11 @@ impl BenchCase {
 
 /// Make sort exprs for each column in `schema`
 fn make_sort_exprs(schema: &Schema) -> LexOrdering {
-    schema
+    let sort_exprs = schema
         .fields()
         .iter()
-        .map(|f| PhysicalSortExpr {
-            expr: col(f.name(), schema).unwrap(),
-            options: SortOptions::default(),
-        })
-        .collect()
+        .map(|f| PhysicalSortExpr::new_default(col(f.name(), schema).unwrap()));
+    LexOrdering::new(sort_exprs).unwrap()
 }
 
 /// Create streams of int64 (where approximately 1/3 values is repeated)
@@ -305,6 +314,30 @@ fn utf8_low_cardinality_streams(sorted: bool) -> PartitionedBatches {
     split_tuples(values, |v| {
         let array: StringArray = v.into_iter().collect();
         RecordBatch::try_from_iter(vec![("utf_low", Arc::new(array) as _)]).unwrap()
+    })
+}
+
+/// Create streams of random low cardinality utf8_view values
+fn utf8_view_low_cardinality_streams(sorted: bool) -> PartitionedBatches {
+    let mut values = DataGenerator::new().utf8_low_cardinality_values();
+    if sorted {
+        values.sort_unstable();
+    }
+    split_tuples(values, |v| {
+        let array: StringViewArray = v.into_iter().collect();
+        RecordBatch::try_from_iter(vec![("utf_view_low", Arc::new(array) as _)]).unwrap()
+    })
+}
+
+/// Create streams of high  cardinality (~ no duplicates) utf8_view values
+fn utf8_view_high_cardinality_streams(sorted: bool) -> PartitionedBatches {
+    let mut values = DataGenerator::new().utf8_high_cardinality_values();
+    if sorted {
+        values.sort_unstable();
+    }
+    split_tuples(values, |v| {
+        let array: StringViewArray = v.into_iter().collect();
+        RecordBatch::try_from_iter(vec![("utf_view_high", Arc::new(array) as _)]).unwrap()
     })
 }
 
@@ -353,6 +386,39 @@ fn utf8_tuple_streams(sorted: bool) -> PartitionedBatches {
     })
 }
 
+/// Create a batch of (utf8_view_low, utf8_view_low, utf8_view_high)
+fn utf8_view_tuple_streams(sorted: bool) -> PartitionedBatches {
+    let mut gen = DataGenerator::new();
+
+    // need to sort by the combined key, so combine them together
+    let mut tuples: Vec<_> = gen
+        .utf8_low_cardinality_values()
+        .into_iter()
+        .zip(gen.utf8_low_cardinality_values())
+        .zip(gen.utf8_high_cardinality_values())
+        .collect();
+
+    if sorted {
+        tuples.sort_unstable();
+    }
+
+    split_tuples(tuples, |tuples| {
+        let (tuples, utf8_high): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (utf8_low1, utf8_low2): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+
+        let utf8_view_high: StringViewArray = utf8_high.into_iter().collect();
+        let utf8_view_low1: StringViewArray = utf8_low1.into_iter().collect();
+        let utf8_view_low2: StringViewArray = utf8_low2.into_iter().collect();
+
+        RecordBatch::try_from_iter(vec![
+            ("utf_view_low1", Arc::new(utf8_view_low1) as _),
+            ("utf_view_low2", Arc::new(utf8_view_low2) as _),
+            ("utf_view_high", Arc::new(utf8_view_high) as _),
+        ])
+        .unwrap()
+    })
+}
+
 /// Create a batch of (f64, utf8_low, utf8_low, i64)
 fn mixed_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
@@ -391,6 +457,44 @@ fn mixed_tuple_streams(sorted: bool) -> PartitionedBatches {
     })
 }
 
+/// Create a batch of (f64, utf8_view_low, utf8_view_low, i64)
+fn mixed_tuple_with_utf8_view_streams(sorted: bool) -> PartitionedBatches {
+    let mut gen = DataGenerator::new();
+
+    // need to sort by the combined key, so combine them together
+    let mut tuples: Vec<_> = gen
+        .i64_values()
+        .into_iter()
+        .zip(gen.utf8_low_cardinality_values())
+        .zip(gen.utf8_low_cardinality_values())
+        .zip(gen.i64_values())
+        .collect();
+
+    if sorted {
+        tuples.sort_unstable();
+    }
+
+    split_tuples(tuples, |tuples| {
+        let (tuples, i64_values): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (tuples, utf8_low2): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (f64_values, utf8_low1): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+
+        let f64_values: Float64Array = f64_values.into_iter().map(|v| v as f64).collect();
+
+        let utf8_view_low1: StringViewArray = utf8_low1.into_iter().collect();
+        let utf8_view_low2: StringViewArray = utf8_low2.into_iter().collect();
+        let i64_values: Int64Array = i64_values.into_iter().collect();
+
+        RecordBatch::try_from_iter(vec![
+            ("f64", Arc::new(f64_values) as _),
+            ("utf_view_low1", Arc::new(utf8_view_low1) as _),
+            ("utf_view_low2", Arc::new(utf8_view_low2) as _),
+            ("i64", Arc::new(i64_values) as _),
+        ])
+        .unwrap()
+    })
+}
+
 /// Create a batch of (utf8_dict)
 fn dictionary_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
@@ -402,7 +506,6 @@ fn dictionary_streams(sorted: bool) -> PartitionedBatches {
     split_tuples(values, |v| {
         let dictionary: DictionaryArray<Int32Type> =
             v.iter().map(Option::as_deref).collect();
-
         RecordBatch::try_from_iter(vec![("dict", Arc::new(dictionary) as _)]).unwrap()
     })
 }
@@ -488,7 +591,7 @@ impl DataGenerator {
     /// Create an array of i64 sorted values (where approximately 1/3 values is repeated)
     fn i64_values(&mut self) -> Vec<i64> {
         let mut vec: Vec<_> = (0..INPUT_SIZE)
-            .map(|_| self.rng.gen_range(0..INPUT_SIZE as i64))
+            .map(|_| self.rng.random_range(0..INPUT_SIZE as i64))
             .collect();
 
         vec.sort_unstable();
@@ -513,7 +616,7 @@ impl DataGenerator {
         // pick from the 100 strings randomly
         let mut input = (0..INPUT_SIZE)
             .map(|_| {
-                let idx = self.rng.gen_range(0..strings.len());
+                let idx = self.rng.random_range(0..strings.len());
                 let s = Arc::clone(&strings[idx]);
                 Some(s)
             })
@@ -536,7 +639,7 @@ impl DataGenerator {
 
     fn random_string(&mut self) -> String {
         let rng = &mut self.rng;
-        rng.sample_iter(rand::distributions::Alphanumeric)
+        rng.sample_iter(rand::distr::Alphanumeric)
             .filter(|c| c.is_ascii_alphabetic())
             .take(20)
             .map(char::from)
@@ -558,7 +661,7 @@ where
     let mut outputs: Vec<Vec<Vec<T>>> = (0..NUM_STREAMS).map(|_| Vec::new()).collect();
 
     for i in input {
-        let stream_idx = rng.gen_range(0..NUM_STREAMS);
+        let stream_idx = rng.random_range(0..NUM_STREAMS);
         let stream = &mut outputs[stream_idx];
         match stream.last_mut() {
             Some(x) if x.len() < BATCH_SIZE => x.push(i),

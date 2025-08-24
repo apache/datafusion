@@ -205,10 +205,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to decode CsvOptionsProto: {:?}",
-                e
-            ))
+            DataFusionError::Execution(format!("Failed to decode CsvOptionsProto: {e:?}"))
         })?;
         let options: CsvOptions = (&proto).into();
         Ok(Arc::new(CsvFormatFactory {
@@ -233,7 +230,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         });
 
         proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode CsvOptions: {:?}", e))
+            DataFusionError::Execution(format!("Failed to encode CsvOptions: {e:?}"))
         })?;
 
         Ok(())
@@ -316,8 +313,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = JsonOptionsProto::decode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to decode JsonOptionsProto: {:?}",
-                e
+                "Failed to decode JsonOptionsProto: {e:?}"
             ))
         })?;
         let options: JsonOptions = (&proto).into();
@@ -346,7 +342,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         });
 
         proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode JsonOptions: {:?}", e))
+            DataFusionError::Execution(format!("Failed to encode JsonOptions: {e:?}"))
         })?;
 
         Ok(())
@@ -386,9 +382,6 @@ impl TableParquetOptionsProto {
                 statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
                     parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
                 }),
-                max_statistics_size_opt: global_options.global.max_statistics_size.map(|size| {
-                    parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size as u64)
-                }),
                 max_row_group_size: global_options.global.max_row_group_size as u64,
                 created_by: global_options.global.created_by.clone(),
                 column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
@@ -415,6 +408,9 @@ impl TableParquetOptionsProto {
                 schema_force_view_types: global_options.global.schema_force_view_types,
                 binary_as_string: global_options.global.binary_as_string,
                 skip_arrow_metadata: global_options.global.skip_arrow_metadata,
+                coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
+                    parquet_options::CoerceInt96Opt::CoerceInt96(compression)
+                }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -440,9 +436,6 @@ impl TableParquetOptionsProto {
                         }),
                         bloom_filter_ndv_opt: options.bloom_filter_ndv.map(|ndv| {
                             parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
-                        }),
-                        max_statistics_size_opt: options.max_statistics_size.map(|size| {
-                            parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size as u32)
                         }),
                     })
                 }
@@ -482,9 +475,6 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             statistics_enabled: proto.statistics_enabled_opt.as_ref().map(|opt| match opt {
                 parquet_options::StatisticsEnabledOpt::StatisticsEnabled(statistics) => statistics.clone(),
             }),
-            max_statistics_size: proto.max_statistics_size_opt.as_ref().map(|opt| match opt {
-                parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size) => *size as usize,
-            }),
             max_row_group_size: proto.max_row_group_size as usize,
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto.column_index_truncate_length_opt.as_ref().map(|opt| match opt {
@@ -511,6 +501,9 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
             skip_arrow_metadata: proto.skip_arrow_metadata,
+            coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
+                parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
+            }),
         }
     }
 }
@@ -540,11 +533,6 @@ impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
             bloom_filter_ndv: proto
                 .bloom_filter_ndv_opt
                 .map(|parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v)| v),
-            max_statistics_size: proto.max_statistics_size_opt.map(
-                |parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v)| {
-                    v as usize
-                },
-            ),
         }
     }
 }
@@ -574,6 +562,7 @@ impl From<&TableParquetOptionsProto> for TableParquetOptions {
                 .iter()
                 .map(|(k, v)| (k.clone(), Some(v.clone())))
                 .collect(),
+            crypto: Default::default(),
         }
     }
 }
@@ -626,8 +615,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to decode TableParquetOptionsProto: {:?}",
-                e
+                "Failed to decode TableParquetOptionsProto: {e:?}"
             ))
         })?;
         let options: TableParquetOptions = (&proto).into();
@@ -657,8 +645,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
 
         proto.encode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to encode TableParquetOptionsProto: {:?}",
-                e
+                "Failed to encode TableParquetOptionsProto: {e:?}"
             ))
         })?;
 

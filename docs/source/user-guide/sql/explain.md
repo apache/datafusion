@@ -39,39 +39,7 @@ the format from the [configuration value] `datafusion.explain.format`.
 
 [configuration value]: ../configs.md
 
-### `indent` format (default)
-
-The `indent` format shows both the logical and physical plan, with one line for
-each operator in the plan. Child plans are indented to show the hierarchy.
-
-See [Reading Explain Plans](../explain-usage.md) for more information on how to interpret these plans.
-
-```sql
-> CREATE TABLE t(x int, b int) AS VALUES (1, 2), (2, 3);
-0 row(s) fetched.
-Elapsed 0.004 seconds.
-
-> EXPLAIN SELECT SUM(x) FROM t GROUP BY b;
-+---------------+-------------------------------------------------------------------------------+
-| plan_type     | plan                                                                          |
-+---------------+-------------------------------------------------------------------------------+
-| logical_plan  | Projection: sum(t.x)                                                          |
-|               |   Aggregate: groupBy=[[t.b]], aggr=[[sum(CAST(t.x AS Int64))]]                |
-|               |     TableScan: t projection=[x, b]                                            |
-| physical_plan | ProjectionExec: expr=[sum(t.x)@1 as sum(t.x)]                                 |
-|               |   AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(t.x)]       |
-|               |     CoalesceBatchesExec: target_batch_size=8192                               |
-|               |       RepartitionExec: partitioning=Hash([b@0], 16), input_partitions=16      |
-|               |         RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1 |
-|               |           AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(t.x)]        |
-|               |             DataSourceExec: partitions=1, partition_sizes=[1]                 |
-|               |                                                                               |
-+---------------+-------------------------------------------------------------------------------+
-2 row(s) fetched.
-Elapsed 0.004 seconds.
-```
-
-### `tree` format
+### `tree` format (default)
 
 The `tree` format is modeled after [DuckDB plans] and is designed to be easier
 to see the high level structure of the plan
@@ -103,7 +71,7 @@ to see the high level structure of the plan
 |               | ┌─────────────┴─────────────┐ |
 |               | │      RepartitionExec      │ |
 |               | │    --------------------   │ |
-|               | │  output_partition_count:  │ |
+|               | │   input_partition_count:  │ |
 |               | │             16            │ |
 |               | │                           │ |
 |               | │    partitioning_scheme:   │ |
@@ -112,7 +80,7 @@ to see the high level structure of the plan
 |               | ┌─────────────┴─────────────┐ |
 |               | │      RepartitionExec      │ |
 |               | │    --------------------   │ |
-|               | │  output_partition_count:  │ |
+|               | │   input_partition_count:  │ |
 |               | │             1             │ |
 |               | │                           │ |
 |               | │    partitioning_scheme:   │ |
@@ -136,6 +104,38 @@ to see the high level structure of the plan
 +---------------+-------------------------------+
 1 row(s) fetched.
 Elapsed 0.016 seconds.
+```
+
+### `indent` format
+
+The `indent` format shows both the logical and physical plan, with one line for
+each operator in the plan. Child plans are indented to show the hierarchy.
+
+See [Reading Explain Plans](../explain-usage.md) for more information on how to interpret these plans.
+
+```sql
+> CREATE TABLE t(x int, b int) AS VALUES (1, 2), (2, 3);
+0 row(s) fetched.
+Elapsed 0.004 seconds.
+
+> EXPLAIN FORMAT INDENT SELECT SUM(x) FROM t GROUP BY b;
++---------------+-------------------------------------------------------------------------------+
+| plan_type     | plan                                                                          |
++---------------+-------------------------------------------------------------------------------+
+| logical_plan  | Projection: sum(t.x)                                                          |
+|               |   Aggregate: groupBy=[[t.b]], aggr=[[sum(CAST(t.x AS Int64))]]                |
+|               |     TableScan: t projection=[x, b]                                            |
+| physical_plan | ProjectionExec: expr=[sum(t.x)@1 as sum(t.x)]                                 |
+|               |   AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(t.x)]       |
+|               |     CoalesceBatchesExec: target_batch_size=8192                               |
+|               |       RepartitionExec: partitioning=Hash([b@0], 16), input_partitions=16      |
+|               |         RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1 |
+|               |           AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(t.x)]        |
+|               |             DataSourceExec: partitions=1, partition_sizes=[1]                 |
+|               |                                                                               |
++---------------+-------------------------------------------------------------------------------+
+2 row(s) fetched.
+Elapsed 0.004 seconds.
 ```
 
 ### `pgjson` format

@@ -17,6 +17,7 @@
 
 //! `cume_dist` window function implementation
 
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
@@ -43,10 +44,26 @@ define_udwf_and_expr!(
 /// CumeDist calculates the cume_dist in the window function with order by
 #[user_doc(
     doc_section(label = "Ranking Functions"),
-    description = "Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).",
-    syntax_example = "cume_dist()"
+    description = "Relative rank of the current row: (number of rows preceding or peer with the current row) / (total rows).",
+    syntax_example = "cume_dist()",
+    sql_example = r#"
+```sql
+-- Example usage of the cume_dist window function:
+SELECT salary,
+    cume_dist() OVER (ORDER BY salary) AS cume_dist
+FROM employees;
+
++--------+-----------+
+| salary | cume_dist |
++--------+-----------+
+| 30000  | 0.33      |
+| 50000  | 0.67      |
+| 70000  | 1.00      |
++--------+-----------+
+```
+"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CumeDist {
     signature: Signature,
 }
@@ -86,8 +103,8 @@ impl WindowUDFImpl for CumeDist {
         Ok(Box::<CumeDistEvaluator>::default())
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::Float64, false))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::Float64, false).into())
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -113,7 +130,7 @@ impl PartitionEvaluator for CumeDistEvaluator {
                     let len = range.end - range.start;
                     *acc += len as u64;
                     let value: f64 = (*acc as f64) / scalar;
-                    let result = iter::repeat(value).take(len);
+                    let result = iter::repeat_n(value, len);
                     Some(result)
                 })
                 .flatten(),

@@ -83,7 +83,7 @@ pub fn main() -> Result<()> {
     let config = OptimizerContext::default().with_skip_failing_rules(false);
     let analyzed_plan = Analyzer::new().execute_and_check(
         logical_plan,
-        config.options(),
+        &config.options(),
         observe_analyzer,
     )?;
     // Note that the Analyzer has added a CAST to the plan to align the types

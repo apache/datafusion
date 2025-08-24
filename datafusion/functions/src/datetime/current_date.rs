@@ -37,7 +37,7 @@ The `current_date()` return value is determined at query time and will return th
 "#,
     syntax_example = "current_date()"
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentDateFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -108,6 +108,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
         );
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Date32(days),
+            None,
         )))
     }
 

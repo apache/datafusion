@@ -22,7 +22,7 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
+use crate::error::{_exec_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
@@ -82,6 +82,23 @@ pub fn project_schema(
     Ok(schema)
 }
 
+/// Extracts a row at the specified index from a set of columns and stores it in the provided buffer.
+pub fn extract_row_at_idx_to_buf(
+    columns: &[ArrayRef],
+    idx: usize,
+    buf: &mut Vec<ScalarValue>,
+) -> Result<()> {
+    buf.clear();
+
+    let iter = columns
+        .iter()
+        .map(|arr| ScalarValue::try_from_array(arr, idx));
+    for v in iter.into_iter() {
+        buf.push(v?);
+    }
+
+    Ok(())
+}
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
     columns
@@ -103,14 +120,13 @@ pub fn compare_rows(
         let result = match (lhs.is_null(), rhs.is_null(), sort_options.nulls_first) {
             (true, false, false) | (false, true, true) => Ordering::Greater,
             (true, false, true) | (false, true, false) => Ordering::Less,
-            (false, false, _) => if sort_options.descending {
-                rhs.partial_cmp(lhs)
-            } else {
-                lhs.partial_cmp(rhs)
+            (false, false, _) => {
+                if sort_options.descending {
+                    rhs.try_cmp(lhs)?
+                } else {
+                    lhs.try_cmp(rhs)?
+                }
             }
-            .ok_or_else(|| {
-                _internal_datafusion_err!("Column array shouldn't be empty")
-            })?,
             (true, true, _) => continue,
         };
         if result != Ordering::Equal {
@@ -244,7 +260,7 @@ pub fn evaluate_partition_ranges(
 /// the identifier by replacing it with two double quotes
 ///
 /// e.g. identifier `tab.le"name` becomes `"tab.le""name"`
-pub fn quote_identifier(s: &str) -> Cow<str> {
+pub fn quote_identifier(s: &str) -> Cow<'_, str> {
     if needs_quotes(s) {
         Cow::Owned(format!("\"{}\"", s.replace('"', "\"\"")))
     } else {
@@ -426,94 +442,6 @@ impl SingleRowListArrayBuilder {
         };
         (Arc::new(field), arr)
     }
-}
-
-/// Wrap an array into a single element `ListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-/// The field in the list array is nullable.
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(true)
-        .build_list_array()
-}
-
-/// Wrap an array into a single element `ListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(nullable)
-        .build_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array_with_field_name(
-    arr: ArrayRef,
-    nullable: bool,
-    field_name: &str,
-) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(nullable)
-        .with_field_name(Some(field_name.to_string()))
-        .build_list_array()
-}
-
-/// Wrap an array into a single element `LargeListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
-    SingleRowListArrayBuilder::new(arr).build_large_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_large_list_array_with_field_name(
-    arr: ArrayRef,
-    field_name: &str,
-) -> LargeListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_field_name(Some(field_name.to_string()))
-        .build_large_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_fixed_size_list_array(
-    arr: ArrayRef,
-    list_size: usize,
-) -> FixedSizeListArray {
-    SingleRowListArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_fixed_size_list_array_with_field_name(
-    arr: ArrayRef,
-    list_size: usize,
-    field_name: &str,
-) -> FixedSizeListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_field_name(Some(field_name.to_string()))
-        .build_fixed_size_list_array(list_size)
 }
 
 /// Wrap arrays into a single element `ListArray`.
@@ -816,21 +744,6 @@ pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
         .collect()
 }
 
-/// Checks whether the given index sequence is monotonically non-decreasing.
-#[deprecated(since = "45.0.0", note = "Use std::Iterator::is_sorted instead")]
-pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
-    // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
-    let mut previous = 0;
-    for item in sequence.into_iter() {
-        let current = *item.borrow();
-        if current < previous {
-            return false;
-        }
-        previous = current;
-    }
-    true
-}
-
 /// Find indices of each element in `targets` inside `items`. If one of the
 /// elements is absent in `items`, returns an error.
 pub fn find_indices<T: PartialEq, S: Borrow<T>>(
@@ -933,7 +846,7 @@ pub fn get_available_parallelism() -> usize {
         .get()
 }
 
-/// Converts a collection of function arguments into an fixed-size array of length N
+/// Converts a collection of function arguments into a fixed-size array of length N
 /// producing a reasonable error message in case of unexpected number of arguments.
 ///
 /// # Example
@@ -1256,19 +1169,6 @@ mod tests {
         assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
         assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
         assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
-    }
-
-    #[test]
-    #[expect(deprecated)]
-    fn test_is_sorted() {
-        assert!(is_sorted::<usize>([]));
-        assert!(is_sorted([0]));
-        assert!(is_sorted([0, 3, 4]));
-        assert!(is_sorted([0, 1, 2]));
-        assert!(is_sorted([0, 1, 4]));
-        assert!(is_sorted([0usize; 0]));
-        assert!(is_sorted([1, 2]));
-        assert!(!is_sorted([3, 2]));
     }
 
     #[test]

@@ -21,13 +21,12 @@ use arrow::array::{Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::{
-    datasource::{
-        listing::PartitionedFile,
-        physical_plan::{FileScanConfig, ParquetSource},
-    },
+    datasource::{listing::PartitionedFile, physical_plan::ParquetSource},
     prelude::*,
 };
 use datafusion_common::DFSchema;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{collect, filter::FilterExec, ExecutionPlan};
@@ -91,42 +90,42 @@ async fn test_utf8_not_like() {
 
 #[tokio::test]
 async fn test_utf8_like_prefix() {
-    Utf8Test::new(|value| col("a").like(lit(format!("%{}", value))))
+    Utf8Test::new(|value| col("a").like(lit(format!("%{value}"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_like_suffix() {
-    Utf8Test::new(|value| col("a").like(lit(format!("{}%", value))))
+    Utf8Test::new(|value| col("a").like(lit(format!("{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_prefix() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("%{}", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("%{value}"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_ecsape() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{}%", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_suffix() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("{}%", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_suffix_one() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("{}_", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{value}_"))))
         .run()
         .await;
 }
@@ -227,7 +226,7 @@ impl Utf8Test {
             return (*files).clone();
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let values = Self::values();
 
         let mut row_groups = vec![];
@@ -277,11 +276,11 @@ async fn execute_with_predicate(
     ctx: &SessionContext,
 ) -> Vec<String> {
     let parquet_source = if prune_stats {
-        ParquetSource::default().with_predicate(Arc::clone(&schema), predicate.clone())
+        ParquetSource::default().with_predicate(predicate.clone())
     } else {
         ParquetSource::default()
     };
-    let scan = FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("memory://").unwrap(),
         schema.clone(),
         Arc::new(parquet_source),
@@ -293,8 +292,9 @@ async fn execute_with_predicate(
                 PartitionedFile::new(test_file.path.clone(), test_file.size as u64)
             })
             .collect(),
-    );
-    let exec = scan.build();
+    )
+    .build();
+    let exec = DataSourceExec::from_data_source(config);
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 
@@ -319,14 +319,9 @@ async fn write_parquet_file(
     row_groups: Vec<Vec<String>>,
 ) -> Bytes {
     let mut buf = BytesMut::new().writer();
-    let mut props = WriterProperties::builder();
-    if let Some(truncation_length) = truncation_length {
-        props = {
-            #[allow(deprecated)]
-            props.set_max_statistics_size(truncation_length)
-        }
-    }
-    props = props.set_statistics_enabled(EnabledStatistics::Chunk); // row group level
+    let props = WriterProperties::builder()
+        .set_statistics_enabled(EnabledStatistics::Chunk) // row group level
+        .set_statistics_truncate_length(truncation_length);
     let props = props.build();
     {
         let mut writer =
@@ -345,7 +340,7 @@ async fn write_parquet_file(
 
 /// The string values for [Utf8Test::values]
 static VALUES: LazyLock<Vec<String>> = LazyLock::new(|| {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let characters = [
         "z",

@@ -34,7 +34,7 @@ use datafusion_common::{
 };
 
 /// Holds the state of evaluating a window function
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WindowAggState {
     /// The range that we calculate the window function
     pub window_frame_range: Range<usize>,
@@ -112,7 +112,7 @@ impl WindowAggState {
 }
 
 /// This object stores the window frame state for use in incremental calculations.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WindowFrameContext {
     /// ROWS frames are inherently stateless.
     Rows(Arc<WindowFrame>),
@@ -193,11 +193,7 @@ impl WindowFrameContext {
             // UNBOUNDED PRECEDING
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => 0,
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
-                if idx >= n as usize {
-                    idx - n as usize
-                } else {
-                    0
-                }
+                idx.saturating_sub(n as usize)
             }
             WindowFrameBound::CurrentRow => idx,
             // UNBOUNDED FOLLOWING
@@ -211,7 +207,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return internal_err!("Rows should be Uint")
+                return internal_err!("Rows should be UInt64")
             }
         };
         let end = match window_frame.end_bound {
@@ -236,7 +232,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return internal_err!("Rows should be Uint")
+                return internal_err!("Rows should be UInt64")
             }
         };
         Ok(Range { start, end })
@@ -244,7 +240,7 @@ impl WindowFrameContext {
 }
 
 /// State for each unique partition determined according to PARTITION BY column(s)
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PartitionBatchState {
     /// The record batch belonging to current partition
     pub record_batch: RecordBatch,
@@ -286,7 +282,7 @@ impl PartitionBatchState {
 /// ranges of data while processing RANGE frames.
 /// Attribute `sort_options` stores the column ordering specified by the ORDER
 /// BY clause. This information is used to calculate the range.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateRange {
     sort_options: Vec<SortOptions>,
 }
@@ -458,7 +454,7 @@ impl WindowFrameStateRange {
 
 /// This structure encapsulates all the state information we require as we
 /// scan groups of data while processing window frames.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateGroups {
     /// A tuple containing group values and the row index where the group ends.
     /// Example: [[1, 1], [1, 1], [2, 1], [2, 1], ...] would correspond to
@@ -602,11 +598,7 @@ impl WindowFrameStateGroups {
 
         // Find the group index of the frame boundary:
         let group_idx = if SEARCH_SIDE {
-            if self.current_group_idx > delta {
-                self.current_group_idx - delta
-            } else {
-                0
-            }
+            self.current_group_idx.saturating_sub(delta)
         } else {
             self.current_group_idx + delta
         };
@@ -683,9 +675,9 @@ mod tests {
         (range_columns, sort_options)
     }
 
-    fn assert_expected(
-        expected_results: Vec<(Range<usize>, usize)>,
+    fn assert_group_ranges(
         window_frame: &Arc<WindowFrame>,
+        expected_results: Vec<(Range<usize>, usize)>,
     ) -> Result<()> {
         let mut window_frame_groups = WindowFrameStateGroups::default();
         let (range_columns, _) = get_test_data();
@@ -705,6 +697,136 @@ mod tests {
         Ok(())
     }
 
+    fn assert_frame_ranges(
+        window_frame: &Arc<WindowFrame>,
+        expected_results: Vec<Range<usize>>,
+    ) -> Result<()> {
+        let mut window_frame_context =
+            WindowFrameContext::new(Arc::clone(window_frame), vec![]);
+        let (range_columns, _) = get_test_data();
+        let n_row = range_columns[0].len();
+        let mut last_range = Range { start: 0, end: 0 };
+        for (idx, expected_range) in expected_results.into_iter().enumerate() {
+            let range = window_frame_context.calculate_range(
+                &range_columns,
+                &last_range,
+                n_row,
+                idx,
+            )?;
+            assert_eq!(range, expected_range);
+            last_range = range;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_default_window_frame_group_boundaries() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame::new(None));
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+            ],
+        )?;
+
+        assert_frame_ranges(
+            &window_frame,
+            vec![
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unordered_window_frame_group_boundaries() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame::new(Some(false)));
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range { start: 0, end: 1 }, 0),
+                (Range { start: 0, end: 2 }, 1),
+                (Range { start: 0, end: 4 }, 2),
+                (Range { start: 0, end: 4 }, 2),
+                (Range { start: 0, end: 5 }, 3),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 9 }, 5),
+            ],
+        )?;
+
+        assert_frame_ranges(
+            &window_frame,
+            vec![
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordered_window_frame_group_boundaries() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame::new(Some(true)));
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range { start: 0, end: 1 }, 0),
+                (Range { start: 0, end: 2 }, 1),
+                (Range { start: 0, end: 4 }, 2),
+                (Range { start: 0, end: 4 }, 2),
+                (Range { start: 0, end: 5 }, 3),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 9 }, 5),
+            ],
+        )?;
+
+        assert_frame_ranges(
+            &window_frame,
+            vec![
+                Range { start: 0, end: 1 },
+                Range { start: 0, end: 2 },
+                Range { start: 0, end: 3 },
+                Range { start: 0, end: 4 },
+                Range { start: 0, end: 5 },
+                Range { start: 0, end: 6 },
+                Range { start: 0, end: 7 },
+                Range { start: 0, end: 8 },
+                Range { start: 0, end: 9 },
+            ],
+        )?;
+
+        Ok(())
+    }
+
     #[test]
     fn test_window_frame_group_boundaries() -> Result<()> {
         let window_frame = Arc::new(WindowFrame::new_bounds(
@@ -712,18 +834,20 @@ mod tests {
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
             WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
         ));
-        let expected_results = vec![
-            (Range { start: 0, end: 2 }, 0),
-            (Range { start: 0, end: 4 }, 1),
-            (Range { start: 1, end: 5 }, 2),
-            (Range { start: 1, end: 5 }, 2),
-            (Range { start: 2, end: 8 }, 3),
-            (Range { start: 4, end: 9 }, 4),
-            (Range { start: 4, end: 9 }, 4),
-            (Range { start: 4, end: 9 }, 4),
-            (Range { start: 5, end: 9 }, 5),
-        ];
-        assert_expected(expected_results, &window_frame)
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range { start: 0, end: 2 }, 0),
+                (Range { start: 0, end: 4 }, 1),
+                (Range { start: 1, end: 5 }, 2),
+                (Range { start: 1, end: 5 }, 2),
+                (Range { start: 2, end: 8 }, 3),
+                (Range { start: 4, end: 9 }, 4),
+                (Range { start: 4, end: 9 }, 4),
+                (Range { start: 4, end: 9 }, 4),
+                (Range { start: 5, end: 9 }, 5),
+            ],
+        )
     }
 
     #[test]
@@ -733,18 +857,20 @@ mod tests {
             WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
             WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
         ));
-        let expected_results = vec![
-            (Range::<usize> { start: 1, end: 4 }, 0),
-            (Range::<usize> { start: 2, end: 5 }, 1),
-            (Range::<usize> { start: 4, end: 8 }, 2),
-            (Range::<usize> { start: 4, end: 8 }, 2),
-            (Range::<usize> { start: 5, end: 9 }, 3),
-            (Range::<usize> { start: 8, end: 9 }, 4),
-            (Range::<usize> { start: 8, end: 9 }, 4),
-            (Range::<usize> { start: 8, end: 9 }, 4),
-            (Range::<usize> { start: 9, end: 9 }, 5),
-        ];
-        assert_expected(expected_results, &window_frame)
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range::<usize> { start: 1, end: 4 }, 0),
+                (Range::<usize> { start: 2, end: 5 }, 1),
+                (Range::<usize> { start: 4, end: 8 }, 2),
+                (Range::<usize> { start: 4, end: 8 }, 2),
+                (Range::<usize> { start: 5, end: 9 }, 3),
+                (Range::<usize> { start: 8, end: 9 }, 4),
+                (Range::<usize> { start: 8, end: 9 }, 4),
+                (Range::<usize> { start: 8, end: 9 }, 4),
+                (Range::<usize> { start: 9, end: 9 }, 5),
+            ],
+        )
     }
 
     #[test]
@@ -754,17 +880,19 @@ mod tests {
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
         ));
-        let expected_results = vec![
-            (Range::<usize> { start: 0, end: 0 }, 0),
-            (Range::<usize> { start: 0, end: 1 }, 1),
-            (Range::<usize> { start: 0, end: 2 }, 2),
-            (Range::<usize> { start: 0, end: 2 }, 2),
-            (Range::<usize> { start: 1, end: 4 }, 3),
-            (Range::<usize> { start: 2, end: 5 }, 4),
-            (Range::<usize> { start: 2, end: 5 }, 4),
-            (Range::<usize> { start: 2, end: 5 }, 4),
-            (Range::<usize> { start: 4, end: 8 }, 5),
-        ];
-        assert_expected(expected_results, &window_frame)
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range::<usize> { start: 0, end: 0 }, 0),
+                (Range::<usize> { start: 0, end: 1 }, 1),
+                (Range::<usize> { start: 0, end: 2 }, 2),
+                (Range::<usize> { start: 0, end: 2 }, 2),
+                (Range::<usize> { start: 1, end: 4 }, 3),
+                (Range::<usize> { start: 2, end: 5 }, 4),
+                (Range::<usize> { start: 2, end: 5 }, 4),
+                (Range::<usize> { start: 2, end: 5 }, 4),
+                (Range::<usize> { start: 4, end: 8 }, 5),
+            ],
+        )
     }
 }

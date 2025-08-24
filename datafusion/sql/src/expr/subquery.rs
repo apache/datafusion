@@ -58,7 +58,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
 
         let mut spans = Spans::new();
-        if let SetExpr::Select(select) = subquery.body.as_ref() {
+        if let SetExpr::Select(select) = &subquery.body.as_ref() {
             for item in &select.projection {
                 if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item {
                     if let Some(span) = Span::try_from_sqlparser_span(ident.span) {
@@ -138,15 +138,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if sub_plan.schema().fields().len() > 1 {
             let sub_schema = sub_plan.schema();
             let field_names = sub_schema.field_names();
-
-            plan_err!("{}: {}", error_message, field_names.join(", ")).map_err(|err| {
-                let diagnostic = self.build_multi_column_diagnostic(
-                    spans,
-                    error_message,
-                    help_message,
-                );
-                err.with_diagnostic(diagnostic)
-            })
+            let diagnostic =
+                self.build_multi_column_diagnostic(spans, error_message, help_message);
+            plan_err!("{}: {}", error_message, field_names.join(", "); diagnostic=diagnostic)
         } else {
             Ok(())
         }

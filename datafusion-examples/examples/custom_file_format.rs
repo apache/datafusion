@@ -21,28 +21,24 @@ use arrow::{
     array::{AsArray, RecordBatch, StringArray, UInt8Array},
     datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type},
 };
-use datafusion::physical_expr::LexRequirement;
-use datafusion::physical_expr::PhysicalExpr;
 use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
-};
-use datafusion::{
-    datasource::physical_plan::FileSource, execution::session_state::SessionStateBuilder,
-};
-use datafusion::{
     datasource::{
         file_format::{
             csv::CsvFormatFactory, file_compression_type::FileCompressionType,
             FileFormat, FileFormatFactory,
         },
-        physical_plan::{FileScanConfig, FileSinkConfig},
+        physical_plan::{FileScanConfig, FileSinkConfig, FileSource},
         MemTable,
     },
     error::Result,
+    execution::session_state::SessionStateBuilder,
+    physical_expr_common::sort_expr::LexRequirement,
     physical_plan::ExecutionPlan,
     prelude::SessionContext,
 };
+
 use object_store::{ObjectMeta, ObjectStore};
 use tempfile::tempdir;
 
@@ -85,6 +81,10 @@ impl FileFormat for TSVFileFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         state: &dyn Session,
@@ -112,11 +112,8 @@ impl FileFormat for TSVFileFormat {
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.csv_file_format
-            .create_physical_plan(state, conf, filters)
-            .await
+        self.csv_file_format.create_physical_plan(state, conf).await
     }
 
     async fn create_writer_physical_plan(

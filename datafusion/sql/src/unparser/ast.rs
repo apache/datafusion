@@ -19,7 +19,9 @@ use core::fmt;
 use std::ops::ControlFlow;
 
 use sqlparser::ast::helpers::attached_token::AttachedToken;
-use sqlparser::ast::{self, visit_expressions_mut, OrderByKind, SelectFlavor};
+use sqlparser::ast::{
+    self, visit_expressions_mut, LimitClause, OrderByKind, SelectFlavor,
+};
 
 #[derive(Clone)]
 pub struct QueryBuilder {
@@ -32,6 +34,8 @@ pub struct QueryBuilder {
     fetch: Option<ast::Fetch>,
     locks: Vec<ast::LockClause>,
     for_clause: Option<ast::ForClause>,
+    // If true, we need to unparse LogicalPlan::Union as a SQL `UNION` rather than a `UNION ALL`.
+    distinct_union: bool,
 }
 
 #[allow(dead_code)]
@@ -75,6 +79,13 @@ impl QueryBuilder {
         self.for_clause = value;
         self
     }
+    pub fn distinct_union(&mut self) -> &mut Self {
+        self.distinct_union = true;
+        self
+    }
+    pub fn is_distinct_union(&self) -> bool {
+        self.distinct_union
+    }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
         let order_by = self
             .order_by_kind
@@ -91,14 +102,17 @@ impl QueryBuilder {
                 None => return Err(Into::into(UninitializedFieldError::from("body"))),
             },
             order_by,
-            limit: self.limit.clone(),
-            limit_by: self.limit_by.clone(),
-            offset: self.offset.clone(),
+            limit_clause: Some(LimitClause::LimitOffset {
+                limit: self.limit.clone(),
+                offset: self.offset.clone(),
+                limit_by: self.limit_by.clone(),
+            }),
             fetch: self.fetch.clone(),
             locks: self.locks.clone(),
             for_clause: self.for_clause.clone(),
             settings: None,
             format_clause: None,
+            pipe_operators: vec![],
         })
     }
     fn create_empty() -> Self {
@@ -112,6 +126,7 @@ impl QueryBuilder {
             fetch: Default::default(),
             locks: Default::default(),
             for_clause: Default::default(),
+            distinct_union: false,
         }
     }
 }
@@ -133,7 +148,7 @@ pub struct SelectBuilder {
     group_by: Option<ast::GroupByExpr>,
     cluster_by: Vec<ast::Expr>,
     distribute_by: Vec<ast::Expr>,
-    sort_by: Vec<ast::Expr>,
+    sort_by: Vec<ast::OrderByExpr>,
     having: Option<ast::Expr>,
     named_window: Vec<ast::NamedWindowDefinition>,
     qualify: Option<ast::Expr>,
@@ -154,6 +169,11 @@ impl SelectBuilder {
     pub fn projection(&mut self, value: Vec<ast::SelectItem>) -> &mut Self {
         self.projection = value;
         self
+    }
+    pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
+        let ret = self.projection.clone();
+        self.projection.clear();
+        ret
     }
     pub fn already_projected(&self) -> bool {
         !self.projection.is_empty()
@@ -198,7 +218,7 @@ impl SelectBuilder {
         value: &ast::Expr,
     ) -> &mut Self {
         if let Some(selection) = &mut self.selection {
-            visit_expressions_mut(selection, |expr| {
+            let _ = visit_expressions_mut(selection, |expr| {
                 if expr == existing_expr {
                     *expr = value.clone();
                 }
@@ -245,7 +265,7 @@ impl SelectBuilder {
         self.distribute_by = value;
         self
     }
-    pub fn sort_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
+    pub fn sort_by(&mut self, value: Vec<ast::OrderByExpr>) -> &mut Self {
         self.sort_by = value;
         self
     }
@@ -300,6 +320,7 @@ impl SelectBuilder {
                 Some(ref value) => value.clone(),
                 None => return Err(Into::into(UninitializedFieldError::from("flavor"))),
             },
+            exclude: None,
         })
     }
     fn create_empty() -> Self {
@@ -383,6 +404,7 @@ pub struct RelationBuilder {
 
 #[allow(dead_code)]
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
@@ -690,9 +712,9 @@ impl fmt::Display for BuilderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UninitializedField(ref field) => {
-                write!(f, "`{}` must be initialized", field)
+                write!(f, "`{field}` must be initialized")
             }
-            Self::ValidationError(ref error) => write!(f, "{}", error),
+            Self::ValidationError(ref error) => write!(f, "{error}"),
         }
     }
 }

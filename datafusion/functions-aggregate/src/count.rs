@@ -16,53 +16,50 @@
 // under the License.
 
 use ahash::RandomState;
-use datafusion_common::stats::Precision;
-use datafusion_expr::expr::WindowFunction;
-use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
-use datafusion_macros::user_doc;
-use datafusion_physical_expr::expressions;
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::mem::{size_of, size_of_val};
-use std::ops::BitAnd;
-use std::sync::Arc;
-
 use arrow::{
-    array::{ArrayRef, AsArray},
+    array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
+    buffer::BooleanBuffer,
     compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        FieldRef, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+        Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
         Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-
-use arrow::{
-    array::{Array, BooleanArray, Int64Array, PrimitiveArray},
-    buffer::BooleanBuffer,
-};
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, Result, ScalarValue,
-};
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::{
-    function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
+    downcast_value, internal_err, not_impl_err, stats::Precision,
+    utils::expr::COUNT_STAR_EXPANSION, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::{
-    Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,
+    expr::WindowFunction,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::format_state_name,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
+    ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
+    WindowFunctionDefinition,
 };
-use datafusion_functions_aggregate_common::aggregate::count_distinct::{
-    BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
-    PrimitiveDistinctCountAccumulator,
+use datafusion_functions_aggregate_common::aggregate::{
+    count_distinct::BytesDistinctCountAccumulator,
+    count_distinct::BytesViewDistinctCountAccumulator,
+    count_distinct::DictionaryCountAccumulator,
+    count_distinct::FloatDistinctCountAccumulator,
+    count_distinct::PrimitiveDistinctCountAccumulator,
+    groups_accumulator::accumulate::accumulate_indices,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
+use datafusion_macros::user_doc;
+use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::binary_map::OutputType;
+use std::{
+    collections::HashSet,
+    fmt::Debug,
+    mem::{size_of, size_of_val},
+    ops::BitAnd,
+    sync::Arc,
+};
 
-use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 make_udaf_expr_and_func!(
     Count,
     count,
@@ -77,7 +74,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
         vec![expr],
         true,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -100,7 +97,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
 /// let expr = col(expr.schema_name().to_string());
 /// ```
 pub fn count_all() -> Expr {
-    count(Expr::Literal(COUNT_STAR_EXPANSION)).alias("count(*)")
+    count(Expr::Literal(COUNT_STAR_EXPANSION, None)).alias("count(*)")
 }
 
 /// Creates window aggregation to count all rows.
@@ -123,9 +120,9 @@ pub fn count_all() -> Expr {
 /// let expr = col(expr.schema_name().to_string());
 /// ```
 pub fn count_all_window() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(
+    Expr::from(WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
-        vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+        vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
     ))
 }
 
@@ -150,6 +147,7 @@ pub fn count_all_window() -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct Count {
     signature: Signature,
 }
@@ -179,6 +177,107 @@ impl Count {
         }
     }
 }
+fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
+    match data_type {
+        // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
+        DataType::Int8 => Box::new(PrimitiveDistinctCountAccumulator::<Int8Type>::new(
+            data_type,
+        )),
+        DataType::Int16 => Box::new(PrimitiveDistinctCountAccumulator::<Int16Type>::new(
+            data_type,
+        )),
+        DataType::Int32 => Box::new(PrimitiveDistinctCountAccumulator::<Int32Type>::new(
+            data_type,
+        )),
+        DataType::Int64 => Box::new(PrimitiveDistinctCountAccumulator::<Int64Type>::new(
+            data_type,
+        )),
+        DataType::UInt8 => Box::new(PrimitiveDistinctCountAccumulator::<UInt8Type>::new(
+            data_type,
+        )),
+        DataType::UInt16 => Box::new(
+            PrimitiveDistinctCountAccumulator::<UInt16Type>::new(data_type),
+        ),
+        DataType::UInt32 => Box::new(
+            PrimitiveDistinctCountAccumulator::<UInt32Type>::new(data_type),
+        ),
+        DataType::UInt64 => Box::new(
+            PrimitiveDistinctCountAccumulator::<UInt64Type>::new(data_type),
+        ),
+        DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal128Type,
+        >::new(data_type)),
+        DataType::Decimal256(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal256Type,
+        >::new(data_type)),
+
+        DataType::Date32 => Box::new(
+            PrimitiveDistinctCountAccumulator::<Date32Type>::new(data_type),
+        ),
+        DataType::Date64 => Box::new(
+            PrimitiveDistinctCountAccumulator::<Date64Type>::new(data_type),
+        ),
+        DataType::Time32(TimeUnit::Millisecond) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Time32MillisecondType>::new(data_type),
+        ),
+        DataType::Time32(TimeUnit::Second) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Time32SecondType>::new(data_type),
+        ),
+        DataType::Time64(TimeUnit::Microsecond) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Time64MicrosecondType>::new(data_type),
+        ),
+        DataType::Time64(TimeUnit::Nanosecond) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Time64NanosecondType>::new(data_type),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<TimestampMicrosecondType>::new(data_type),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<TimestampMillisecondType>::new(data_type),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<TimestampNanosecondType>::new(data_type),
+        ),
+        DataType::Timestamp(TimeUnit::Second, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<TimestampSecondType>::new(data_type),
+        ),
+
+        DataType::Float16 => {
+            Box::new(FloatDistinctCountAccumulator::<Float16Type>::new())
+        }
+        DataType::Float32 => {
+            Box::new(FloatDistinctCountAccumulator::<Float32Type>::new())
+        }
+        DataType::Float64 => {
+            Box::new(FloatDistinctCountAccumulator::<Float64Type>::new())
+        }
+
+        DataType::Utf8 => {
+            Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8))
+        }
+        DataType::Utf8View => {
+            Box::new(BytesViewDistinctCountAccumulator::new(OutputType::Utf8View))
+        }
+        DataType::LargeUtf8 => {
+            Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))
+        }
+        DataType::Binary => Box::new(BytesDistinctCountAccumulator::<i32>::new(
+            OutputType::Binary,
+        )),
+        DataType::BinaryView => Box::new(BytesViewDistinctCountAccumulator::new(
+            OutputType::BinaryView,
+        )),
+        DataType::LargeBinary => Box::new(BytesDistinctCountAccumulator::<i64>::new(
+            OutputType::Binary,
+        )),
+
+        // Use the generic accumulator based on `ScalarValue` for all other types
+        _ => Box::new(DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: data_type.clone(),
+        }),
+    }
+}
 
 impl AggregateUDFImpl for Count {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -201,20 +300,27 @@ impl AggregateUDFImpl for Count {
         false
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
+            let dtype: DataType = match &args.input_fields[0].data_type() {
+                DataType::Dictionary(_, values_type) => (**values_type).clone(),
+                &dtype => dtype.clone(),
+            };
+
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "count distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.input_types[0].clone(), true),
+                Field::new_list_field(dtype, true),
                 false,
-            )])
+            )
+            .into()])
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, "count"),
                 DataType::Int64,
                 false,
-            )])
+            )
+            .into()])
         }
     }
 
@@ -228,119 +334,14 @@ impl AggregateUDFImpl for Count {
         }
 
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
+
         Ok(match data_type {
-            // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
-            DataType::Int8 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Int8Type>::new(data_type),
-            ),
-            DataType::Int16 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Int16Type>::new(data_type),
-            ),
-            DataType::Int32 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Int32Type>::new(data_type),
-            ),
-            DataType::Int64 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Int64Type>::new(data_type),
-            ),
-            DataType::UInt8 => Box::new(
-                PrimitiveDistinctCountAccumulator::<UInt8Type>::new(data_type),
-            ),
-            DataType::UInt16 => Box::new(
-                PrimitiveDistinctCountAccumulator::<UInt16Type>::new(data_type),
-            ),
-            DataType::UInt32 => Box::new(
-                PrimitiveDistinctCountAccumulator::<UInt32Type>::new(data_type),
-            ),
-            DataType::UInt64 => Box::new(
-                PrimitiveDistinctCountAccumulator::<UInt64Type>::new(data_type),
-            ),
-            DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
-                Decimal128Type,
-            >::new(data_type)),
-            DataType::Decimal256(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
-                Decimal256Type,
-            >::new(data_type)),
-
-            DataType::Date32 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Date32Type>::new(data_type),
-            ),
-            DataType::Date64 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Date64Type>::new(data_type),
-            ),
-            DataType::Time32(TimeUnit::Millisecond) => Box::new(
-                PrimitiveDistinctCountAccumulator::<Time32MillisecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Time32(TimeUnit::Second) => Box::new(
-                PrimitiveDistinctCountAccumulator::<Time32SecondType>::new(data_type),
-            ),
-            DataType::Time64(TimeUnit::Microsecond) => Box::new(
-                PrimitiveDistinctCountAccumulator::<Time64MicrosecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Time64(TimeUnit::Nanosecond) => Box::new(
-                PrimitiveDistinctCountAccumulator::<Time64NanosecondType>::new(data_type),
-            ),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(
-                PrimitiveDistinctCountAccumulator::<TimestampMicrosecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(
-                PrimitiveDistinctCountAccumulator::<TimestampMillisecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
-                PrimitiveDistinctCountAccumulator::<TimestampNanosecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Timestamp(TimeUnit::Second, _) => Box::new(
-                PrimitiveDistinctCountAccumulator::<TimestampSecondType>::new(data_type),
-            ),
-
-            DataType::Float16 => {
-                Box::new(FloatDistinctCountAccumulator::<Float16Type>::new())
+            DataType::Dictionary(_, values_type) => {
+                let inner = get_count_accumulator(values_type);
+                Box::new(DictionaryCountAccumulator::new(inner))
             }
-            DataType::Float32 => {
-                Box::new(FloatDistinctCountAccumulator::<Float32Type>::new())
-            }
-            DataType::Float64 => {
-                Box::new(FloatDistinctCountAccumulator::<Float64Type>::new())
-            }
-
-            DataType::Utf8 => {
-                Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8))
-            }
-            DataType::Utf8View => {
-                Box::new(BytesViewDistinctCountAccumulator::new(OutputType::Utf8View))
-            }
-            DataType::LargeUtf8 => {
-                Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))
-            }
-            DataType::Binary => Box::new(BytesDistinctCountAccumulator::<i32>::new(
-                OutputType::Binary,
-            )),
-            DataType::BinaryView => Box::new(BytesViewDistinctCountAccumulator::new(
-                OutputType::BinaryView,
-            )),
-            DataType::LargeBinary => Box::new(BytesDistinctCountAccumulator::<i64>::new(
-                OutputType::Binary,
-            )),
-
-            // Use the generic accumulator based on `ScalarValue` for all other types
-            _ => Box::new(DistinctCountAccumulator {
-                values: HashSet::default(),
-                state_data_type: data_type.clone(),
-            }),
+            _ => get_count_accumulator(data_type),
         })
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -406,6 +407,98 @@ impl AggregateUDFImpl for Count {
         // `COUNT` is monotonically increasing as it always increases or stays
         // the same as new values are seen.
         SetMonotonicity::Increasing
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        if args.is_distinct {
+            let acc =
+                SlidingDistinctCountAccumulator::try_new(args.return_field.data_type())?;
+            Ok(Box::new(acc))
+        } else {
+            let acc = CountAccumulator::new();
+            Ok(Box::new(acc))
+        }
+    }
+}
+
+// DistinctCountAccumulator does not support retract_batch and sliding window
+// this is a specialized accumulator for distinct count that supports retract_batch
+// and sliding window.
+#[derive(Debug)]
+pub struct SlidingDistinctCountAccumulator {
+    counts: HashMap<ScalarValue, usize, RandomState>,
+    data_type: DataType,
+}
+
+impl SlidingDistinctCountAccumulator {
+    pub fn try_new(data_type: &DataType) -> Result<Self> {
+        Ok(Self {
+            counts: HashMap::default(),
+            data_type: data_type.clone(),
+        })
+    }
+}
+
+impl Accumulator for SlidingDistinctCountAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let keys = self.counts.keys().cloned().collect::<Vec<_>>();
+        Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
+            keys.as_slice(),
+            &self.data_type,
+        ))])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            let v = ScalarValue::try_from_array(arr, i)?;
+            if !v.is_null() {
+                *self.counts.entry(v).or_default() += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            let v = ScalarValue::try_from_array(arr, i)?;
+            if !v.is_null() {
+                if let Some(cnt) = self.counts.get_mut(&v) {
+                    *cnt -= 1;
+                    if *cnt == 0 {
+                        self.counts.remove(&v);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let list_arr = states[0].as_list::<i32>();
+        for inner in list_arr.iter().flatten() {
+            for j in 0..inner.len() {
+                let v = ScalarValue::try_from_array(&*inner, j)?;
+                *self.counts.entry(v).or_default() += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.counts.len() as i64)))
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
     }
 }
 
@@ -708,8 +801,8 @@ impl Accumulator for DistinctCountAccumulator {
         }
 
         (0..arr.len()).try_for_each(|index| {
-            if !arr.is_null(index) {
-                let scalar = ScalarValue::try_from_array(arr, index)?;
+            let scalar = ScalarValue::try_from_array(arr, index)?;
+            if !scalar.is_null() {
                 self.values.insert(scalar);
             }
             Ok(())
@@ -754,14 +847,197 @@ impl Accumulator for DistinctCountAccumulator {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
-    use arrow::array::NullArray;
+    use arrow::{
+        array::{DictionaryArray, Int32Array, NullArray, StringArray},
+        datatypes::{DataType, Field, Int32Type, Schema},
+    };
+    use datafusion_expr::function::AccumulatorArgs;
+    use datafusion_physical_expr::expressions::Column;
+    use std::sync::Arc;
+    /// Helper function to create a dictionary array with non-null keys but some null values
+    /// Returns a dictionary array where:
+    /// - keys are [0, 1, 2, 0, 1] (all non-null)
+    /// - values are ["a", null, "c"]
+    /// - so the keys reference: "a", null, "c", "a", null
+    fn create_dictionary_with_null_values() -> Result<DictionaryArray<Int32Type>> {
+        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1]); // references "a", null, "c", "a", null
+        Ok(DictionaryArray::<Int32Type>::try_new(
+            keys,
+            Arc::new(values),
+        )?)
+    }
 
     #[test]
     fn count_accumulator_nulls() -> Result<()> {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_dictionary() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "dict_col",
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Utf8),
+                )),
+            ),
+            true,
+        )]));
+
+        // Using Count UDAF's accumulator
+        let count = Count::new();
+        let expr = Arc::new(Column::new("dict_col", 0));
+        let args = AccumulatorArgs {
+            schema: &schema,
+            exprs: &[expr],
+            is_distinct: true,
+            name: "count",
+            ignore_nulls: false,
+            is_reversed: false,
+            return_field: Arc::new(Field::new_list_field(DataType::Int64, true)),
+            order_bys: &[],
+        };
+
+        let inner_dict =
+            DictionaryArray::<Int32Type>::from_iter(["a", "b", "c", "d", "a", "b"]);
+
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 3, 1]);
+        let dict_of_dict =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(inner_dict))?;
+
+        let mut acc = count.accumulator(args)?;
+        acc.update_batch(&[Arc::new(dict_of_dict)])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(4)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_accumulator_dictionary_with_null_values() -> Result<()> {
+        let dict_array = create_dictionary_with_null_values()?;
+
+        // The expected behavior is that count_distinct should count only non-null values
+        // which in this case are "a" and "c" (appearing as 0 and 2 in keys)
+        let mut accumulator = DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: dict_array.data_type().clone(),
+        };
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // Should have 2 distinct non-null values ("a" and "c")
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(2)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_accumulator_dictionary_with_null_values() -> Result<()> {
+        let dict_array = create_dictionary_with_null_values()?;
+
+        // The expected behavior is that count should only count non-null values
+        let mut accumulator = CountAccumulator::new();
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // 5 elements in the array, of which 2 reference null values (the two 1s in the keys)
+        // So we should count 3 non-null values
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_accumulator_dictionary_all_null_values() -> Result<()> {
+        // Create a dictionary array that only contains null values
+        let dict_values = StringArray::from(vec![None, Some("abc")]);
+        let dict_indices = Int32Array::from(vec![0; 5]);
+        let dict_array =
+            DictionaryArray::<Int32Type>::try_new(dict_indices, Arc::new(dict_values))?;
+
+        let mut accumulator = DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: dict_array.data_type().clone(),
+        };
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // All referenced values are null so count(distinct) should be 0
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_distinct_count_accumulator_basic() -> Result<()> {
+        // Basic update_batch + evaluate functionality
+        let mut acc = SlidingDistinctCountAccumulator::try_new(&DataType::Int32)?;
+        // Create an Int32Array: [1, 2, 2, 3, null]
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(2),
+            Some(3),
+            None,
+        ]));
+        acc.update_batch(&[values])?;
+        // Expect distinct values {1,2,3} → count = 3
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_distinct_count_accumulator_retract() -> Result<()> {
+        // Test that retract_batch properly decrements counts
+        let mut acc = SlidingDistinctCountAccumulator::try_new(&DataType::Utf8)?;
+        // Initial batch: ["a", "b", "a"]
+        let arr1 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("a")]))
+            as ArrayRef;
+        acc.update_batch(&[arr1])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(2))); // {"a","b"}
+
+        // Retract batch: ["a", null, "b"]
+        let arr2 =
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("b")])) as ArrayRef;
+        acc.retract_batch(&[arr2])?;
+        // Before: a→2, b→1; after retract a→1, b→0 → b removed; remaining {"a"}
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(1)));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_distinct_count_accumulator_merge_states() -> Result<()> {
+        // Test merging multiple accumulator states with merge_batch
+        let mut acc1 = SlidingDistinctCountAccumulator::try_new(&DataType::Int32)?;
+        let mut acc2 = SlidingDistinctCountAccumulator::try_new(&DataType::Int32)?;
+        // acc1 sees [1, 2]
+        acc1.update_batch(&[Arc::new(Int32Array::from(vec![Some(1), Some(2)]))])?;
+        // acc2 sees [2, 3]
+        acc2.update_batch(&[Arc::new(Int32Array::from(vec![Some(2), Some(3)]))])?;
+        // Extract their states as Vec<ScalarValue>
+        let state_sv1 = acc1.state()?;
+        let state_sv2 = acc2.state()?;
+        // Convert ScalarValue states into Vec<ArrayRef>, propagating errors
+        // NOTE we pass `1` because each ScalarValue.to_array produces a 1‑row ListArray
+        let state_arr1: Vec<ArrayRef> = state_sv1
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+        let state_arr2: Vec<ArrayRef> = state_sv2
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+        // Merge both states into a fresh accumulator
+        let mut merged = SlidingDistinctCountAccumulator::try_new(&DataType::Int32)?;
+        merged.merge_batch(&state_arr1)?;
+        merged.merge_batch(&state_arr2)?;
+        // Expect distinct {1,2,3} → count = 3
+        assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(3)));
         Ok(())
     }
 }

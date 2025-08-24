@@ -36,7 +36,7 @@ The `current_time()` return value is determined at query time and will return th
 "#,
     syntax_example = "current_time()"
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentTimeFunc {
     signature: Signature,
 }
@@ -96,6 +96,7 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         let nano = now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000);
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Time64Nanosecond(nano),
+            None,
         )))
     }
 

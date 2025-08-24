@@ -22,18 +22,17 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
-use crate::window::window_expr::AggregateWindowExpr;
+use crate::window::window_expr::{AggregateWindowExpr, WindowFn};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
+use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 
 use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A window expr that takes the form of an aggregate function that
 /// can be incrementally computed over sliding windows.
@@ -43,7 +42,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 pub struct SlidingAggregateWindowExpr {
     aggregate: Arc<AggregateFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: LexOrdering,
+    order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
 }
 
@@ -52,13 +51,13 @@ impl SlidingAggregateWindowExpr {
     pub fn new(
         aggregate: Arc<AggregateFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &LexOrdering,
+        order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
-            order_by: order_by.clone(),
+            order_by: order_by.to_vec(),
             window_frame,
         }
     }
@@ -80,7 +79,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         self
     }
 
-    fn field(&self) -> Result<Field> {
+    fn field(&self) -> Result<FieldRef> {
         Ok(self.aggregate.field())
     }
 
@@ -108,8 +107,8 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &LexOrdering {
-        self.order_by.as_ref()
+    fn order_by(&self) -> &[PhysicalSortExpr] {
+        &self.order_by
     }
 
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
@@ -123,14 +122,22 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                    &self
+                        .order_by
+                        .iter()
+                        .map(|e| e.reverse())
+                        .collect::<Vec<_>>(),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                    &self
+                        .order_by
+                        .iter()
+                        .map(|e| e.reverse())
+                        .collect::<Vec<_>>(),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             }
@@ -157,7 +164,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 expr: new_expr,
                 options: req.options,
             })
-            .collect::<LexOrdering>();
+            .collect();
         Some(Arc::new(SlidingAggregateWindowExpr {
             aggregate: self
                 .aggregate
@@ -167,6 +174,10 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             order_by: new_order_by,
             window_frame: Arc::clone(&self.window_frame),
         }))
+    }
+
+    fn create_window_fn(&self) -> Result<WindowFn> {
+        Ok(WindowFn::Aggregate(self.get_accumulator()?))
     }
 }
 
@@ -209,5 +220,9 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
             }
             accumulator.evaluate()
         }
+    }
+
+    fn is_constant_in_partition(&self) -> bool {
+        false
     }
 }

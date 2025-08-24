@@ -36,8 +36,8 @@ If you would like to propose your change for inclusion in a release branch for a
 patch release:
 
 1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
-1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
-1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
+2. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
+3. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
 For example, to backport commit `12345` from `main` to `branch-43`:
 
@@ -127,6 +127,15 @@ Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
 release.
 
 See [#9697](https://github.com/apache/datafusion/pull/9697) for an example.
+
+Modify `asf.yaml` to protect future release candidate branch to prevent accidental merges:
+
+```yaml
+# needs to be updated as part of the release process
+branch-50:
+  required_pull_request_reviews:
+    required_approving_review_count: 1
+```
 
 Here are the commands that could be used to prepare the `38.0.0` release:
 
@@ -278,17 +287,24 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
+(cd datafusion/pruning && cargo publish)
 (cd datafusion/physical-optimizer && cargo publish)
-(cd datafusion/catalog && cargo publish)
+(cd datafusion/session && cargo publish)
 (cd datafusion/datasource && cargo publish)
+(cd datafusion/catalog && cargo publish)
 (cd datafusion/catalog-listing && cargo publish)
 (cd datafusion/functions-table && cargo publish)
+(cd datafusion/datasource-csv && cargo publish)
+(cd datafusion/datasource-json && cargo publish)
+(cd datafusion/datasource-parquet && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)
+(cd datafusion/datasource-avro && cargo publish)
 (cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
 (cd datafusion-cli && cargo publish)
+(cd datafusion/spark && cargo publish)
 (cd datafusion/sqllogictest && cargo publish)
 ```
 

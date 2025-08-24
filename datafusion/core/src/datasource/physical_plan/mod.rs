@@ -27,36 +27,26 @@ pub mod parquet;
 #[cfg(feature = "avro")]
 pub mod avro;
 
-#[allow(deprecated)]
 #[cfg(feature = "avro")]
-pub use avro::{AvroExec, AvroSource};
+pub use avro::AvroSource;
 
 #[cfg(feature = "parquet")]
 pub use datafusion_datasource_parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
-#[allow(deprecated)]
-pub use datafusion_datasource_parquet::{
-    ParquetExec, ParquetExecBuilder, ParquetFileMetrics, ParquetFileReaderFactory,
-};
+pub use datafusion_datasource_parquet::{ParquetFileMetrics, ParquetFileReaderFactory};
 
-#[allow(deprecated)]
-pub use arrow_file::ArrowExec;
 pub use arrow_file::ArrowSource;
-
-#[allow(deprecated)]
-pub use json::NdJsonExec;
 
 pub use json::{JsonOpener, JsonSource};
 
-#[allow(deprecated)]
-pub use csv::{CsvExec, CsvExecBuilder};
-
 pub use csv::{CsvOpener, CsvSource};
 pub use datafusion_datasource::file::FileSource;
+pub use datafusion_datasource::file_groups::FileGroup;
 pub use datafusion_datasource::file_groups::FileGroupPartitioner;
 pub use datafusion_datasource::file_meta::FileMeta;
 pub use datafusion_datasource::file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
+    FileScanConfigBuilder,
 };
 pub use datafusion_datasource::file_sink_config::*;
 

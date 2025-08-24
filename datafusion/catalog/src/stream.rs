@@ -30,11 +30,11 @@ use arrow::array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_physical_expr::create_ordering;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
@@ -256,7 +256,7 @@ impl StreamConfig {
         Self {
             source,
             order: vec![],
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
         }
     }
 
@@ -350,15 +350,10 @@ impl TableProvider for StreamTable {
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let ordering = match self.0.order.first() {
-            Some(x) => {
-                let schema = self.0.source.schema();
-                let orders = create_ordering(schema, std::slice::from_ref(x))?;
-                let ordering = orders.into_iter().next().unwrap();
-                Some(ordering.into_iter().map(Into::into).collect())
-            }
-            None => None,
-        };
+        let schema = self.0.source.schema();
+        let orders = create_ordering(schema, &self.0.order)?;
+        // It is sufficient to pass only one of the equivalent orderings:
+        let ordering = orders.into_iter().next().map(Into::into);
 
         Ok(Arc::new(DataSinkExec::new(
             input,
@@ -440,6 +435,6 @@ impl DataSink for StreamWrite {
         write_task
             .join_unwind()
             .await
-            .map_err(DataFusionError::ExecutionJoin)?
+            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
     }
 }

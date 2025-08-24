@@ -33,5 +33,5 @@ SQL Reference
    window_functions
    scalar_functions
    special_functions
-   write_options
+   format_options
    prepared_statements

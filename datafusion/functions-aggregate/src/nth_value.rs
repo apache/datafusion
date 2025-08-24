@@ -24,7 +24,7 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
@@ -86,10 +86,10 @@ pub fn nth_value(
         description = "The position (nth) of the value to retrieve, based on the ordering."
     )
 )]
-/// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
+/// Expression for a `NTH_VALUE(..., ... ORDER BY ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NthValueAgg {
     signature: Signature,
 }
@@ -148,27 +148,28 @@ impl AggregateUDFImpl for NthValueAgg {
             }
         };
 
-        let ordering_dtypes = acc_args
-            .ordering_req
+        let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
+            return TrivialNthValueAccumulator::try_new(
+                n,
+                acc_args.return_field.data_type(),
+            )
+            .map(|acc| Box::new(acc) as _);
+        };
+        let ordering_dtypes = ordering
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
-        NthValueAccumulator::try_new(
-            n,
-            &data_type,
-            &ordering_dtypes,
-            acc_args.ordering_req.clone(),
-        )
-        .map(|acc| Box::new(acc) as _)
+        NthValueAccumulator::try_new(n, &data_type, &ordering_dtypes, ordering)
+            .map(|acc| Box::new(acc) as _)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new_list_field(args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_fields[0].data_type().clone(), true),
             false,
         )];
         let orderings = args.ordering_fields.to_vec();
@@ -179,11 +180,7 @@ impl AggregateUDFImpl for NthValueAgg {
                 false,
             ));
         }
-        Ok(fields)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
+        Ok(fields.into_iter().map(Arc::new).collect())
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -192,6 +189,126 @@ impl AggregateUDFImpl for NthValueAgg {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[derive(Debug)]
+pub struct TrivialNthValueAccumulator {
+    /// The `N` value.
+    n: i64,
+    /// Stores entries in the `NTH_VALUE` result.
+    values: VecDeque<ScalarValue>,
+    /// Data types of the value.
+    datatype: DataType,
+}
+
+impl TrivialNthValueAccumulator {
+    /// Create a new order-insensitive NTH_VALUE accumulator based on the given
+    /// item data type.
+    pub fn try_new(n: i64, datatype: &DataType) -> Result<Self> {
+        if n == 0 {
+            // n cannot be 0
+            return internal_err!("Nth value indices are 1 based. 0 is invalid index");
+        }
+        Ok(Self {
+            n,
+            values: VecDeque::new(),
+            datatype: datatype.clone(),
+        })
+    }
+
+    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
+    /// None represents all of the new `values` need to be added to the state.
+    fn append_new_data(
+        &mut self,
+        values: &[ArrayRef],
+        fetch: Option<usize>,
+    ) -> Result<()> {
+        let n_row = values[0].len();
+        let n_to_add = if let Some(fetch) = fetch {
+            std::cmp::min(fetch, n_row)
+        } else {
+            n_row
+        };
+        for index in 0..n_to_add {
+            let mut row = get_row_at_idx(values, index)?;
+            self.values.push_back(row.swap_remove(0));
+            // At index 1, we have n index argument, which is constant.
+        }
+        Ok(())
+    }
+}
+
+impl Accumulator for TrivialNthValueAccumulator {
+    /// Updates its state with the `values`. Assumes data in the `values` satisfies the required
+    /// ordering for the accumulator (across consecutive batches, not just batch-wise).
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if !values.is_empty() {
+            let n_required = self.n.unsigned_abs() as usize;
+            let from_start = self.n > 0;
+            if from_start {
+                // direction is from start
+                let n_remaining = n_required.saturating_sub(self.values.len());
+                self.append_new_data(values, Some(n_remaining))?;
+            } else {
+                // direction is from end
+                self.append_new_data(values, None)?;
+                let start_offset = self.values.len().saturating_sub(n_required);
+                if start_offset > 0 {
+                    self.values.drain(0..start_offset);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if !states.is_empty() {
+            // First entry in the state is the aggregation result.
+            let n_required = self.n.unsigned_abs() as usize;
+            let array_agg_res = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
+            for v in array_agg_res.into_iter() {
+                self.values.extend(v);
+                if self.values.len() > n_required {
+                    // There is enough data collected, can stop merging:
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let mut values_cloned = self.values.clone();
+        let values_slice = values_cloned.make_contiguous();
+        Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
+            values_slice,
+            &self.datatype,
+        ))])
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let n_required = self.n.unsigned_abs() as usize;
+        let from_start = self.n > 0;
+        let nth_value_idx = if from_start {
+            // index is from start
+            let forward_idx = n_required - 1;
+            (forward_idx < self.values.len()).then_some(forward_idx)
+        } else {
+            // index is from end
+            self.values.len().checked_sub(n_required)
+        };
+        if let Some(idx) = nth_value_idx {
+            Ok(self.values[idx].clone())
+        } else {
+            ScalarValue::try_from(self.datatype.clone())
+        }
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + ScalarValue::size_of_vec_deque(&self.values)
+            - size_of_val(&self.values)
+            + size_of::<DataType>()
     }
 }
 
@@ -236,6 +353,64 @@ impl NthValueAccumulator {
             ordering_req,
         })
     }
+
+    fn evaluate_orderings(&self) -> Result<ScalarValue> {
+        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+
+        let mut column_wise_ordering_values = vec![];
+        let num_columns = fields.len();
+        for i in 0..num_columns {
+            let column_values = self
+                .ordering_values
+                .iter()
+                .map(|x| x[i].clone())
+                .collect::<Vec<_>>();
+            let array = if column_values.is_empty() {
+                new_empty_array(fields[i].data_type())
+            } else {
+                ScalarValue::iter_to_array(column_values.into_iter())?
+            };
+            column_wise_ordering_values.push(array);
+        }
+
+        let struct_field = Fields::from(fields);
+        let ordering_array =
+            StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
+
+        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
+    }
+
+    fn evaluate_values(&self) -> ScalarValue {
+        let mut values_cloned = self.values.clone();
+        let values_slice = values_cloned.make_contiguous();
+        ScalarValue::List(ScalarValue::new_list_nullable(
+            values_slice,
+            &self.datatypes[0],
+        ))
+    }
+
+    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
+    /// None represents all of the new `values` need to be added to the state.
+    fn append_new_data(
+        &mut self,
+        values: &[ArrayRef],
+        fetch: Option<usize>,
+    ) -> Result<()> {
+        let n_row = values[0].len();
+        let n_to_add = if let Some(fetch) = fetch {
+            std::cmp::min(fetch, n_row)
+        } else {
+            n_row
+        };
+        for index in 0..n_to_add {
+            let row = get_row_at_idx(values, index)?;
+            self.values.push_back(row[0].clone());
+            // At index 1, we have n index argument.
+            // Ordering values cover starting from 2nd index to end
+            self.ordering_values.push_back(row[2..].to_vec());
+        }
+        Ok(())
+    }
 }
 
 impl Accumulator for NthValueAccumulator {
@@ -269,91 +444,60 @@ impl Accumulator for NthValueAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        // First entry in the state is the aggregation result.
-        let array_agg_values = &states[0];
-        let n_required = self.n.unsigned_abs() as usize;
-        if self.ordering_req.is_empty() {
-            let array_agg_res =
-                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-            for v in array_agg_res.into_iter() {
-                self.values.extend(v);
-                if self.values.len() > n_required {
-                    // There is enough data collected can stop merging
-                    break;
-                }
-            }
-        } else if let Some(agg_orderings) = states[1].as_list_opt::<i32>() {
-            // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside NTH_VALUE list.
-            // For each `StructArray` inside NTH_VALUE list, we will receive an `Array` that stores
-            // values received from its ordering requirement expression. (This information is necessary for during merging).
-
-            // Stores NTH_VALUE results coming from each partition
-            let mut partition_values: Vec<VecDeque<ScalarValue>> = vec![];
-            // Stores ordering requirement expression results coming from each partition
-            let mut partition_ordering_values: Vec<VecDeque<Vec<ScalarValue>>> = vec![];
-
-            // Existing values should be merged also.
-            partition_values.push(self.values.clone());
-
-            partition_ordering_values.push(self.ordering_values.clone());
-
-            let array_agg_res =
-                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-
-            for v in array_agg_res.into_iter() {
-                partition_values.push(v.into());
-            }
-
-            let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
-
-            let ordering_values = orderings.into_iter().map(|partition_ordering_rows| {
-                // Extract value from struct to ordering_rows for each group/partition
-                partition_ordering_rows.into_iter().map(|ordering_row| {
-                    if let ScalarValue::Struct(s) = ordering_row {
-                        let mut ordering_columns_per_row = vec![];
-
-                        for column in s.columns() {
-                            let sv = ScalarValue::try_from_array(column, 0)?;
-                            ordering_columns_per_row.push(sv);
-                        }
-
-                        Ok(ordering_columns_per_row)
-                    } else {
-                        exec_err!(
-                            "Expects to receive ScalarValue::Struct(Some(..), _) but got: {:?}",
-                            ordering_row.data_type()
-                        )
-                    }
-                }).collect::<Result<Vec<_>>>()
-            }).collect::<Result<Vec<_>>>()?;
-            for ordering_values in ordering_values.into_iter() {
-                partition_ordering_values.push(ordering_values.into());
-            }
-
-            let sort_options = self
-                .ordering_req
-                .iter()
-                .map(|sort_expr| sort_expr.options)
-                .collect::<Vec<_>>();
-            let (new_values, new_orderings) = merge_ordered_arrays(
-                &mut partition_values,
-                &mut partition_ordering_values,
-                &sort_options,
-            )?;
-            self.values = new_values.into();
-            self.ordering_values = new_orderings.into();
-        } else {
+        // Second entry stores values received for ordering requirement columns
+        // for each aggregation value inside NTH_VALUE list. For each `StructArray`
+        // inside this list, we will receive an `Array` that stores values received
+        // from its ordering requirement expression. This information is necessary
+        // during merging.
+        let Some(agg_orderings) = states[1].as_list_opt::<i32>() else {
             return exec_err!("Expects to receive a list array");
+        };
+
+        // Stores NTH_VALUE results coming from each partition
+        let mut partition_values = vec![self.values.clone()];
+        // First entry in the state is the aggregation result.
+        let array_agg_res = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
+        for v in array_agg_res.into_iter() {
+            partition_values.push(v.into());
         }
+        // Stores ordering requirement expression results coming from each partition:
+        let mut partition_ordering_values = vec![self.ordering_values.clone()];
+        let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
+        // Extract value from struct to ordering_rows for each group/partition:
+        for partition_ordering_rows in orderings.into_iter() {
+            let ordering_values = partition_ordering_rows.into_iter().map(|ordering_row| {
+                let ScalarValue::Struct(s_array) = ordering_row else {
+                    return exec_err!(
+                        "Expects to receive ScalarValue::Struct(Some(..), _) but got: {:?}",
+                        ordering_row.data_type()
+                    );
+                };
+                s_array
+                    .columns()
+                    .iter()
+                    .map(|column| ScalarValue::try_from_array(column, 0))
+                    .collect()
+            }).collect::<Result<VecDeque<_>>>()?;
+            partition_ordering_values.push(ordering_values);
+        }
+
+        let sort_options = self
+            .ordering_req
+            .iter()
+            .map(|sort_expr| sort_expr.options)
+            .collect::<Vec<_>>();
+        let (new_values, new_orderings) = merge_ordered_arrays(
+            &mut partition_values,
+            &mut partition_ordering_values,
+            &sort_options,
+        )?;
+        self.values = new_values.into();
+        self.ordering_values = new_orderings.into();
         Ok(())
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut result = vec![self.evaluate_values()];
-        if !self.ordering_req.is_empty() {
-            result.push(self.evaluate_orderings()?);
-        }
-        Ok(result)
+        Ok(vec![self.evaluate_values(), self.evaluate_orderings()?])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -394,65 +538,5 @@ impl Accumulator for NthValueAccumulator {
         total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
         // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
         total
-    }
-}
-
-impl NthValueAccumulator {
-    fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
-        let struct_field = Fields::from(fields.clone());
-
-        let mut column_wise_ordering_values = vec![];
-        let num_columns = fields.len();
-        for i in 0..num_columns {
-            let column_values = self
-                .ordering_values
-                .iter()
-                .map(|x| x[i].clone())
-                .collect::<Vec<_>>();
-            let array = if column_values.is_empty() {
-                new_empty_array(fields[i].data_type())
-            } else {
-                ScalarValue::iter_to_array(column_values.into_iter())?
-            };
-            column_wise_ordering_values.push(array);
-        }
-
-        let ordering_array =
-            StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
-
-        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
-    }
-
-    fn evaluate_values(&self) -> ScalarValue {
-        let mut values_cloned = self.values.clone();
-        let values_slice = values_cloned.make_contiguous();
-        ScalarValue::List(ScalarValue::new_list_nullable(
-            values_slice,
-            &self.datatypes[0],
-        ))
-    }
-
-    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
-    /// None represents all of the new `values` need to be added to the state.
-    fn append_new_data(
-        &mut self,
-        values: &[ArrayRef],
-        fetch: Option<usize>,
-    ) -> Result<()> {
-        let n_row = values[0].len();
-        let n_to_add = if let Some(fetch) = fetch {
-            std::cmp::min(fetch, n_row)
-        } else {
-            n_row
-        };
-        for index in 0..n_to_add {
-            let row = get_row_at_idx(values, index)?;
-            self.values.push_back(row[0].clone());
-            // At index 1, we have n index argument.
-            // Ordering values cover starting from 2nd index to end
-            self.ordering_values.push_back(row[2..].to_vec());
-        }
-        Ok(())
     }
 }

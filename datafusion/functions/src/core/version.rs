@@ -39,7 +39,7 @@ use std::any::Any;
 +--------------------------------------------+
 ```"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VersionFunc {
     signature: Signature,
 }
@@ -97,7 +97,10 @@ impl ScalarUDFImpl for VersionFunc {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarUDF;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_version_udf() {
@@ -105,8 +108,10 @@ mod test {
         let version = version_udf
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![],
+                arg_fields: vec![],
                 number_rows: 0,
-                return_type: &DataType::Utf8,
+                return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
 

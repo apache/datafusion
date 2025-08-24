@@ -43,7 +43,7 @@ use std::any::Any;
     related_udf(name = "initcap"),
     related_udf(name = "lower")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UpperFunc {
     signature: Signature,
 }
@@ -97,15 +97,21 @@ impl ScalarUDFImpl for UpperFunc {
 mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, StringArray};
+    use arrow::datatypes::DataType::Utf8;
+    use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
 
+        let arg_field = Field::new("a", input.data_type().clone(), true).into();
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
-            return_type: &DataType::Utf8,
+            arg_fields: vec![arg_field],
+            return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = match func.invoke_with_args(args)? {

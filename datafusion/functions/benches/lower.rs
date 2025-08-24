@@ -18,11 +18,12 @@
 extern crate criterion;
 
 use arrow::array::{ArrayRef, StringArray, StringViewBuilder};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
@@ -44,7 +45,7 @@ fn create_args2(size: usize) -> Vec<ColumnarValue> {
     let mut items = Vec::with_capacity(size);
     items.push("农历新年".to_string());
     for i in 1..size {
-        items.push(format!("DATAFUSION {}", i));
+        items.push(format!("DATAFUSION {i}"));
     }
     let array = Arc::new(StringArray::from(items)) as ArrayRef;
     vec![ColumnarValue::Array(array)]
@@ -58,11 +59,11 @@ fn create_args3(size: usize) -> Vec<ColumnarValue> {
     let mut items = Vec::with_capacity(size);
     let half = size / 2;
     for i in 0..half {
-        items.push(format!("DATAFUSION {}", i));
+        items.push(format!("DATAFUSION {i}"));
     }
     items.push("Ⱦ".to_string());
     for i in half + 1..size {
-        items.push(format!("DATAFUSION {}", i));
+        items.push(format!("DATAFUSION {i}"));
     }
     let array = Arc::new(StringArray::from(items)) as ArrayRef;
     vec![ColumnarValue::Array(array)]
@@ -122,44 +123,73 @@ fn create_args5(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let lower = string::lower();
+    let config_options = Arc::new(ConfigOptions::default());
+
     for size in [1024, 4096, 8192] {
         let args = create_args1(size, 32);
-        c.bench_function(&format!("lower_all_values_are_ascii: {}", size), |b| {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        c.bench_function(&format!("lower_all_values_are_ascii: {size}"), |b| {
             b.iter(|| {
                 let args_cloned = args.clone();
                 black_box(lower.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_fields: arg_fields.clone(),
                     number_rows: size,
-                    return_type: &DataType::Utf8,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
                 }))
             })
         });
 
         let args = create_args2(size);
-        c.bench_function(
-            &format!("lower_the_first_value_is_nonascii: {}", size),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(lower.invoke_with_args(ScalarFunctionArgs {
-                        args: args_cloned,
-                        number_rows: size,
-                        return_type: &DataType::Utf8,
-                    }))
-                })
-            },
-        );
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        c.bench_function(&format!("lower_the_first_value_is_nonascii: {size}"), |b| {
+            b.iter(|| {
+                let args_cloned = args.clone();
+                black_box(lower.invoke_with_args(ScalarFunctionArgs {
+                    args: args_cloned,
+                    arg_fields: arg_fields.clone(),
+                    number_rows: size,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
+                }))
+            })
+        });
 
         let args = create_args3(size);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
         c.bench_function(
-            &format!("lower_the_middle_value_is_nonascii: {}", size),
+            &format!("lower_the_middle_value_is_nonascii: {size}"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
                     black_box(lower.invoke_with_args(ScalarFunctionArgs {
                         args: args_cloned,
+                        arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_type: &DataType::Utf8,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -176,29 +206,39 @@ fn criterion_benchmark(c: &mut Criterion) {
             for &str_len in &str_lens {
                 for &size in &sizes {
                     let args = create_args4(size, str_len, *null_density, mixed);
+                    let arg_fields = args
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, arg)| {
+                            Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                        })
+                        .collect::<Vec<_>>();
+
                     c.bench_function(
-                        &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
-                     size, str_len, null_density, mixed),
+                        &format!("lower_all_values_are_ascii_string_views: size: {size}, str_len: {str_len}, null_density: {null_density}, mixed: {mixed}"),
                         |b| b.iter(|| {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
+                                arg_fields: arg_fields.clone(),
                                 number_rows: size,
-                                return_type: &DataType::Utf8,
+                                return_field: Field::new("f", DataType::Utf8, true).into(),
+                                config_options: Arc::clone(&config_options),
                             }))
                         }),
                     );
 
                     let args = create_args4(size, str_len, *null_density, mixed);
                     c.bench_function(
-                        &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
-                     size, str_len, null_density, mixed),
+                        &format!("lower_all_values_are_ascii_string_views: size: {size}, str_len: {str_len}, null_density: {null_density}, mixed: {mixed}"),
                         |b| b.iter(|| {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
+                                arg_fields: arg_fields.clone(),
                                 number_rows: size,
-                                return_type: &DataType::Utf8,
+                                return_field: Field::new("f", DataType::Utf8, true).into(),
+                                config_options: Arc::clone(&config_options),
                             }))
                         }),
                     );
@@ -211,8 +251,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
+                                arg_fields: arg_fields.clone(),
                                 number_rows: size,
-                                return_type: &DataType::Utf8,
+                                return_field: Field::new("f", DataType::Utf8, true).into(),
+                                config_options: Arc::clone(&config_options),
                             }))
                         }),
                     );

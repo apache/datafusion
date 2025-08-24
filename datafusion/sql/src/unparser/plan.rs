@@ -50,7 +50,7 @@ use datafusion_expr::{
     UserDefinedLogicalNode,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
-use std::sync::Arc;
+use std::{sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -309,12 +309,13 @@ impl Unparser<'_> {
         plan: &LogicalPlan,
         relation: &mut RelationBuilder,
         lateral: bool,
+        columns: Vec<Ident>,
     ) -> Result<()> {
-        if self.dialect.requires_derived_table_alias() {
+        if self.dialect.requires_derived_table_alias() || !columns.is_empty() {
             self.derive(
                 plan,
                 relation,
-                Some(self.new_table_alias(alias.to_string(), vec![])),
+                Some(self.new_table_alias(alias.to_string(), columns)),
                 lateral,
             )
         } else {
@@ -392,6 +393,18 @@ impl Unparser<'_> {
                     }
                 }
 
+                // If it's a unnest projection, we should provide the table column alias
+                // to provide a column name for the unnest relation.
+                let columns = if unnest_input_type.is_some() {
+                    p.expr
+                        .iter()
+                        .map(|e| {
+                            self.new_ident_quoted_if_needs(e.schema_name().to_string())
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
                 // Projection can be top-level plan for derived table
                 if select.already_projected() {
                     return self.derive_with_dialect_alias(
@@ -401,6 +414,7 @@ impl Unparser<'_> {
                         unnest_input_type
                             .filter(|t| matches!(t, UnnestInputType::OuterReference))
                             .is_some(),
+                        columns,
                     );
                 }
                 self.reconstruct_select_statement(plan, p, select)?;
@@ -434,6 +448,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
                 if let Some(fetch) = &limit.fetch {
@@ -451,6 +466,7 @@ impl Unparser<'_> {
                             "Offset operator only valid in a statement context."
                         );
                     };
+
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
                         value: self.expr_to_sql(skip)?,
@@ -472,6 +488,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
                 let Some(query_ref) = query else {
@@ -493,7 +510,7 @@ impl Unparser<'_> {
                     .expr
                     .iter()
                     .map(|sort_expr| {
-                        unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
+                        unproject_sort_expr(sort_expr.clone(), agg, sort.input.as_ref())
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -543,8 +560,26 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
+
+                // If this distinct is the parent of a Union and we're in a query context,
+                // then we need to unparse as a `UNION` rather than a `UNION ALL`.
+                if let Distinct::All(input) = distinct {
+                    if matches!(input.as_ref(), LogicalPlan::Union(_)) {
+                        if let Some(query_mut) = query.as_mut() {
+                            query_mut.distinct_union();
+                            return self.select_to_sql_recursively(
+                                input.as_ref(),
+                                query,
+                                select,
+                                relation,
+                            );
+                        }
+                    }
+                }
+
                 let (select_distinct, input) = match distinct {
                     Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
                     Distinct::On(on) => {
@@ -582,6 +617,10 @@ impl Unparser<'_> {
                     }
                     _ => (&join.left, &join.right),
                 };
+                // If there's an outer projection plan, it will already set up the projection.
+                // In that case, we don't need to worry about setting up the projection here.
+                // The outer projection plan will handle projecting the correct columns.
+                let already_projected = select.already_projected();
 
                 let left_plan =
                     match try_transform_to_simple_table_scan_with_filters(left_plan)? {
@@ -598,6 +637,13 @@ impl Unparser<'_> {
                     select,
                     relation,
                 )?;
+
+                let left_projection: Option<Vec<ast::SelectItem>> = if !already_projected
+                {
+                    Some(select.pop_projections())
+                } else {
+                    None
+                };
 
                 let right_plan =
                     match try_transform_to_simple_table_scan_with_filters(right_plan)? {
@@ -657,12 +703,20 @@ impl Unparser<'_> {
                     &mut right_relation,
                 )?;
 
+                let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected
+                {
+                    Some(select.pop_projections())
+                } else {
+                    None
+                };
+
                 match join.join_type {
                     JoinType::LeftSemi
                     | JoinType::LeftAnti
                     | JoinType::LeftMark
                     | JoinType::RightSemi
-                    | JoinType::RightAnti => {
+                    | JoinType::RightAnti
+                    | JoinType::RightMark => {
                         let mut query_builder = QueryBuilder::default();
                         let mut from = TableWithJoinsBuilder::default();
                         let mut exists_select: SelectBuilder = SelectBuilder::default();
@@ -686,7 +740,8 @@ impl Unparser<'_> {
                         let negated = match join.join_type {
                             JoinType::LeftSemi
                             | JoinType::RightSemi
-                            | JoinType::LeftMark => false,
+                            | JoinType::LeftMark
+                            | JoinType::RightMark => false,
                             JoinType::LeftAnti | JoinType::RightAnti => true,
                             _ => unreachable!(),
                         };
@@ -694,13 +749,28 @@ impl Unparser<'_> {
                             subquery: Box::new(query_builder.build()?),
                             negated,
                         };
-                        if join.join_type == JoinType::LeftMark {
-                            let (table_ref, _) = right_plan.schema().qualified_field(0);
-                            let column = self
-                                .col_to_sql(&Column::new(table_ref.cloned(), "mark"))?;
-                            select.replace_mark(&column, &exists_expr);
-                        } else {
-                            select.selection(Some(exists_expr));
+
+                        match join.join_type {
+                            JoinType::LeftMark | JoinType::RightMark => {
+                                let source_schema =
+                                    if join.join_type == JoinType::LeftMark {
+                                        right_plan.schema()
+                                    } else {
+                                        left_plan.schema()
+                                    };
+                                let (table_ref, _) = source_schema.qualified_field(0);
+                                let column = self.col_to_sql(&Column::new(
+                                    table_ref.cloned(),
+                                    "mark",
+                                ))?;
+                                select.replace_mark(&column, &exists_expr);
+                            }
+                            _ => {
+                                select.selection(Some(exists_expr));
+                            }
+                        }
+                        if let Some(projection) = left_projection {
+                            select.projection(projection);
                         }
                     }
                     JoinType::Inner
@@ -719,6 +789,21 @@ impl Unparser<'_> {
                         let mut from = select.pop_from().unwrap();
                         from.push_join(ast_join);
                         select.push_from(from);
+                        if !already_projected {
+                            let Some(left_projection) = left_projection else {
+                                return internal_err!("Left projection is missing");
+                            };
+
+                            let Some(right_projection) = right_projection else {
+                                return internal_err!("Right projection is missing");
+                            };
+
+                            let projection = left_projection
+                                .into_iter()
+                                .chain(right_projection)
+                                .collect();
+                            select.projection(projection);
+                        }
                     }
                 };
 
@@ -780,6 +865,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
 
@@ -793,6 +879,15 @@ impl Unparser<'_> {
                     return internal_err!("UNION operator requires at least 2 inputs");
                 }
 
+                let set_quantifier =
+                    if query.as_ref().is_some_and(|q| q.is_distinct_union()) {
+                        // Setting the SetQuantifier to None will unparse as a `UNION`
+                        // rather than a `UNION ALL`.
+                        ast::SetQuantifier::None
+                    } else {
+                        ast::SetQuantifier::All
+                    };
+
                 // Build the union expression tree bottom-up by reversing the order
                 // note that we are also swapping left and right inputs because of the rev
                 let union_expr = input_exprs
@@ -800,7 +895,7 @@ impl Unparser<'_> {
                     .rev()
                     .reduce(|a, b| SetExpr::SetOperation {
                         op: ast::SetOperator::Union,
-                        set_quantifier: ast::SetQuantifier::All,
+                        set_quantifier,
                         left: Box::new(b),
                         right: Box::new(a),
                     })
@@ -888,6 +983,7 @@ impl Unparser<'_> {
                         subquery.subquery.as_ref(),
                         relation,
                         true,
+                        vec![],
                     )
                 }
             }
@@ -900,9 +996,9 @@ impl Unparser<'_> {
     /// Try to find the placeholder column name generated by `RecursiveUnnestRewriter`.
     ///
     /// - If the column is a placeholder column match the pattern `Expr::Alias(Expr::Column("__unnest_placeholder(...)"))`,
-    ///     it means it is a scalar column, return [UnnestInputType::Scalar].
+    ///   it means it is a scalar column, return [UnnestInputType::Scalar].
     /// - If the column is a placeholder column match the pattern `Expr::Alias(Expr::Column("__unnest_placeholder(outer_ref(...)))")`,
-    ///     it means it is an outer reference column, return [UnnestInputType::OuterReference].
+    ///   it means it is an outer reference column, return [UnnestInputType::OuterReference].
     /// - If the column is not a placeholder column, return [None].
     ///
     /// `outer_ref` is the display result of [Expr::OuterReferenceColumn]
@@ -910,8 +1006,7 @@ impl Unparser<'_> {
         if let Expr::Alias(Alias { expr, .. }) = expr {
             if let Expr::Column(Column { name, .. }) = expr.as_ref() {
                 if let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER) {
-                    if prefix.starts_with(&format!("({}(", OUTER_REFERENCE_COLUMN_PREFIX))
-                    {
+                    if prefix.starts_with(&format!("({OUTER_REFERENCE_COLUMN_PREFIX}(")) {
                         return Some(UnnestInputType::OuterReference);
                     }
                     return Some(UnnestInputType::Scalar);
@@ -998,6 +1093,7 @@ impl Unparser<'_> {
                         if project_vec.is_empty() {
                             builder = builder.project(vec![Expr::Literal(
                                 ScalarValue::Int64(Some(1)),
+                                None,
                             )])?;
                         } else {
                             let project_columns = project_vec
@@ -1118,9 +1214,18 @@ impl Unparser<'_> {
             Expr::Alias(Alias { expr, name, .. }) => {
                 let inner = self.expr_to_sql(expr)?;
 
+                // Determine the alias name to use
+                let col_name = if let Some(rewritten_name) =
+                    self.dialect.col_alias_overrides(name)?
+                {
+                    rewritten_name.to_string()
+                } else {
+                    name.to_string()
+                };
+
                 Ok(ast::SelectItem::ExprWithAlias {
                     expr: inner,
-                    alias: self.new_ident_quoted_if_needs(name.to_string()),
+                    alias: self.new_ident_quoted_if_needs(col_name),
                 })
             }
             _ => {
@@ -1163,7 +1268,9 @@ impl Unparser<'_> {
             JoinType::LeftSemi => ast::JoinOperator::LeftSemi(constraint),
             JoinType::RightAnti => ast::JoinOperator::RightAnti(constraint),
             JoinType::RightSemi => ast::JoinOperator::RightSemi(constraint),
-            JoinType::LeftMark => unimplemented!("Unparsing of Left Mark join type"),
+            JoinType::LeftMark | JoinType::RightMark => {
+                unimplemented!("Unparsing of Mark join type")
+            }
         })
     }
 

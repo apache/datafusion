@@ -25,6 +25,7 @@ use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
     StateFieldsArgs,
 };
+use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
@@ -37,13 +38,14 @@ use crate::{
 use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -401,11 +403,12 @@ pub fn create_udf(
 
 /// Implements [`ScalarUDFImpl`] for functions that have a single signature and
 /// return type.
+#[derive(PartialEq, Eq, Hash)]
 pub struct SimpleScalarUDF {
     name: String,
     signature: Signature,
     return_type: DataType,
-    fun: ScalarFunctionImplementation,
+    fun: PtrEq<ScalarFunctionImplementation>,
 }
 
 impl Debug for SimpleScalarUDF {
@@ -449,7 +452,7 @@ impl SimpleScalarUDF {
             name: name.into(),
             signature,
             return_type,
-            fun,
+            fun: fun.into(),
         }
     }
 }
@@ -492,6 +495,7 @@ pub fn create_udaf(
         .into_iter()
         .enumerate()
         .map(|(i, t)| Field::new(format!("{i}"), t, true))
+        .map(Arc::new)
         .collect::<Vec<_>>();
     AggregateUDF::from(SimpleAggregateUDF::new(
         name,
@@ -505,12 +509,13 @@ pub fn create_udaf(
 
 /// Implements [`AggregateUDFImpl`] for functions that have a single signature and
 /// return type.
+#[derive(PartialEq, Eq, Hash)]
 pub struct SimpleAggregateUDF {
     name: String,
     signature: Signature,
     return_type: DataType,
-    accumulator: AccumulatorFactoryFunction,
-    state_fields: Vec<Field>,
+    accumulator: PtrEq<AccumulatorFactoryFunction>,
+    state_fields: Vec<FieldRef>,
 }
 
 impl Debug for SimpleAggregateUDF {
@@ -533,7 +538,7 @@ impl SimpleAggregateUDF {
         return_type: DataType,
         volatility: Volatility,
         accumulator: AccumulatorFactoryFunction,
-        state_fields: Vec<Field>,
+        state_fields: Vec<FieldRef>,
     ) -> Self {
         let name = name.into();
         let signature = Signature::exact(input_type, volatility);
@@ -541,7 +546,7 @@ impl SimpleAggregateUDF {
             name,
             signature,
             return_type,
-            accumulator,
+            accumulator: accumulator.into(),
             state_fields,
         }
     }
@@ -553,14 +558,14 @@ impl SimpleAggregateUDF {
         signature: Signature,
         return_type: DataType,
         accumulator: AccumulatorFactoryFunction,
-        state_fields: Vec<Field>,
+        state_fields: Vec<FieldRef>,
     ) -> Self {
         let name = name.into();
         Self {
             name,
             signature,
             return_type,
-            accumulator,
+            accumulator: accumulator.into(),
             state_fields,
         }
     }
@@ -590,7 +595,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         (self.accumulator)(acc_args)
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(self.state_fields.clone())
     }
 }
@@ -619,11 +624,12 @@ pub fn create_udwf(
 
 /// Implements [`WindowUDFImpl`] for functions that have a single signature and
 /// return type.
+#[derive(PartialEq, Eq, Hash)]
 pub struct SimpleWindowUDF {
     name: String,
     signature: Signature,
     return_type: DataType,
-    partition_evaluator_factory: PartitionEvaluatorFactory,
+    partition_evaluator_factory: PtrEq<PartitionEvaluatorFactory>,
 }
 
 impl Debug for SimpleWindowUDF {
@@ -653,7 +659,7 @@ impl SimpleWindowUDF {
             name,
             signature,
             return_type,
-            partition_evaluator_factory,
+            partition_evaluator_factory: partition_evaluator_factory.into(),
         }
     }
 }
@@ -678,28 +684,28 @@ impl WindowUDFImpl for SimpleWindowUDF {
         (self.partition_evaluator_factory)()
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
             field_args.name(),
             self.return_type.clone(),
             true,
-        ))
+        )))
     }
 }
 
 pub fn interval_year_month_lit(value: &str) -> Expr {
     let interval = parse_interval_year_month(value).ok();
-    Expr::Literal(ScalarValue::IntervalYearMonth(interval))
+    Expr::Literal(ScalarValue::IntervalYearMonth(interval), None)
 }
 
 pub fn interval_datetime_lit(value: &str) -> Expr {
     let interval = parse_interval_day_time(value).ok();
-    Expr::Literal(ScalarValue::IntervalDayTime(interval))
+    Expr::Literal(ScalarValue::IntervalDayTime(interval), None)
 }
 
 pub fn interval_month_day_nano_lit(value: &str) -> Expr {
     let interval = parse_interval_month_day_nano(value).ok();
-    Expr::Literal(ScalarValue::IntervalMonthDayNano(interval))
+    Expr::Literal(ScalarValue::IntervalMonthDayNano(interval), None)
 }
 
 /// Extensions for configuring [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
@@ -820,7 +826,7 @@ impl ExprFuncBuilder {
 
         let fun_expr = match fun {
             ExprFuncKind::Aggregate(mut udaf) => {
-                udaf.params.order_by = order_by;
+                udaf.params.order_by = order_by.unwrap_or_default();
                 udaf.params.filter = filter.map(Box::new);
                 udaf.params.distinct = distinct;
                 udaf.params.null_treatment = null_treatment;
@@ -831,15 +837,16 @@ impl ExprFuncBuilder {
                 params: WindowFunctionParams { args, .. },
             }) => {
                 let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
-                Expr::WindowFunction(WindowFunction {
+                Expr::from(WindowFunction {
                     fun,
                     params: WindowFunctionParams {
                         args,
                         partition_by: partition_by.unwrap_or_default(),
                         order_by: order_by.unwrap_or_default(),
                         window_frame: window_frame
-                            .unwrap_or(WindowFrame::new(has_order_by)),
+                            .unwrap_or_else(|| WindowFrame::new(has_order_by)),
                         null_treatment,
+                        distinct,
                     },
                 })
             }
@@ -895,7 +902,7 @@ impl ExprFunctionExt for Expr {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
             Expr::WindowFunction(udwf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)))
             }
             _ => ExprFuncBuilder::new(None),
         };
@@ -935,7 +942,7 @@ impl ExprFunctionExt for Expr {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
             Expr::WindowFunction(udwf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)))
             }
             _ => ExprFuncBuilder::new(None),
         };
@@ -948,7 +955,7 @@ impl ExprFunctionExt for Expr {
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
         match self {
             Expr::WindowFunction(udwf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
+                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)));
                 builder.partition_by = Some(partition_by);
                 builder
             }
@@ -959,7 +966,7 @@ impl ExprFunctionExt for Expr {
     fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder {
         match self {
             Expr::WindowFunction(udwf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
+                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)));
                 builder.window_frame = Some(window_frame);
                 builder
             }

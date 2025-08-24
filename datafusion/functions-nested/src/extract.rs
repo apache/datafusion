@@ -19,12 +19,12 @@
 
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, Capacities, GenericListArray, Int64Array,
-    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+    MutableArrayData, NullArray, NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{
-    DataType::{FixedSizeList, LargeList, List},
+    DataType::{FixedSizeList, LargeList, List, Null},
     Field,
 };
 use datafusion_common::cast::as_int64_array;
@@ -103,7 +103,7 @@ make_udf_expr_and_func!(
         description = "Index to extract the element from the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayElement {
     signature: Signature,
     aliases: Vec<String>,
@@ -163,13 +163,9 @@ impl ScalarUDFImpl for ArrayElement {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field)
-            | LargeList(field)
-            | FixedSizeList(field, _) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true)))),
-            _ => plan_err!(
-                "ArrayElement can only accept List, LargeList or FixedSizeList as the first argument"
-            ),
+            Null => Ok(Null),
+            List(field) | LargeList(field) => Ok(field.data_type().clone()),
+            arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
         }
     }
 
@@ -200,6 +196,7 @@ fn array_element_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, indexes] = take_function_args("array_element", args)?;
 
     match &array.data_type() {
+        Null => Ok(Arc::new(NullArray::new(array.len()))),
         List(_) => {
             let array = as_list_array(&array)?;
             let indexes = as_int64_array(&indexes)?;
@@ -210,10 +207,9 @@ fn array_element_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let indexes = as_int64_array(&indexes)?;
             general_array_element::<i64>(array, indexes)
         }
-        _ => exec_err!(
-            "array_element does not support type: {:?}",
-            array.data_type()
-        ),
+        arg_type => {
+            exec_err!("array_element does not support type {arg_type}")
+        }
     }
 }
 
@@ -225,6 +221,10 @@ where
     i64: TryInto<O>,
 {
     let values = array.values();
+    if values.data_type().is_null() {
+        return Ok(Arc::new(NullArray::new(array.len())));
+    }
+
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
@@ -238,8 +238,7 @@ where
     {
         let index: O = index.try_into().map_err(|_| {
             DataFusionError::Execution(format!(
-                "array_element got invalid index: {}",
-                index
+                "array_element got invalid index: {index}"
             ))
         })?;
         // 0 ~ len - 1
@@ -321,7 +320,7 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
         description = "Stride of the array slice. The default is 1."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArraySlice {
     signature: Signature,
     aliases: Vec<String>,
@@ -664,7 +663,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayPopFront {
     signature: Signature,
     aliases: Vec<String>,
@@ -771,7 +770,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayPopBack {
     signature: Signature,
     aliases: Vec<String>,
@@ -879,7 +878,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayAnyValue {
     signature: Signature,
     aliases: Vec<String>,

@@ -467,7 +467,18 @@ FROM t;
 ----
 [{foo: blarg}]
 
+query II
+SELECT v, CASE WHEN v != 0 THEN 10/v ELSE 42 END FROM (VALUES (0), (1), (2)) t(v)
+----
+0 42
+1 10
+2 5
 
+query II
+SELECT v, CASE WHEN v < 0 THEN 10/0 ELSE 1 END FROM (VALUES (1), (2)) t(v)
+----
+1 1
+2 1
 
 statement ok
 drop table t

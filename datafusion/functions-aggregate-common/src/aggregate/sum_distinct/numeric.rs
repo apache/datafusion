@@ -49,11 +49,11 @@ impl<T: ArrowPrimitiveType> Debug for DistinctSumAccumulator<T> {
 }
 
 impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
+    pub fn new(data_type: &DataType) -> Self {
+        Self {
             values: HashSet::default(),
             data_type: data_type.clone(),
-        })
+        }
     }
 
     pub fn distinct_count(&self) -> usize {

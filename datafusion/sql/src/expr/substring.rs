@@ -18,8 +18,8 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, plan_err};
 use datafusion_common::{DFSchema, Result, ScalarValue};
-use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::Expr;
+use datafusion_expr::{planner::PlannerResult, Expr};
+
 use sqlparser::ast::Expr as SQLExpr;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -51,7 +51,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             (None, Some(for_expr)) => {
                 let arg =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
-                let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
+                let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)), None);
                 let for_logic =
                     self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
                 vec![arg, from_logic, for_logic]
@@ -62,12 +62,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     substring_from: None,
                     substring_for: None,
                     special: false,
+                    shorthand: false,
                 };
 
                 return plan_err!("Substring without for/from is not valid {orig_sql:?}");
             }
         };
 
+        // Try to plan the substring expression using one of the registered planners
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_substring(substring_args)? {
                 PlannerResult::Planned(expr) => return Ok(expr),
@@ -77,8 +79,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        not_impl_err!(
-            "Substring not supported by UserDefinedExtensionPlanners: {substring_args:?}"
-        )
+        not_impl_err!("Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions" )
     }
 }

@@ -17,17 +17,20 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+use datafusion::execution::memory_pool::{
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-use datafusion_cli::functions::ParquetMetadataFunc;
+use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
 use datafusion_cli::{
     exec,
     pool_type::PoolType,
@@ -37,6 +40,9 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
+use datafusion::common::config_err;
+use datafusion::config::ConfigOptions;
+use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -116,6 +122,13 @@ struct Args {
 
     #[clap(
         long,
+        help = "The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0",
+        default_value = "3"
+    )]
+    top_memory_consumers: usize,
+
+    #[clap(
+        long,
         help = "The max number of rows to display for 'Table' format\n[possible values: numbers(0/10/...), inf(no limit)]",
         default_value = "40"
     )]
@@ -123,6 +136,14 @@ struct Args {
 
     #[clap(long, help = "Enables console syntax highlighting")]
     color: bool,
+
+    #[clap(
+        short = 'd',
+        long,
+        help = "Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')",
+        value_parser(extract_disk_limit)
+    )]
+    disk_limit: Option<usize>,
 }
 
 #[tokio::main]
@@ -142,7 +163,7 @@ async fn main_inner() -> Result<()> {
     let args = Args::parse();
 
     if !args.quiet {
-        println!("DataFusion CLI v{}", DATAFUSION_CLI_VERSION);
+        println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
     }
 
     if let Some(ref path) = args.data_path {
@@ -150,21 +171,38 @@ async fn main_inner() -> Result<()> {
         env::set_current_dir(p).unwrap();
     };
 
-    let mut session_config = SessionConfig::from_env()?.with_information_schema(true);
-
-    if let Some(batch_size) = args.batch_size {
-        session_config = session_config.with_batch_size(batch_size);
-    };
+    let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
     // set memory pool size
     if let Some(memory_limit) = args.memory_limit {
         // set memory pool type
         let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
-            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
+            PoolType::Fair if args.top_memory_consumers == 0 => {
+                Arc::new(FairSpillPool::new(memory_limit))
+            }
+            PoolType::Fair => Arc::new(TrackConsumersPool::new(
+                FairSpillPool::new(memory_limit),
+                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+            )),
+            PoolType::Greedy if args.top_memory_consumers == 0 => {
+                Arc::new(GreedyMemoryPool::new(memory_limit))
+            }
+            PoolType::Greedy => Arc::new(TrackConsumersPool::new(
+                GreedyMemoryPool::new(memory_limit),
+                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+            )),
         };
+
         rt_builder = rt_builder.with_memory_pool(pool)
+    }
+
+    // set disk limit
+    if let Some(disk_limit) = args.disk_limit {
+        let builder = DiskManagerBuilder::default()
+            .with_mode(DiskManagerMode::OsTmpDirectory)
+            .with_max_temp_directory_size(disk_limit.try_into().unwrap());
+        rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
 
     let runtime_env = rt_builder.build_arc()?;
@@ -180,6 +218,14 @@ async fn main_inner() -> Result<()> {
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
     ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+
+    // register `metadata_cache` table function to get the contents of the file metadata cache
+    ctx.register_udtf(
+        "metadata_cache",
+        Arc::new(MetadataCacheFunc::new(
+            ctx.task_ctx().runtime_env().cache_manager.clone(),
+        )),
+    );
 
     let mut print_options = PrintOptions {
         format: args.format,
@@ -226,11 +272,40 @@ async fn main_inner() -> Result<()> {
     Ok(())
 }
 
+/// Get the session configuration based on the provided arguments
+/// and environment settings.
+fn get_session_config(args: &Args) -> Result<SessionConfig> {
+    // Read options from environment variables and merge with command line options
+    let mut config_options = ConfigOptions::from_env()?;
+
+    if let Some(batch_size) = args.batch_size {
+        if batch_size == 0 {
+            return config_err!("batch_size must be greater than 0");
+        }
+        config_options.execution.batch_size = batch_size;
+    };
+
+    // use easier to understand "tree" mode by default
+    // if the user hasn't specified an explain format in the environment
+    if env::var_os("DATAFUSION_EXPLAIN_FORMAT").is_none() {
+        config_options.explain.format = String::from("tree");
+    }
+
+    // in the CLI, we want to show NULL values rather the empty strings
+    if env::var_os("DATAFUSION_FORMAT_NULL").is_none() {
+        config_options.format.null = String::from("NULL");
+    }
+
+    let session_config =
+        SessionConfig::from(config_options).with_information_schema(true);
+    Ok(session_config)
+}
+
 fn parse_valid_file(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_file() {
         Ok(dir.to_string())
     } else {
-        Err(format!("Invalid file '{}'", dir))
+        Err(format!("Invalid file '{dir}'"))
     }
 }
 
@@ -238,14 +313,14 @@ fn parse_valid_data_dir(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_dir() {
         Ok(dir.to_string())
     } else {
-        Err(format!("Invalid data directory '{}'", dir))
+        Err(format!("Invalid data directory '{dir}'"))
     }
 }
 
 fn parse_batch_size(size: &str) -> Result<usize, String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(size),
-        _ => Err(format!("Invalid batch size '{}'", size)),
+        _ => Err(format!("Invalid batch size '{size}'")),
     }
 }
 
@@ -278,7 +353,7 @@ impl ByteUnit {
     }
 }
 
-fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
+fn parse_size_string(size: &str, label: &str) -> Result<usize, String> {
     static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> =
         LazyLock::new(|| {
             let mut m = HashMap::new();
@@ -300,29 +375,37 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
     let lower = size.to_lowercase();
     if let Some(caps) = SUFFIX_REGEX.captures(&lower) {
         let num_str = caps.get(1).unwrap().as_str();
-        let num = num_str.parse::<usize>().map_err(|_| {
-            format!("Invalid numeric value in memory pool size '{}'", size)
-        })?;
+        let num = num_str
+            .parse::<usize>()
+            .map_err(|_| format!("Invalid numeric value in {label} '{size}'"))?;
 
         let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
-        let unit = &BYTE_SUFFIXES
+        let unit = BYTE_SUFFIXES
             .get(suffix)
-            .ok_or_else(|| format!("Invalid memory pool size '{}'", size))?;
-        let memory_pool_size = usize::try_from(unit.multiplier())
+            .ok_or_else(|| format!("Invalid {label} '{size}'"))?;
+        let total_bytes = usize::try_from(unit.multiplier())
             .ok()
             .and_then(|multiplier| num.checked_mul(multiplier))
-            .ok_or_else(|| format!("Memory pool size '{}' is too large", size))?;
+            .ok_or_else(|| format!("{label} '{size}' is too large"))?;
 
-        Ok(memory_pool_size)
+        Ok(total_bytes)
     } else {
-        Err(format!("Invalid memory pool size '{}'", size))
+        Err(format!("Invalid {label} '{size}'"))
     }
+}
+
+pub fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
+    parse_size_string(size, "memory pool size")
+}
+
+pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
+    parse_size_string(size, "disk limit")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::common::test_util::batches_to_string;
+    use datafusion::{common::test_util::batches_to_string, prelude::ParquetReadOptions};
     use insta::assert_snapshot;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
@@ -433,6 +516,99 @@ mod tests {
         +-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
         | ../parquet-testing/data/data_index_bloom_encoding_stats.parquet | 0            | 14                 | 1                     | 163             | 0         | 4           | 14         | "String"       | BYTE_ARRAY | Hello     | today     | 0                |                      | Hello           | today           | GZIP(GzipLevel(6)) | [BIT_PACKED, RLE, PLAIN] |                   |                        | 4                | 152                   | 163                     |
         +-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metadata_cache() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_udtf(
+            "metadata_cache",
+            Arc::new(MetadataCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        ctx.register_parquet(
+            "alltypes_plain",
+            "../parquet-testing/data/alltypes_plain.parquet",
+            ParquetReadOptions::new(),
+        )
+        .await?;
+
+        ctx.register_parquet(
+            "alltypes_tiny_pages",
+            "../parquet-testing/data/alltypes_tiny_pages.parquet",
+            ParquetReadOptions::new(),
+        )
+        .await?;
+
+        ctx.register_parquet(
+            "lz4_raw_compressed_larger",
+            "../parquet-testing/data/lz4_raw_compressed_larger.parquet",
+            ParquetReadOptions::new(),
+        )
+        .await?;
+
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_tiny_pages")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from lz4_raw_compressed_larger")
+            .await?
+            .collect()
+            .await?;
+
+        // initial state
+        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, metadata_size_bytes, hits, extra from metadata_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        assert_snapshot!(batches_to_string(&rbs),@r#"
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | alltypes_plain.parquet            | 1851            | 10181               | 2    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 881634              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 2    | page_index=false |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        "#);
+
+        // increase the number of hits
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from lz4_raw_compressed_larger")
+            .await?
+            .collect()
+            .await?;
+        let sql = "select split_part(path, '/', -1) as filename, file_size_bytes, metadata_size_bytes, hits, extra from metadata_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        assert_snapshot!(batches_to_string(&rbs),@r#"
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | alltypes_plain.parquet            | 1851            | 10181               | 5    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 881634              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 3    | page_index=false |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
         "#);
 
         Ok(())

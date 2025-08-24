@@ -50,13 +50,15 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
+parking_lot = { workspace = true }
 paste = "^1.0"
-petgraph = "0.7.1"
+petgraph = "0.8.2"
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
+insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 
@@ -71,3 +73,7 @@ name = "case_when"
 [[bench]]
 harness = false
 name = "is_null"
+
+[[bench]]
+harness = false
+name = "binary_op"

@@ -37,7 +37,8 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -82,27 +83,26 @@ impl TestParquetFile {
         props: WriterProperties,
         batches: impl IntoIterator<Item = RecordBatch>,
     ) -> Result<Self> {
-        let file = File::create(&path).unwrap();
+        let file = File::create(&path)?;
 
         let mut batches = batches.into_iter();
         let first_batch = batches.next().expect("need at least one record batch");
         let schema = first_batch.schema();
 
-        let mut writer =
-            ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))?;
 
-        writer.write(&first_batch).unwrap();
+        writer.write(&first_batch)?;
         let mut num_rows = first_batch.num_rows();
 
         for batch in batches {
-            writer.write(&batch).unwrap();
+            writer.write(&batch)?;
             num_rows += batch.num_rows();
         }
-        writer.close().unwrap();
+        writer.close()?;
 
         println!("Generated test dataset with {num_rows} rows");
 
-        let size = std::fs::metadata(&path)?.len() as usize;
+        let size = std::fs::metadata(&path)?.len();
 
         let mut canonical_path = path.canonicalize()?;
 
@@ -157,7 +157,7 @@ impl TestParquetFile {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let parquet_options = ctx.copied_table_options().parquet;
         let source = Arc::new(ParquetSource::new(parquet_options.clone()));
-        let scan_config = FileScanConfig::new(
+        let scan_config_builder = FileScanConfigBuilder::new(
             self.object_store_url.clone(),
             Arc::clone(&self.schema),
             source,
@@ -182,16 +182,19 @@ impl TestParquetFile {
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
-            let source = Arc::new(ParquetSource::new(parquet_options).with_predicate(
-                Arc::clone(&scan_config.file_schema),
-                Arc::clone(&physical_filter_expr),
-            ));
-            let parquet_exec = scan_config.with_source(source).build();
+            let source = Arc::new(
+                ParquetSource::new(parquet_options)
+                    .with_predicate(Arc::clone(&physical_filter_expr)),
+            )
+            .with_schema(Arc::clone(&self.schema));
+            let config = scan_config_builder.with_source(source).build();
+            let parquet_exec = DataSourceExec::from_data_source(config);
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            Ok(scan_config.build())
+            let config = scan_config_builder.build();
+            Ok(DataSourceExec::from_data_source(config))
         }
     }
 
@@ -201,18 +204,11 @@ impl TestParquetFile {
     /// on the first one it finds
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
         if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            let data_source = data_source_exec.data_source();
-            if let Some(maybe_parquet) =
-                data_source.as_any().downcast_ref::<FileScanConfig>()
+            if data_source_exec
+                .downcast_to_file_source::<ParquetSource>()
+                .is_some()
             {
-                if maybe_parquet
-                    .file_source()
-                    .as_any()
-                    .downcast_ref::<ParquetSource>()
-                    .is_some()
-                {
-                    return data_source_exec.metrics();
-                }
+                return data_source_exec.metrics();
             }
         }
 

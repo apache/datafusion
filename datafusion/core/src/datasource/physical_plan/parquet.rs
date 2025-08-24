@@ -38,22 +38,23 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
-        ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
-        StructArray,
+        ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        StringViewArray, StructArray, TimestampNanosecondArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::SchemaRef;
+    use arrow::util::pretty::pretty_format_batches;
+    use arrow_schema::{SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
-    use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, Result, ScalarValue,
-    };
+    use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
+    use datafusion_common::{assert_contains, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_meta::FileMeta;
-    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
+    use datafusion_datasource::file::FileSource;
     use datafusion_datasource::{FileRange, PartitionedFile};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
@@ -62,12 +63,16 @@ mod tests {
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::analyze::AnalyzeExec;
+    use datafusion_physical_plan::collect;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-    use datafusion_physical_plan::{collect, displayable};
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use chrono::{TimeZone, Utc};
+    use datafusion_datasource::file_groups::FileGroup;
     use futures::StreamExt;
+    use insta;
+    use insta::assert_snapshot;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore};
@@ -79,10 +84,10 @@ mod tests {
     struct RoundTripResult {
         /// Data that was read back from ParquetFiles
         batches: Result<Vec<RecordBatch>>,
+        /// The EXPLAIN ANALYZE output
+        explain: Result<String>,
         /// The physical plan that was created (that has statistics, etc)
         parquet_exec: Arc<DataSourceExec>,
-        /// The ParquetSource that is used in plan
-        parquet_source: ParquetSource,
     }
 
     /// round-trip record batches by writing each individual RecordBatch to
@@ -91,10 +96,15 @@ mod tests {
     #[derive(Debug, Default)]
     struct RoundTrip {
         projection: Option<Vec<usize>>,
-        schema: Option<SchemaRef>,
+        /// Optional logical table schema to use when reading the parquet files
+        ///
+        /// If None, the logical schema to use will be inferred from the
+        /// original data via [`Schema::try_merge`]
+        table_schema: Option<SchemaRef>,
         predicate: Option<Expr>,
         pushdown_predicate: bool,
         page_index_predicate: bool,
+        bloom_filters: bool,
     }
 
     impl RoundTrip {
@@ -107,8 +117,11 @@ mod tests {
             self
         }
 
-        fn with_schema(mut self, schema: SchemaRef) -> Self {
-            self.schema = Some(schema);
+        /// Specify table schema.
+        ///
+        ///See  [`Self::table_schema`] for more details
+        fn with_table_schema(mut self, schema: SchemaRef) -> Self {
+            self.table_schema = Some(schema);
             self
         }
 
@@ -127,6 +140,11 @@ mod tests {
             self
         }
 
+        fn with_bloom_filters(mut self) -> Self {
+            self.bloom_filters = true;
+            self
+        }
+
         /// run the test, returning only the resulting RecordBatches
         async fn round_trip_to_batches(
             self,
@@ -135,19 +153,69 @@ mod tests {
             self.round_trip(batches).await.batches
         }
 
-        /// run the test, returning the `RoundTripResult`
-        async fn round_trip(self, batches: Vec<RecordBatch>) -> RoundTripResult {
-            let Self {
-                projection,
-                schema,
-                predicate,
-                pushdown_predicate,
-                page_index_predicate,
-            } = self;
+        fn build_file_source(&self, table_schema: SchemaRef) -> Arc<dyn FileSource> {
+            // set up predicate (this is normally done by a layer higher up)
+            let predicate = self
+                .predicate
+                .as_ref()
+                .map(|p| logical2physical(p, &table_schema));
 
-            let file_schema = match schema {
+            let mut source = ParquetSource::default();
+            if let Some(predicate) = predicate {
+                source = source.with_predicate(predicate);
+            }
+
+            if self.pushdown_predicate {
+                source = source
+                    .with_pushdown_filters(true)
+                    .with_reorder_filters(true);
+            } else {
+                source = source.with_pushdown_filters(false);
+            }
+
+            if self.page_index_predicate {
+                source = source.with_enable_page_index(true);
+            } else {
+                source = source.with_enable_page_index(false);
+            }
+
+            if self.bloom_filters {
+                source = source.with_bloom_filter_on_read(true);
+            } else {
+                source = source.with_bloom_filter_on_read(false);
+            }
+
+            source.with_schema(Arc::clone(&table_schema))
+        }
+
+        fn build_parquet_exec(
+            &self,
+            file_schema: SchemaRef,
+            file_group: FileGroup,
+            source: Arc<dyn FileSource>,
+        ) -> Arc<DataSourceExec> {
+            let base_config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                file_schema,
+                source,
+            )
+            .with_file_group(file_group)
+            .with_projection(self.projection.clone())
+            .build();
+            DataSourceExec::from_data_source(base_config)
+        }
+
+        /// run the test, returning the `RoundTripResult`
+        ///
+        /// Each input batch is written into one or more parquet files (and thus
+        /// they could potentially have different schemas). The resulting
+        /// parquet files are then read back and filters are applied to the
+        async fn round_trip(&self, batches: Vec<RecordBatch>) -> RoundTripResult {
+            // If table_schema is not set, we need to merge the schema of the
+            // input batches to get a unified schema.
+            let table_schema = match &self.table_schema {
                 Some(schema) => schema,
-                None => Arc::new(
+                None => &Arc::new(
                     Schema::try_merge(
                         batches.iter().map(|b| b.schema().as_ref().clone()),
                     )
@@ -156,48 +224,53 @@ mod tests {
             };
             // If testing with page_index_predicate, write parquet
             // files with multiple pages
-            let multi_page = page_index_predicate;
+            let multi_page = self.page_index_predicate;
             let (meta, _files) = store_parquet(batches, multi_page).await.unwrap();
-            let file_group = meta.into_iter().map(Into::into).collect();
+            let file_group: FileGroup = meta.into_iter().map(Into::into).collect();
 
-            // set up predicate (this is normally done by a layer higher up)
-            let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
+            // build a ParquetExec to return the results
+            let parquet_source = self.build_file_source(Arc::clone(table_schema));
+            let parquet_exec = self.build_parquet_exec(
+                Arc::clone(table_schema),
+                file_group.clone(),
+                Arc::clone(&parquet_source),
+            );
 
-            let mut source = ParquetSource::default();
-            if let Some(predicate) = predicate {
-                source = source.with_predicate(Arc::clone(&file_schema), predicate);
-            }
-
-            if pushdown_predicate {
-                source = source
-                    .with_pushdown_filters(true)
-                    .with_reorder_filters(true);
-            }
-
-            if page_index_predicate {
-                source = source.with_enable_page_index(true);
-            }
-
-            let base_config = FileScanConfig::new(
-                ObjectStoreUrl::local_filesystem(),
-                file_schema,
-                Arc::new(source.clone()),
-            )
-            .with_file_group(file_group)
-            .with_projection(projection);
+            let analyze_exec = Arc::new(AnalyzeExec::new(
+                false,
+                false,
+                // use a new ParquetSource to avoid sharing execution metrics
+                self.build_parquet_exec(
+                    Arc::clone(table_schema),
+                    file_group.clone(),
+                    self.build_file_source(Arc::clone(table_schema)),
+                ),
+                Arc::new(Schema::new(vec![
+                    Field::new("plan_type", DataType::Utf8, true),
+                    Field::new("plan", DataType::Utf8, true),
+                ])),
+            ));
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
-            let parquet_exec = base_config.clone().build();
+
+            let batches = collect(
+                Arc::clone(&parquet_exec) as Arc<dyn ExecutionPlan>,
+                task_ctx.clone(),
+            )
+            .await;
+
+            let explain = collect(analyze_exec, task_ctx.clone())
+                .await
+                .map(|batches| {
+                    let batches = pretty_format_batches(&batches).unwrap();
+                    format!("{batches}")
+                });
+
             RoundTripResult {
-                batches: collect(parquet_exec.clone(), task_ctx).await,
+                batches,
+                explain,
                 parquet_exec,
-                parquet_source: base_config
-                    .file_source()
-                    .as_any()
-                    .downcast_ref::<ParquetSource>()
-                    .unwrap()
-                    .clone(),
             }
         }
     }
@@ -243,7 +316,7 @@ mod tests {
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit(1_i32));
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
@@ -262,21 +335,21 @@ mod tests {
         // If we excplicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
             .await;
         let batches = rt.batches.unwrap();
-        #[rustfmt::skip]
-        let expected = [
-            "+----+----+",
-            "| c1 | c2 |",
-            "+----+----+",
-            "| 1  |    |",
-            "+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        +----+----+
+        | c1 | c2 |
+        +----+----+
+        | 1  |    |
+        +----+----+
+        "###);
+
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 2, "Expected all rows to be pruned");
@@ -301,7 +374,7 @@ mod tests {
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
@@ -320,21 +393,21 @@ mod tests {
         // If we excplicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
             .await;
         let batches = rt.batches.unwrap();
-        #[rustfmt::skip]
-        let expected = [
-            "+----+----+",
-            "| c1 | c2 |",
-            "+----+----+",
-            "| 1  |    |",
-            "+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        +----+----+
+        | c1 | c2 |
+        +----+----+
+        | 1  |    |
+        +----+----+
+        "###);
+
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 2, "Expected all rows to be pruned");
@@ -363,7 +436,7 @@ mod tests {
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
@@ -382,21 +455,21 @@ mod tests {
         // If we excplicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
             .await;
         let batches = rt.batches.unwrap();
-        #[rustfmt::skip]
-        let expected = [
-            "+----+----+----+",
-            "| c1 | c2 | c3 |",
-            "+----+----+----+",
-            "| 1  |    | 7  |",
-            "+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        +----+----+----+
+        | c1 | c2 | c3 |
+        +----+----+----+
+        | 1  |    | 7  |
+        +----+----+----+
+        "###);
+
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 2, "Expected all rows to be pruned");
@@ -425,7 +498,7 @@ mod tests {
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
@@ -444,21 +517,21 @@ mod tests {
         // If we excplicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c3").eq(lit(7_i32)));
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
             .await;
         let batches = rt.batches.unwrap();
-        #[rustfmt::skip]
-        let expected = [
-            "+----+----+----+",
-            "| c1 | c2 | c3 |",
-            "+----+----+----+",
-            "|    |    | 7  |",
-            "+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        +----+----+----+
+        | c1 | c2 | c3 |
+        +----+----+----+
+        |    |    | 7  |
+        +----+----+----+
+        "###);
+
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 2, "Expected all rows to be pruned");
@@ -492,22 +565,22 @@ mod tests {
             .and(col("c3").eq(lit(10_i32)).or(col("c2").is_null()));
 
         let rt = RoundTrip::new()
-            .with_schema(table_schema.clone())
+            .with_table_schema(table_schema.clone())
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch.clone()])
             .await;
 
         let batches = rt.batches.unwrap();
-        #[rustfmt::skip]
-        let expected = [
-            "+----+----+----+",
-            "| c1 | c2 | c3 |",
-            "+----+----+----+",
-            "| 1  |    | 10 |",
-            "+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        +----+----+----+
+        | c1 | c2 | c3 |
+        +----+----+----+
+        | 1  |    | 10 |
+        +----+----+----+
+        "###);
+
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 4, "Expected 4 rows to be pruned");
@@ -522,24 +595,24 @@ mod tests {
             .or(col("c3").gt(lit(20_i32)).and(col("c2").is_null()));
 
         let rt = RoundTrip::new()
-            .with_schema(table_schema)
+            .with_table_schema(table_schema)
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
             .round_trip(vec![batch])
             .await;
 
         let batches = rt.batches.unwrap();
-        #[rustfmt::skip]
-        let expected = [
-            "+----+----+----+",
-            "| c1 | c2 | c3 |",
-            "+----+----+----+",
-            "| 3  |    | 30 |",
-            "| 4  |    | 40 |",
-            "| 5  |    | 50 |",
-            "+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        +----+----+----+
+        | c1 | c2 | c3 |
+        +----+----+----+
+        | 3  |    | 30 |
+        | 4  |    | 40 |
+        | 5  |    | 50 |
+        +----+----+----+
+        "###);
+
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 2, "Expected 2 rows to be pruned");
@@ -566,22 +639,22 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2, batch3])
             .await
             .unwrap();
-        let expected = vec![
-            "+-----+----+----+",
-            "| c1  | c2 | c3 |",
-            "+-----+----+----+",
-            "|     |    |    |",
-            "|     |    | 20 |",
-            "|     | 2  |    |",
-            "| Foo |    |    |",
-            "| Foo |    | 10 |",
-            "| Foo | 1  |    |",
-            "| bar |    |    |",
-            "| bar |    |    |",
-            "| bar |    |    |",
-            "+-----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+
+        insta::assert_snapshot!(batches_to_sort_string(&read), @r###"
+        +-----+----+----+
+        | c1  | c2 | c3 |
+        +-----+----+----+
+        |     |    |    |
+        |     |    | 20 |
+        |     | 2  |    |
+        | Foo |    |    |
+        | Foo |    | 10 |
+        | Foo | 1  |    |
+        | bar |    |    |
+        | bar |    |    |
+        | bar |    |    |
+        +-----+----+----+
+        "###);
     }
 
     #[tokio::test]
@@ -608,19 +681,19 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = [
-            "+-----+----+----+",
-            "| c1  | c2 | c3 |",
-            "+-----+----+----+",
-            "| Foo | 1  | 10 |",
-            "|     | 2  | 20 |",
-            "| bar |    |    |",
-            "| Foo | 1  | 10 |",
-            "|     | 2  | 20 |",
-            "| bar |    |    |",
-            "+-----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+----+
+        | c1  | c2 | c3 |
+        +-----+----+----+
+        |     | 2  | 20 |
+        |     | 2  | 20 |
+        | Foo | 1  | 10 |
+        | Foo | 1  | 10 |
+        | bar |    |    |
+        | bar |    |    |
+        +-----+----+----+
+        ");
     }
 
     #[tokio::test]
@@ -643,19 +716,19 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = [
-            "+-----+----+----+",
-            "| c1  | c3 | c2 |",
-            "+-----+----+----+",
-            "| Foo | 10 |    |",
-            "|     | 20 |    |",
-            "| bar |    |    |",
-            "|     | 10 | 1  |",
-            "|     | 20 | 2  |",
-            "|     |    |    |",
-            "+-----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+----+
+        | c1  | c3 | c2 |
+        +-----+----+----+
+        |     |    |    |
+        |     | 10 | 1  |
+        |     | 20 |    |
+        |     | 20 | 2  |
+        | Foo | 10 |    |
+        | bar |    |    |
+        +-----+----+----+
+        ");
     }
 
     #[tokio::test]
@@ -681,38 +754,32 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = [
-            "+-----+----+----+",
-            "| c1  | c3 | c2 |",
-            "+-----+----+----+",
-            "|     |    |    |",
-            "|     | 10 | 1  |",
-            "|     | 20 |    |",
-            "|     | 20 | 2  |",
-            "| Foo | 10 |    |",
-            "| bar |    |    |",
-            "+-----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+            +-----+----+----+
+            | c1  | c3 | c2 |
+            +-----+----+----+
+            |     |    |    |
+            |     | 10 | 1  |
+            |     | 20 |    |
+            |     | 20 | 2  |
+            | Foo | 10 |    |
+            | bar |    |    |
+            +-----+----+----+
+        "###);
     }
 
     #[tokio::test]
     async fn evolved_schema_intersection_filter_with_filter_pushdown() {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
-
         let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
-
         let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
-
         // batch1: c1(string), c3(int8)
         let batch1 = create_batch(vec![("c1", c1), ("c3", c3.clone())]);
-
         // batch2: c3(int8), c2(int64)
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
-
         let filter = col("c2").eq(lit(2_i64)).or(col("c2").eq(lit(1_i64)));
-
         // read/write them files:
         let rt = RoundTrip::new()
             .with_predicate(filter)
@@ -720,15 +787,14 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        let expected = [
-            "+----+----+----+",
-            "| c1 | c3 | c2 |",
-            "+----+----+----+",
-            "|    | 10 | 1  |",
-            "|    | 20 | 2  |",
-            "+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        +----+----+----+
+        | c1 | c3 | c2 |
+        +----+----+----+
+        |    | 10 | 1  |
+        |    | 20 | 2  |
+        +----+----+----+
+        "###);
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 4);
@@ -763,23 +829,23 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = [
-            "+-----+-----+",
-            "| c1  | c4  |",
-            "+-----+-----+",
-            "| Foo | baz |",
-            "|     | boo |",
-            "| bar |     |",
-            "| Foo |     |",
-            "|     |     |",
-            "| bar |     |",
-            "+-----+-----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+
+        insta::assert_snapshot!(batches_to_sort_string(&read), @r###"
+        +-----+-----+
+        | c1  | c4  |
+        +-----+-----+
+        |     |     |
+        |     | boo |
+        | Foo |     |
+        | Foo | baz |
+        | bar |     |
+        | bar |     |
+        +-----+-----+
+        "###);
     }
 
     #[tokio::test]
-    async fn evolved_schema_filter() {
+    async fn evolved_schema_column_order_filter() {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
@@ -811,6 +877,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn evolved_schema_column_type_filter_strings() {
+        // The table and filter have a common data type, but the file schema differs
+        let c1: ArrayRef =
+            Arc::new(StringViewArray::from(vec![Some("foo"), Some("bar")]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+
+        // Table schema is Utf8 but file schema is StringView
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
+
+        // Predicate should prune all row groups
+        let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("aaa".to_string()))));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_table_schema(table_schema.clone())
+            .round_trip(vec![batch.clone()])
+            .await;
+        // There should be no predicate evaluation errors
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 0);
+        assert_eq!(rt.batches.unwrap().len(), 0);
+
+        // Predicate should prune no row groups
+        let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("foo".to_string()))));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_table_schema(table_schema)
+            .round_trip(vec![batch])
+            .await;
+        // There should be no predicate evaluation errors
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 2, "Expected 2 rows to match the predicate");
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_column_type_filter_ints() {
+        // The table and filter have a common data type, but the file schema differs
+        let c1: ArrayRef = Arc::new(Int8Array::from(vec![Some(1), Some(2)]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt64, false)]));
+
+        // Predicate should prune all row groups
+        let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(5))));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_table_schema(table_schema.clone())
+            .round_trip(vec![batch.clone()])
+            .await;
+        // There should be no predicate evaluation errors
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(rt.batches.unwrap().len(), 0);
+
+        // Predicate should prune no row groups
+        let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(1))));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_table_schema(table_schema)
+            .round_trip(vec![batch])
+            .await;
+        // There should be no predicate evaluation errors
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 2, "Expected 2 rows to match the predicate");
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_column_type_filter_timestamp_units() {
+        // The table and filter have a common data type
+        // The table schema is in milliseconds, but the file schema is in nanoseconds
+        let c1: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
+            Some(1_000_000_000), // 1970-01-01T00:00:01Z
+            Some(2_000_000_000), // 1970-01-01T00:00:02Z
+            Some(3_000_000_000), // 1970-01-01T00:00:03Z
+            Some(4_000_000_000), // 1970-01-01T00:00:04Z
+        ]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+            false,
+        )]));
+        // One row should match, 2 pruned via page index, 1 pruned via filter pushdown
+        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(
+            Some(1_000),
+            Some("UTC".into()),
+        )));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_page_index_predicate() // produces pages with 2 rows each (2 pages total for our data)
+            .with_table_schema(table_schema.clone())
+            .round_trip(vec![batch.clone()])
+            .await;
+        // There should be no predicate evaluation errors and we keep 1 row
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 1, "Expected 1 rows to match the predicate");
+        assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
+        // If we filter with a value that is completely out of the range of the data
+        // we prune at the row group level.
+        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(
+            Some(5_000),
+            Some("UTC".into()),
+        )));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_table_schema(table_schema)
+            .round_trip(vec![batch])
+            .await;
+        // There should be no predicate evaluation errors and we keep 0 rows
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 0, "Expected 0 rows to match the predicate");
+        assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 1);
+    }
+
+    #[tokio::test]
     async fn evolved_schema_disjoint_schema_filter() {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
@@ -837,19 +1053,19 @@ mod tests {
         // a null array, then the pruning predicate (currently) can not be applied.
         // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `DataSourceExec`,
         // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
-        let expected = [
-            "+-----+----+",
-            "| c1  | c2 |",
-            "+-----+----+",
-            "|     |    |",
-            "|     |    |",
-            "|     | 1  |",
-            "|     | 2  |",
-            "| Foo |    |",
-            "| bar |    |",
-            "+-----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+            +-----+----+
+            | c1  | c2 |
+            +-----+----+
+            |     |    |
+            |     |    |
+            |     | 1  |
+            |     | 2  |
+            | Foo |    |
+            | bar |    |
+            +-----+----+
+        "###);
     }
 
     #[tokio::test]
@@ -874,14 +1090,13 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        let expected = [
-            "+----+----+",
-            "| c1 | c2 |",
-            "+----+----+",
-            "|    | 1  |",
-            "+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        +----+----+
+        | c1 | c2 |
+        +----+----+
+        |    | 1  |
+        +----+----+
+        "###);
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
@@ -935,25 +1150,24 @@ mod tests {
             .round_trip(vec![batch1, batch2, batch3, batch4])
             .await;
 
-        let expected = vec![
-            "+------+----+",
-            "| c1   | c2 |",
-            "+------+----+",
-            "|      | 1  |",
-            "|      | 2  |",
-            "| Bar  |    |",
-            "| Bar  | 2  |",
-            "| Bar  | 2  |",
-            "| Bar2 |    |",
-            "| Bar3 |    |",
-            "| Foo  |    |",
-            "| Foo  | 1  |",
-            "| Foo  | 1  |",
-            "| Foo2 |    |",
-            "| Foo3 |    |",
-            "+------+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        +------+----+
+        | c1   | c2 |
+        +------+----+
+        |      | 1  |
+        |      | 2  |
+        | Bar  |    |
+        | Bar  | 2  |
+        | Bar  | 2  |
+        | Bar2 |    |
+        | Bar3 |    |
+        | Foo  |    |
+        | Foo  | 1  |
+        | Foo  | 1  |
+        | Foo2 |    |
+        | Foo3 |    |
+        +------+----+
+        "###);
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // There are 4 rows pruned in each of batch2, batch3, and
@@ -983,15 +1197,14 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = [
-            "+-----+----+",
-            "| c1  | c2 |",
-            "+-----+----+",
-            "| Foo | 1  |",
-            "| bar |    |",
-            "+-----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+            +-----+----+
+            | c1  | c2 |
+            +-----+----+
+            | Foo | 1  |
+            | bar |    |
+            +-----+----+
+        "###);
     }
 
     #[tokio::test]
@@ -1014,16 +1227,15 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = [
-            "+-----+----+",
-            "| c1  | c2 |",
-            "+-----+----+",
-            "|     | 2  |",
-            "| Foo | 1  |",
-            "| bar |    |",
-            "+-----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+            +-----+----+
+            | c1  | c2 |
+            +-----+----+
+            |     | 2  |
+            | Foo | 1  |
+            | bar |    |
+            +-----+----+
+        "###);
     }
 
     #[tokio::test]
@@ -1051,7 +1263,7 @@ mod tests {
         // batch2: c3(int8), c2(int64), c1(string), c4(string)
         let batch2 = create_batch(vec![("c3", c4), ("c2", c2), ("c1", c1)]);
 
-        let schema = Schema::new(vec![
+        let table_schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
             Field::new("c2", DataType::Int64, true),
             Field::new("c3", DataType::Int8, true),
@@ -1059,7 +1271,7 @@ mod tests {
 
         // read/write them files:
         let read = RoundTrip::new()
-            .with_schema(Arc::new(schema))
+            .with_table_schema(Arc::new(table_schema))
             .round_trip_to_batches(vec![batch1, batch2])
             .await;
         assert_contains!(read.unwrap_err().to_string(),
@@ -1076,6 +1288,7 @@ mod tests {
         let parquet_exec = scan_format(
             &state,
             &ParquetFormat::default(),
+            None,
             &testdata,
             filename,
             Some(vec![0, 1, 2]),
@@ -1109,6 +1322,210 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parquet_exec_with_int96_from_spark() -> Result<()> {
+        // arrow-rs relies on the chrono library to convert between timestamps and strings, so
+        // instead compare as Int64. The underlying type should be a PrimitiveArray of Int64
+        // anyway, so this should be a zero-copy non-modifying cast at the SchemaAdapter.
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let filename = "int96_from_spark.parquet";
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+
+        let time_units_and_expected = vec![
+            (
+                None, // Same as "ns" time_unit
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456000), // Reads as nanosecond fine (note 3 extra 0s)
+                    Some(1704070800000000000), // Reads as nanosecond fine (note 3 extra 0s)
+                    Some(-4852191831933722624), // Cannot be represented with nanos timestamp (year 9999)
+                    Some(1735599600000000000), // Reads as nanosecond fine (note 3 extra 0s)
+                    None,
+                    Some(-4864435138808946688), // Cannot be represented with nanos timestamp (year 290000)
+                ])),
+            ),
+            (
+                Some("ns".to_string()),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456000),
+                    Some(1704070800000000000),
+                    Some(-4852191831933722624),
+                    Some(1735599600000000000),
+                    None,
+                    Some(-4864435138808946688),
+                ])),
+            ),
+            (
+                Some("us".to_string()),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456),
+                    Some(1704070800000000),
+                    Some(253402225200000000),
+                    Some(1735599600000000),
+                    None,
+                    Some(9089380393200000000),
+                ])),
+            ),
+        ];
+
+        for (time_unit, expected) in time_units_and_expected {
+            let parquet_exec = scan_format(
+                &state,
+                &ParquetFormat::default().with_coerce_int96(time_unit.clone()),
+                Some(schema.clone()),
+                &testdata,
+                filename,
+                Some(vec![0]),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+
+            let mut results = parquet_exec.execute(0, task_ctx.clone())?;
+            let batch = results.next().await.unwrap()?;
+
+            assert_eq!(6, batch.num_rows());
+            assert_eq!(1, batch.num_columns());
+
+            assert_eq!(batch.num_columns(), 1);
+            let column = batch.column(0);
+
+            assert_eq!(column.len(), expected.len());
+
+            column
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .iter()
+                .zip(expected.iter())
+                .for_each(|(lhs, rhs)| {
+                    assert_eq!(lhs, rhs);
+                });
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_with_int96_nested() -> Result<()> {
+        // This test ensures that we maintain compatibility with coercing int96 to the desired
+        // resolution when they're within a nested type (e.g., struct, map, list). This file
+        // originates from a modified CometFuzzTestSuite ParquetGenerator to generate combinations
+        // of primitive and complex columns using int96. Other tests cover reading the data
+        // correctly with this coercion. Here we're only checking the coerced schema is correct.
+        let testdata = "../../datafusion/core/tests/data";
+        let filename = "int96_nested.parquet";
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+
+        let parquet_exec = scan_format(
+            &state,
+            &ParquetFormat::default().with_coerce_int96(Some("us".to_string())),
+            None,
+            testdata,
+            filename,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+
+        let mut results = parquet_exec.execute(0, task_ctx.clone())?;
+        let batch = results.next().await.unwrap()?;
+
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new_struct(
+                "c1",
+                vec![Field::new(
+                    "c0",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_struct(
+                "c2",
+                vec![Field::new_list(
+                    "c0",
+                    Field::new(
+                        "element",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_map(
+                "c3",
+                "key_value",
+                Field::new(
+                    "key",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    false,
+                ),
+                Field::new(
+                    "value",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                false,
+                true,
+            ),
+            Field::new_list(
+                "c4",
+                Field::new(
+                    "element",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                true,
+            ),
+            Field::new_list(
+                "c5",
+                Field::new_struct(
+                    "element",
+                    vec![Field::new(
+                        "c0",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    )],
+                    true,
+                ),
+                true,
+            ),
+            Field::new_list(
+                "c6",
+                Field::new_map(
+                    "element",
+                    "key_value",
+                    Field::new(
+                        "key",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        false,
+                    ),
+                    Field::new(
+                        "value",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    false,
+                    true,
+                ),
+                true,
+            ),
+        ]));
+
+        assert_eq!(batch.schema(), expected_schema);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_exec_with_range() -> Result<()> {
         fn file_range(meta: &ObjectMeta, start: i64, end: i64) -> PartitionedFile {
             PartitionedFile {
@@ -1123,17 +1540,19 @@ mod tests {
 
         async fn assert_parquet_read(
             state: &SessionState,
-            file_groups: Vec<Vec<PartitionedFile>>,
+            file_groups: Vec<FileGroup>,
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
-            let parquet_exec = FileScanConfig::new(
+            let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
                 file_schema,
                 Arc::new(ParquetSource::default()),
             )
             .with_file_groups(file_groups)
             .build();
+
+            let parquet_exec = DataSourceExec::from_data_source(config);
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1166,12 +1585,12 @@ mod tests {
             .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
-        let group_empty = vec![vec![file_range(&meta, 0, 2)]];
-        let group_contain = vec![vec![file_range(&meta, 2, i64::MAX)]];
-        let group_all = vec![vec![
+        let group_empty = vec![FileGroup::new(vec![file_range(&meta, 0, 2)])];
+        let group_contain = vec![FileGroup::new(vec![file_range(&meta, 2, i64::MAX)])];
+        let group_all = vec![FileGroup::new(vec![
             file_range(&meta, 0, 2),
             file_range(&meta, 2, i64::MAX),
-        ]];
+        ])];
 
         assert_parquet_read(&state, group_empty, None, file_schema.clone()).await?;
         assert_parquet_read(&state, group_contain, Some(8), file_schema.clone()).await?;
@@ -1231,7 +1650,7 @@ mod tests {
         ]);
 
         let source = Arc::new(ParquetSource::default());
-        let parquet_exec = FileScanConfig::new(object_store_url, schema.clone(), source)
+        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
             .with_file(partitioned_file)
             // file has 10 cols so index 12 should be month and 13 should be day
             .with_projection(Some(vec![0, 1, 2, 12, 13]))
@@ -1248,6 +1667,8 @@ mod tests {
                 ),
             ])
             .build();
+
+        let parquet_exec = DataSourceExec::from_data_source(config);
         let partition_count = parquet_exec
             .data_source()
             .output_partitioning()
@@ -1258,21 +1679,21 @@ mod tests {
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
         assert_eq!(batch.schema().as_ref(), &expected_schema);
-        let expected = [
-            "+----+----------+-------------+-------+-----+",
-            "| id | bool_col | tinyint_col | month | day |",
-            "+----+----------+-------------+-------+-----+",
-            "| 4  | true     | 0           | 10    | 26  |",
-            "| 5  | false    | 1           | 10    | 26  |",
-            "| 6  | true     | 0           | 10    | 26  |",
-            "| 7  | false    | 1           | 10    | 26  |",
-            "| 2  | true     | 0           | 10    | 26  |",
-            "| 3  | false    | 1           | 10    | 26  |",
-            "| 0  | true     | 0           | 10    | 26  |",
-            "| 1  | false    | 1           | 10    | 26  |",
-            "+----+----------+-------------+-------+-----+",
-        ];
-        assert_batches_eq!(expected, &[batch]);
+
+        assert_snapshot!(batches_to_string(&[batch]),@r###"
+            +----+----------+-------------+-------+-----+
+            | id | bool_col | tinyint_col | month | day |
+            +----+----------+-------------+-------+-----+
+            | 4  | true     | 0           | 10    | 26  |
+            | 5  | false    | 1           | 10    | 26  |
+            | 6  | true     | 0           | 10    | 26  |
+            | 7  | false    | 1           | 10    | 26  |
+            | 2  | true     | 0           | 10    | 26  |
+            | 3  | false    | 1           | 10    | 26  |
+            | 0  | true     | 0           | 10    | 26  |
+            | 1  | false    | 1           | 10    | 26  |
+            +----+----------+-------------+-------+-----+
+        "###);
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -1304,13 +1725,15 @@ mod tests {
         };
 
         let file_schema = Arc::new(Schema::empty());
-        let parquet_exec = FileScanConfig::new(
+        let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             file_schema,
             Arc::new(ParquetSource::default()),
         )
         .with_file(partitioned_file)
         .build();
+
+        let parquet_exec = DataSourceExec::from_data_source(config);
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -1343,17 +1766,14 @@ mod tests {
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
-        // assert the batches and some metrics
-        #[rustfmt::skip]
-        let expected = [
-            "+-----+",
-            "| int |",
-            "+-----+",
-            "| 4   |",
-            "| 5   |",
-            "+-----+"
-        ];
-        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()),@r###"
+            +-----+
+            | int |
+            +-----+
+            | 4   |
+            | 5   |
+            +-----+
+        "###);
         assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 4);
         assert_eq!(get_value(&metrics, "page_index_rows_matched"), 2);
         assert!(
@@ -1379,26 +1799,6 @@ mod tests {
         create_batch(vec![("c1", c1.clone())])
     }
 
-    /// Returns a int64 array with contents:
-    /// "[-1, 1, null, 2, 3, null, null]"
-    fn int64_batch() -> RecordBatch {
-        let contents: ArrayRef = Arc::new(Int64Array::from(vec![
-            Some(-1),
-            Some(1),
-            None,
-            Some(2),
-            Some(3),
-            None,
-            None,
-        ]));
-
-        create_batch(vec![
-            ("a", contents.clone()),
-            ("b", contents.clone()),
-            ("c", contents.clone()),
-        ])
-    }
-
     #[tokio::test]
     async fn parquet_exec_metrics() {
         // batch1: c1(string)
@@ -1417,10 +1817,14 @@ mod tests {
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // assert the batches and some metrics
-        let expected = [
-            "+-----+", "| c1  |", "+-----+", "| Foo |", "| zzz |", "+-----+",
-        ];
-        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r###"
+            +-----+
+            | c1  |
+            +-----+
+            | Foo |
+            | zzz |
+            +-----+
+        "###);
 
         // pushdown predicates have eliminated all 4 bar rows and the
         // null row for 5 rows total
@@ -1454,110 +1858,17 @@ mod tests {
             .round_trip(vec![batch1])
             .await;
 
-        // should have a pruning predicate
-        let pruning_predicate = rt.parquet_source.pruning_predicate();
-        assert!(pruning_predicate.is_some());
+        let explain = rt.explain.unwrap();
 
-        // convert to explain plan form
-        let display = displayable(rt.parquet_exec.as_ref())
-            .indent(true)
-            .to_string();
+        // check that there was a pruning predicate -> row groups got pruned
+        assert_contains!(&explain, "predicate=c1@0 != bar");
 
-        assert_contains!(
-            &display,
-            "pruning_predicate=c1_null_count@2 != row_count@3 AND (c1_min@0 != bar OR bar != c1_max@1)"
-        );
+        // there's a single row group, but we can check that it matched
+        // if no pruning was done this would be 0 instead of 1
+        assert_contains!(&explain, "row_groups_matched_statistics=1");
 
-        assert_contains!(&display, r#"predicate=c1@0 != bar"#);
-
-        assert_contains!(&display, "projection=[c1]");
-    }
-
-    #[tokio::test]
-    async fn parquet_exec_display_deterministic() {
-        // batches: a(int64), b(int64), c(int64)
-        let batches = int64_batch();
-
-        fn extract_required_guarantees(s: &str) -> Option<&str> {
-            s.split("required_guarantees=").nth(1)
-        }
-
-        // Ensuring that the required_guarantees remain consistent across every display plan of the filter conditions
-        for _ in 0..100 {
-            // c = 1 AND b = 1 AND a = 1
-            let filter0 = col("c")
-                .eq(lit(1))
-                .and(col("b").eq(lit(1)))
-                .and(col("a").eq(lit(1)));
-
-            let rt0 = RoundTrip::new()
-                .with_predicate(filter0)
-                .with_pushdown_predicate()
-                .round_trip(vec![batches.clone()])
-                .await;
-
-            let pruning_predicate = rt0.parquet_source.pruning_predicate();
-            assert!(pruning_predicate.is_some());
-
-            let display0 = displayable(rt0.parquet_exec.as_ref())
-                .indent(true)
-                .to_string();
-
-            let guarantees0: &str = extract_required_guarantees(&display0)
-                .expect("Failed to extract required_guarantees");
-            // Compare only the required_guarantees part (Because the file_groups part will not be the same)
-            assert_eq!(
-                guarantees0.trim(),
-                "[a in (1), b in (1), c in (1)]",
-                "required_guarantees don't match"
-            );
-        }
-
-        // c = 1 AND a = 1 AND b = 1
-        let filter1 = col("c")
-            .eq(lit(1))
-            .and(col("a").eq(lit(1)))
-            .and(col("b").eq(lit(1)));
-
-        let rt1 = RoundTrip::new()
-            .with_predicate(filter1)
-            .with_pushdown_predicate()
-            .round_trip(vec![batches.clone()])
-            .await;
-
-        // b = 1 AND a = 1 AND c = 1
-        let filter2 = col("b")
-            .eq(lit(1))
-            .and(col("a").eq(lit(1)))
-            .and(col("c").eq(lit(1)));
-
-        let rt2 = RoundTrip::new()
-            .with_predicate(filter2)
-            .with_pushdown_predicate()
-            .round_trip(vec![batches])
-            .await;
-
-        // should have a pruning predicate
-        let pruning_predicate = rt1.parquet_source.pruning_predicate();
-        assert!(pruning_predicate.is_some());
-        let pruning_predicate = rt2.parquet_source.predicate();
-        assert!(pruning_predicate.is_some());
-
-        // convert to explain plan form
-        let display1 = displayable(rt1.parquet_exec.as_ref())
-            .indent(true)
-            .to_string();
-        let display2 = displayable(rt2.parquet_exec.as_ref())
-            .indent(true)
-            .to_string();
-
-        let guarantees1 = extract_required_guarantees(&display1)
-            .expect("Failed to extract required_guarantees");
-        let guarantees2 = extract_required_guarantees(&display2)
-            .expect("Failed to extract required_guarantees");
-
-        // Compare only the required_guarantees part (Because the predicate part will not be the same)
-        assert_eq!(guarantees1, guarantees2, "required_guarantees don't match");
+        // check the projection
+        assert_contains!(&explain, "projection=[c1]");
     }
 
     #[tokio::test]
@@ -1581,16 +1892,19 @@ mod tests {
             .await;
 
         // Should not contain a pruning predicate (since nothing can be pruned)
-        let pruning_predicate = rt.parquet_source.pruning_predicate();
-        assert!(
-            pruning_predicate.is_none(),
-            "Still had pruning predicate: {pruning_predicate:?}"
-        );
+        let explain = rt.explain.unwrap();
 
-        // but does still has a pushdown down predicate
-        let predicate = rt.parquet_source.predicate();
-        let filter_phys = logical2physical(&filter, rt.parquet_exec.schema().as_ref());
-        assert_eq!(predicate.unwrap().to_string(), filter_phys.to_string());
+        // When both matched and pruned are 0, it means that the pruning predicate
+        // was not used at all.
+        assert_contains!(&explain, "row_groups_matched_statistics=0");
+        assert_contains!(&explain, "row_groups_pruned_statistics=0");
+
+        // But pushdown predicate should be present
+        assert_contains!(
+            &explain,
+            "predicate=CASE WHEN c1@0 != bar THEN true ELSE false END"
+        );
+        assert_contains!(&explain, "pushdown_rows_pruned=5");
     }
 
     #[tokio::test]
@@ -1612,12 +1926,19 @@ mod tests {
         let rt = RoundTrip::new()
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
+            .with_bloom_filters()
             .round_trip(vec![batch1])
             .await;
 
         // Should have a pruning predicate
-        let pruning_predicate = rt.parquet_source.pruning_predicate();
-        assert!(pruning_predicate.is_some());
+        let explain = rt.explain.unwrap();
+        assert_contains!(
+            &explain,
+            "predicate=c1@0 = foo AND CASE WHEN c1@0 != bar THEN true ELSE false END"
+        );
+
+        // And bloom filters should have been evaluated
+        assert_contains!(&explain, "row_groups_pruned_bloom_filter=1");
     }
 
     /// Returns the sum of all the metrics with the specified name
@@ -1769,14 +2090,13 @@ mod tests {
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         assert_eq!(batch.len(), 1);
-        let expected = [
-            "+---------------------+----+--------+",
-            "| struct              | id | name   |",
-            "+---------------------+----+--------+",
-            "| {id: 4, name: aaa2} | 2  | test02 |",
-            "+---------------------+----+--------+",
-        ];
-        assert_batches_eq!(expected, &batch);
+        insta::assert_snapshot!(batches_to_string(&batch),@r###"
+            +---------------------+----+--------+
+            | struct              | id | name   |
+            +---------------------+----+--------+
+            | {id: 4, name: aaa2} | 2  | test02 |
+            +---------------------+----+--------+
+        "###);
         Ok(())
     }
 
@@ -1799,14 +2119,13 @@ mod tests {
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         assert_eq!(batch.len(), 1);
-        let expected = [
-            "+---------------------+----+--------+",
-            "| struct              | id | name   |",
-            "+---------------------+----+--------+",
-            "| {id: 4, name: aaa2} | 2  | test02 |",
-            "+---------------------+----+--------+",
-        ];
-        assert_batches_eq!(expected, &batch);
+        insta::assert_snapshot!(batches_to_string(&batch),@r###"
+            +---------------------+----+--------+
+            | struct              | id | name   |
+            +---------------------+----+--------+
+            | {id: 4, name: aaa2} | 2  | test02 |
+            +---------------------+----+--------+
+        "###);
         Ok(())
     }
 
@@ -1852,13 +2171,13 @@ mod tests {
         path: &str,
         store: Arc<dyn ObjectStore>,
         batch: RecordBatch,
-    ) -> usize {
+    ) -> u64 {
         let mut writer =
             ArrowWriter::try_new(BytesMut::new().writer(), batch.schema(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.flush().unwrap();
         let bytes = writer.into_inner().unwrap().into_inner().freeze();
-        let total_size = bytes.len();
+        let total_size = bytes.len() as u64;
         let path = Path::from(path);
         let payload = object_store::PutPayload::from_bytes(bytes);
         store
@@ -1935,7 +2254,7 @@ mod tests {
                 .with_parquet_file_reader_factory(reader_factory)
                 .with_metadata_size_hint(456),
         );
-        let exec = FileScanConfig::new(store_url, schema, source)
+        let config = FileScanConfigBuilder::new(store_url, schema, source)
             .with_file(
                 PartitionedFile {
                     object_meta: ObjectMeta {
@@ -1968,6 +2287,8 @@ mod tests {
                 metadata_size_hint: None,
             })
             .build();
+
+        let exec = DataSourceExec::from_data_source(config);
 
         let res = collect(exec, ctx.task_ctx()).await.unwrap();
         assert_eq!(res.len(), 2);

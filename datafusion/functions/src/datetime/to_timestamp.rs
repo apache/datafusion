@@ -18,15 +18,16 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::datetime::common::*;
+use arrow::array::Float64Array;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-
-use crate::datetime::common::*;
-use datafusion_common::{exec_err, Result, ScalarType};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -54,7 +55,7 @@ Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for in
 | 2023-05-17T03:59:00.123456789                                                                          |
 +--------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -65,7 +66,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampFunc {
     signature: Signature,
 }
@@ -88,7 +89,7 @@ pub struct ToTimestampFunc {
 | 2023-05-17T03:59:00                                                                                            |
 +----------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -99,7 +100,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampSecondsFunc {
     signature: Signature,
 }
@@ -122,7 +123,7 @@ pub struct ToTimestampSecondsFunc {
 | 2023-05-17T03:59:00.123                                                                                       |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -133,7 +134,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampMillisFunc {
     signature: Signature,
 }
@@ -156,7 +157,7 @@ pub struct ToTimestampMillisFunc {
 | 2023-05-17T03:59:00.123456                                                                                    |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -167,7 +168,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampMicrosFunc {
     signature: Signature,
 }
@@ -190,7 +191,7 @@ pub struct ToTimestampMicrosFunc {
 | 2023-05-17T03:59:00.123456789                                                                                |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -201,7 +202,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampNanosFunc {
     signature: Signature,
 }
@@ -320,14 +321,51 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Int32 | Int64 => args[0]
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, None), None),
-            Null | Float64 | Timestamp(_, None) => {
+            Null | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
+            }
+            Float64 => {
+                let rescaled = arrow::compute::kernels::numeric::mul(
+                    &args[0].to_array(1)?,
+                    &arrow::array::Scalar::new(Float64Array::from(vec![
+                        1_000_000_000f64,
+                    ])),
+                )?;
+                Ok(ColumnarValue::Array(arrow::compute::cast_with_options(
+                    &rescaled,
+                    &Timestamp(Nanosecond, None),
+                    &DEFAULT_CAST_OPTIONS,
+                )?))
             }
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
             Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp")
+            }
+            Decimal128(_, _) => {
+                match &args[0] {
+                    ColumnarValue::Scalar(ScalarValue::Decimal128(
+                        Some(value),
+                        _,
+                        scale,
+                    )) => {
+                        // Convert decimal to seconds and nanoseconds
+                        let scale_factor = 10_i128.pow(*scale as u32);
+                        let seconds = value / scale_factor;
+                        let fraction = value % scale_factor;
+
+                        let nanos = (fraction * 1_000_000_000) / scale_factor;
+
+                        let timestamp_nanos = seconds * 1_000_000_000 + nanos;
+
+                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                            Some(timestamp_nanos as i64),
+                            None,
+                        )))
+                    }
+                    _ => exec_err!("Invalid decimal value"),
+                }
             }
             other => {
                 exec_err!(
@@ -377,7 +415,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
 
         match args[0].data_type() {
-            Null | Int32 | Int64 | Timestamp(_, None) => {
+            Null | Int32 | Int64 | Timestamp(_, None) | Decimal128(_, _) => {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
             Timestamp(_, Some(tz)) => args[0].cast_to(&Timestamp(Second, Some(tz)), None),
@@ -616,8 +654,9 @@ mod tests {
         TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
-    use arrow::datatypes::TimeUnit;
+    use arrow::datatypes::{Field, TimeUnit};
     use chrono::Utc;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
 
@@ -989,11 +1028,14 @@ mod tests {
         for udf in &udfs {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
+                let arg_field = Field::new("arg", array.data_type().clone(), true).into();
                 assert!(matches!(rt, Timestamp(_, Some(_))));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
+                    arg_fields: vec![arg_field],
                     number_rows: 4,
-                    return_type: &rt,
+                    return_field: Field::new("f", rt, true).into(),
+                    config_options: Arc::new(ConfigOptions::default()),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1037,10 +1079,13 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, None)));
+                let arg_field = Field::new("arg", array.data_type().clone(), true).into();
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
+                    arg_fields: vec![arg_field],
                     number_rows: 5,
-                    return_type: &rt,
+                    return_field: Field::new("f", rt, true).into(),
+                    config_options: Arc::new(ConfigOptions::default()),
                 };
                 let res = udf
                     .invoke_with_args(args)

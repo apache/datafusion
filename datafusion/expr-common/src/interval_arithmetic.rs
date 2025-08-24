@@ -174,7 +174,7 @@ macro_rules! value_transition {
 ///    - `INF` values are converted to `NULL`s while constructing an interval to
 ///      ensure consistency, with other data types.
 ///    - `NaN` (Not a Number) results are conservatively result in unbounded
-///       endpoints.
+///      endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     lower: ScalarValue,
@@ -606,7 +606,7 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical conjunction"),
+            _ => internal_err!("Incompatible data types for logical disjunction"),
         }
     }
 
@@ -752,6 +752,17 @@ impl Interval {
             }
             None => Ok(Self::CERTAINLY_FALSE),
         }
+    }
+
+    /// Decide if this interval is a superset of `other`. If argument `strict`
+    /// is `true`, only returns `true` if this interval is a strict superset.
+    ///
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
+    pub fn is_superset(&self, other: &Interval, strict: bool) -> Result<bool> {
+        Ok(!(strict && self.eq(other))
+            && (self.contains(other)? == Interval::CERTAINLY_TRUE))
     }
 
     /// Add the given interval (`other`) to this interval. Say we have intervals
@@ -949,6 +960,18 @@ impl Display for Interval {
     }
 }
 
+impl From<ScalarValue> for Interval {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(value.clone(), value)
+    }
+}
+
+impl From<&ScalarValue> for Interval {
+    fn from(value: &ScalarValue) -> Self {
+        Self::new(value.to_owned(), value.to_owned())
+    }
+}
+
 /// Applies the given binary operator the `lhs` and `rhs` arguments.
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {
@@ -959,6 +982,7 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::Lt => lhs.lt(rhs),
         Operator::LtEq => lhs.lt_eq(rhs),
         Operator::And => lhs.and(rhs),
+        Operator::Or => lhs.or(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
         Operator::Multiply => lhs.mul(rhs),
@@ -1683,9 +1707,9 @@ impl Display for NullableInterval {
         match self {
             Self::Null { .. } => write!(f, "NullableInterval: {{NULL}}"),
             Self::MaybeNull { values } => {
-                write!(f, "NullableInterval: {} U {{NULL}}", values)
+                write!(f, "NullableInterval: {values} U {{NULL}}")
             }
-            Self::NotNull { values } => write!(f, "NullableInterval: {}", values),
+            Self::NotNull { values } => write!(f, "NullableInterval: {values}"),
         }
     }
 }
@@ -2706,8 +2730,8 @@ mod tests {
             ),
         ];
         for (first, second, expected) in possible_cases {
-            println!("{}", first);
-            println!("{}", second);
+            println!("{first}");
+            println!("{second}");
             assert_eq!(first.union(second)?, expected)
         }
 
@@ -3674,6 +3698,76 @@ mod tests {
                 Interval::make(Some(-500.0_f64), Some(1000.0_f64))?,
                 Interval::make(Some(-500.0_f64), Some(500.0_f64))?,
             ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                true,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
+                true,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                true,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                false,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+                true,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+                false,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+                true,
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+                false,
+                Interval::make(Some(1_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+                true,
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+                false,
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+            ),
         ];
         for (first, second, includes_endpoints, left_modified, right_modified) in cases {
             assert_eq!(
@@ -3693,6 +3787,16 @@ mod tests {
                 Interval::make(Some(1500.0_f32), Some(2000.0_f32))?,
                 false,
             ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                false,
+            ),
+            (
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
+                false,
+            ),
         ];
         for (first, second, includes_endpoints) in infeasible_cases {
             assert_eq!(satisfy_greater(&first, &second, !includes_endpoints)?, None);
@@ -3704,14 +3808,14 @@ mod tests {
     #[test]
     fn test_interval_display() {
         let interval = Interval::make(Some(0.25_f32), Some(0.50_f32)).unwrap();
-        assert_eq!(format!("{}", interval), "[0.25, 0.5]");
+        assert_eq!(format!("{interval}"), "[0.25, 0.5]");
 
         let interval = Interval::try_new(
             ScalarValue::Float32(Some(f32::NEG_INFINITY)),
             ScalarValue::Float32(Some(f32::INFINITY)),
         )
         .unwrap();
-        assert_eq!(format!("{}", interval), "[NULL, NULL]");
+        assert_eq!(format!("{interval}"), "[NULL, NULL]");
     }
 
     macro_rules! capture_mode_change {
@@ -3791,5 +3895,139 @@ mod tests {
         let lower = 1.5;
         let upper = 1.5;
         capture_mode_change_f32((lower, upper), true, true);
+    }
+
+    #[test]
+    fn test_is_superset() -> Result<()> {
+        // Test cases: (interval1, interval2, strict, expected)
+        let test_cases = vec![
+            // Equal intervals - non-strict should be true, strict should be false
+            (
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                true,
+                false,
+            ),
+            // Unbounded intervals
+            (
+                Interval::make::<i32>(None, None)?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make::<i32>(None, None)?,
+                Interval::make::<i32>(None, None)?,
+                false,
+                true,
+            ),
+            (
+                Interval::make::<i32>(None, None)?,
+                Interval::make::<i32>(None, None)?,
+                true,
+                false,
+            ),
+            // Half-bounded intervals
+            (
+                Interval::make(Some(0_i32), None)?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(None, Some(100_i32))?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            // Non-superset cases - partial overlap
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(25_i32), Some(75_i32))?,
+                false,
+                false,
+            ),
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(25_i32), Some(75_i32))?,
+                true,
+                false,
+            ),
+            // Non-superset cases - disjoint intervals
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(60_i32), Some(100_i32))?,
+                false,
+                false,
+            ),
+            // Subset relationship (reversed)
+            (
+                Interval::make(Some(20_i32), Some(80_i32))?,
+                Interval::make(Some(0_i32), Some(100_i32))?,
+                false,
+                false,
+            ),
+            // Float cases
+            (
+                Interval::make(Some(0.0_f32), Some(100.0_f32))?,
+                Interval::make(Some(25.5_f32), Some(75.5_f32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(100.0_f64))?,
+                Interval::make(Some(0.0_f64), Some(100.0_f64))?,
+                true,
+                false,
+            ),
+            // Edge cases with single point intervals
+            (
+                Interval::make(Some(0_i32), Some(100_i32))?,
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                true,
+                false,
+            ),
+            // Boundary touch cases
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(0_i32), Some(25_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(25_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+        ];
+
+        for (interval1, interval2, strict, expected) in test_cases {
+            let result = interval1.is_superset(&interval2, strict)?;
+            assert_eq!(
+                result, expected,
+                "Failed for interval1: {interval1}, interval2: {interval2}, strict: {strict}",
+            );
+        }
+
+        Ok(())
     }
 }

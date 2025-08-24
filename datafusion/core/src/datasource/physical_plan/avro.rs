@@ -30,16 +30,19 @@ mod tests {
     use crate::prelude::SessionContext;
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::datatypes::{DataType, Field, SchemaBuilder};
-    use datafusion_common::{assert_batches_eq, test_util, Result, ScalarValue};
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{test_util, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::PartitionedFile;
     use datafusion_datasource_avro::source::AvroSource;
     use datafusion_datasource_avro::AvroFormat;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::ExecutionPlan;
 
+    use datafusion_datasource::source::DataSourceExec;
     use futures::StreamExt;
+    use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -79,12 +82,16 @@ mod tests {
             .await?;
 
         let source = Arc::new(AvroSource::new());
-        let conf =
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
-                .with_file(meta.into())
-                .with_projection(Some(vec![0, 1, 2]));
+        let conf = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            file_schema,
+            source,
+        )
+        .with_file(meta.into())
+        .with_projection(Some(vec![0, 1, 2]))
+        .build();
 
-        let source_exec = conf.build();
+        let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
             source_exec
                 .properties()
@@ -102,22 +109,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+-------------+",
-            "| id | bool_col | tinyint_col |",
-            "+----+----------+-------------+",
-            "| 4  | true     | 0           |",
-            "| 5  | false    | 1           |",
-            "| 6  | true     | 0           |",
-            "| 7  | false    | 1           |",
-            "| 2  | true     | 0           |",
-            "| 3  | false    | 1           |",
-            "| 0  | true     | 0           |",
-            "| 1  | false    | 1           |",
-            "+----+----------+-------------+",
-        ];
-
-        assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+-------------+
+            | id | bool_col | tinyint_col |
+            +----+----------+-------------+
+            | 4  | true     | 0           |
+            | 5  | false    | 1           |
+            | 6  | true     | 0           |
+            | 7  | false    | 1           |
+            | 2  | true     | 0           |
+            | 3  | false    | 1           |
+            | 0  | true     | 0           |
+            | 1  | false    | 1           |
+            +----+----------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -153,11 +158,12 @@ mod tests {
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
         let source = Arc::new(AvroSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file(meta.into())
-            .with_projection(projection);
+            .with_projection(projection)
+            .build();
 
-        let source_exec = conf.build();
+        let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
             source_exec
                 .properties()
@@ -176,22 +182,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+-------------+-------------+",
-            "| id | bool_col | tinyint_col | missing_col |",
-            "+----+----------+-------------+-------------+",
-            "| 4  | true     | 0           |             |",
-            "| 5  | false    | 1           |             |",
-            "| 6  | true     | 0           |             |",
-            "| 7  | false    | 1           |             |",
-            "| 2  | true     | 0           |             |",
-            "| 3  | false    | 1           |             |",
-            "| 0  | true     | 0           |             |",
-            "| 1  | false    | 1           |             |",
-            "+----+----------+-------------+-------------+",
-        ];
-
-        assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+-------------+-------------+
+            | id | bool_col | tinyint_col | missing_col |
+            +----+----------+-------------+-------------+
+            | 4  | true     | 0           |             |
+            | 5  | false    | 1           |             |
+            | 6  | true     | 0           |             |
+            | 7  | false    | 1           |             |
+            | 2  | true     | 0           |             |
+            | 3  | false    | 1           |             |
+            | 0  | true     | 0           |             |
+            | 1  | false    | 1           |             |
+            +----+----------+-------------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -224,14 +228,15 @@ mod tests {
 
         let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
         let source = Arc::new(AvroSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.
             .with_projection(projection)
             .with_file(partitioned_file)
-            .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)]);
+            .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
+            .build();
 
-        let source_exec = conf.build();
+        let source_exec = DataSourceExec::from_data_source(conf);
 
         assert_eq!(
             source_exec
@@ -251,21 +256,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+------------+-------------+",
-            "| id | bool_col | date       | tinyint_col |",
-            "+----+----------+------------+-------------+",
-            "| 4  | true     | 2021-10-26 | 0           |",
-            "| 5  | false    | 2021-10-26 | 1           |",
-            "| 6  | true     | 2021-10-26 | 0           |",
-            "| 7  | false    | 2021-10-26 | 1           |",
-            "| 2  | true     | 2021-10-26 | 0           |",
-            "| 3  | false    | 2021-10-26 | 1           |",
-            "| 0  | true     | 2021-10-26 | 0           |",
-            "| 1  | false    | 2021-10-26 | 1           |",
-            "+----+----------+------------+-------------+",
-        ];
-        assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+------------+-------------+
+            | id | bool_col | date       | tinyint_col |
+            +----+----------+------------+-------------+
+            | 4  | true     | 2021-10-26 | 0           |
+            | 5  | false    | 2021-10-26 | 1           |
+            | 6  | true     | 2021-10-26 | 0           |
+            | 7  | false    | 2021-10-26 | 1           |
+            | 2  | true     | 2021-10-26 | 0           |
+            | 3  | false    | 2021-10-26 | 1           |
+            | 0  | true     | 2021-10-26 | 0           |
+            | 1  | false    | 2021-10-26 | 1           |
+            +----+----------+------------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());

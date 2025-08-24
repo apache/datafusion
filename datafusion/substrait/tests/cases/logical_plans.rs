@@ -24,6 +24,7 @@ mod tests {
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn scalar_function_compound_signature() -> Result<()> {
@@ -40,11 +41,13 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: NOT DATA.D AS EXPR$0\
-            \n  TableScan: DATA"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: NOT DATA.D AS EXPR$0
+              TableScan: DATA
+            "#
+                );
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
@@ -69,12 +72,14 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
-            \n  WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
-            \n    TableScan: DATA"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
+              WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+                TableScan: DATA
+            "#
+                );
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
@@ -94,12 +99,14 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED\
-            \n  WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-            \n    TableScan: DATA"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
+              WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+                TableScan: DATA
+            "#
+                );
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
@@ -121,13 +128,15 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1\
-            \n  WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-            \n    WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-            \n      TableScan: DATA"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
+              WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+                WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+                  TableScan: DATA
+            "#
+                );
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
@@ -145,7 +154,12 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(format!("{}", &plan), "Values: (List([1, 2]))");
+        assert_snapshot!(
+                &plan,
+            @r#"
+        Values: (List([1, 2]))
+        "#
+        );
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
@@ -160,13 +174,15 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count\
-            \n  Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]\
-            \n    Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]\
-            \n      TableScan: sales"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
+              Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
+                Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]
+                  TableScan: sales
+            "#
+                );
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;

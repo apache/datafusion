@@ -17,18 +17,20 @@
 
 //! Object store implementation used for testing
 
-use crate::execution::context::SessionState;
-use crate::execution::session_state::SessionStateBuilder;
-use crate::prelude::SessionContext;
-use futures::stream::BoxStream;
-use futures::FutureExt;
-use object_store::{
-    memory::InMemory, path::Path, Error, GetOptions, GetResult, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload,
-    PutResult,
+use crate::{
+    execution::{context::SessionState, session_state::SessionStateBuilder},
+    object_store::{
+        memory::InMemory, path::Path, Error, GetOptions, GetResult, ListResult,
+        MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
+        PutPayload, PutResult,
+    },
+    prelude::SessionContext,
 };
-use std::fmt::{Debug, Display, Formatter};
-use std::sync::Arc;
+use futures::{stream::BoxStream, FutureExt};
+use std::{
+    fmt::{Debug, Display, Formatter},
+    sync::Arc,
+};
 use tokio::{
     sync::Barrier,
     time::{timeout, Duration},
@@ -66,7 +68,7 @@ pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta
     ObjectMeta {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-        size: metadata.len() as usize,
+        size: metadata.len(),
         e_tag: None,
         version: None,
     }
@@ -118,7 +120,7 @@ impl ObjectStore for BlockingObjectStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, opts).await
     }
@@ -148,7 +150,7 @@ impl ObjectStore for BlockingObjectStore {
                     "{} barrier wait timed out for {location}",
                     BlockingObjectStore::NAME
                 );
-                log::error!("{}", error_message);
+                log::error!("{error_message}");
                 return Err(Error::Generic {
                     store: BlockingObjectStore::NAME,
                     source: error_message.into(),
@@ -166,7 +168,7 @@ impl ObjectStore for BlockingObjectStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 

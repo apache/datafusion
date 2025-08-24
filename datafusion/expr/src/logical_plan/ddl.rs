@@ -189,7 +189,7 @@ impl DdlStatement {
                         write!(f, "CreateFunction: name {name:?}")
                     }
                     DdlStatement::DropFunction(DropFunction { name, .. }) => {
-                        write!(f, "CreateFunction: name {name:?}")
+                        write!(f, "DropFunction: name {name:?}")
                     }
                 }
             }

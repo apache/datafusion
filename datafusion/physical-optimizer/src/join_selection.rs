@@ -23,10 +23,7 @@
 //! pipeline-friendly ones. To achieve the second goal, it selects the proper
 //! `PartitionMode` and the build side using the available statistics for hash joins.
 
-use std::sync::Arc;
-
 use crate::PhysicalOptimizerRule;
-
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -35,12 +32,13 @@ use datafusion_expr_common::sort_properties::SortProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::EmissionType;
-use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use std::sync::Arc;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -65,8 +63,8 @@ pub(crate) fn should_swap_join_order(
     // Get the left and right table's total bytes
     // If both the left and right tables contain total_byte_size statistics,
     // use `total_byte_size` to determine `should_swap_join_order`, else use `num_rows`
-    let left_stats = left.statistics()?;
-    let right_stats = right.statistics()?;
+    let left_stats = left.partition_statistics(None)?;
+    let right_stats = right.partition_statistics(None)?;
     // First compare `total_byte_size` of left and right side,
     // if information in this field is insufficient fallback to the `num_rows`
     match (
@@ -91,7 +89,7 @@ fn supports_collect_by_thresholds(
 ) -> bool {
     // Currently we do not trust the 0 value from stats, due to stats collection might have bug
     // TODO check the logic in datasource::get_statistics_with_limit()
-    let Ok(stats) = plan.statistics() else {
+    let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 
@@ -102,52 +100,6 @@ fn supports_collect_by_thresholds(
     } else {
         false
     }
-}
-
-/// Predicate that checks whether the given join type supports input swapping.
-#[deprecated(since = "45.0.0", note = "use JoinType::supports_swap instead")]
-#[allow(dead_code)]
-pub(crate) fn supports_swap(join_type: JoinType) -> bool {
-    join_type.supports_swap()
-}
-
-/// This function returns the new join type we get after swapping the given
-/// join's inputs.
-#[deprecated(since = "45.0.0", note = "use datafusion-functions-nested instead")]
-#[allow(dead_code)]
-pub(crate) fn swap_join_type(join_type: JoinType) -> JoinType {
-    join_type.swap()
-}
-
-/// This function swaps the inputs of the given join operator.
-/// This function is public so other downstream projects can use it
-/// to construct `HashJoinExec` with right side as the build side.
-#[deprecated(since = "45.0.0", note = "use HashJoinExec::swap_inputs instead")]
-pub fn swap_hash_join(
-    hash_join: &HashJoinExec,
-    partition_mode: PartitionMode,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    hash_join.swap_inputs(partition_mode)
-}
-
-/// Swaps inputs of `NestedLoopJoinExec` and wraps it into `ProjectionExec` is required
-#[deprecated(since = "45.0.0", note = "use NestedLoopJoinExec::swap_inputs")]
-#[allow(dead_code)]
-pub(crate) fn swap_nl_join(join: &NestedLoopJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
-    join.swap_inputs()
-}
-
-/// Swaps join sides for filter column indices and produces new `JoinFilter` (if exists).
-#[deprecated(since = "45.0.0", note = "use filter.map(JoinFilter::swap) instead")]
-#[allow(dead_code)]
-fn swap_join_filter(filter: Option<&JoinFilter>) -> Option<JoinFilter> {
-    filter.map(JoinFilter::swap)
-}
-
-#[deprecated(since = "45.0.0", note = "use JoinFilter::swap instead")]
-#[allow(dead_code)]
-pub(crate) fn swap_filter(filter: &JoinFilter) -> JoinFilter {
-    filter.swap()
 }
 
 impl PhysicalOptimizerRule for JoinSelection {
@@ -245,7 +197,7 @@ pub(crate) fn try_collect_left(
                     hash_join.join_type(),
                     hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
-                    hash_join.null_equals_null(),
+                    hash_join.null_equality(),
                 )?)))
             }
         }
@@ -257,7 +209,7 @@ pub(crate) fn try_collect_left(
             hash_join.join_type(),
             hash_join.projection.clone(),
             PartitionMode::CollectLeft,
-            hash_join.null_equals_null(),
+            hash_join.null_equality(),
         )?))),
         (false, true) => {
             if hash_join.join_type().supports_swap() {
@@ -292,7 +244,7 @@ pub(crate) fn partitioned_hash_join(
             hash_join.join_type(),
             hash_join.projection.clone(),
             PartitionMode::Partitioned,
-            hash_join.null_equals_null(),
+            hash_join.null_equality(),
         )?))
     }
 }
@@ -459,7 +411,7 @@ fn hash_join_convert_symmetric_subrule(
                             JoinSide::Right => hash_join.right().output_ordering(),
                             JoinSide::None => unreachable!(),
                         }
-                        .map(|p| LexOrdering::new(p.to_vec()))
+                        .cloned()
                     })
                     .flatten()
             };
@@ -474,7 +426,7 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.on().to_vec(),
                 hash_join.filter().cloned(),
                 hash_join.join_type(),
-                hash_join.null_equals_null(),
+                hash_join.null_equality(),
                 left_order,
                 right_order,
                 mode,
@@ -571,7 +523,8 @@ pub(crate) fn swap_join_according_to_unboundedness(
             hash_join.swap_inputs(PartitionMode::CollectLeft)
         }
         (PartitionMode::Auto, _) => {
-            internal_err!("Auto is not acceptable for unbounded input here.")
+            // Use `PartitionMode::Partitioned` as default if `Auto` is selected.
+            hash_join.swap_inputs(PartitionMode::Partitioned)
         }
     }
 }

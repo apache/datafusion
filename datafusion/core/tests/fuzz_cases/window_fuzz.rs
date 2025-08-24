@@ -35,7 +35,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::HashMap;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
+use datafusion_expr::type_coercion::functions::fields_with_aggregate_udf;
 use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
@@ -51,7 +51,7 @@ use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use test_utils::add_empty_batches;
@@ -252,7 +252,6 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
     ];
 
     let partitionby_exprs = vec![];
-    let orderby_exprs = LexOrdering::default();
     // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
@@ -285,9 +284,10 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     fn_name.to_string(),
                     &args,
                     &partitionby_exprs,
-                    orderby_exprs.as_ref(),
+                    &[],
                     Arc::new(window_frame),
                     &extended_schema,
+                    false,
                     false,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
@@ -398,8 +398,8 @@ fn get_random_function(
                 WindowFunctionDefinition::WindowUDF(lead_udwf()),
                 vec![
                     arg.clone(),
-                    lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-                    lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+                    lit(ScalarValue::Int64(Some(rng.random_range(1..10)))),
+                    lit(ScalarValue::Int64(Some(rng.random_range(1..1000)))),
                 ],
             ),
         );
@@ -409,8 +409,8 @@ fn get_random_function(
                 WindowFunctionDefinition::WindowUDF(lag_udwf()),
                 vec![
                     arg.clone(),
-                    lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-                    lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+                    lit(ScalarValue::Int64(Some(rng.random_range(1..10)))),
+                    lit(ScalarValue::Int64(Some(rng.random_range(1..1000)))),
                 ],
             ),
         );
@@ -435,12 +435,12 @@ fn get_random_function(
             WindowFunctionDefinition::WindowUDF(nth_value_udwf()),
             vec![
                 arg.clone(),
-                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+                lit(ScalarValue::Int64(Some(rng.random_range(1..10)))),
             ],
         ),
     );
 
-    let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
+    let rand_fn_idx = rng.random_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
     let (window_fn, args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
     let mut args = args.clone();
@@ -448,9 +448,9 @@ fn get_random_function(
         if !args.is_empty() {
             // Do type coercion first argument
             let a = args[0].clone();
-            let dt = a.data_type(schema.as_ref()).unwrap();
-            let coerced = data_types_with_aggregate_udf(&[dt], udf).unwrap();
-            args[0] = cast(a, schema, coerced[0].clone()).unwrap();
+            let dt = a.return_field(schema.as_ref()).unwrap();
+            let coerced = fields_with_aggregate_udf(&[dt], udf).unwrap();
+            args[0] = cast(a, schema, coerced[0].data_type().clone()).unwrap();
         }
     }
 
@@ -463,12 +463,12 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
         is_preceding: bool,
     }
     let first_bound = Utils {
-        val: rng.gen_range(0..10),
-        is_preceding: rng.gen_range(0..2) == 0,
+        val: rng.random_range(0..10),
+        is_preceding: rng.random_range(0..2) == 0,
     };
     let second_bound = Utils {
-        val: rng.gen_range(0..10),
-        is_preceding: rng.gen_range(0..2) == 0,
+        val: rng.random_range(0..10),
+        is_preceding: rng.random_range(0..2) == 0,
     };
     let (start_bound, end_bound) =
         if first_bound.is_preceding == second_bound.is_preceding {
@@ -485,7 +485,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             (second_bound, first_bound)
         };
     // 0 means Range, 1 means Rows, 2 means GROUPS
-    let rand_num = rng.gen_range(0..3);
+    let rand_num = rng.random_range(0..3);
     let units = if rand_num < 1 {
         WindowFrameUnits::Range
     } else if rand_num < 2 {
@@ -517,7 +517,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             };
             let mut window_frame = WindowFrame::new_bounds(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
-            if rng.gen_range(0..10) == 0 {
+            if rng.random_range(0..10) == 0 {
                 window_frame.start_bound =
                     WindowFrameBound::Preceding(ScalarValue::Int32(None));
             }
@@ -545,7 +545,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             };
             let mut window_frame = WindowFrame::new_bounds(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
-            if rng.gen_range(0..10) == 0 {
+            if rng.random_range(0..10) == 0 {
                 window_frame.start_bound =
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None));
             }
@@ -569,7 +569,7 @@ fn convert_bound_to_current_row_if_applicable(
     match bound {
         WindowFrameBound::Preceding(value) | WindowFrameBound::Following(value) => {
             if let Ok(zero) = ScalarValue::new_zero(&value.data_type()) {
-                if value == &zero && rng.gen_range(0..2) == 0 {
+                if value == &zero && rng.random_range(0..2) == 0 {
                     *bound = WindowFrameBound::CurrentRow;
                 }
             }
@@ -594,7 +594,7 @@ async fn run_window_test(
     let ctx = SessionContext::new_with_config(session_config);
     let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng, is_linear);
     let window_frame = get_random_window_frame(&mut rng, is_linear);
-    let mut orderby_exprs = LexOrdering::default();
+    let mut orderby_exprs = vec![];
     for column in &orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
             expr: col(column, &schema)?,
@@ -602,13 +602,13 @@ async fn run_window_test(
         })
     }
     if orderby_exprs.len() > 1 && !window_frame.can_accept_multi_orderby() {
-        orderby_exprs = LexOrdering::new(orderby_exprs[0..1].to_vec());
+        orderby_exprs.truncate(1);
     }
     let mut partitionby_exprs = vec![];
     for column in &partition_by_columns {
         partitionby_exprs.push(col(column, &schema)?);
     }
-    let mut sort_keys = LexOrdering::default();
+    let mut sort_keys = vec![];
     for partition_by_expr in &partitionby_exprs {
         sort_keys.push(PhysicalSortExpr {
             expr: partition_by_expr.clone(),
@@ -622,7 +622,7 @@ async fn run_window_test(
     }
 
     let concat_input_record = concat_batches(&schema, &input1)?;
-    let source_sort_keys = LexOrdering::new(vec![
+    let source_sort_keys: LexOrdering = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: Default::default(),
@@ -635,15 +635,18 @@ async fn run_window_test(
             expr: col("c", &schema)?,
             options: Default::default(),
         },
-    ]);
-    let mut exec1 = Arc::new(DataSourceExec::new(Arc::new(
+    ]
+    .into();
+    let mut exec1 = DataSourceExec::from_data_source(
         MemorySourceConfig::try_new(&[vec![concat_input_record]], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
-    ))) as _;
+    ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
-        exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
+        if let Some(ordering) = LexOrdering::new(sort_keys) {
+            exec1 = Arc::new(SortExec::new(ordering, exec1)) as _;
+        }
     }
 
     let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
@@ -654,27 +657,29 @@ async fn run_window_test(
             fn_name.clone(),
             &args,
             &partitionby_exprs,
-            orderby_exprs.as_ref(),
+            &orderby_exprs.clone(),
             Arc::new(window_frame.clone()),
             &extended_schema,
+            false,
             false,
         )?],
         exec1,
         false,
     )?) as _;
-    let exec2 = Arc::new(DataSourceExec::new(Arc::new(
-        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)?
-            .try_with_sort_information(vec![source_sort_keys.clone()])?,
-    )));
+    let exec2 = DataSourceExec::from_data_source(
+        MemorySourceConfig::try_new(&[input1], schema, None)?
+            .try_with_sort_information(vec![source_sort_keys])?,
+    );
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
         vec![create_window_expr(
             &window_fn,
             fn_name,
             &args,
             &partitionby_exprs,
-            orderby_exprs.as_ref(),
+            &orderby_exprs,
             Arc::new(window_frame.clone()),
             &extended_schema,
+            false,
             false,
         )?],
         exec2,
@@ -728,7 +733,7 @@ async fn run_window_test(
             for (line1, line2) in
                 usual_formatted_sorted.iter().zip(running_formatted_sorted)
             {
-                println!("{:?}   ---   {:?}", line1, line2);
+                println!("{line1:?}   ---   {line2:?}");
             }
             unreachable!();
         }
@@ -758,9 +763,9 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut input5: Vec<String> = vec!["".to_string(); len];
     input123.iter_mut().for_each(|v| {
         *v = (
-            rng.gen_range(0..n_distinct) as i32,
-            rng.gen_range(0..n_distinct) as i32,
-            rng.gen_range(0..n_distinct) as i32,
+            rng.random_range(0..n_distinct) as i32,
+            rng.random_range(0..n_distinct) as i32,
+            rng.random_range(0..n_distinct) as i32,
         )
     });
     input123.sort();
@@ -788,7 +793,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut batches = vec![];
     if STREAM {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..50);
+            let batch_size = rng.random_range(0..50);
             if remainder.num_rows() < batch_size {
                 batches.push(remainder);
                 break;
@@ -798,7 +803,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
         }
     } else {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+            let batch_size = rng.random_range(0..remainder.num_rows() + 1);
             batches.push(remainder.slice(0, batch_size));
             remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
         }

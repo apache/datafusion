@@ -54,7 +54,7 @@ use std::any::Any;
     ),
     related_udf(name = "decode")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct EncodeFunc {
     signature: Signature,
 }
@@ -147,7 +147,7 @@ impl ScalarUDFImpl for EncodeFunc {
     argument(name = "format", description = "Same arguments as [encode](#encode)"),
     related_udf(name = "encode")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DecodeFunc {
     signature: Signature,
 }
@@ -310,7 +310,7 @@ fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
     let out_len = input.len() / 2;
     let buf = &mut buf[..out_len];
     hex::decode_to_slice(input, buf).map_err(|e| {
-        DataFusionError::Internal(format!("Failed to decode from hex: {}", e))
+        DataFusionError::Internal(format!("Failed to decode from hex: {e}"))
     })?;
     Ok(out_len)
 }
@@ -319,7 +319,7 @@ fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
     general_purpose::STANDARD_NO_PAD
         .decode_slice(input, buf)
         .map_err(|e| {
-            DataFusionError::Internal(format!("Failed to decode from base64: {}", e))
+            DataFusionError::Internal(format!("Failed to decode from base64: {e}"))
         })
 }
 
@@ -419,15 +419,13 @@ impl Encoding {
                     .decode(value)
                     .map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Failed to decode value using base64: {}",
-                            e
+                            "Failed to decode value using base64: {e}"
                         ))
                     })?
             }
             Self::Hex => hex::decode(value).map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Failed to decode value using hex: {}",
-                    e
+                    "Failed to decode value using hex: {e}"
                 ))
             })?,
         };
@@ -447,15 +445,13 @@ impl Encoding {
                     .decode(value)
                     .map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Failed to decode value using base64: {}",
-                            e
+                            "Failed to decode value using base64: {e}"
                         ))
                     })?
             }
             Self::Hex => hex::decode(value).map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Failed to decode value using hex: {}",
-                    e
+                    "Failed to decode value using hex: {e}"
                 ))
             })?,
         };

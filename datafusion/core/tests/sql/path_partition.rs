@@ -25,8 +25,6 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
@@ -42,8 +40,6 @@ use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
-use datafusion_expr::{col, lit, Expr, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -54,64 +50,8 @@ use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
     ObjectStore, PutOptions, PutResult,
 };
-use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
+use object_store::{Attributes, MultipartUpload, PutMultipartOptions, PutPayload};
 use url::Url;
-
-#[tokio::test]
-async fn parquet_partition_pruning_filter() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let table = create_partitioned_alltypes_parquet_table(
-        &ctx,
-        &[
-            "year=2021/month=09/day=09/file.parquet",
-            "year=2021/month=10/day=09/file.parquet",
-            "year=2021/month=10/day=28/file.parquet",
-        ],
-        &[
-            ("year", DataType::Int32),
-            ("month", DataType::Int32),
-            ("day", DataType::Int32),
-        ],
-        "mirror:///",
-        "alltypes_plain.parquet",
-    )
-    .await;
-
-    // The first three filters can be resolved using only the partition columns.
-    let filters = [
-        Expr::eq(col("year"), lit(2021)),
-        Expr::eq(col("month"), lit(10)),
-        Expr::eq(col("day"), lit(28)),
-        Expr::gt(col("id"), lit(1)),
-    ];
-    let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let data_source = data_source_exec.data_source();
-    let file_source = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
-    let parquet_config = file_source
-        .file_source()
-        .as_any()
-        .downcast_ref::<ParquetSource>()
-        .unwrap();
-    let pred = parquet_config.predicate().unwrap();
-    // Only the last filter should be pushdown to TableScan
-    let expected = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
-        Operator::Gt,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-    ));
-
-    assert!(pred.as_any().is::<BinaryExpr>());
-    let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
-
-    assert_eq!(pred, expected.as_ref());
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
@@ -491,7 +431,9 @@ async fn parquet_multiple_nonstring_partitions() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_statistics() -> Result<()> {
-    let ctx = SessionContext::new();
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.collect_statistics = true;
+    let ctx = SessionContext::new_with_config(config);
 
     register_partitioned_alltypes_parquet(
         &ctx,
@@ -518,7 +460,7 @@ async fn parquet_statistics() -> Result<()> {
     let schema = physical_plan.schema();
     assert_eq!(schema.fields().len(), 4);
 
-    let stat_cols = physical_plan.statistics()?.column_statistics;
+    let stat_cols = physical_plan.partition_statistics(None)?.column_statistics;
     assert_eq!(stat_cols.len(), 4);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(3));
@@ -533,7 +475,7 @@ async fn parquet_statistics() -> Result<()> {
     let schema = physical_plan.schema();
     assert_eq!(schema.fields().len(), 2);
 
-    let stat_cols = physical_plan.statistics()?.column_statistics;
+    let stat_cols = physical_plan.partition_statistics(None)?.column_statistics;
     assert_eq!(stat_cols.len(), 2);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(1));
@@ -643,7 +585,8 @@ async fn create_partitioned_alltypes_parquet_table(
                 .iter()
                 .map(|x| (x.0.to_owned(), x.1.clone()))
                 .collect::<Vec<_>>(),
-        );
+        )
+        .with_session_config_options(&ctx.copied_config());
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let store_path =
@@ -702,7 +645,7 @@ impl ObjectStore for MirroringObjectStore {
     async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         unimplemented!()
     }
@@ -719,7 +662,7 @@ impl ObjectStore for MirroringObjectStore {
         let meta = ObjectMeta {
             location: location.clone(),
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len() as usize,
+            size: metadata.len(),
             e_tag: None,
             version: None,
         };
@@ -735,14 +678,15 @@ impl ObjectStore for MirroringObjectStore {
     async fn get_range(
         &self,
         location: &Path,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> object_store::Result<Bytes> {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let mut file = File::open(path).unwrap();
-        file.seek(SeekFrom::Start(range.start as u64)).unwrap();
+        file.seek(SeekFrom::Start(range.start)).unwrap();
 
         let to_read = range.end - range.start;
+        let to_read: usize = to_read.try_into().unwrap();
         let mut data = Vec::with_capacity(to_read);
         let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
         assert_eq!(read, to_read);
@@ -757,9 +701,10 @@ impl ObjectStore for MirroringObjectStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         let prefix = prefix.cloned().unwrap_or_default();
-        Box::pin(stream::iter(self.files.iter().filter_map(
+        let size = self.file_size;
+        Box::pin(stream::iter(self.files.clone().into_iter().filter_map(
             move |location| {
                 // Don't return for exact prefix match
                 let filter = location
@@ -769,9 +714,9 @@ impl ObjectStore for MirroringObjectStore {
 
                 filter.then(|| {
                     Ok(ObjectMeta {
-                        location: location.clone(),
+                        location,
                         last_modified: Utc.timestamp_nanos(0),
-                        size: self.file_size as usize,
+                        size,
                         e_tag: None,
                         version: None,
                     })
@@ -809,7 +754,7 @@ impl ObjectStore for MirroringObjectStore {
                 let object = ObjectMeta {
                     location: k.clone(),
                     last_modified: Utc.timestamp_nanos(0),
-                    size: self.file_size as usize,
+                    size: self.file_size,
                     e_tag: None,
                     version: None,
                 };
