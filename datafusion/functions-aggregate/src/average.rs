@@ -122,37 +122,36 @@ impl AggregateUDFImpl for Avg {
 
         // instantiate specialized accumulator based for the type
         if acc_args.is_distinct {
-            match &data_type {
+            match (&data_type, acc_args.return_type()) {
                 // Numeric types are converted to Float64 via `coerce_avg_type` during logical plan creation
-                Float64 => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
-                Decimal128(_, scale) => {
-                    let target_type = &acc_args.return_type();
-                    if let Decimal128(target_precision, target_scale) = target_type {
-                        Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal128Type>::with_decimal_params(
-                            *scale,
-                            *target_precision,
-                            *target_scale,
-                        )))
-                    } else {
-                        exec_err!("AVG(DISTINCT) for Decimal128 expected Decimal128 return type, got {}", target_type)
-                    }
-                }
-                Decimal256(_, scale) => {
-                    let target_type = &acc_args.return_type();
-                    if let Decimal256(target_precision, target_scale) = target_type {
-                        Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal256Type>::with_decimal_params(
-                            *scale,
-                            *target_precision,
-                            *target_scale,
-                        )))
-                    } else {
-                        exec_err!("AVG(DISTINCT) for Decimal256 expected Decimal256 return type, got {}", target_type)
-                    }
-                }
-                _ => exec_err!("AVG(DISTINCT) for {} not supported", data_type),
+                (Float64, _) => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
+
+                (
+                    Decimal128(_, scale),
+                    Decimal128(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal128Type>::with_decimal_params(
+                    *scale,
+                    *target_precision,
+                    *target_scale,
+                ))),
+
+                (
+                    Decimal256(_, scale),
+                    Decimal256(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal256Type>::with_decimal_params(
+                    *scale,
+                    *target_precision,
+                    *target_scale,
+                ))),
+
+                (dt, return_type) => exec_err!(
+                    "AVG(DISTINCT) for ({} --> {}) not supported",
+                    dt,
+                    return_type
+                ),
             }
         } else {
-            match (&data_type, acc_args.return_field.data_type()) {
+            match (&data_type, acc_args.return_type()) {
                 (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
                 (
                     Decimal128(sum_precision, sum_scale),
@@ -187,11 +186,9 @@ impl AggregateUDFImpl for Avg {
                     }))
                 }
 
-                _ => exec_err!(
-                    "AvgAccumulator for ({} --> {})",
-                    &data_type,
-                    acc_args.return_field.data_type()
-                ),
+                (dt, return_type) => {
+                    exec_err!("AvgAccumulator for ({} --> {})", dt, return_type)
+                }
             }
         }
     }

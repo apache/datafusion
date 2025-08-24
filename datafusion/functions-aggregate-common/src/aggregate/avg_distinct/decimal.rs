@@ -188,12 +188,12 @@ mod tests {
         let scale = 2_i8;
 
         let array = Decimal256Array::from(vec![
-            Some(i256::from_i128(100_00)), // 100.00
-            Some(i256::from_i128(125_00)), // 125.00
-            Some(i256::from_i128(175_00)), // 175.00
-            Some(i256::from_i128(200_00)), // 200.00
-            Some(i256::from_i128(200_00)), // 200.00 (duplicate)
-            Some(i256::from_i128(300_00)), // 300.00
+            Some(i256::from_i128(10_000)), // 100.00
+            Some(i256::from_i128(12_500)), // 125.00
+            Some(i256::from_i128(17_500)), // 175.00
+            Some(i256::from_i128(20_000)), // 200.00
+            Some(i256::from_i128(20_000)), // 200.00 (duplicate)
+            Some(i256::from_i128(30_000)), // 300.00
             None,                          // null
             None,                          // null
         ])
