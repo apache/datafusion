@@ -199,7 +199,7 @@ atan(numeric_expression)
 #### Example
 
 ```sql
-> SELECT atan(1);
+    > SELECT atan(1);
 +-----------+
 | atan(1)   |
 +-----------+
@@ -248,7 +248,7 @@ atanh(numeric_expression)
 #### Example
 
 ```sql
-> SELECT atanh(0.5);
+    > SELECT atanh(0.5);
 +-------------+
 | atanh(0.5)  |
 +-------------+
@@ -294,7 +294,7 @@ ceil(numeric_expression)
 #### Example
 
 ```sql
-> SELECT ceil(3.14);
+    > SELECT ceil(3.14);
 +------------+
 | ceil(3.14) |
 +------------+
@@ -318,11 +318,11 @@ cos(numeric_expression)
 
 ```sql
 > SELECT cos(0);
-+---------+
-| cos(0)  |
-+---------+
-| 1.0     |
-+---------+
++--------+
+| cos(0) |
++--------+
+| 1.0    |
++--------+
 ```
 
 ### `cosh`
@@ -386,7 +386,7 @@ degrees(numeric_expression)
 #### Example
 
 ```sql
-> SELECT degrees(PI());
+    > SELECT degrees(pi());
 +------------+
 | degrees(0) |
 +------------+
@@ -621,11 +621,11 @@ log10(numeric_expression)
 
 ```sql
 > SELECT log10(100);
-+--------------+
-| log10(100)   |
-+--------------+
-| 2.0          |
-+--------------+
++-------------+
+| log10(100)  |
++-------------+
+| 2.0         |
++-------------+
 ```
 
 ### `log2`
@@ -732,11 +732,11 @@ radians(numeric_expression)
 
 ```sql
 > SELECT radians(180);
-+-----------------+
-| radians(180)    |
-+-----------------+
-| 3.1415          |
-+-----------------+
++----------------+
+| radians(180)   |
++----------------+
+| 3.14159265359  |
++----------------+
 ```
 
 ### `random`
@@ -746,6 +746,17 @@ The random seed is unique to each row.
 
 ```sql
 random()
+```
+
+#### Example
+
+```sql
+> SELECT random();
++------------------+
+| random()         |
++------------------+
+| 0.7389238902938  |
++------------------+
 ```
 
 ### `round`
@@ -816,7 +827,7 @@ sin(numeric_expression)
 +----------+
 | sin(0)   |
 +----------+
-| 1.0      |
+|  1.0     |
 +----------+
 ```
 
@@ -854,17 +865,6 @@ sqrt(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
-
-#### Example
-
-```sql
-> SELECT sqrt(16);
-+----------+
-| sqrt(16) |
-+----------+
-| 4.0      |
-+----------+
-```
 
 ### `tan`
 
@@ -904,12 +904,12 @@ tanh(numeric_expression)
 #### Example
 
 ```sql
-> SELECT tanh(1);
-+-----------+
-| tanh(1)   |
-+-----------+
-| 0.7615941 |
-+-----------+
+> SELECT trunc(42.738);
++----------------+
+| trunc(42.738)  |
++----------------+
+| 42             |
++----------------+
 ```
 
 ### `trunc`
@@ -929,16 +929,16 @@ trunc(numeric_expression[, decimal_places])
   right of the decimal point. If `decimal_places` is a negative
   integer, replaces digits to the left of the decimal point with `0`.
 
-  #### Example
+#### Example
 
-  ```sql
-  > SELECT trunc(42.738);
-  +----------------+
-  | trunc(42.738)  |
-  +----------------+
-  | 42             |
-  +----------------+
-  ```
+```sql
+> SELECT trunc(42.738);
++----------------+
+| trunc(42.738)  |
++----------------+
+| 42             |
++----------------+
+```
 
 ## Conditional Functions
 
@@ -2444,6 +2444,7 @@ date_bin(interval, expression, origin-timestamp)
 - **interval**: Bin interval.
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 - **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
+
   - nanoseconds
   - microseconds
   - milliseconds
@@ -2497,6 +2498,7 @@ date_part(part, expression)
 #### Arguments
 
 - **part**: Part of the date to return. The following date parts are supported:
+
   - year
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
   - month
@@ -2536,6 +2538,7 @@ date_trunc(precision, expression)
 #### Arguments
 
 - **precision**: Time precision to truncate to. The following precisions are supported:
+
   - year / YEAR
   - quarter / QUARTER
   - month / MONTH
