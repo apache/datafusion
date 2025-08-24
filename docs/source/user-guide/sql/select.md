@@ -75,6 +75,20 @@ Example:
 SELECT t.a FROM table AS t
 ```
 
+The `FROM` clause can also come before the `SELECT` clause.
+Example:
+
+```sql
+FROM table AS t
+SELECT t.a
+```
+
+If the `SELECT` clause is omitted, the `FROM` clause will return all columns from the table.
+
+```sql
+FROM table
+```
+
 ## WHERE clause
 
 Example:
