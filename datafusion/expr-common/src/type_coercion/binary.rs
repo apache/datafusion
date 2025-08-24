@@ -565,7 +565,7 @@ fn type_union_resolution_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
-    if lhs_type == rhs_type {
+    if lhs_type.equals_datatype(rhs_type) {
         return Some(lhs_type.clone());
     }
 
@@ -791,7 +791,7 @@ pub fn comparison_coercion_numeric(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
-    if lhs_type == rhs_type {
+    if lhs_type.equals_datatype(rhs_type) {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
@@ -887,7 +887,7 @@ pub fn binary_numeric_coercion(
     };
 
     // same type => all good
-    if lhs_type == rhs_type {
+    if lhs_type.equals_datatype(rhs_type) {
         return Some(lhs_type.clone());
     }
 
