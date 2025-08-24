@@ -120,7 +120,7 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
 ```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct AbsFunc {
     signature: Signature,
 }

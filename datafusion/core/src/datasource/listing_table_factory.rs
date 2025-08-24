@@ -63,8 +63,6 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let file_extension = get_extension(cmd.location.as_str());
-
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
             (
                 None,
@@ -109,9 +107,16 @@ impl TableProviderFactory for ListingTableFactory {
         };
 
         let mut table_path = ListingTableUrl::parse(&cmd.location)?;
-
+        let file_extension = match table_path.is_collection() {
+            // Setting the extension to be empty instead of allowing the default extension seems
+            // odd, but was done to ensure existing behavior isn't modified. It seems like this
+            // could be refactored to either use the default extension or set the fully expected
+            // extension when compression is included (e.g. ".csv.gz")
+            true => "",
+            false => &get_extension(cmd.location.as_str()),
+        };
         let options = ListingOptions::new(file_format)
-            .with_file_extension(&file_extension)
+            .with_file_extension(file_extension)
             .with_session_config_options(session_state.config())
             .with_table_partition_cols(table_partition_cols);
 
@@ -189,6 +194,8 @@ fn get_extension(path: &str) -> String {
 mod tests {
     use glob::Pattern;
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
 
     use super::*;
     use crate::{
@@ -374,5 +381,42 @@ mod tests {
             table_path.get_glob().clone().unwrap(),
             Pattern::new("*.csv").unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_odd_directory_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(dir.path());
+        path.extend(["odd.v1", "odd.v2"]);
+        fs::create_dir_all(&path).unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable {
+            name,
+            location: String::from(path.to_str().unwrap()),
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert_eq!("", listing_options.file_extension);
     }
 }

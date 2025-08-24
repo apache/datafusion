@@ -51,7 +51,7 @@ use datafusion_macros::user_doc;
 +--------------+
 ```"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RoundFunc {
     signature: Signature,
 }

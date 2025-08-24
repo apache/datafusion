@@ -41,7 +41,7 @@ use std::sync::Arc;
 ```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct IsNanFunc {
     signature: Signature,
 }

@@ -982,7 +982,18 @@ async fn roundtrip_expr_api() -> Result<()> {
         approx_median(lit(2)),
         approx_percentile_cont(lit(2).sort(true, false), lit(0.5), None),
         approx_percentile_cont(lit(2).sort(true, false), lit(0.5), Some(lit(50))),
-        approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
+        approx_percentile_cont_with_weight(
+            lit(2).sort(true, false),
+            lit(1),
+            lit(0.5),
+            None,
+        ),
+        approx_percentile_cont_with_weight(
+            lit(2).sort(true, false),
+            lit(1),
+            lit(0.5),
+            Some(lit(50)),
+        ),
         grouping(lit(1)),
         bit_and(lit(2)),
         bit_or(lit(2)),
@@ -1067,6 +1078,7 @@ pub mod proto {
         pub expr: Option<datafusion_proto::protobuf::LogicalExprNode>,
     }
 
+    #[allow(dead_code)]
     #[derive(Clone, PartialEq, Eq, ::prost::Message)]
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
@@ -2484,7 +2496,7 @@ fn roundtrip_window() {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimpleWindowUDF {
         signature: Signature,
     }

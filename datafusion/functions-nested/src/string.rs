@@ -146,7 +146,7 @@ make_udf_expr_and_func!(
         description = "Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayToString {
     signature: Signature,
     aliases: Vec<String>,
@@ -242,7 +242,7 @@ make_udf_expr_and_func!(
         description = "Substring values to be replaced with `NULL`."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct StringToArray {
     signature: Signature,
     aliases: Vec<String>,

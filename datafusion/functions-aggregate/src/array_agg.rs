@@ -23,14 +23,12 @@ use std::mem::{size_of, size_of_val, take};
 use std::sync::Arc;
 
 use arrow::array::{
-    make_array, new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray,
-    StructArray,
+    new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray, StructArray,
 };
 use arrow::compute::{filter, SortOptions};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::{
     compare_rows, get_row_at_idx, take_function_args, SingleRowListArrayBuilder,
 };
@@ -77,7 +75,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 "#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
     signature: Signature,
@@ -335,11 +333,7 @@ impl Accumulator for ArrayAggAccumulator {
         };
 
         if !val.is_empty() {
-            // The ArrayRef might be holding a reference to its original input buffer, so
-            // storing it here directly copied/compacted avoids over accounting memory
-            // not used here.
-            self.values
-                .push(make_array(copy_array_data(&val.to_data())));
+            self.values.push(val)
         }
 
         Ok(())
@@ -398,7 +392,18 @@ impl Accumulator for ArrayAggAccumulator {
             + self
                 .values
                 .iter()
-                .map(|arr| arr.get_array_memory_size())
+                // Each ArrayRef might be just a reference to a bigger array, and many
+                // ArrayRefs here might be referencing exactly the same array, so if we
+                // were to call `arr.get_array_memory_size()`, we would be double-counting
+                // the same underlying data many times.
+                //
+                // Instead, we do an approximation by estimating how much memory each
+                // ArrayRef would occupy if its underlying data was fully owned by this
+                // accumulator.
+                //
+                // Note that this is just an estimation, but the reality is that this
+                // accumulator might not own any data.
+                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
                 .sum::<usize>()
             + self.datatype.size()
             - size_of_val(&self.datatype)
@@ -1064,8 +1069,7 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        // without compaction, the size is 2652.
-        assert_eq!(acc1.size(), 732);
+        assert_eq!(acc1.size(), 266);
 
         Ok(())
     }

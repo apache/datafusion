@@ -914,7 +914,7 @@ impl SessionContext {
             ..
         } = cmd;
 
-        // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
+        // sqlparser doesn't accept database / catalog as parameter to CREATE SCHEMA
         // so for now, we default to default catalog
         let tokens: Vec<&str> = schema_name.split('.').collect();
         let (catalog, schema_name) = match tokens.len() {
@@ -1068,6 +1068,10 @@ impl SessionContext {
                 builder.with_max_temp_directory_size(directory_size as u64)
             }
             "temp_directory" => builder.with_temp_file_path(value),
+            "metadata_cache_limit" => {
+                let limit = Self::parse_memory_limit(value)?;
+                builder.with_metadata_cache_limit(limit)
+            }
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unknown runtime configuration: {variable}"
@@ -1646,7 +1650,7 @@ impl SessionContext {
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
         let mut state = self.state.read().clone();
-        state.execution_props_mut().start_execution();
+        state.mark_start_execution();
         state
     }
 

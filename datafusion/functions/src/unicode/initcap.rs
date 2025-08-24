@@ -50,7 +50,7 @@ use datafusion_macros::user_doc;
     related_udf(name = "lower"),
     related_udf(name = "upper")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct InitcapFunc {
     signature: Signature,
 }

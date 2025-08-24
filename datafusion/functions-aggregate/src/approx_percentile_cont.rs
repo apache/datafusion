@@ -77,15 +77,38 @@ pub fn approx_percentile_cont(
 #[user_doc(
     doc_section(label = "Approximate Functions"),
     description = "Returns the approximate percentile of input values using the t-digest algorithm.",
-    syntax_example = "approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)",
+    syntax_example = "approx_percentile_cont(percentile [, centroids]) WITHIN GROUP (ORDER BY expression)",
     sql_example = r#"```sql
+> SELECT approx_percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++------------------------------------------------------------------+
+| approx_percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) |
++------------------------------------------------------------------+
+| 65.0                                                             |
++------------------------------------------------------------------+
 > SELECT approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
 +-----------------------------------------------------------------------+
 | approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) |
 +-----------------------------------------------------------------------+
 | 65.0                                                                  |
 +-----------------------------------------------------------------------+
-```"#,
+```
+An alternate syntax is also supported:
+```sql
+> SELECT approx_percentile_cont(column_name, 0.75) FROM table_name;
++-----------------------------------------------+
+| approx_percentile_cont(column_name, 0.75)     |
++-----------------------------------------------+
+| 65.0                                          |
++-----------------------------------------------+
+
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++----------------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)           |
++----------------------------------------------------------+
+| 65.0                                                     |
++----------------------------------------------------------+
+```
+"#,
     standard_argument(name = "expression",),
     argument(
         name = "percentile",
@@ -96,6 +119,7 @@ pub fn approx_percentile_cont(
         description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxPercentileCont {
     signature: Signature,
 }
@@ -313,7 +337,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         }
         if arg_types.len() == 3 && !arg_types[2].is_integer() {
             return plan_err!(
-                "approx_percentile_cont requires integer max_size input types"
+                "approx_percentile_cont requires integer centroids input types"
             );
         }
         Ok(arg_types[0].clone())
@@ -358,6 +382,11 @@ impl ApproxPercentileAccumulator {
             percentile,
             return_type,
         }
+    }
+
+    // public for approx_percentile_cont_with_weight
+    pub(crate) fn max_size(&self) -> usize {
+        self.digest.max_size()
     }
 
     // public for approx_percentile_cont_with_weight

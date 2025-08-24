@@ -46,7 +46,7 @@ define_udwf_and_expr!(
     doc_section(label = "Ranking Functions"),
     description = "Number of the current row within its partition, counting from 1.",
     syntax_example = "row_number()",
-    sql_example = r"
+    sql_example = r#"
 ```sql
 -- Example usage of the row_number window function:
 SELECT department,
@@ -65,9 +65,9 @@ FROM employees;
 | Engineering | 80000  | 2       |
 +-------------+--------+---------+
 ```
-#"
+"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RowNumber {
     signature: Signature,
 }

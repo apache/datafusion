@@ -49,7 +49,7 @@ use datafusion_macros::user_doc;
 ```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FactorialFunc {
     signature: Signature,
 }
