@@ -2128,35 +2128,57 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
 
 #[test]
 fn roundtrip_sort_merge_join() -> Result<()> {
-    let field_a = Field::new("col", DataType::Int64, false);
+    let field_a = Field::new("col_a", DataType::Int64, false);
+    let field_b = Field::new("col_b", DataType::Int64, false);
     let schema_left = Schema::new(vec![field_a.clone()]);
-    let schema_right = Schema::new(vec![field_a]);
+    let schema_right = Schema::new(vec![field_b.clone()]);
     let on = vec![(
-        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
-        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+        Arc::new(Column::new("col_a", schema_left.index_of("col_a")?)) as _,
+        Arc::new(Column::new("col_b", schema_right.index_of("col_b")?)) as _,
     )];
+
+    let filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("col_a", 1)),
+            Operator::Gt,
+            Arc::new(Column::new("col_b", 0)),
+        )),
+        vec![
+            datafusion::physical_plan::joins::utils::ColumnIndex {
+                index: 0,
+                side: datafusion_common::JoinSide::Left,
+            },
+            datafusion::physical_plan::joins::utils::ColumnIndex {
+                index: 0,
+                side: datafusion_common::JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![field_a, field_b])),
+    );
 
     let schema_left = Arc::new(schema_left);
     let schema_right = Arc::new(schema_right);
-    for join_type in [
-        JoinType::Inner,
-        JoinType::Left,
-        JoinType::Right,
-        JoinType::Full,
-        JoinType::LeftAnti,
-        JoinType::RightAnti,
-        JoinType::LeftSemi,
-        JoinType::RightSemi,
-    ] {
-        roundtrip_test(Arc::new(SortMergeJoinExec::try_new(
-            Arc::new(EmptyExec::new(schema_left.clone())),
-            Arc::new(EmptyExec::new(schema_right.clone())),
-            on.clone(),
-            None,
-            join_type,
-            vec![Default::default()],
-            NullEquality::NullEqualsNothing,
-        )?))?;
+    for filter in [None, Some(filter)] {
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+        ] {
+            roundtrip_test(Arc::new(SortMergeJoinExec::try_new(
+                Arc::new(EmptyExec::new(schema_left.clone())),
+                Arc::new(EmptyExec::new(schema_right.clone())),
+                on.clone(),
+                filter.clone(),
+                join_type,
+                vec![Default::default()],
+                NullEquality::NullEqualsNothing,
+            )?))?;
+        }
     }
     Ok(())
 }
