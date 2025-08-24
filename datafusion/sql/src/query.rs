@@ -28,9 +28,9 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Ident, LimitClause, Offset, OffsetRows, OrderBy, OrderByExpr,
-    OrderByKind, PipeOperator, Query, SelectInto, SetExpr, SetOperator, SetQuantifier,
-    TableAlias,
+    Expr as SQLExpr, ExprWithAliasAndOrderBy, Ident, LimitClause, Offset, OffsetRows,
+    OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto, SetExpr,
+    SetOperator, SetQuantifier, TableAlias,
 };
 use sqlparser::tokenizer::Span;
 
@@ -188,6 +188,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 queries,
                 planner_context,
             ),
+            PipeOperator::Aggregate {
+                full_table_exprs,
+                group_by_expr,
+            } => self.pipe_operator_aggregate(
+                plan,
+                full_table_exprs,
+                group_by_expr,
+                planner_context,
+            ),
 
             x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }
@@ -292,6 +301,76 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             LogicalPlanBuilder::from(plan).sort(order_by)?.build()
         }
+    }
+
+    /// Handle AGGREGATE pipe operator
+    fn pipe_operator_aggregate(
+        &self,
+        plan: LogicalPlan,
+        full_table_exprs: Vec<ExprWithAliasAndOrderBy>,
+        group_by_expr: Vec<ExprWithAliasAndOrderBy>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        // Convert aggregate expressions directly
+        let aggr_exprs: Vec<Expr> = full_table_exprs
+            .into_iter()
+            .map(|expr_with_alias_and_order_by| {
+                let expr_with_alias = expr_with_alias_and_order_by.expr;
+                let sql_expr = expr_with_alias.expr;
+                let alias = expr_with_alias.alias;
+
+                // Convert SQL expression to DataFusion expression
+                let df_expr =
+                    self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
+
+                // Apply alias if present, but handle the case where the expression might already be aliased
+                match alias {
+                    Some(alias_ident) => {
+                        // If the expression is already an alias, replace the alias name
+                        match df_expr {
+                            Expr::Alias(alias_expr) => {
+                                Ok(alias_expr.expr.alias(alias_ident.value))
+                            }
+                            _ => Ok(df_expr.alias(alias_ident.value)),
+                        }
+                    }
+                    None => Ok(df_expr),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Convert group by expressions directly
+        let group_by_exprs: Vec<Expr> = group_by_expr
+            .into_iter()
+            .map(|expr_with_alias_and_order_by| {
+                let expr_with_alias = expr_with_alias_and_order_by.expr;
+                let sql_expr = expr_with_alias.expr;
+                let alias = expr_with_alias.alias;
+
+                // Convert SQL expression to DataFusion expression
+                let df_expr =
+                    self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
+
+                // Apply alias if present (though group by aliases are less common)
+                match alias {
+                    Some(alias_ident) => {
+                        // If the expression is already an alias, replace the alias name
+                        match df_expr {
+                            Expr::Alias(alias_expr) => {
+                                Ok(alias_expr.expr.alias(alias_ident.value))
+                            }
+                            _ => Ok(df_expr.alias(alias_ident.value)),
+                        }
+                    }
+                    None => Ok(df_expr),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Create the aggregate logical plan
+        LogicalPlanBuilder::from(plan)
+            .aggregate(group_by_exprs, aggr_exprs)?
+            .build()
     }
 
     /// Wrap the logical plan in a `SelectInto`

@@ -634,6 +634,7 @@ DataFusion currently supports the following pipe operators:
 - [UNION](#pipe_union)
 - [INTERSECT](#pipe_intersect)
 - [EXCEPT](#pipe_except)
+- [AGGREGATE](#pipe_aggregate)
 
 (pipe_where)=
 
@@ -782,5 +783,19 @@ DataFusion currently supports the following pipe operators:
 | 2     |
 | 3     |
 | 4     |
++-------+
+```
+
+(pipe_aggregate)=
+
+### AGGREGATE
+
+```sql
+> select * from range(0,3)
+|> aggregate sum(value) AS total;
++-------+
+| total |
++-------+
+| 3     |
 +-------+
 ```
