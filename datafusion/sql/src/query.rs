@@ -29,7 +29,7 @@ use datafusion_expr::{
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Ident, LimitClause, Offset, OffsetRows, OrderBy, OrderByExpr,
-    OrderByKind, PipeOperator, Query, SelectInto, SetExpr, TableAlias,
+    OrderByKind, PipeOperator, Query, SelectInto, SetExpr, SetOperator, TableAlias,
 };
 use sqlparser::tokenizer::Span;
 
@@ -157,6 +157,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     columns: vec![],
                 },
             ),
+            PipeOperator::Union {
+                set_quantifier,
+                queries,
+            } => {
+                let left_plan = plan;
+                let mut result_plan = left_plan;
+
+                // Process each query in the union
+                for query in queries {
+                    let right_plan = self.query_to_plan(query, planner_context)?;
+                    result_plan = self.set_operation_to_plan(
+                        SetOperator::Union,
+                        result_plan,
+                        right_plan,
+                        set_quantifier,
+                    )?;
+                }
+
+                Ok(result_plan)
+            }
 
             x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }
