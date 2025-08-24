@@ -152,7 +152,7 @@ impl AggregateUDFImpl for Avg {
                 _ => exec_err!("AVG(DISTINCT) for {} not supported", data_type),
             }
         } else {
-            match (&data_type, acc_args.return_type()) {
+            match (&data_type, acc_args.return_field.data_type()) {
                 (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
                 (
                     Decimal128(sum_precision, sum_scale),
@@ -177,6 +177,7 @@ impl AggregateUDFImpl for Avg {
                     target_precision: *target_precision,
                     target_scale: *target_scale,
                 })),
+
                 (Duration(time_unit), Duration(result_unit)) => {
                     Ok(Box::new(DurationAvgAccumulator {
                         sum: None,
@@ -185,6 +186,7 @@ impl AggregateUDFImpl for Avg {
                         result_unit: *result_unit,
                     }))
                 }
+
                 _ => exec_err!(
                     "AvgAccumulator for ({} --> {})",
                     &data_type,
