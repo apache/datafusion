@@ -79,6 +79,19 @@ pub fn channels<T>(
     (senders, receivers)
 }
 
+/// Create `n` empty mpsc channels with unbounded capacity.
+pub fn unbounded_channels<T>(
+    n: usize,
+) -> (
+    Vec<tokio::sync::mpsc::UnboundedSender<T>>,
+    Vec<tokio::sync::mpsc::UnboundedReceiver<T>>,
+) {
+    let (senders, receivers) = (0..n)
+        .map(|_| tokio::sync::mpsc::unbounded_channel())
+        .unzip();
+    (senders, receivers)
+}
+
 type PartitionAwareSenders<T> = Vec<Vec<DistributionSender<T>>>;
 type PartitionAwareReceivers<T> = Vec<Vec<DistributionReceiver<T>>>;
 
@@ -90,6 +103,20 @@ pub fn partition_aware_channels<T>(
     n_out: usize,
 ) -> (PartitionAwareSenders<T>, PartitionAwareReceivers<T>) {
     (0..n_in).map(|_| channels(n_out)).unzip()
+}
+
+type OnDemandPartitionAwareSenders<T> = Vec<Vec<tokio::sync::mpsc::UnboundedSender<T>>>;
+type OnDemandPartitionAwareReceivers<T> =
+    Vec<Vec<tokio::sync::mpsc::UnboundedReceiver<T>>>;
+
+pub fn on_demand_partition_aware_channels<T>(
+    n_in: usize,
+    n_out: usize,
+) -> (
+    OnDemandPartitionAwareSenders<T>,
+    OnDemandPartitionAwareReceivers<T>,
+) {
+    (0..n_in).map(|_| unbounded_channels(n_out)).unzip()
 }
 
 /// Erroring during [send](DistributionSender::send).
