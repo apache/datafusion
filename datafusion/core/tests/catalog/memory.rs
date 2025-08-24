@@ -109,7 +109,7 @@ async fn test_mem_provider() {
     assert!(provider.table_exist(table_name));
     let other_table = EmptyTable::new(Arc::new(Schema::empty()));
     let result = provider.register_table(table_name.to_string(), Arc::new(other_table));
-    assert!(result.is_err());
+    assert!(result.is_err(), "The table test_table_exist already exists");
 }
 
 #[tokio::test]
