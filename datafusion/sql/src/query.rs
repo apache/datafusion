@@ -29,7 +29,7 @@ use datafusion_expr::{
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Ident, LimitClause, Offset, OffsetRows, OrderBy, OrderByExpr,
-    OrderByKind, PipeOperator, Query, SelectInto, SetExpr,
+    OrderByKind, PipeOperator, Query, SelectInto, SetExpr, TableAlias,
 };
 use sqlparser::tokenizer::Span;
 
@@ -149,6 +149,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .collect();
                 self.project(plan, all_exprs)
             }
+            PipeOperator::As { alias } => self.apply_table_alias(
+                plan,
+                TableAlias {
+                    name: alias,
+                    // Apply to all fields
+                    columns: vec![],
+                },
+            ),
 
             x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }

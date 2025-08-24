@@ -630,6 +630,7 @@ DataFusion currently supports the following pipe operators:
 - [LIMIT](#pipe_limit)
 - [SELECT](#pipe_select)
 - [EXTEND](#pipe_extend)
+- [AS](#pipe_as)
 
 (pipe_where)=
 
@@ -707,4 +708,21 @@ DataFusion currently supports the following pipe operators:
 | 1     | -1          |
 | 2     | -2          |
 +-------+-------------+
+```
+
+(pipe_as)=
+
+### AS
+
+```sql
+> select * from range(0,3)
+|> as my_range
+|> SELECT my_range.value;
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
++-------+
 ```

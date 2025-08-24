@@ -89,3 +89,14 @@ FROM test
 |> EXTEND a + b AS a_plus_b
 ----
 1 1.1 2.1
+
+# AS pipe
+query I
+SELECT *
+FROM test
+|> as test_pipe
+|> select test_pipe.a
+----
+1
+2
+3
