@@ -178,12 +178,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 queries,
                 planner_context,
             ),
+            PipeOperator::Except {
+                set_quantifier,
+                queries,
+            } => self.pipe_operator_set(
+                plan,
+                SetOperator::Except,
+                set_quantifier,
+                queries,
+                planner_context,
+            ),
 
             x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }
     }
 
-    /// Handle Union/Intersect pipe operators
+    /// Handle Union/Intersect/Except pipe operators
     fn pipe_operator_set(
         &self,
         plan: LogicalPlan,
