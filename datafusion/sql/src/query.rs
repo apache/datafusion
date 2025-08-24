@@ -29,7 +29,8 @@ use datafusion_expr::{
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Ident, LimitClause, Offset, OffsetRows, OrderBy, OrderByExpr,
-    OrderByKind, PipeOperator, Query, SelectInto, SetExpr, SetOperator, TableAlias,
+    OrderByKind, PipeOperator, Query, SelectInto, SetExpr, SetOperator, SetQuantifier,
+    TableAlias,
 };
 use sqlparser::tokenizer::Span;
 
@@ -160,26 +161,51 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             PipeOperator::Union {
                 set_quantifier,
                 queries,
-            } => {
-                let left_plan = plan;
-                let mut result_plan = left_plan;
-
-                // Process each query in the union
-                for query in queries {
-                    let right_plan = self.query_to_plan(query, planner_context)?;
-                    result_plan = self.set_operation_to_plan(
-                        SetOperator::Union,
-                        result_plan,
-                        right_plan,
-                        set_quantifier,
-                    )?;
-                }
-
-                Ok(result_plan)
-            }
+            } => self.pipe_operator_set(
+                plan,
+                SetOperator::Union,
+                set_quantifier,
+                queries,
+                planner_context,
+            ),
+            PipeOperator::Intersect {
+                set_quantifier,
+                queries,
+            } => self.pipe_operator_set(
+                plan,
+                SetOperator::Intersect,
+                set_quantifier,
+                queries,
+                planner_context,
+            ),
 
             x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }
+    }
+
+    /// Handle Union/Intersect pipe operators
+    fn pipe_operator_set(
+        &self,
+        plan: LogicalPlan,
+        set_operator: SetOperator,
+        set_quantifier: SetQuantifier,
+        queries: Vec<Query>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        let mut result_plan = plan;
+
+        // Process each query
+        for query in queries {
+            let right_plan = self.query_to_plan(query, planner_context)?;
+            result_plan = self.set_operation_to_plan(
+                set_operator,
+                result_plan,
+                right_plan,
+                set_quantifier,
+            )?;
+        }
+
+        Ok(result_plan)
     }
 
     /// Wrap a plan in a limit
