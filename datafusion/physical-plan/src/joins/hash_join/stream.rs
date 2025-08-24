@@ -167,7 +167,7 @@ impl ProcessProbeBatchState {
 ///
 /// This stream:
 ///
-/// - Collecting the build side (left input) into a [`JoinHashMap`]
+/// - Collecting the build side (left input) into a hash map
 /// - Iterating over the probe side (right input) in streaming fashion
 /// - Looking up matches against the hash table and applying join filters
 /// - Producing joined [`RecordBatch`]es incrementally
