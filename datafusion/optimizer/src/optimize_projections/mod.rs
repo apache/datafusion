@@ -55,6 +55,24 @@ use datafusion_common::tree_node::{
 /// The rule analyzes the input logical plan, determines the necessary column
 /// indices, and then removes any unnecessary columns. It also removes any
 /// unnecessary projections from the plan tree.
+///
+/// ## Schema, Field Properties, and Metadata Handling
+///
+/// The `OptimizeProjections` rule preserves schema and field metadata in most optimization scenarios:
+///
+/// **Schema-level metadata preservation by plan type**:
+/// - **Window and Aggregate plans**: Schema metadata is preserved
+/// - **Projection plans**: Schema metadata is preserved per [`projection_schema`](datafusion_expr::logical_plan::projection_schema).
+/// - **Other logical plans**: Schema metadata is preserved unless [`LogicalPlan::recompute_schema`]
+///   is called on plan types that drop metadata
+///
+/// **Field-level properties and metadata**: Individual field properties are preserved when fields
+/// are retained in the optimized plan, determined by [`exprlist_to_fields`](datafusion_expr::utils::exprlist_to_fields)
+/// and [`ExprSchemable::to_field`](datafusion_expr::expr_schema::ExprSchemable::to_field).
+///
+/// **Field precedence**: When the same field appears multiple times, the optimizer
+/// maintains one occurrence and removes duplicates (refer to `RequiredIndices::compact()`),
+/// preserving the properties and metadata of that occurrence.
 #[derive(Default, Debug)]
 pub struct OptimizeProjections {}
 
@@ -435,6 +453,18 @@ fn optimize_projections(
 /// appear more than once in its input fields. This can act as a caching mechanism
 /// for non-trivial computations.
 ///
+/// ## Metadata Handling During Projection Merging
+///
+/// **Alias metadata preservation**: When merging projections, alias metadata from both
+/// the current and previous projections is carefully preserved. The presence of metadata
+/// precludes alias trimming.
+///
+/// **Schema, Fields, and metadata**: If a projection is rewritten, the schema and metadata
+/// are preserved. Individual field properties and metadata flows through expression rewriting
+/// and are preserved when fields are referenced in the merged projection.
+/// Refer to [`projection_schema`](datafusion_expr::logical_plan::projection_schema)
+/// for more details.
+///
 /// # Parameters
 ///
 /// * `proj` - A reference to the `Projection` to be merged.
@@ -558,7 +588,8 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 /// - `Err(error)`: An error occurred during the function call.
 ///
 /// # Notes
-/// This rewrite also removes any unnecessary layers of aliasing.
+/// This rewrite also removes any unnecessary layers of aliasing. "Unnecessary" is
+/// defined as not contributing new information, such as metadata.
 ///
 /// Without trimming, we can end up with unnecessary indirections inside expressions
 /// during projection merges.
