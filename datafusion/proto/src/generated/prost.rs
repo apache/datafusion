@@ -1128,6 +1128,8 @@ pub mod physical_plan_node {
         #[prost(message, tag = "33")]
         GenerateSeries(super::GenerateSeriesNode),
         #[prost(message, tag = "34")]
+        SortMergeJoin(::prost::alloc::boxed::Box<super::SortMergeJoinExecNode>),
+        #[prost(message, tag = "35")]
         MemoryScan(super::MemoryScanExecNode),
     }
 }
@@ -2045,6 +2047,23 @@ pub mod generate_series_node {
         #[prost(message, tag = "6")]
         DateArgs(super::GenerateSeriesArgsDate),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SortMergeJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "4")]
+    pub join_type: i32,
+    #[prost(message, optional, tag = "5")]
+    pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(message, repeated, tag = "6")]
+    pub sort_options: ::prost::alloc::vec::Vec<SortExprNode>,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

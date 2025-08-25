@@ -1186,8 +1186,6 @@ impl ScalarValue {
 
     /// Returns a [`ScalarValue`] representing PI's upper bound
     pub fn new_pi_upper(datatype: &DataType) -> Result<ScalarValue> {
-        // TODO: replace the constants with next_up/next_down when
-        // they are stabilized: https://doc.rust-lang.org/std/primitive.f64.html#method.next_up
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
