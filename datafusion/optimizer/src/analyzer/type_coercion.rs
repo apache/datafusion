@@ -602,6 +602,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
+            | Expr::Lambda(_)
             | Expr::OuterReferenceColumn(_, _) => Ok(Transformed::no(expr)),
         }
     }

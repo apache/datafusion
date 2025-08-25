@@ -19,8 +19,8 @@
 
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest,
-    WindowFunction, WindowFunctionParams,
+    GroupingSet, InList, InSubquery, LambdaFunction, Like, Placeholder, ScalarFunction,
+    TryCast, Unnest, WindowFunction, WindowFunctionParams,
 };
 use crate::{Expr, ExprFunctionExt};
 
@@ -104,6 +104,9 @@ impl TreeNode for Expr {
 
             Expr::InList(InList { expr, list, .. }) => {
                 (expr, list).apply_ref_elements(f)
+            }
+            Expr::Lambda(LambdaFunction { body, .. }) => {
+                body.apply_elements(f)
             }
         }
     }
@@ -312,6 +315,12 @@ impl TreeNode for Expr {
                 .update_data(|(new_expr, new_list)| {
                     Expr::InList(InList::new(new_expr, new_list, negated))
                 }),
+            Expr::Lambda(LambdaFunction {
+                params: arguments,
+                body,
+            }) => body.map_elements(f)?.update_data(|new_body| {
+                Expr::Lambda(LambdaFunction::new(arguments, new_body))
+            }),
         })
     }
 }

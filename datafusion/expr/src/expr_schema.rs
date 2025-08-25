@@ -226,6 +226,7 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
+            Expr::Lambda(..) => Ok(DataType::Null),
         }
     }
 
@@ -342,6 +343,7 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
+            Expr::Lambda(..) => Ok(true),
         }
     }
 
@@ -559,6 +561,7 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
+            | Expr::Lambda(..)
             | Expr::Unnest(_) => Ok(Arc::new(Field::new(
                 &schema_name,
                 self.get_type(schema)?,
