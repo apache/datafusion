@@ -3268,8 +3268,8 @@ logical_plan
 09)--------WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 10)----------TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
-01)SortPreservingMergeExec: [a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@11 ASC NULLS LAST]
-02)--SortExec: expr=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@11 ASC NULLS LAST], preserve_partitioning=[true]
+01)PartialSortExec: expr=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@11 ASC NULLS LAST], common_prefix_length=[3]
+02)--CoalescePartitionsExec
 03)----SortMergeJoin: join_type=Inner, on=[(a@1, a@1)]
 04)------SortExec: expr=[a@1 ASC], preserve_partitioning=[true]
 05)--------CoalesceBatchesExec: target_batch_size=2
