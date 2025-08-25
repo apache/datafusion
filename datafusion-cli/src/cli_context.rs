@@ -28,6 +28,30 @@ use object_store::ObjectStore;
 
 use crate::object_storage::{AwsOptions, GcpOptions};
 
+/// Registers table option extensions based on the provided URL scheme.
+///
+/// Supported schemes are:
+/// * `s3`, `oss`, `cos` - registers [`AwsOptions`]
+/// * `gs`, `gcs` - registers [`GcpOptions`]
+///
+/// Any other scheme is ignored.
+pub fn register_table_options_from_scheme(ctx: &SessionContext, scheme: &str) {
+    match scheme {
+        // For Amazon S3 or Alibaba Cloud OSS
+        "s3" | "oss" | "cos" => {
+            // Register AWS specific table options in the session context:
+            ctx.register_table_options_extension(AwsOptions::default())
+        }
+        // For Google Cloud Storage
+        "gs" | "gcs" => {
+            // Register GCP specific table options in the session context:
+            ctx.register_table_options_extension(GcpOptions::default())
+        }
+        // For unsupported schemes, do nothing:
+        _ => {}
+    }
+}
+
 #[async_trait::async_trait]
 /// The CLI session context trait provides a way to have a session context that can be used with datafusion's CLI code.
 pub trait CliSessionContext {
@@ -86,20 +110,7 @@ impl CliSessionContext for SessionContext {
     }
 
     fn register_table_options_extension_from_scheme(&self, scheme: &str) {
-        match scheme {
-            // For Amazon S3 or Alibaba Cloud OSS
-            "s3" | "oss" | "cos" => {
-                // Register AWS specific table options in the session context:
-                self.register_table_options_extension(AwsOptions::default())
-            }
-            // For Google Cloud Storage
-            "gs" | "gcs" => {
-                // Register GCP specific table options in the session context:
-                self.register_table_options_extension(GcpOptions::default())
-            }
-            // For unsupported schemes, do nothing:
-            _ => {}
-        }
+        register_table_options_from_scheme(self, scheme);
     }
 
     async fn execute_logical_plan(
@@ -147,18 +158,7 @@ impl CliSessionContext for ReplSessionContext {
     }
 
     fn register_table_options_extension_from_scheme(&self, scheme: &str) {
-        match scheme {
-            // For Amazon S3 or Alibaba Cloud OSS
-            "s3" | "oss" | "cos" => self
-                .ctx
-                .register_table_options_extension(AwsOptions::default()),
-            // For Google Cloud Storage
-            "gs" | "gcs" => self
-                .ctx
-                .register_table_options_extension(GcpOptions::default()),
-            // For unsupported schemes, do nothing:
-            _ => {}
-        }
+        register_table_options_from_scheme(&self.ctx, scheme);
     }
 
     async fn execute_logical_plan(

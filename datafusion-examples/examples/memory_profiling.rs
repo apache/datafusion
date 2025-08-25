@@ -19,13 +19,44 @@
 //!
 //! Run with `cargo run --example memory_profiling`.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{collections::BTreeMap, fmt::Write, num::NonZeroUsize, sync::Arc};
 
 use datafusion::execution::memory_pool::{
-    format_metrics, GreedyMemoryPool, TrackConsumersPool,
+    human_readable_size, operator_category, ConsumerMemoryMetrics, GreedyMemoryPool,
+    TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
+
+/// Format summary of memory usage metrics.
+fn format_metrics(metrics: &[ConsumerMemoryMetrics]) -> String {
+    if metrics.is_empty() {
+        return "no memory metrics recorded".to_string();
+    }
+
+    let peak = metrics.iter().map(|m| m.peak).max().unwrap_or(0);
+    let cumulative: usize = metrics.iter().map(|m| m.cumulative).sum();
+
+    let mut s = String::new();
+    let _ = writeln!(s, "Peak memory usage: {}", human_readable_size(peak));
+    let _ = writeln!(
+        s,
+        "Cumulative allocations: {}",
+        human_readable_size(cumulative)
+    );
+
+    let mut by_op: BTreeMap<&str, usize> = BTreeMap::new();
+    for m in metrics {
+        let category = operator_category(&m.name);
+        *by_op.entry(category).or_default() += m.cumulative;
+    }
+
+    let _ = writeln!(s, "Memory usage by operator:");
+    for (op, bytes) in by_op {
+        let _ = writeln!(s, "{op}: {}", human_readable_size(bytes));
+    }
+    s
+}
 
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {

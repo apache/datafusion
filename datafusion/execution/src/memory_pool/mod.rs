@@ -19,13 +19,9 @@
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
-use std::{
-    cmp::Ordering,
-    fmt,
-    hash::{Hash, Hasher},
-    sync::{atomic, Arc},
-};
-mod metrics;
+use std::hash::{Hash, Hasher};
+use std::{cmp::Ordering, fmt, sync::atomic, sync::Arc};
+
 mod pool;
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{
@@ -33,7 +29,6 @@ pub mod proxy {
     };
 }
 
-pub use metrics::{format_metrics, operator_category};
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.
@@ -570,6 +565,43 @@ pub fn human_readable_size(size: usize) -> String {
         }
     };
     format!("{value:.1} {unit}")
+}
+
+/// Categorize operator names into high-level groups for reporting.
+const OPERATOR_CATEGORIES: &[(&str, &str)] = &[
+    ("parquet", "Parquet"),
+    ("csv", "CSV"),
+    ("json", "JSON"),
+    ("coalesce", "Coalesce"),
+    ("repart", "Repartition"),
+    ("shuffle", "Shuffle"),
+    ("exchange", "Network Shuffle"),
+    ("scan", "Data Input"),
+    ("filter", "Filtering"),
+    ("join", "Join Operation"),
+    ("nested_loop", "Nested Loop Join"),
+    ("sort_merge", "Sort Merge Join"),
+    ("hash", "Hash Aggregate"),
+    ("aggregate", "Aggregation"),
+    ("sort", "Sorting"),
+    ("project", "Projection"),
+    ("union", "Set Operation"),
+    ("window", "Window Function"),
+    ("limit", "Limit/TopK"),
+    ("top", "Limit/TopK"),
+    ("distinct", "Distinct"),
+    ("spill", "Memory Management"),
+];
+
+/// Return a human-friendly category for an operator name.
+pub fn operator_category(name: &str) -> &'static str {
+    let name = name.to_lowercase();
+    for (pat, cat) in OPERATOR_CATEGORIES {
+        if name.contains(pat) {
+            return cat;
+        }
+    }
+    "Other"
 }
 
 #[cfg(test)]

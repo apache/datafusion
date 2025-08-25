@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Memory usage metrics for query execution.
+//! Utilities for formatting memory usage metrics.
 
-use super::{human_readable_size, ConsumerMemoryMetrics};
+use datafusion::execution::memory_pool::{
+    human_readable_size, operator_category, ConsumerMemoryMetrics,
+};
 use std::{collections::BTreeMap, fmt::Write};
+
 /// Format summary of memory usage metrics.
 ///
 /// Returns a string with peak usage, cumulative allocations, and totals per
@@ -51,40 +54,4 @@ pub fn format_metrics(metrics: &[ConsumerMemoryMetrics]) -> String {
         let _ = writeln!(s, "{op}: {}", human_readable_size(bytes));
     }
     s
-}
-
-/// Categorize operator names into high-level groups for reporting.
-const OPERATOR_CATEGORIES: &[(&str, &str)] = &[
-    ("parquet", "Parquet"),
-    ("csv", "CSV"),
-    ("json", "JSON"),
-    ("coalesce", "Coalesce"),
-    ("repart", "Repartition"),
-    ("shuffle", "Shuffle"),
-    ("exchange", "Network Shuffle"),
-    ("scan", "Data Input"),
-    ("filter", "Filtering"),
-    ("join", "Join Operation"),
-    ("nested_loop", "Nested Loop Join"),
-    ("sort_merge", "Sort Merge Join"),
-    ("hash", "Hash Aggregate"),
-    ("aggregate", "Aggregation"),
-    ("sort", "Sorting"),
-    ("project", "Projection"),
-    ("union", "Set Operation"),
-    ("window", "Window Function"),
-    ("limit", "Limit/TopK"),
-    ("top", "Limit/TopK"),
-    ("distinct", "Distinct"),
-    ("spill", "Memory Management"),
-];
-
-pub fn operator_category(name: &str) -> &'static str {
-    let name = name.to_lowercase();
-    for (pat, cat) in OPERATOR_CATEGORIES {
-        if name.contains(pat) {
-            return cat;
-        }
-    }
-    "Other"
 }

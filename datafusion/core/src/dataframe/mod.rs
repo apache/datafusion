@@ -1504,8 +1504,7 @@ impl DataFrame {
     pub async fn collect_partitioned(self) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        let partitions = collect_partitioned(plan, task_ctx).await?;
-        Ok(partitions)
+        collect_partitioned(plan, task_ctx).await
     }
 
     /// Executes this DataFrame and returns one stream per partition.

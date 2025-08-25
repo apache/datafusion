@@ -1,15 +1,10 @@
 ---
-source: datafusion-cli/tests/cli_integration.rs
+source: tests/cli_integration.rs
 info:
   program: datafusion-cli
   args: []
-  env:
-    AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
-    AWS_ALLOW_HTTP: "true"
-    AWS_ENDPOINT: "http://localhost:32768"
-    AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
   stdin: "CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION '../datafusion/core/tests/data/cars.csv'\nOPTIONS ('has_header' 'TRUE');\n\nSELECT * FROM CARS limit 1;"
-input_file: datafusion-cli/tests/sql/integration/load_local_csv.sql
+input_file: tests/sql/load_local_csv.sql
 ---
 success: true
 exit_code: 0
