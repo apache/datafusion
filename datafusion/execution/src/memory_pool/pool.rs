@@ -329,9 +329,25 @@ pub trait TrackedPool: Send + Sync {
 ///
 /// By tracking memory reservations more carefully this pool
 /// can provide better error messages on the largest memory users
+/// when memory allocation fails.
 ///
 /// Tracking is per hashed [`MemoryConsumer`], not per [`MemoryReservation`].
 /// The same consumer can have multiple reservations.
+///
+/// # Automatic Usage via [`RuntimeEnvBuilder`]
+///
+/// The easiest way to use `TrackConsumersPool` is via
+/// [`RuntimeEnvBuilder::with_memory_limit()`].
+///
+/// [`RuntimeEnvBuilder`]: crate::runtime_env::RuntimeEnvBuilder
+/// [`RuntimeEnvBuilder::with_memory_limit()`]: crate::runtime_env::RuntimeEnvBuilder::with_memory_limit
+///
+/// # Usage Examples
+///
+/// For more examples of using `TrackConsumersPool`, see the [memory_pool_tracking.rs] example
+///
+/// [memory_pool_tracking.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_tracking.rs
+/// [memory_pool_execution_plan.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
 #[derive(Debug)]
 pub struct TrackConsumersPool<I> {
     /// The wrapped memory pool that actually handles reservation logic
@@ -346,6 +362,36 @@ pub struct TrackConsumersPool<I> {
 
 impl<I: MemoryPool> TrackConsumersPool<I> {
     /// Creates a new [`TrackConsumersPool`].
+    ///
+    /// # Arguments
+    /// * `inner` - The underlying memory pool that handles actual memory allocation
+    /// * `top` - The number of top memory consumers to include in error messages
+    ///
+    /// # Note
+    /// In most cases, you should use [`RuntimeEnvBuilder::with_memory_limit()`](crate::runtime_env::RuntimeEnvBuilder::with_memory_limit)
+    /// instead of creating this pool manually, as it automatically sets up tracking with
+    /// sensible defaults (top 5 consumers).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::num::NonZeroUsize;
+    /// use datafusion_execution::memory_pool::{TrackConsumersPool, GreedyMemoryPool, FairSpillPool};
+    ///
+    /// // Create with a greedy pool backend, reporting top 3 consumers in error messages
+    /// let tracked_greedy = TrackConsumersPool::new(
+    ///     GreedyMemoryPool::new(1024 * 1024), // 1MB limit
+    ///     NonZeroUsize::new(3).unwrap(),
+    /// );
+    ///
+    /// // Create with a fair spill pool backend, reporting top 5 consumers in error messages
+    /// let tracked_fair = TrackConsumersPool::new(
+    ///     FairSpillPool::new(2 * 1024 * 1024), // 2MB limit
+    ///     NonZeroUsize::new(5).unwrap(),
+    /// );
+    /// ```
+    ///
+    /// # Impact on Error Messages
     ///
     /// The `top` determines how many Top K [`MemoryConsumer`]s to include
     /// in the reported [`DataFusionError::ResourcesExhausted`].
@@ -385,7 +431,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
             .collect()
     }
 
-    /// The top consumers in a report string.
+    /// Returns a formatted string with the top memory consumers.
     pub fn report_top(&self, top: usize) -> String {
         let mut consumers = self
             .tracked_consumers
