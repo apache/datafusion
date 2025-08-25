@@ -24,7 +24,7 @@ use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
-    CheckColumnsSatisfyExprsPurpose,
+    CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
 };
 
 use datafusion_common::error::DataFusionErrorBuilder;
@@ -850,8 +850,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Create an aggregate plan.
     ///
-    /// An aggregate plan consists of grouping expressions, aggregate expressions, and an
-    /// optional HAVING expression (which is a filter on the output of the aggregate).
+    /// An aggregate plan consists of grouping expressions, aggregate expressions, an
+    /// optional HAVING expression (which is a filter on the output of the aggregate),
+    /// and an optional QUALIFY clause which may reference aggregates.
     ///
     /// # Arguments
     ///
@@ -866,7 +867,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///
     /// # Return
     ///
-    /// The return value is a triplet of the following items:
+    /// The return value is a quadruplet of the following items:
     ///
     /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
     /// * `select_exprs_post_aggr` - The projection expressions rewritten to reference columns from
@@ -875,6 +876,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///   the aggregate
     /// * `qualify_expr_post_aggr`  - The "qualify" expression rewritten to reference a column from
     ///   the aggregate
+    #[allow(clippy::type_complexity)]
     fn aggregate(
         &self,
         input: &LogicalPlan,
@@ -947,7 +949,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         check_columns_satisfy_exprs(
             &column_exprs_post_aggr,
             &select_exprs_post_aggr,
-            CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate,
+            CheckColumnsSatisfyExprsPurpose::Aggregate(
+                CheckColumnsMustReferenceAggregatePurpose::Projection,
+            ),
         )?;
 
         // Rewrite the HAVING expression to use the columns produced by the
@@ -959,7 +963,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 std::slice::from_ref(&having_expr_post_aggr),
-                CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate,
+                CheckColumnsSatisfyExprsPurpose::Aggregate(
+                    CheckColumnsMustReferenceAggregatePurpose::Having,
+                ),
             )?;
 
             Some(having_expr_post_aggr)
@@ -976,7 +982,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 std::slice::from_ref(&qualify_expr_post_aggr),
-                CheckColumnsSatisfyExprsPurpose::QualifyMustReferenceAggregate,
+                CheckColumnsSatisfyExprsPurpose::Aggregate(
+                    CheckColumnsMustReferenceAggregatePurpose::Qualify,
+                ),
             )?;
 
             Some(qualify_expr_post_aggr)
