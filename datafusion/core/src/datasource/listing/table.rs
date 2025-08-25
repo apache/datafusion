@@ -40,7 +40,7 @@ use datafusion_datasource::{
     compute_all_files_statistics,
     file::FileSource,
     file_groups::FileGroup,
-    file_scan_config::{FileScanConfig, FileScanConfigBuilder},
+    file_scan_config::{FileGroupPartitioning, FileScanConfig, FileScanConfigBuilder},
     schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory},
 };
 use datafusion_execution::{
@@ -1131,6 +1131,124 @@ impl ListingTable {
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
         create_ordering(&self.table_schema, &self.options.file_sort_order)
     }
+
+    /// Checks if the requested ordering can be satisfied using file statistics.
+    ///
+    /// Only simple column references (not expressions) can be used for file ordering
+    /// because statistics are typically available only at the column level.
+    fn can_use_ordering_from_statistics(&self, ordering: &[SortExpr]) -> bool {
+        ordering.iter().all(|sort_expr| {
+            // Check if sort expression contains only simple column references
+            let mut is_simple_column = true;
+            let _ = sort_expr.apply_elements(|e| {
+                if !matches!(e, Expr::Column(_)) {
+                    is_simple_column = false;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            });
+            is_simple_column
+        })
+    }
+
+    /// Resolves the desired file ordering based on query requirements and natural ordering.
+    ///
+    /// This method prioritizes query-requested ordering if it can be satisfied using statistics,
+    /// otherwise falls back to any natural file ordering defined in the table configuration.
+    fn resolve_desired_ordering(
+        &self,
+        requested_ordering: Option<&[SortExpr]>,
+    ) -> Result<Option<LexOrdering>> {
+        // Check if query requested specific ordering that we can use
+        if let Some(ordering) = requested_ordering {
+            if !ordering.is_empty() && self.can_use_ordering_from_statistics(ordering) {
+                return create_ordering(&self.table_schema, &[ordering.to_vec()])
+                    .map(|orderings| orderings.first().cloned());
+            }
+        }
+
+        // Fall back to natural file ordering if any
+        self.try_create_output_ordering()
+            .map(|orderings| orderings.first().cloned())
+    }
+
+    /// Determines the optimal file grouping and ordering strategy.
+    ///
+    /// This method orchestrates the file grouping process by:
+    /// 1. Resolving the desired ordering (query-requested vs natural)
+    /// 2. Applying statistics-based splitting if enabled and available
+    /// 3. Returning both the file groups and any output ordering that can be guaranteed
+    ///
+    /// # Arguments
+    /// * `state` - The session state containing configuration options
+    /// * `partitioned_file_lists` - Original file groups to potentially reorganize
+    /// * `requested_ordering` - Ordering requested by the query, if any
+    ///
+    /// # Returns
+    /// A tuple of (file_groups, optional_output_ordering) where:
+    /// - file_groups: The optimized file group arrangement
+    /// - optional_output_ordering: Output ordering that can be guaranteed (if any)
+    fn determine_file_groups_and_ordering(
+        &self,
+        state: &dyn Session,
+        partitioned_file_lists: Vec<FileGroup>,
+        requested_ordering: Option<&[SortExpr]>,
+    ) -> Result<(Vec<FileGroup>, Option<Vec<LexOrdering>>)> {
+        // 1. Determine desired ordering (query-requested vs natural)
+        let desired_ordering = self.resolve_desired_ordering(requested_ordering)?;
+
+        // 2. Check if statistics-based splitting is enabled
+        if !state
+            .config_options()
+            .execution
+            .split_file_groups_by_statistics
+        {
+            return Ok((partitioned_file_lists, desired_ordering.map(|o| vec![o])));
+        }
+
+        // 3. Apply statistics-based splitting if we have an ordering requirement
+        let Some(ordering) = desired_ordering else {
+            // No ordering requirement, keep original groups
+            return Ok((partitioned_file_lists, None));
+        };
+
+        match FileScanConfig::split_groups_by_statistics_with_overlap_handling(
+            &self.table_schema,
+            &partitioned_file_lists,
+            &ordering,
+            self.options.target_partitions,
+        ) {
+            Ok(FileGroupPartitioning::TotalOrder(groups)) => {
+                // Files don't overlap - can guarantee output ordering
+                log::debug!(
+                    "Files arranged in total order across {} partitions",
+                    groups.len()
+                );
+                Ok((groups, Some(vec![ordering])))
+            }
+            Ok(FileGroupPartitioning::PartialOrder(groups)) => {
+                // Files overlap but are ordered within partitions
+                log::debug!(
+                    "Files arranged in partial order across {} partitions",
+                    groups.len()
+                );
+                Ok((groups, None))
+            }
+            Ok(FileGroupPartitioning::Unordered(groups)) => {
+                // No statistics available, files ordered by path
+                log::debug!(
+                    "Files arranged by path across {} partitions (no statistics)",
+                    groups.len()
+                );
+                Ok((groups, None))
+            }
+            Err(e) => {
+                log::debug!("Failed to split file groups by statistics: {e}");
+                Ok((partitioned_file_lists, None))
+            }
+        }
+    }
 }
 
 // Expressions can be used for parttion pruning if they can be evaluated using
@@ -1207,7 +1325,7 @@ impl TableProvider for ListingTable {
         // at the same time. This is because the limit should be applied after the filters are applied.
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
-        let (mut partitioned_file_lists, statistics) = self
+        let (partitioned_file_lists, statistics) = self
             .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
 
@@ -1220,66 +1338,13 @@ impl TableProvider for ListingTable {
             ));
         }
 
-        let known_file_ordering = self.try_create_output_ordering()?;
-        let desired_file_ordering = match args.preferred_ordering() {
-            Some(ordering) if !ordering.is_empty() => {
-                // Prefer the ordering requested by the query to any natural file ordering.
-                // We'll try to re-order the file reads to match the requested ordering as best we can using statistics.
-                // Whatever the result is, it's likely better than a natural file ordering that doesn't match the query's ordering.
-                // But we can only do this if the query's ordering is a simple ordering of columns (no expressions).
-                let can_use_preferred_ordering = ordering.iter().all(|sort_expr| {
-                    let mut contains_only_columns = true;
-                    sort_expr
-                        .apply_elements(|e| {
-                            if !matches!(e, Expr::Column(_)) {
-                                contains_only_columns = false;
-                                Ok(TreeNodeRecursion::Stop)
-                            } else {
-                                Ok(TreeNodeRecursion::Continue)
-                            }
-                        })
-                        .expect("infallible closure cannot fail");
-                    contains_only_columns
-                });
-                if can_use_preferred_ordering {
-                    create_ordering(&self.table_schema, &[ordering.to_vec()])?
-                        .first()
-                        .cloned()
-                } else {
-                    known_file_ordering.first().cloned()
-                }
-            }
-            Some(_) | None => {
-                // If the query did not request a specific ordering, fall back to any inherent file ordering
-                known_file_ordering.first().cloned()
-            }
-        };
-        match state
-            .config_options()
-            .execution
-            .split_file_groups_by_statistics
-            .then(|| {
-                desired_file_ordering.map(|ordering| {
-                    FileScanConfig::split_groups_by_statistics_with_target_partitions(
-                        &self.table_schema,
-                        &partitioned_file_lists,
-                        &ordering,
-                        self.options.target_partitions,
-                    )
-                })
-            })
-            .flatten()
-        {
-            Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
-            Some(Ok(new_groups)) => {
-                if new_groups.len() <= self.options.target_partitions {
-                    partitioned_file_lists = new_groups;
-                } else {
-                    log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
-                }
-            }
-            None => {} // no ordering required
-        };
+        // Determine optimal file grouping and ordering strategy
+        let (partitioned_file_lists, output_ordering) = self
+            .determine_file_groups_and_ordering(
+                state,
+                partitioned_file_lists,
+                args.preferred_ordering(),
+            )?;
 
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
@@ -1308,7 +1373,7 @@ impl TableProvider for ListingTable {
                 .with_statistics(statistics)
                 .with_projection(projection)
                 .with_limit(limit)
-                .with_output_ordering(known_file_ordering)
+                .with_output_ordering(output_ordering.unwrap_or_default())
                 .with_table_partition_cols(table_partition_cols)
                 .with_expr_adapter(self.expr_adapter_factory.clone())
                 .build(),

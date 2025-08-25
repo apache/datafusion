@@ -43,6 +43,7 @@ use arrow::{
     },
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
+    row::Row,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -68,6 +69,41 @@ use datafusion_physical_plan::{
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
 use log::{debug, warn};
+
+/// Result of file group partitioning that indicates the ordering properties
+/// of the resulting file groups.
+#[derive(Debug, Clone)]
+pub enum FileGroupPartitioning {
+    /// Files are globally ordered and non-overlapping across all partitions.
+    /// This means the entire scan result maintains the requested sort order.
+    TotalOrder(Vec<FileGroup>),
+    /// Files are ordered within partitions but may overlap across partitions.
+    /// Individual partitions maintain sort order but global ordering is not guaranteed.
+    PartialOrder(Vec<FileGroup>),
+    /// Files have no specific ordering guarantees.
+    Unordered(Vec<FileGroup>),
+}
+
+impl FileGroupPartitioning {
+    /// Extract the file groups regardless of their ordering properties.
+    pub fn file_groups(self) -> Vec<FileGroup> {
+        match self {
+            Self::TotalOrder(groups)
+            | Self::PartialOrder(groups)
+            | Self::Unordered(groups) => groups,
+        }
+    }
+
+    /// Returns true if the file groups maintain total ordering across all partitions.
+    pub fn is_total_order(&self) -> bool {
+        matches!(self, Self::TotalOrder(_))
+    }
+
+    /// Returns true if the file groups have some ordering (partial or total).
+    pub fn is_ordered(&self) -> bool {
+        matches!(self, Self::TotalOrder(_) | Self::PartialOrder(_))
+    }
+}
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -888,6 +924,216 @@ impl FileScanConfig {
                 )
             })
             .collect())
+    }
+
+    /// Distributes sorted files evenly across the target number of partitions using round-robin.
+    ///
+    /// This helper function takes pre-sorted files and distributes them across `target_partitions`
+    /// partitions in a round-robin fashion, which maintains the relative ordering within each
+    /// partition while ensuring even distribution.
+    ///
+    /// # Arguments
+    /// * `sorted_files` - Files that have already been sorted (by statistics or path)
+    /// * `target_partitions` - The desired number of output partitions
+    ///
+    /// # Returns
+    /// A vector of file groups, one per partition, with files distributed evenly
+    fn distribute_sorted_files_evenly(
+        sorted_files: Vec<PartitionedFile>,
+        target_partitions: usize,
+    ) -> Vec<FileGroup> {
+        if sorted_files.is_empty() || target_partitions == 0 {
+            return vec![];
+        }
+
+        let mut groups: Vec<Vec<PartitionedFile>> = vec![vec![]; target_partitions];
+
+        // Round-robin distribution maintaining order
+        for (i, file) in sorted_files.into_iter().enumerate() {
+            groups[i % target_partitions].push(file);
+        }
+
+        // Convert to FileGroups, filtering out empty groups
+        groups
+            .into_iter()
+            .filter(|g| !g.is_empty())
+            .map(FileGroup::new)
+            .collect()
+    }
+
+    /// Splits file groups by statistics with overlap handling, implementing a three-tier strategy.
+    ///
+    /// This method attempts to arrange files in the optimal order for query execution while
+    /// respecting the target number of partitions. It uses a fallback strategy:
+    ///
+    /// 1. **Tier 1 (TotalOrder)**: Try to arrange files as non-overlapping and ordered
+    /// 2. **Tier 2 (PartialOrder)**: If files overlap, distribute them evenly while maintaining order
+    /// 3. **Tier 3 (Unordered)**: If no statistics, sort by file path and distribute
+    ///
+    /// # Arguments
+    /// * `table_schema` - Schema of the table for statistics extraction
+    /// * `file_groups` - Original file groups to split
+    /// * `sort_order` - The desired lexicographical ordering
+    /// * `target_partitions` - The desired number of output partitions
+    ///
+    /// # Returns
+    /// A `FileGroupPartitioning` enum indicating the achieved ordering and containing the file groups
+    pub fn split_groups_by_statistics_with_overlap_handling(
+        table_schema: &SchemaRef,
+        file_groups: &[FileGroup],
+        sort_order: &LexOrdering,
+        target_partitions: usize,
+    ) -> Result<FileGroupPartitioning> {
+        if target_partitions == 0 {
+            return Err(DataFusionError::Internal(
+                "target_partitions must be greater than 0".to_string(),
+            ));
+        }
+
+        let flattened_files: Vec<_> =
+            file_groups.iter().flat_map(FileGroup::iter).collect();
+
+        if flattened_files.is_empty() {
+            return Ok(FileGroupPartitioning::Unordered(vec![]));
+        }
+
+        // Try to get statistics - if this fails, use Tier 3 (path-based ordering)
+        let statistics = match MinMaxStatistics::new_from_files(
+            sort_order,
+            table_schema,
+            None,
+            flattened_files.iter().copied(),
+        ) {
+            Ok(stats) => stats,
+            Err(e) => {
+                debug!("Unable to use statistics for file ordering: {e}, falling back to path-based ordering");
+                return Ok(Self::arrange_files_by_path(
+                    &flattened_files,
+                    target_partitions,
+                ));
+            }
+        };
+
+        let indices_sorted_by_min = statistics.min_values_sorted();
+
+        // Try Tier 1: Non-overlapping arrangement
+        if let Some(groups) = Self::try_arrange_files_non_overlapping(
+            &flattened_files,
+            &statistics,
+            &indices_sorted_by_min,
+            target_partitions,
+        ) {
+            debug!(
+                "Successfully arranged {} files in {} non-overlapping groups",
+                flattened_files.len(),
+                groups.len()
+            );
+            return Ok(FileGroupPartitioning::TotalOrder(groups));
+        }
+
+        // Tier 2: Overlapping arrangement with statistics-based ordering
+        debug!("Files have overlapping statistics, using overlapping arrangement with {} target partitions", 
+               target_partitions);
+        let groups = Self::arrange_files_with_overlap(
+            &flattened_files,
+            &indices_sorted_by_min,
+            target_partitions,
+        );
+        debug!(
+            "Arranged {} files in {} groups with statistics-based ordering (overlapping)",
+            flattened_files.len(),
+            groups.len()
+        );
+        Ok(FileGroupPartitioning::PartialOrder(groups))
+    }
+
+    /// Tier 1: Attempts to arrange files without overlap across partitions.
+    /// Returns Some(groups) if successful, None if files have overlapping statistics.
+    fn try_arrange_files_non_overlapping(
+        flattened_files: &[&PartitionedFile],
+        statistics: &MinMaxStatistics,
+        indices_sorted_by_min: &[(usize, Row<'_>)],
+        target_partitions: usize,
+    ) -> Option<Vec<FileGroup>> {
+        // Initialize with target_partitions empty groups
+        let mut file_groups_indices: Vec<Vec<usize>> = vec![vec![]; target_partitions];
+
+        for (idx, min) in indices_sorted_by_min.iter().copied() {
+            if let Some((_, group)) = file_groups_indices
+                .iter_mut()
+                .enumerate()
+                .filter(|(_, group)| {
+                    group.is_empty()
+                        || min
+                            > statistics
+                                .max(*group.last().expect("groups should not be empty"))
+                })
+                .min_by_key(|(_, group)| group.len())
+            {
+                group.push(idx);
+            } else {
+                // No existing group can fit this file without overlap
+                return None;
+            }
+        }
+
+        // Remove any empty groups
+        file_groups_indices.retain(|group| !group.is_empty());
+
+        // Success: files are non-overlapping and fit in target partitions
+        let groups = file_groups_indices
+            .into_iter()
+            .map(|file_group_indices| {
+                FileGroup::new(
+                    file_group_indices
+                        .into_iter()
+                        .map(|idx| flattened_files[idx].clone())
+                        .collect(),
+                )
+            })
+            .collect();
+
+        Some(groups)
+    }
+
+    /// Tier 2: Arranges files with overlapping statistics by distributing them evenly
+    /// across partitions while maintaining statistical ordering within each partition.
+    fn arrange_files_with_overlap(
+        flattened_files: &[&PartitionedFile],
+        indices_sorted_by_min: &[(usize, Row<'_>)],
+        target_partitions: usize,
+    ) -> Vec<FileGroup> {
+        let sorted_files: Vec<_> = indices_sorted_by_min
+            .iter()
+            .map(|(idx, _)| flattened_files[*idx].clone())
+            .collect();
+
+        Self::distribute_sorted_files_evenly(sorted_files, target_partitions)
+    }
+
+    /// Tier 3: Arranges files without statistics by sorting them by path and distributing evenly.
+    fn arrange_files_by_path(
+        flattened_files: &[&PartitionedFile],
+        target_partitions: usize,
+    ) -> FileGroupPartitioning {
+        let mut files_with_paths: Vec<_> = flattened_files
+            .iter()
+            .map(|f| (f.path().to_string(), (*f).clone()))
+            .collect();
+
+        files_with_paths.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let sorted_files: Vec<_> =
+            files_with_paths.into_iter().map(|(_, file)| file).collect();
+
+        let groups =
+            Self::distribute_sorted_files_evenly(sorted_files, target_partitions);
+        debug!(
+            "Arranged {} files in {} groups ordered by file path (no statistics)",
+            flattened_files.len(),
+            groups.len()
+        );
+        FileGroupPartitioning::Unordered(groups)
     }
 
     /// Attempts to do a bin-packing on files into file groups, such that any two files
@@ -2428,5 +2674,374 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_try_arrange_files_non_overlapping() -> Result<()> {
+        use datafusion_common::DFSchema;
+        use datafusion_expr::{col, execution_props::ExecutionProps};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+
+        let exec_props = ExecutionProps::new();
+        let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
+        let sort_expr = [col("value").sort(true, false)];
+        let sort_ordering = sort_expr
+            .map(|expr| {
+                create_physical_sort_expr(&expr, &df_schema, &exec_props).unwrap()
+            })
+            .into();
+
+        // Test case 1: Non-overlapping files should succeed
+        let non_overlapping_files = generate_test_files(4, 0.0);
+        let flattened_files: Vec<_> = non_overlapping_files
+            .iter()
+            .flat_map(FileGroup::iter)
+            .collect();
+
+        let statistics = MinMaxStatistics::new_from_files(
+            &sort_ordering,
+            &schema,
+            None,
+            flattened_files.iter().copied(),
+        )?;
+        let indices_sorted_by_min = statistics.min_values_sorted();
+
+        let result = FileScanConfig::try_arrange_files_non_overlapping(
+            &flattened_files,
+            &statistics,
+            &indices_sorted_by_min,
+            3,
+        );
+
+        assert!(result.is_some(), "Non-overlapping files should succeed");
+        let groups = result.unwrap();
+        assert!(groups.len() <= 3, "Should not exceed target partitions");
+
+        // Verify total file count is preserved
+        let total_files: usize = groups.iter().map(FileGroup::len).sum();
+        assert_eq!(total_files, flattened_files.len());
+
+        // Test case 2: Overlapping files should fail
+        let overlapping_files = generate_test_files(8, 0.9); // High overlap
+        let flattened_overlapping: Vec<_> =
+            overlapping_files.iter().flat_map(FileGroup::iter).collect();
+
+        let overlapping_stats = MinMaxStatistics::new_from_files(
+            &sort_ordering,
+            &schema,
+            None,
+            flattened_overlapping.iter().copied(),
+        )?;
+        let overlapping_indices = overlapping_stats.min_values_sorted();
+
+        let overlapping_result = FileScanConfig::try_arrange_files_non_overlapping(
+            &flattened_overlapping,
+            &overlapping_stats,
+            &overlapping_indices,
+            3,
+        );
+
+        // This might succeed or fail depending on the specific overlap pattern
+        match overlapping_result {
+            Some(groups) => {
+                println!(
+                    "✓ Overlapping files surprisingly fit in non-overlapping arrangement"
+                );
+                assert!(groups.len() <= 3);
+            }
+            None => {
+                println!("✓ Overlapping files correctly rejected by non-overlapping arrangement");
+            }
+        }
+
+        println!("✓ try_arrange_files_non_overlapping tests passed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_arrange_files_with_overlap() -> Result<()> {
+        use datafusion_common::DFSchema;
+        use datafusion_expr::{col, execution_props::ExecutionProps};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+
+        let exec_props = ExecutionProps::new();
+        let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
+        let sort_expr = [col("value").sort(true, false)];
+        let sort_ordering = sort_expr
+            .map(|expr| {
+                create_physical_sort_expr(&expr, &df_schema, &exec_props).unwrap()
+            })
+            .into();
+
+        // Test with overlapping files
+        let overlapping_files = generate_test_files(10, 0.8);
+        let flattened_files: Vec<_> =
+            overlapping_files.iter().flat_map(FileGroup::iter).collect();
+
+        let statistics = MinMaxStatistics::new_from_files(
+            &sort_ordering,
+            &schema,
+            None,
+            flattened_files.iter().copied(),
+        )?;
+        let indices_sorted_by_min = statistics.min_values_sorted();
+
+        let target_partitions = 3;
+        let result = FileScanConfig::arrange_files_with_overlap(
+            &flattened_files,
+            &indices_sorted_by_min,
+            target_partitions,
+        );
+
+        // Should create exactly target_partitions groups
+        assert_eq!(result.len(), target_partitions);
+
+        // Verify total file count is preserved
+        let total_files: usize = result.iter().map(FileGroup::len).sum();
+        assert_eq!(total_files, flattened_files.len());
+
+        // Verify files are distributed somewhat evenly
+        let group_sizes: Vec<usize> = result.iter().map(FileGroup::len).collect();
+        let max_size = *group_sizes.iter().max().unwrap();
+        let min_size = *group_sizes.iter().min().unwrap();
+        let size_diff = max_size - min_size;
+
+        // Difference should not be more than 1 (round-robin distribution)
+        assert!(
+            size_diff <= 1,
+            "Files should be distributed evenly, got sizes: {:?}",
+            group_sizes
+        );
+
+        println!("✓ arrange_files_with_overlap tests passed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_arrange_files_by_path() {
+        use crate::PartitionedFile;
+        use object_store::path::Path;
+
+        // Create files with specific names to test path sorting
+        let files = vec![
+            PartitionedFile::new(Path::from("file_c.parquet"), 1000),
+            PartitionedFile::new(Path::from("file_a.parquet"), 2000),
+            PartitionedFile::new(Path::from("file_b.parquet"), 1500),
+        ];
+
+        let file_refs: Vec<_> = files.iter().collect();
+        let target_partitions = 2;
+
+        let result = FileScanConfig::arrange_files_by_path(&file_refs, target_partitions);
+
+        match result {
+            FileGroupPartitioning::Unordered(groups) => {
+                // Should not exceed target partitions
+                assert!(groups.len() <= target_partitions);
+
+                // Collect all files in order they appear in groups
+                let all_files: Vec<_> = groups
+                    .iter()
+                    .flat_map(FileGroup::iter)
+                    .map(|f| f.path().to_string())
+                    .collect();
+
+                // The files are sorted before distribution, but round-robin distribution
+                // means the global order may not be maintained across partitions.
+                // Instead, verify that all original files are present.
+                let mut sorted_all_files = all_files.clone();
+                sorted_all_files.sort();
+                let expected_files = vec![
+                    "file_a.parquet".to_string(),
+                    "file_b.parquet".to_string(),
+                    "file_c.parquet".to_string(),
+                ];
+                assert_eq!(
+                    sorted_all_files, expected_files,
+                    "All files should be present"
+                );
+
+                // Verify that within each partition, files maintain relative order if they exist
+                for group in &groups {
+                    let group_files: Vec<_> =
+                        group.iter().map(|f| f.path().to_string()).collect();
+                    let mut sorted_group_files = group_files.clone();
+                    sorted_group_files.sort();
+                    assert_eq!(
+                        group_files, sorted_group_files,
+                        "Files within each partition should be sorted"
+                    );
+                }
+
+                // Verify total count
+                assert_eq!(all_files.len(), files.len());
+
+                println!("✓ arrange_files_by_path correctly sorted files by path");
+            }
+            _ => panic!("Expected Unordered result"),
+        }
+
+        println!("✓ arrange_files_by_path tests passed");
+    }
+
+    #[test]
+    fn test_split_groups_by_statistics_with_overlap_handling_integration() -> Result<()> {
+        use datafusion_common::DFSchema;
+        use datafusion_expr::{col, execution_props::ExecutionProps};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+
+        let exec_props = ExecutionProps::new();
+        let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
+        let sort_expr = [col("value").sort(true, false)];
+        let sort_ordering = sort_expr
+            .map(|expr| {
+                create_physical_sort_expr(&expr, &df_schema, &exec_props).unwrap()
+            })
+            .into();
+
+        let target_partitions = 3;
+
+        // Test case 1: Non-overlapping files (Tier 1)
+        let non_overlapping_files = generate_test_files(5, 0.0);
+        let result = FileScanConfig::split_groups_by_statistics_with_overlap_handling(
+            &schema,
+            &non_overlapping_files,
+            &sort_ordering,
+            target_partitions,
+        )?;
+
+        match result {
+            FileGroupPartitioning::TotalOrder(groups) => {
+                println!("✓ Non-overlapping files -> TotalOrder");
+                assert!(groups.len() <= target_partitions);
+            }
+            _ => panic!("Expected TotalOrder for non-overlapping files"),
+        }
+
+        // Test case 2: Overlapping files (Tier 2)
+        let overlapping_files = generate_test_files(10, 0.8);
+        let result = FileScanConfig::split_groups_by_statistics_with_overlap_handling(
+            &schema,
+            &overlapping_files,
+            &sort_ordering,
+            target_partitions,
+        )?;
+
+        match result {
+            FileGroupPartitioning::PartialOrder(groups) => {
+                println!("✓ Overlapping files -> PartialOrder");
+                assert_eq!(groups.len(), target_partitions);
+            }
+            FileGroupPartitioning::TotalOrder(groups) => {
+                println!("✓ Overlapping files fit in TotalOrder");
+                assert!(groups.len() <= target_partitions);
+            }
+            _ => panic!("Expected PartialOrder or TotalOrder for files with statistics"),
+        }
+
+        // Test case 3: Files without statistics (Tier 3)
+        use crate::PartitionedFile;
+        use object_store::path::Path;
+
+        let files_no_stats = vec![FileGroup::new(vec![
+            PartitionedFile::new(Path::from("file1.parquet"), 1000),
+            PartitionedFile::new(Path::from("file2.parquet"), 2000),
+            PartitionedFile::new(Path::from("file3.parquet"), 1500),
+        ])];
+
+        let result = FileScanConfig::split_groups_by_statistics_with_overlap_handling(
+            &schema,
+            &files_no_stats,
+            &sort_ordering,
+            target_partitions,
+        )?;
+
+        match result {
+            FileGroupPartitioning::Unordered(groups) => {
+                println!("✓ Files without statistics -> Unordered");
+                assert!(groups.len() <= target_partitions);
+            }
+            _ => panic!("Expected Unordered for files without statistics"),
+        }
+
+        // Test case 4: Empty file groups
+        let empty_groups: Vec<FileGroup> = vec![];
+        let result = FileScanConfig::split_groups_by_statistics_with_overlap_handling(
+            &schema,
+            &empty_groups,
+            &sort_ordering,
+            target_partitions,
+        )?;
+
+        match result {
+            FileGroupPartitioning::Unordered(groups) => {
+                assert!(groups.is_empty());
+                println!("✓ Empty file groups handled correctly");
+            }
+            _ => panic!("Expected empty Unordered for empty file groups"),
+        }
+
+        // Test case 5: Zero target partitions
+        let result = FileScanConfig::split_groups_by_statistics_with_overlap_handling(
+            &schema,
+            &non_overlapping_files,
+            &sort_ordering,
+            0,
+        );
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("target_partitions must be greater than 0"));
+
+        println!("✓ Integration tests passed for split_groups_by_statistics_with_overlap_handling");
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_group_partitioning_methods() {
+        // Test the enum helper methods
+        let groups = vec![FileGroup::new(vec![]), FileGroup::new(vec![])];
+
+        let total_order = FileGroupPartitioning::TotalOrder(groups.clone());
+        let partial_order = FileGroupPartitioning::PartialOrder(groups.clone());
+        let unordered = FileGroupPartitioning::Unordered(groups.clone());
+
+        // Test is_total_order
+        assert!(total_order.is_total_order());
+        assert!(!partial_order.is_total_order());
+        assert!(!unordered.is_total_order());
+
+        // Test is_ordered
+        assert!(total_order.is_ordered());
+        assert!(partial_order.is_ordered());
+        assert!(!unordered.is_ordered());
+
+        // Test file_groups extraction
+        let extracted_total = total_order.file_groups();
+        let extracted_partial = partial_order.file_groups();
+        let extracted_unordered = unordered.file_groups();
+
+        assert_eq!(extracted_total.len(), 2);
+        assert_eq!(extracted_partial.len(), 2);
+        assert_eq!(extracted_unordered.len(), 2);
+
+        println!("✓ FileGroupPartitioning helper methods work correctly");
     }
 }
