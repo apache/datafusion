@@ -111,9 +111,11 @@ impl FileFormat for TSVFileFormat {
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
-        conf: FileScanConfig,
+        source: Arc<dyn FileSource>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.csv_file_format.create_physical_plan(state, conf).await
+        self.csv_file_format
+            .create_physical_plan(state, source)
+            .await
     }
 
     async fn create_writer_physical_plan(
@@ -128,8 +130,8 @@ impl FileFormat for TSVFileFormat {
             .await
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        self.csv_file_format.file_source()
+    fn file_source(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        self.csv_file_format.file_source(config)
     }
 }
 

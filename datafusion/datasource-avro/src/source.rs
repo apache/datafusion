@@ -24,7 +24,6 @@ use crate::avro_to_arrow::Reader as AvroReader;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::Result;
-use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
@@ -32,44 +31,67 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
+use datafusion_datasource::source::DataSource;
 use object_store::ObjectStore;
 
 /// AvroSource holds the extra configuration that is necessary for opening avro files
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AvroSource {
-    schema: Option<SchemaRef>,
-    batch_size: Option<usize>,
-    projection: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+
+    config: FileScanConfig,
 }
 
 impl AvroSource {
     /// Initialize an AvroSource with default values
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(config: FileScanConfig) -> Self {
+        Self {
+            metrics: Default::default(),
+            schema_adapter_factory: None,
+            config,
+        }
     }
 
-    fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
+    fn open<R: std::io::Read>(
+        &self,
+        reader: R,
+        file_schema: SchemaRef,
+        batch_size: Option<usize>,
+        projected_file_column_names: Option<Vec<String>>,
+    ) -> Result<AvroReader<'static, R>> {
         AvroReader::try_new(
             reader,
-            Arc::clone(self.schema.as_ref().expect("Schema must set before open")),
-            self.batch_size.expect("Batch size must set before open"),
-            self.projection.clone(),
+            file_schema,
+            batch_size.expect("Batch size must set before open"),
+            projected_file_column_names,
         )
     }
 }
 
 impl FileSource for AvroSource {
+    fn config(&self) -> &FileScanConfig {
+        &self.config
+    }
+
+    fn with_config(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        let mut this = self.clone();
+        this.config = config;
+
+        Arc::new(this)
+    }
+
+    fn as_data_source(&self) -> Arc<dyn DataSource> {
+        Arc::new(self.clone())
+    }
+
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
-        _base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(private::AvroOpener {
-            config: Arc::new(self.clone()),
+            source: Arc::new(self.clone()),
             object_store,
         })
     }
@@ -78,51 +100,20 @@ impl FileSource for AvroSource {
         self
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
-    }
-
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.schema = Some(schema);
-        Arc::new(conf)
-    }
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projection = config.projected_file_column_names();
-        Arc::new(conf)
-    }
-
-    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+    fn metrics_inner(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set"))
     }
 
     fn file_type(&self) -> &str {
         "avro"
     }
 
-    fn repartitioned(
+    fn repartitioned_inner(
         &self,
         _target_partitions: usize,
         _repartition_file_min_size: usize,
         _output_ordering: Option<LexOrdering>,
-        _config: &FileScanConfig,
-    ) -> Result<Option<FileScanConfig>> {
+    ) -> Result<Option<Arc<dyn FileSource>>> {
         Ok(None)
     }
 
@@ -141,6 +132,15 @@ impl FileSource for AvroSource {
     }
 }
 
+impl std::fmt::Debug for AvroSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {{ ", self.file_type())?;
+        write!(f, "statistics={:?}, ", self.file_source_statistics())?;
+        write!(f, "config={:?}, ", self.config())?;
+        write!(f, " }}")
+    }
+}
+
 mod private {
     use super::*;
 
@@ -152,7 +152,7 @@ mod private {
     use object_store::{GetResultPayload, ObjectStore};
 
     pub struct AvroOpener {
-        pub config: Arc<AvroSource>,
+        pub source: Arc<AvroSource>,
         pub object_store: Arc<dyn ObjectStore>,
     }
 
@@ -162,18 +162,33 @@ mod private {
             file_meta: FileMeta,
             _file: PartitionedFile,
         ) -> Result<FileOpenFuture> {
-            let config = Arc::clone(&self.config);
+            let source = Arc::clone(&self.source);
             let object_store = Arc::clone(&self.object_store);
+            let file_schema = Arc::clone(&self.source.config().file_schema);
+            let batch_size = self.source.config().batch_size;
+            let projected_file_names =
+                self.source.config().projected_file_column_names().clone();
+
             Ok(Box::pin(async move {
                 let r = object_store.get(file_meta.location()).await?;
                 match r.payload {
                     GetResultPayload::File(file, _) => {
-                        let reader = config.open(file)?;
+                        let reader = source.open(
+                            file,
+                            file_schema,
+                            batch_size,
+                            projected_file_names,
+                        )?;
                         Ok(futures::stream::iter(reader).boxed())
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
-                        let reader = config.open(bytes.reader())?;
+                        let reader = source.open(
+                            bytes.reader(),
+                            file_schema,
+                            batch_size,
+                            projected_file_names,
+                        )?;
                         Ok(futures::stream::iter(reader).boxed())
                     }
                 }

@@ -410,7 +410,7 @@ impl FileFormat for CsvFormat {
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
-        conf: FileScanConfig,
+        source: Arc<dyn FileSource>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Consult configuration options for default values
         let has_header = self
@@ -422,20 +422,23 @@ impl FileFormat for CsvFormat {
             .newlines_in_values
             .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
-        let conf_builder = FileScanConfigBuilder::from(conf)
+        let conf_builder = FileScanConfigBuilder::from(source.config().to_owned())
             .with_file_compression_type(self.options.compression.into())
             .with_newlines_in_values(newlines_in_values);
 
-        let source = Arc::new(
-            CsvSource::new(has_header, self.options.delimiter, self.options.quote)
-                .with_escape(self.options.escape)
-                .with_terminator(self.options.terminator)
-                .with_comment(self.options.comment),
-        );
+        let config = conf_builder.build();
 
-        let config = conf_builder.with_source(source).build();
+        let source = CsvSource::new(
+            has_header,
+            self.options.delimiter,
+            self.options.quote,
+            config.clone(),
+        )
+        .with_escape(self.options.escape)
+        .with_terminator(self.options.terminator)
+        .with_comment(self.options.comment);
 
-        Ok(DataSourceExec::from_data_source(config))
+        Ok(DataSourceExec::from_data_source(source))
     }
 
     async fn create_writer_physical_plan(
@@ -475,8 +478,13 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(CsvSource::default())
+    fn file_source(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        Arc::new(CsvSource::new(
+            self.has_header().unwrap_or(false),
+            self.delimiter(),
+            self.quote(),
+            config,
+        ))
     }
 }
 

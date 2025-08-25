@@ -49,7 +49,7 @@ use datafusion_common::{
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::ObjectWriterBuilder;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -58,7 +58,6 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
@@ -173,19 +172,6 @@ impl FileFormat for ArrowFormat {
         Ok(Statistics::new_unknown(&table_schema))
     }
 
-    async fn create_physical_plan(
-        &self,
-        _state: &dyn Session,
-        conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source = Arc::new(ArrowSource::default());
-        let config = FileScanConfigBuilder::from(conf)
-            .with_source(source)
-            .build();
-
-        Ok(DataSourceExec::from_data_source(config))
-    }
-
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
@@ -202,8 +188,8 @@ impl FileFormat for ArrowFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(ArrowSource::default())
+    fn file_source(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        Arc::new(ArrowSource::new(config))
     }
 }
 
