@@ -209,6 +209,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             file_metrics,
             file_meta,
             metadata_cache: Arc::clone(&self.metadata_cache),
+            metadata_size_hint,
         }))
     }
 }
@@ -222,6 +223,7 @@ pub struct CachedParquetFileReader {
     pub inner: ParquetObjectReader,
     file_meta: FileMeta,
     metadata_cache: Arc<dyn FileMetadataCache>,
+    metadata_size_hint: Option<usize>,
 }
 
 impl AsyncFileReader for CachedParquetFileReader {
@@ -261,11 +263,10 @@ impl AsyncFileReader for CachedParquetFileReader {
             #[cfg(not(feature = "parquet_encryption"))]
             let file_decryption_properties = None;
 
-            // TODO there should be metadata prefetch hint here
-            // https://github.com/apache/datafusion/issues/17279
             DFParquetMetadata::new(&self.store, &file_meta.object_meta)
                 .with_decryption_properties(file_decryption_properties)
                 .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
+                .with_metadata_size_hint(self.metadata_size_hint)
                 .fetch_metadata()
                 .await
                 .map_err(|e| {
