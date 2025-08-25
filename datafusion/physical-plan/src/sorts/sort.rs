@@ -373,7 +373,6 @@ impl ExternalSorter {
         // Only for first time
         if self.cursor_batch_ratio.is_none() {
             let ratio = self.calculate_ratio(&input)?;
-            println!("{ratio} ratio");
             self.cursor_batch_ratio = Some(ratio);
         }
 
@@ -850,7 +849,7 @@ impl ExternalSorter {
         // if cursor is smaller than half of original batch, we may say that 2x batch is enough for both sort and merge phase
         let cursor_small = self
             .cursor_batch_ratio
-            .map_or(false, |ratio| ratio.is_le(1.0));
+            .is_some_and(|ratio| ratio.is_le(1.0));
         if cursor_small {
             match sort_res {
                 Ok(_) => return Ok(()),

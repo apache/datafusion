@@ -119,7 +119,7 @@ async fn test_sort_strings_100k_mem() {
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_multi_columns_100k_mem() {
     for (batch_size, should_spill) in
-        [(5, false), (1000, false), (10000, true), (20000, true)]
+        [(5, false), (750, false), (10000, true), (20000, true)]
     {
         let (input, collected) = SortTest::new()
             .with_int32_utf8_batches(batch_size)

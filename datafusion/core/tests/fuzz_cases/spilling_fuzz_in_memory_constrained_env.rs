@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::fuzz_cases::aggregate_fuzz::assert_spill_count_metric;
 use crate::fuzz_cases::once_exec::OnceExec;
-use arrow::array::UInt64Array;
+use arrow::array::{UInt32Array, UInt64Array};
 use arrow::{array::StringArray, compute::SortOptions, record_batch::RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::common::Result;
@@ -323,6 +323,138 @@ fn grow_memory_as_much_as_possible(
     }
 
     Ok(was_able_to_grow)
+}
+
+#[tokio::test]
+async fn test_sort_with_limited_memory_larger_cursor() -> Result<()> {
+    let record_batch_size = 8192;
+    let pool_size = 2 * MB as usize;
+    let task_ctx = {
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        TaskContext::default()
+            .with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(record_batch_size)
+                    .with_sort_spill_reservation_bytes(1),
+            )
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
+    };
+
+    // Test that the merge degree of multi level merge sort cannot be fixed size when there is not enough memory
+    run_sort_test_q5_like_no_payload(RunTestWithLimitedMemoryArgs {
+        pool_size,
+        task_ctx: Arc::new(task_ctx),
+        number_of_record_batches: 100,
+        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 6),
+        memory_behavior: Default::default(),
+    })
+    .await?;
+
+    Ok(())
+}
+/// Q5: 3 sort keys + no payload
+async fn run_sort_test_q5_like_no_payload(
+    mut args: RunTestWithLimitedMemoryArgs,
+) -> Result<usize> {
+    let _ = std::mem::replace(
+        &mut args.get_size_of_record_batch_to_generate,
+        Box::pin(move |_| unreachable!("should not be called after take")),
+    );
+
+    // l_linenumber: Int32, l_suppkey: Int64, l_orderkey: Int64
+    let scan_schema = Arc::new(Schema::new(vec![
+        Field::new("l_linenumber", DataType::UInt32, false),
+        Field::new("l_suppkey", DataType::UInt64, false),
+        Field::new("l_orderkey", DataType::UInt64, false),
+    ]));
+
+    let record_batch_size = args.task_ctx.session_config().batch_size() as i64;
+
+    let lnum_step: i64 = 5;
+    let supp_step: i64 = 9_973;
+    let order_step: i64 = 104_729;
+
+    const L_LINE_NUMBER_CARD: i64 = 7;
+    const L_SUPPKEY_CARD: i64 = 10_000;
+    const L_ORDERKEY_CARD: i64 = 1_500_000;
+    let schema = Arc::clone(&scan_schema);
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(OnceExec::new(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter((0..args.number_of_record_batches as i64).map(
+                move |batch_idx| {
+                    let start = batch_idx * record_batch_size;
+
+                    // l_linenumber ∈ [1,7], l_suppkey ∈ [1,10_000], l_orderkey ∈ [1,1_500_000]
+                    let linenumbers =
+                        UInt32Array::from_iter_values((0..record_batch_size).map(|i| {
+                            let n = start + i;
+                            // 1..=7
+                            ((n * lnum_step).rem_euclid(L_LINE_NUMBER_CARD) + 1) as u32
+                        }));
+
+                    let suppkeys =
+                        UInt64Array::from_iter_values((0..record_batch_size).map(|i| {
+                            let n = start + i;
+                            // 1..=10_000
+                            ((n * supp_step).rem_euclid(L_SUPPKEY_CARD) + 1) as u64
+                        }));
+
+                    let orderkeys =
+                        UInt64Array::from_iter_values((0..record_batch_size).map(|i| {
+                            let n = start + i;
+                            // 1..=1_500_000
+                            ((n * order_step).rem_euclid(L_ORDERKEY_CARD) + 1) as u64
+                        }));
+
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(linenumbers) as _,
+                            Arc::new(suppkeys) as _,
+                            Arc::new(orderkeys) as _,
+                        ],
+                    )
+                    .map_err(|e| e.into())
+                },
+            )),
+        ))));
+
+    // ORDER BY l_linenumber, l_suppkey, l_orderkey ASC
+    let sort_exec = Arc::new(SortExec::new(
+        LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: col("l_linenumber", &scan_schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            },
+            PhysicalSortExpr {
+                expr: col("l_suppkey", &scan_schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            },
+            PhysicalSortExpr {
+                expr: col("l_orderkey", &scan_schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            },
+        ])
+        .unwrap(),
+        plan,
+    ));
+
+    let result = sort_exec.execute(0, Arc::clone(&args.task_ctx))?;
+    run_test(args, sort_exec, result).await
 }
 
 #[tokio::test]
