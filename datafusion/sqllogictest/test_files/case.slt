@@ -482,3 +482,13 @@ SELECT v, CASE WHEN v < 0 THEN 10/0 ELSE 1 END FROM (VALUES (1), (2)) t(v)
 
 statement ok
 drop table t
+
+query I
+SELECT case when true then 1 / 1 else 1 / 0 end;
+----
+1
+
+query I
+SELECT case when false then 1 / 0 else 1 / 1 end;
+----
+1
