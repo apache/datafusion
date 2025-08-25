@@ -1472,7 +1472,6 @@ impl NestedLoopJoinStream {
         r_matched_bitmap: &BooleanArray,
     ) -> Result<()> {
         let left_data = self.get_left_data()?;
-
         // number of successfully joined pairs from (l_index x cur_right_batch)
         let joined_len = r_matched_bitmap.true_count();
 
