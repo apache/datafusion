@@ -281,8 +281,6 @@ pub struct ParquetSource {
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional user defined schema adapter
     pub(crate) schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    /// Batch size configuration
-    pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
     pub(crate) projected_statistics: Option<Statistics>,
@@ -493,6 +491,7 @@ impl FileSource for ParquetSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
+        batch_size: usize,
     ) -> Arc<dyn FileOpener> {
         let projection = base_config
             .file_column_projection_indices()
@@ -559,9 +558,7 @@ impl FileSource for ParquetSource {
         Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
-            batch_size: self
-                .batch_size
-                .expect("Batch size must set before creating ParquetOpener"),
+            batch_size,
             limit: base_config.limit,
             predicate: self.predicate.clone(),
             logical_file_schema: Arc::clone(&base_config.file_schema),
@@ -585,12 +582,6 @@ impl FileSource for ParquetSource {
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
     }
 
     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {

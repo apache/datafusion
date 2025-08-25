@@ -77,7 +77,6 @@ impl JsonOpener {
 /// JsonSource holds the extra configuration that is necessary for [`JsonOpener`]
 #[derive(Clone, Default)]
 pub struct JsonSource {
-    batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
@@ -102,11 +101,10 @@ impl FileSource for JsonSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
+        batch_size: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(JsonOpener {
-            batch_size: self
-                .batch_size
-                .expect("Batch size must set before creating opener"),
+            batch_size,
             projected_schema: base_config.projected_file_schema(),
             file_compression_type: base_config.file_compression_type,
             object_store,
@@ -115,12 +113,6 @@ impl FileSource for JsonSource {
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
     }
 
     fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
