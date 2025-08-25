@@ -17400,6 +17400,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("sortMergeJoin"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::SortMergeJoin)
+;
+                        }
                         GeneratedField::MemoryScan => {
                             if physical_plan_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("memoryScan"));
