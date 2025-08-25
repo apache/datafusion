@@ -58,7 +58,7 @@ OPTIONS:
             Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
 
         --top-memory-consumers <TOP_MEMORY_CONSUMERS>
-            The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0 [default: 3]
+            The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0 [default: 5]
 
     -d, --disk-limit <DISK_LIMIT>
             Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
