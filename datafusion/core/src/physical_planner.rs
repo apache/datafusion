@@ -60,6 +60,7 @@ use crate::schema_equivalence::schema_satisfied_by;
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
@@ -452,6 +453,7 @@ impl DefaultPhysicalPlanner {
                 projection,
                 filters,
                 fetch,
+                preferred_ordering,
                 ..
             }) => {
                 let source = source_as_provider(source)?;
@@ -459,9 +461,14 @@ impl DefaultPhysicalPlanner {
                 // doesn't know (nor should care) how the relation was
                 // referred to in the query
                 let filters = unnormalize_cols(filters.iter().cloned());
-                source
-                    .scan(session_state, projection.as_ref(), &filters, *fetch)
-                    .await?
+                let opts = ScanArgs::default()
+                    .with_projection(projection.clone())
+                    .with_filters(Some(filters).clone())
+                    .with_preferred_ordering(preferred_ordering.clone())
+                    .with_limit(*fetch);
+                let res = source.scan_with_args(session_state, opts).await?;
+                // TODO: move FilterExec wrapping logic from filter pushdown rule to here?
+                res.plan()
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exec_schema = schema.as_ref().to_owned().into();
