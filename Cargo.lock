@@ -1875,6 +1875,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "snmalloc-rs",
  "sqlparser",
  "sysinfo",
  "tempfile",

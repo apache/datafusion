@@ -119,6 +119,8 @@ async fn main() -> Result<()> {
 DataFusion can also read Avro files using the `register_avro` method.
 
 ```rust
+# #[cfg(feature = "avro")]
+{
 use datafusion::arrow::util::pretty;
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -154,6 +156,7 @@ async fn main() -> Result<()> {
     );
     Ok(())
 }
+}
 ```
 
 ## Reading Multiple Files as a table
@@ -163,10 +166,6 @@ with the ListingTableProvider which takes a list of file paths and reads them
 as a single table, matching schemas as appropriate
 
 Coming Soon
-
-```rust
-
-```
 
 ## Using `CREATE EXTERNAL TABLE` to register data sources via SQL
 

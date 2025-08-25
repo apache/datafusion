@@ -41,7 +41,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
