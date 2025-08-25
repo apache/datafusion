@@ -950,7 +950,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
-    // Rouugh plan we're trying to recreate:
+    // Rough sketch of the MRE we're trying to recreate:
     // COPY (select i as k from generate_series(1, 10000000) as t(i))
     // TO 'test_files/scratch/push_down_filter/t1.parquet'
     // STORED AS PARQUET;

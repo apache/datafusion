@@ -668,7 +668,7 @@ impl FileSource for ParquetSource {
                             .map(|item| format!("{item}"))
                             .collect_vec();
                         guarantees.sort();
-                        writeln!(
+                        write!(
                             f,
                             ", pruning_predicate={}, required_guarantees=[{}]",
                             pruning_predicate.predicate_expr(),

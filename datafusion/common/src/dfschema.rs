@@ -297,6 +297,20 @@ impl DFSchema {
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
     /// duplicate fields.
+    ///
+    /// ## Merge Precedence
+    ///
+    /// **Schema-level metadata**: Metadata from both schemas is merged.
+    /// If both schemas have the same metadata key, the value from the `other_schema` parameter takes precedence.
+    ///
+    /// **Field-level merging**: Only non-duplicate fields are added. This means that the
+    /// `self` fields will always take precedence over the `other_schema` fields.
+    /// Duplicate field detection is based on:
+    /// - For qualified fields: both qualifier and field name must match
+    /// - For unqualified fields: only field name needs to match
+    ///
+    /// Take note how the precedence for fields & metadata merging differs;
+    /// merging prefers fields from `self` but prefers metadata from `other_schema`.
     pub fn merge(&mut self, other_schema: &DFSchema) {
         if other_schema.inner.fields.is_empty() {
             return;
