@@ -96,6 +96,7 @@ pub(crate) fn rebase_expr(
 pub(crate) enum CheckColumnsSatisfyExprsPurpose {
     ProjectionMustReferenceAggregate,
     HavingMustReferenceAggregate,
+    QualifyMustReferenceAggregate,
 }
 
 impl CheckColumnsSatisfyExprsPurpose {
@@ -106,6 +107,9 @@ impl CheckColumnsSatisfyExprsPurpose {
             }
             CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate => {
                 "Column in HAVING must be in GROUP BY or an aggregate function"
+            }
+            CheckColumnsSatisfyExprsPurpose::QualifyMustReferenceAggregate => {
+                "Column in QUALIFY must be in GROUP BY or an aggregate function"
             }
         }
     }
