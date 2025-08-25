@@ -21,7 +21,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use crate::stack::StackGuard;
 use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
-use datafusion_expr::expr::Sort;
+use datafusion_expr::expr::{Sort, WildcardOptions};
 
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -143,12 +143,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
                 let extend_exprs =
                     self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
-                let all_exprs = plan
-                    .expressions()
-                    .into_iter()
-                    .map(SelectExpr::Expression)
-                    .chain(extend_exprs)
-                    .collect();
+                let all_exprs =
+                    std::iter::once(SelectExpr::Wildcard(WildcardOptions::default()))
+                        .chain(extend_exprs)
+                        .collect();
                 self.project(plan, all_exprs)
             }
 

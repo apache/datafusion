@@ -80,3 +80,12 @@ FROM test
 1 1.1 2.1
 2 2.2 4.2
 3 3.3 6.3
+
+query IRR
+SELECT *
+FROM test
+|> SELECT a, b
+|> where a = 1
+|> EXTEND a + b AS a_plus_b
+----
+1 1.1 2.1
