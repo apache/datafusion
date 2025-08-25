@@ -79,7 +79,7 @@ async fn test_sort_with_limited_memory() -> Result<()> {
     .await?;
 
     let total_spill_files_size = spill_count * record_batch_size;
-      assert!(
+    assert!(
         total_spill_files_size > pool_size,
         "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
     );

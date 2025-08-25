@@ -51,7 +51,9 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
+use arrow::array::{
+    Array, ArrowNativeTypeOp, RecordBatch, RecordBatchOptions, StringViewArray,
+};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use arrow::row::{RowConverter, SortField};
@@ -322,8 +324,8 @@ impl ExternalSorter {
     }
 
     /// Calculates the ratio of memory used by the sort cursor to the original `RecordBatch`.
-    /// Returns the ratio `(cursor_size / batch_size) + 1.0`, representing the expected memory multiplier
-    /// when allocating space for both the original batch and its associated cursor.
+    /// Returns the ratio `(cursor_size / batch_size)`, representing the expected memory multiplier
+    /// when allocating space for associated cursor.
     ///
     /// Mirrors the cursor selection logic in `StreamingMerge::build`
     /// Performs the same conversion for ratio estimation, but discards the result.
@@ -334,7 +336,7 @@ impl ExternalSorter {
             let array = value.into_array(batch.num_rows())?;
             let size_in_mem = array.get_buffer_memory_size();
 
-            Ok(size_in_mem as f64 / batch_size as f64 + 1.0)
+            Ok(size_in_mem as f64 / batch_size as f64)
         } else {
             let sort_fields = self
                 .expr
@@ -360,7 +362,7 @@ impl ExternalSorter {
 
             let rows = Arc::new(rows);
 
-            Ok(rows.size() as f64 / batch_size as f64 + 1.0)
+            Ok(rows.size() as f64 / batch_size as f64)
         }
     }
 
@@ -371,6 +373,7 @@ impl ExternalSorter {
         // Only for first time
         if self.cursor_batch_ratio.is_none() {
             let ratio = self.calculate_ratio(&input)?;
+            println!("{ratio} ratio");
             self.cursor_batch_ratio = Some(ratio);
         }
 
@@ -378,7 +381,7 @@ impl ExternalSorter {
             return Ok(());
         }
 
-        self.reserve_memory_for_merge()?;
+        self.reserve_memory_for_sort_spill_reservation_bytes()?;
         self.reserve_memory_for_batch_and_maybe_spill(&input)
             .await?;
 
@@ -637,7 +640,7 @@ impl ExternalSorter {
         }
 
         // Reserve headroom for next sort/merge
-        self.reserve_memory_for_merge()?;
+        self.reserve_memory_for_sort_spill_reservation_bytes()?;
 
         Ok(())
     }
@@ -739,16 +742,6 @@ impl ExternalSorter {
             return self.sort_batch_stream(batch, metrics, reservation, true);
         }
 
-        let mut expected_usage = 0;
-        for batch in &self.in_mem_batches {
-            expected_usage += get_reserved_byte_for_record_batch(&batch, self.cursor_batch_ratio);
-        }
-        let old = self.reservation.size();
-        let res = self.reservation.try_resize(expected_usage);
-        if let Err(e) = res {
-            // TODO(ding-young) handle this error for sort-tpch Q5
-        }
-        self.reservation.try_resize(old)?;
         let streams = std::mem::take(&mut self.in_mem_batches)
             .into_iter()
             .map(|batch| {
@@ -831,11 +824,11 @@ impl ExternalSorter {
     /// If this sort may spill, pre-allocates
     /// `sort_spill_reservation_bytes` of memory to guarantee memory
     /// left for the in memory sort/merge.
-    fn reserve_memory_for_merge(&mut self) -> Result<()> {
+    fn reserve_memory_for_sort_spill_reservation_bytes(&mut self) -> Result<()> {
         // Reserve headroom for next merge sort
         if self.runtime.disk_manager.tmp_files_enabled() {
             let size = self.sort_spill_reservation_bytes;
-            if self.merge_reservation.size() != size {
+            if self.merge_reservation.size() < size {
                 self.merge_reservation
                     .try_resize(size)
                     .map_err(Self::err_with_oom_context)?;
@@ -851,10 +844,51 @@ impl ExternalSorter {
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
-        let size = get_reserved_byte_for_record_batch(input, None);
-        match self.reservation.try_grow(size) {
-            Ok(_) => Ok(()),
-            Err(e) => {
+        let batch_size = get_reserved_byte_for_record_batch(input, None);
+        let sort_res = self.reservation.try_grow(batch_size);
+
+        // if cursor is smaller than half of original batch, we may say that 2x batch is enough for both sort and merge phase
+        let cursor_small = self
+            .cursor_batch_ratio
+            .map_or(false, |ratio| ratio.is_le(1.0));
+        if cursor_small {
+            match sort_res {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if self.in_mem_batches.is_empty() {
+                        return Err(Self::err_with_oom_context(e));
+                    }
+
+                    // Spill and try again.
+                    self.sort_and_spill_in_mem_batches().await?;
+                    self.reservation
+                        .try_grow(batch_size)
+                        .map_err(Self::err_with_oom_context)?;
+                    return Ok(());
+                }
+            }
+        }
+
+        let cursor_size =
+            get_reserved_byte_for_record_batch(input, self.cursor_batch_ratio);
+        let cursor_res = self.merge_reservation.try_grow(cursor_size);
+
+        match (sort_res, cursor_res) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Ok(_), Err(e)) => {
+                if self.in_mem_batches.is_empty() {
+                    return Err(Self::err_with_oom_context(e));
+                }
+                // Spill and try again.
+                let _ = self.reservation.try_shrink(batch_size); // Just to ensure we can safely sort and spill
+                self.sort_and_spill_in_mem_batches().await?;
+                self.reservation
+                    .try_grow(batch_size)
+                    .map_err(Self::err_with_oom_context)?;
+                let _ = self.merge_reservation.try_grow(cursor_size);
+                Ok(())
+            }
+            (Err(e), _) => {
                 if self.in_mem_batches.is_empty() {
                     return Err(Self::err_with_oom_context(e));
                 }
@@ -862,8 +896,10 @@ impl ExternalSorter {
                 // Spill and try again.
                 self.sort_and_spill_in_mem_batches().await?;
                 self.reservation
-                    .try_grow(size)
-                    .map_err(Self::err_with_oom_context)
+                    .try_grow(batch_size)
+                    .map_err(Self::err_with_oom_context)?;
+                let _ = self.merge_reservation.try_grow(cursor_size);
+                Ok(())
             }
         }
     }

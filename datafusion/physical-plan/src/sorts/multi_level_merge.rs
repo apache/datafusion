@@ -359,7 +359,8 @@ impl MultiLevelMergeBuilder {
             // and there should be some upper limit to memory reservation so we won't starve the system
             match reservation.try_grow(get_reserved_byte_for_record_batch_size(
                 spill.max_record_batch_memory * buffer_len,
-                self.cursor_batch_ratio,
+                // ratio for both original batch(+1.0) and its associated cursor
+                self.cursor_batch_ratio.map(|ratio| ratio + 1.0),
             )) {
                 Ok(_) => {
                     number_of_spills_to_read_for_current_phase += 1;
