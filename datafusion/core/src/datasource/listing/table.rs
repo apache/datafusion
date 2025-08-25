@@ -1152,15 +1152,19 @@ impl ListingTable {
         })
     }
 
-    /// Resolves the desired file ordering based on query requirements and natural ordering.
+    /// Resolves the desired file ordering for file arrangement purposes.
     ///
-    /// This method prioritizes query-requested ordering if it can be satisfied using statistics,
-    /// otherwise falls back to any natural file ordering defined in the table configuration.
-    fn resolve_desired_ordering(
+    /// This method returns the ordering to use for arranging files optimally,
+    /// prioritizing query-requested ordering if it can be satisfied using statistics,
+    /// otherwise using any configured file_sort_order.
+    ///
+    /// Note: This is for file arrangement only - output ordering should be determined
+    /// separately based on whether file_sort_order is configured.
+    fn resolve_desired_file_arrangement_ordering(
         &self,
         requested_ordering: Option<&[SortExpr]>,
     ) -> Result<Option<LexOrdering>> {
-        // Check if query requested specific ordering that we can use
+        // Check if query requested specific ordering that we can use for file arrangement
         if let Some(ordering) = requested_ordering {
             if !ordering.is_empty() && self.can_use_ordering_from_statistics(ordering) {
                 return create_ordering(&self.table_schema, &[ordering.to_vec()])
@@ -1168,17 +1172,42 @@ impl ListingTable {
             }
         }
 
-        // Fall back to natural file ordering if any
+        // Fall back to file_sort_order for arrangement if configured
         self.try_create_output_ordering()
             .map(|orderings| orderings.first().cloned())
+    }
+
+    /// Gets the output orderings that can be guaranteed by the scan.
+    ///
+    /// Only returns orderings if file_sort_order is explicitly configured,
+    /// as this represents a promise about the physical file layout.
+    /// Returns all configured equivalent orderings.
+    ///
+    /// TODO: For formats like Parquet that store ordering metadata in the file,
+    /// we could read and use that information instead of requiring explicit configuration.
+    fn get_guaranteed_output_orderings(&self) -> Result<Option<Vec<LexOrdering>>> {
+        if self.options.file_sort_order.is_empty() {
+            // No explicit file sort order configured
+            Ok(None)
+        } else {
+            // Return all configured file sort orderings
+            self.try_create_output_ordering().map(|orderings| {
+                if orderings.is_empty() {
+                    None
+                } else {
+                    Some(orderings)
+                }
+            })
+        }
     }
 
     /// Determines the optimal file grouping and ordering strategy.
     ///
     /// This method orchestrates the file grouping process by:
-    /// 1. Resolving the desired ordering (query-requested vs natural)
-    /// 2. Applying statistics-based splitting if enabled and available
-    /// 3. Returning both the file groups and any output ordering that can be guaranteed
+    /// 1. Resolving the desired ordering for file arrangement (query-requested vs file_sort_order)
+    /// 2. Applying statistics-based splitting if enabled and available  
+    /// 3. Determining output ordering separately based on file_sort_order configuration
+    /// 4. Returning both the optimized file groups and any guaranteed output ordering
     ///
     /// # Arguments
     /// * `state` - The session state containing configuration options
@@ -1188,15 +1217,16 @@ impl ListingTable {
     /// # Returns
     /// A tuple of (file_groups, optional_output_ordering) where:
     /// - file_groups: The optimized file group arrangement
-    /// - optional_output_ordering: Output ordering that can be guaranteed (if any)
+    /// - optional_output_ordering: Output ordering guaranteed by scan (only if file_sort_order configured)
     fn determine_file_groups_and_ordering(
         &self,
         state: &dyn Session,
         partitioned_file_lists: Vec<FileGroup>,
         requested_ordering: Option<&[SortExpr]>,
     ) -> Result<(Vec<FileGroup>, Option<Vec<LexOrdering>>)> {
-        // 1. Determine desired ordering (query-requested vs natural)
-        let desired_ordering = self.resolve_desired_ordering(requested_ordering)?;
+        // 1. Determine desired ordering for file arrangement (query-requested vs configured)
+        let arrangement_ordering =
+            self.resolve_desired_file_arrangement_ordering(requested_ordering)?;
 
         // 2. Check if statistics-based splitting is enabled
         if !state
@@ -1204,13 +1234,16 @@ impl ListingTable {
             .execution
             .split_file_groups_by_statistics
         {
-            return Ok((partitioned_file_lists, desired_ordering.map(|o| vec![o])));
+            // No statistics-based splitting - return original groups with guaranteed ordering if any
+            let guaranteed_orderings = self.get_guaranteed_output_orderings()?;
+            return Ok((partitioned_file_lists, guaranteed_orderings));
         }
 
-        // 3. Apply statistics-based splitting if we have an ordering requirement
-        let Some(ordering) = desired_ordering else {
-            // No ordering requirement, keep original groups
-            return Ok((partitioned_file_lists, None));
+        // 3. Apply statistics-based splitting if we have an arrangement ordering requirement
+        let Some(ordering) = arrangement_ordering else {
+            // No ordering requirement for arrangement, keep original groups
+            let guaranteed_orderings = self.get_guaranteed_output_orderings()?;
+            return Ok((partitioned_file_lists, guaranteed_orderings));
         };
 
         match FileScanConfig::split_groups_by_statistics_with_overlap_handling(
@@ -1220,15 +1253,31 @@ impl ListingTable {
             self.options.target_partitions,
         ) {
             Ok(FileGroupPartitioning::TotalOrder(groups)) => {
-                // Files don't overlap - can guarantee output ordering
+                // Files don't overlap and are arranged in total order
                 log::debug!(
                     "Files arranged in total order across {} partitions",
                     groups.len()
                 );
-                Ok((groups, Some(vec![ordering])))
+
+                // Only guarantee output ordering if file_sort_order is configured
+                // and the arrangement ordering matches one of the configured orderings
+                let guaranteed_orderings = self.get_guaranteed_output_orderings()?;
+                let output_orderings =
+                    if let Some(configured_orderings) = &guaranteed_orderings {
+                        // Check if the arrangement ordering matches any of the configured file_sort_orders
+                        if configured_orderings.contains(&ordering) {
+                            Some(configured_orderings.clone())
+                        } else {
+                            None // Arrangement was for query optimization, not scan output
+                        }
+                    } else {
+                        None // No file_sort_order configured
+                    };
+
+                Ok((groups, output_orderings))
             }
             Ok(FileGroupPartitioning::PartialOrder(groups)) => {
-                // Files overlap but are ordered within partitions
+                // Files overlap but are ordered within partitions - cannot guarantee total ordering
                 log::debug!(
                     "Files arranged in partial order across {} partitions",
                     groups.len()
@@ -1245,7 +1294,9 @@ impl ListingTable {
             }
             Err(e) => {
                 log::debug!("Failed to split file groups by statistics: {e}");
-                Ok((partitioned_file_lists, None))
+                // Fallback to original groups, but still check for guaranteed ordering
+                let guaranteed_orderings = self.get_guaranteed_output_orderings()?;
+                Ok((partitioned_file_lists, guaranteed_orderings))
             }
         }
     }
