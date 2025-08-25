@@ -2818,8 +2818,7 @@ mod tests {
         // Difference should not be more than 1 (round-robin distribution)
         assert!(
             size_diff <= 1,
-            "Files should be distributed evenly, got sizes: {:?}",
-            group_sizes
+            "Files should be distributed evenly, got sizes: {group_sizes:?}"
         );
 
         println!("✓ arrange_files_with_overlap tests passed");
