@@ -1032,8 +1032,7 @@ impl FileScanConfig {
         }
 
         // Tier 2: Overlapping arrangement with statistics-based ordering
-        debug!("Files have overlapping statistics, using overlapping arrangement with {} target partitions", 
-               target_partitions);
+        debug!("Files have overlapping statistics, using overlapping arrangement with {target_partitions} target partitions");
         let groups = Self::arrange_files_with_overlap(
             &flattened_files,
             &indices_sorted_by_min,
