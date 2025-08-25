@@ -52,7 +52,7 @@ itertools = { workspace = true }
 log = { workspace = true }
 recursive = { workspace = true, optional = true }
 regex = { workspace = true }
-regex-syntax = "0.8.0"
+regex-syntax = "0.8.6"
 
 [dev-dependencies]
 async-trait = { workspace = true }
