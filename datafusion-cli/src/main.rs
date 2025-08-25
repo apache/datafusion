@@ -27,10 +27,12 @@ use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
+use datafusion::execution::object_store::DefaultObjectStoreRegistry;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
+use datafusion_cli::object_storage::instrumented::InstrumentedObjectStoreRegistry;
 use datafusion_cli::{
     exec,
     pool_type::PoolType,
@@ -205,6 +207,13 @@ async fn main_inner() -> Result<()> {
         rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
 
+    // TODO: conditional
+    let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(Arc::new(
+        DefaultObjectStoreRegistry::new(),
+    )));
+    rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
+    let instrumented_registry = Some(instrumented_registry);
+
     let runtime_env = rt_builder.build_arc()?;
 
     // enable dynamic file query
@@ -253,20 +262,23 @@ async fn main_inner() -> Result<()> {
 
     if commands.is_empty() && files.is_empty() {
         if !rc.is_empty() {
-            exec::exec_from_files(&ctx, rc, &print_options).await?;
+            exec::exec_from_files(&ctx, rc, &print_options, &instrumented_registry)
+                .await?;
         }
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
-        return exec::exec_from_repl(&ctx, &mut print_options)
+        return exec::exec_from_repl(&ctx, &mut print_options, &instrumented_registry)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)));
     }
 
     if !files.is_empty() {
-        exec::exec_from_files(&ctx, files, &print_options).await?;
+        exec::exec_from_files(&ctx, files, &print_options, &instrumented_registry)
+            .await?;
     }
 
     if !commands.is_empty() {
-        exec::exec_from_commands(&ctx, commands, &print_options).await?;
+        exec::exec_from_commands(&ctx, commands, &print_options, &instrumented_registry)
+            .await?;
     }
 
     Ok(())

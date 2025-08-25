@@ -75,11 +75,16 @@ impl Command {
                 )
             }
             Self::ListTables => {
-                exec_and_print(ctx, print_options, "SHOW TABLES".into()).await
+                exec_and_print(ctx, print_options, "SHOW TABLES".into(), &None).await
             }
             Self::DescribeTableStmt(name) => {
-                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {name}"))
-                    .await
+                exec_and_print(
+                    ctx,
+                    print_options,
+                    format!("SHOW COLUMNS FROM {name}"),
+                    &None,
+                )
+                .await
             }
             Self::Include(filename) => {
                 if let Some(filename) = filename {
@@ -88,7 +93,7 @@ impl Command {
                             "Error opening {filename:?} {e}"
                         ))
                     })?;
-                    exec_from_lines(ctx, &mut BufReader::new(file), print_options)
+                    exec_from_lines(ctx, &mut BufReader::new(file), print_options, &None)
                         .await?;
                     Ok(())
                 } else {
