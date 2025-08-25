@@ -34,6 +34,14 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = "Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.",
     syntax_example = "gcd(expression_x, expression_y)",
+    sql_example = r#"```sql
+> SELECT gcd(48, 18);
++------------+
+| gcd(48,18) |
++------------+
+| 6          |
++------------+
+```"#,
     standard_argument(name = "expression_x", prefix = "First numeric"),
     standard_argument(name = "expression_y", prefix = "Second numeric")
 )]
