@@ -72,6 +72,16 @@ use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_sql::TableReference;
 
+use std::sync::Arc;
+use uuid::Uuid;
+
+use crate::dataframe::DataFrame;
+use crate::error::Result;
+use crate::execution::context::SessionContext;
+use crate::logical_plan::LogicalPlan;
+use crate::physical_plan::collect_partitioned;
+use crate::physical_plan::memory::MemTable; // for returning Result<DataFrame>
+
 /// Contains options that control how data is
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
@@ -232,19 +242,31 @@ pub struct DataFrame {
     projection_requires_validation: bool,
 }
 
-impl DataFrame {
-    /// Create a new `DataFrame ` based on an existing `LogicalPlan`
-    ///
-    /// This is a low-level method and is not typically used by end users. See
-    /// [`SessionContext::read_csv`] and other methods for creating a
-    /// `DataFrame` from an existing datasource.
-    pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
-        Self {
-            session_state: Box::new(session_state),
-            plan,
-            projection_requires_validation: true,
-        }
+pub async fn cache(self) -> Result<DataFrame> {
+    if self.session_state.config.local_cache {
+        // Eager caching (current behavior)
+        let context = SessionContext::new_with_state((*self.session_state).clone());
+        let plan = self.clone().create_physical_plan().await?;
+        let schema = plan.schema();
+
+        // collect_partitioned now only needs the plan
+        let partitions = collect_partitioned(plan).await?;
+        
+        let mem_table = MemTable::try_new(schema, partitions)?;
+        context.read_table(Arc::new(mem_table))
+    } else {
+        // Lazy caching: return LogicalPlan::Cache
+        let lineage = self.to_logical_plan(); // get the logical plan so far
+        Ok(DataFrame::new(
+            (*self.session_state).clone(),
+            LogicalPlan::Cache {
+                id: Uuid::new_v4().to_string(),
+                lineage: Arc::new(lineage),
+            },
+        ))
     }
+}
+
 
     /// Creates logical expression from a SQL query text.
     /// The expression is created and processed against the current schema.
