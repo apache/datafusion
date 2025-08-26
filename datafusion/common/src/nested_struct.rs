@@ -354,7 +354,6 @@ mod tests {
         let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        println!("error: {}", error_msg);
         assert!(error_msg.contains("Cannot cast struct field 'a'"));
     }
 
