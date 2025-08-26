@@ -172,7 +172,6 @@ rand_distr = "0.5"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-snmalloc-rs = "0.3"
 sysinfo = "0.37.0"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
