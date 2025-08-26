@@ -401,7 +401,6 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
                     "  {name}#{id}(can spill: {can_spill}) consumed {}, peak {}",
                     human_readable_size(*size),
                     human_readable_size(*peak),
-
                 )
             })
             .collect::<Vec<_>>()
