@@ -2665,10 +2665,8 @@ impl Display for OutputFormat {
     }
 }
 
-#[cfg(all(test, feature = "parquet"))]
+#[cfg(test)]
 mod tests {
-    // Import `TableParquetOptions` unconditionally because this module only
-    // runs with the `parquet` feature enabled.
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
         Extensions, TableOptions, TableParquetOptions,
