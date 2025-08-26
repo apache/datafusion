@@ -67,6 +67,7 @@ pub async fn from_project_rel(
             // The name tracker will ensure that two literals in the same project would have
             // unique names but, it does not ensure that if a literal column exists in a previous
             // project say before a join that it is deduplicated with respect to those columns.
+            // See: https://github.com/apache/datafusion/pull/17299
             let maybe_apply_alias = match e {
                 lit @ Expr::Literal(_, _) => {
                     lit.alias(uuid::Uuid::new_v4().to_string())
