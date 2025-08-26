@@ -37,7 +37,9 @@ use log::{debug, trace};
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    cast_column, internal_err, plan_datafusion_err, plan_err,
+    cast_column, internal_err,
+    nested_struct::validate_struct_compatibility,
+    plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
@@ -929,6 +931,12 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
+        if let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
+            (array.data_type(), stat_field.data_type())
+        {
+            // Ensure the structs are compatible before casting
+            validate_struct_compatibility(source_fields, target_fields)?;
+        }
         let array = cast_column(&array, stat_field)?;
 
         arrays.push(array);
@@ -2574,6 +2582,152 @@ mod tests {
             .unwrap();
         assert_eq!(child.value(0), 1);
         assert_eq!(batch.schema().field(0), &field);
+    }
+
+    #[test]
+    fn test_build_statistics_struct_incompatible_type() {
+        // Request a struct column where statistics provide an incompatible field type
+        let field = Field::new(
+            "s_struct_min",
+            DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into()),
+            true,
+        );
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("s", 0),
+            StatisticsType::Min,
+            field,
+        )]);
+
+        // statistics return struct with nested struct child that cannot be cast to Int32
+        let inner_field = Arc::new(Field::new("b", DataType::Int32, true));
+        let inner_struct: ArrayRef = Arc::new(StructArray::from(vec![(
+            inner_field.clone(),
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+        )]));
+        let stats_array: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new(
+                "a",
+                DataType::Struct(vec![inner_field].into()),
+                true,
+            )),
+            inner_struct,
+        )]));
+
+        struct TestStats {
+            min: ArrayRef,
+        }
+
+        impl PruningStatistics for TestStats {
+            fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+                if column.name() == "s" {
+                    Some(self.min.clone())
+                } else {
+                    None
+                }
+            }
+
+            fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn num_containers(&self) -> usize {
+                1
+            }
+
+            fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn contained(
+                &self,
+                _column: &Column,
+                _values: &HashSet<ScalarValue>,
+            ) -> Option<BooleanArray> {
+                None
+            }
+        }
+
+        let statistics = TestStats { min: stats_array };
+        let err =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot cast struct field"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_build_statistics_struct_incompatible_nullability() {
+        // Request a non-nullable child field but statistics provide a nullable field
+        let field = Field::new(
+            "s_struct_min",
+            DataType::Struct(vec![Field::new("a", DataType::Int32, false)].into()),
+            true,
+        );
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("s", 0),
+            StatisticsType::Min,
+            field,
+        )]);
+
+        // statistics return struct with nullable child
+        let stats_array: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+        )]));
+
+        struct TestStats {
+            min: ArrayRef,
+        }
+
+        impl PruningStatistics for TestStats {
+            fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+                if column.name() == "s" {
+                    Some(self.min.clone())
+                } else {
+                    None
+                }
+            }
+
+            fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn num_containers(&self) -> usize {
+                1
+            }
+
+            fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn contained(
+                &self,
+                _column: &Column,
+                _values: &HashSet<ScalarValue>,
+            ) -> Option<BooleanArray> {
+                None
+            }
+        }
+
+        let statistics = TestStats { min: stats_array };
+        let err =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot cast nullable struct field"),
+            "{}",
+            err
+        );
     }
 
     #[test]
