@@ -579,7 +579,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run datafusion-common tests
-        run: cargo test --profile ci -p datafusion-common --features=pyarrow
+        run: cargo test --profile ci -p datafusion-common --features=pyarrow,sql
 
   vendor:
     name: Verify Vendored Code

@@ -886,7 +886,7 @@ pub fn take_function_args<const N: usize, T>(
     })
 }
 
-#[cfg(all(test, feature = "sql"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::ScalarValue::Null;
