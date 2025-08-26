@@ -636,6 +636,7 @@ DataFusion currently supports the following pipe operators:
 - [INTERSECT](#pipe_intersect)
 - [EXCEPT](#pipe_except)
 - [AGGREGATE](#pipe_aggregate)
+- [PIVOT](#pipe_pivot)
 
 (pipe_where)=
 
@@ -824,4 +825,31 @@ DataFusion currently supports the following pipe operators:
 +-------+
 | 3     |
 +-------+
+```
+
+(pipe_pivot)=
+
+### PIVOT
+
+Rotates rows into columns.
+
+```sql
+> (
+  SELECT 'kale' AS product, 51 AS sales, 'Q1' AS quarter
+  UNION ALL
+  SELECT 'kale' AS product, 4 AS sales, 'Q1' AS quarter
+  UNION ALL
+  SELECT 'kale' AS product, 45 AS sales, 'Q2' AS quarter
+  UNION ALL
+  SELECT 'apple' AS product, 8 AS sales, 'Q1' AS quarter
+  UNION ALL
+  SELECT 'apple' AS product, 10 AS sales, 'Q2' AS quarter
+)
+|> PIVOT(SUM(sales) FOR quarter IN ('Q1', 'Q2'));
++---------+-----+-----+
+| product | Q1  | Q2  |
++---------+-----+-----+
+| apple   | 8   | 10  |
+| kale    | 55  | 45  |
++---------+-----+-----+
 ```
