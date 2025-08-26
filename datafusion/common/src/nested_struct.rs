@@ -141,7 +141,7 @@ pub fn cast_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayR
 /// * `target_fields` - Fields from the target struct type
 ///
 /// # Returns
-/// * `Ok(true)` if the structs are compatible for casting
+/// * `Ok(())` if the structs are compatible for casting
 /// * `Err(DataFusionError)` with detailed error message if incompatible
 ///
 /// # Examples
@@ -149,7 +149,7 @@ pub fn cast_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayR
 /// // Compatible: source has extra field, target has missing field
 /// // Source: {a: i32, b: string, c: f64}  
 /// // Target: {a: i64, d: bool}
-/// // Result: Ok(true) - 'a' can cast i32->i64, 'b','c' ignored, 'd' filled with nulls
+/// // Result: Ok(()) - 'a' can cast i32->i64, 'b','c' ignored, 'd' filled with nulls
 ///
 /// // Incompatible: matching field has incompatible types
 /// // Source: {a: string}
@@ -159,7 +159,7 @@ pub fn cast_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayR
 pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
-) -> Result<bool> {
+) -> Result<()> {
     // Check compatibility for each target field
     for target_field in target_fields {
         // Look for matching field in source by name
@@ -202,7 +202,7 @@ pub fn validate_struct_compatibility(
     }
 
     // Extra fields in source are OK - they'll be ignored
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -346,7 +346,6 @@ mod tests {
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
-        assert!(result.unwrap());
     }
 
     #[test]
@@ -360,7 +359,6 @@ mod tests {
         // Should be OK - missing fields will be filled with nulls
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
-        assert!(result.unwrap());
     }
 
     #[test]
@@ -377,7 +375,6 @@ mod tests {
         // Should be OK - extra fields in source are ignored
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
-        assert!(result.unwrap());
     }
 
     #[test]
@@ -430,7 +427,6 @@ mod tests {
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
-        assert!(result.unwrap());
     }
 
     #[test]
