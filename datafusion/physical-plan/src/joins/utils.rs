@@ -1684,7 +1684,7 @@ pub fn update_hash(
     Ok(())
 }
 
-pub fn equal_rows_arr(
+pub(super) fn equal_rows_arr(
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
     left_arrays: &[ArrayRef],
