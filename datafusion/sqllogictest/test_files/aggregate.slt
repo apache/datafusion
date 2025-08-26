@@ -5421,8 +5421,10 @@ select avg(distinct x_dict) from value_dict;
 ----
 3
 
-query error
+query RR
 select avg(x_dict), avg(distinct x_dict) from value_dict;
+----
+2.625 3
 
 query I
 select min(x_dict) from value_dict;
@@ -7387,3 +7389,59 @@ FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
 query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
 SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+
+# distinct average
+statement ok
+create table distinct_avg (a int, b double) as values
+  (3, null),
+  (2, null),
+  (5, 100.5),
+  (5, 1.0),
+  (5, 44.112),
+  (null, 1.0),
+  (5, 100.5),
+  (1, 4.09),
+  (5, 100.5),
+  (5, 100.5),
+  (4, null),
+  (null, null)
+;
+
+# Need two columns to ensure single_distinct_to_group_by rule doesn't kick in, so we know our actual avg(distinct) code is being tested
+query RTRTRR
+select
+    avg(distinct a),
+    arrow_typeof(avg(distinct a)),
+    avg(distinct b),
+    arrow_typeof(avg(distinct b)),
+    avg(a),
+	avg(b)
+from distinct_avg;
+----
+3 Float64 37.4255 Float64 4 56.52525
+
+query RR rowsort
+select
+    avg(distinct a),
+    avg(distinct b)
+from distinct_avg
+group by b;
+----
+1 4.09
+3 NULL
+5 1
+5 100.5
+5 44.112
+
+query RR
+select
+    avg(distinct a),
+    avg(distinct b)
+from distinct_avg
+where a is null and b is null;
+----
+NULL NULL
+
+statement ok
+drop table distinct_avg;
+
