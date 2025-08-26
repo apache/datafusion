@@ -580,17 +580,17 @@ impl DataSource for FileScanConfig {
     fn eq_properties(&self) -> EquivalenceProperties {
         let (schema, constraints, _, orderings) = self.project();
         let mut eq_properties =
-            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
+            EquivalenceProperties::new_with_orderings(schema, orderings)
                 .with_constraints(constraints);
         if let Some(filter) = self.file_source.filter() {
-            match reassign_predicate_columns(filter, &schema, false) {
+            match reassign_predicate_columns(filter, &self.file_schema, false) {
                 Ok(filter) => {
                     match Self::add_filter_equivalence_info(filter, &mut eq_properties) {
                         Ok(()) => {}
                         Err(e) => warn!("Failed to add filter equivalence info: {e}"),
                     }
                 }
-                Err(e) => warn!("Failed to add filter equivalence info: {e}"),
+                Err(e) => warn!("Failed to reassign predicate columns: {e}"),
             };
         }
         eq_properties
