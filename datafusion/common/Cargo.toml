@@ -74,7 +74,7 @@ parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
 pyo3 = { version = "0.25", optional = true }
 recursive = { workspace = true, optional = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 tokio = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
