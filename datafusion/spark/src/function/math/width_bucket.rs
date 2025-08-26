@@ -324,7 +324,6 @@ mod tests {
 
     #[test]
     fn test_width_bucket_f64_basic() {
-        // v in [0.5, 1.0, 9.9, -1.0, 10.0], [lo, hi] = [0, 10], n=10
         let v = f64_array(&[0.5, 1.0, 9.9, -1.0, 10.0]);
         let lo = f64_array(&[0.0, 0.0, 0.0, 0.0, 0.0]);
         let hi = f64_array(&[10.0, 10.0, 10.0, 10.0, 10.0]);
@@ -337,7 +336,6 @@ mod tests {
 
     #[test]
     fn test_width_bucket_f64_descending_range() {
-        // rango descendente: lo=10, hi=0, n=10
         let v = f64_array(&[9.9, 10.0, 0.0, -0.1, 10.1]);
         let lo = f64_array(&[10.0; 5]);
         let hi = f64_array(&[0.0; 5]);
@@ -346,12 +344,10 @@ mod tests {
         let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
         let out = downcast_i32(&out);
 
-        // Inclusión en el límite inferior: x == lo -> bucket 1
         assert_eq!(out.values(), &[1, 1, 11, 11, 0]);
     }
     #[test]
     fn test_width_bucket_f64_bounds_inclusive_exclusive_asc() {
-        // ascendente: lo=0, hi=10, n=10
         let v = f64_array(&[0.0, 9.999999999, 10.0]);
         let lo = f64_array(&[0.0; 3]);
         let hi = f64_array(&[10.0; 3]);
@@ -359,12 +355,11 @@ mod tests {
 
         let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
         let out = downcast_i32(&out);
-        assert_eq!(out.values(), &[1, 10, 11]); // lo inclusivo, hi exclusivo (>=hi -> n+1)
+        assert_eq!(out.values(), &[1, 10, 11]);
     }
 
     #[test]
     fn test_width_bucket_f64_bounds_inclusive_exclusive_desc() {
-        // descendente: lo=10, hi=0, n=10
         let v = f64_array(&[10.0, 0.0, -0.000001]);
         let lo = f64_array(&[10.0; 3]);
         let hi = f64_array(&[0.0; 3]);
@@ -372,13 +367,12 @@ mod tests {
 
         let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
         let out = downcast_i32(&out);
-        assert_eq!(out.values(), &[1, 11, 11]); // lo inclusivo, hi exclusivo (<=hi -> n+1)
+        assert_eq!(out.values(), &[1, 11, 11]);
     }
 
 
     #[test]
     fn test_width_bucket_f64_edge_cases() {
-        // n <= 0  => null
         let v = f64_array(&[1.0, 5.0, 9.0]);
         let lo = f64_array(&[0.0, 0.0, 0.0]);
         let hi = f64_array(&[10.0, 10.0, 10.0]);
@@ -389,7 +383,6 @@ mod tests {
         assert!(out.is_null(1));
         assert_eq!(out.value(2), 10);
 
-        // bounds iguales => null
         let v = f64_array(&[1.0]);
         let lo = f64_array(&[5.0]);
         let hi = f64_array(&[5.0]);
@@ -398,7 +391,6 @@ mod tests {
         let out = downcast_i32(&out);
         assert!(out.is_null(0));
 
-        // NaN en cualquiera => null
         let v = f64_array_opt(&[Some(f64::NAN)]);
         let lo = f64_array(&[0.0]);
         let hi = f64_array(&[10.0]);
@@ -422,7 +414,6 @@ mod tests {
         assert_eq!(out.value(2), 3);
         assert_eq!(out.value(3), 4);
 
-        // null en lo / hi / n => null
         let v = f64_array(&[1.0]);
         let lo = f64_array_opt(&[None]);
         let hi = f64_array(&[10.0]);
@@ -436,7 +427,6 @@ mod tests {
 
     #[test]
     fn test_width_bucket_duration_us() {
-        // v: [1s, 0, -1], lo=0, hi=2s, n=2
         let v = dur_us_array(&[1_000_000, 0, -1]);
         let lo = dur_us_array(&[0, 0, 0]);
         let hi = dur_us_array(&[2_000_000, 2_000_000, 2_000_000]);
@@ -444,7 +434,6 @@ mod tests {
 
         let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
         let out = downcast_i32(&out);
-        // width = 1s; x<lo => 0; x>=hi => 3
         assert_eq!(out.values(), &[2, 1, 0]);
     }
 
@@ -462,8 +451,6 @@ mod tests {
 
     #[test]
     fn test_width_bucket_interval_ym_basic() {
-        // meses: lo=0, hi=12, n=12
-        // v: [0,5,11,12,13] -> [1,6,12,13,13]
         let v = ym_array(&[0, 5, 11, 12, 13]);
         let lo = ym_array(&[0; 5]);
         let hi = ym_array(&[12; 5]);
@@ -476,7 +463,6 @@ mod tests {
 
     #[test]
     fn test_width_bucket_interval_ym_desc() {
-        // descendente: lo=12, hi=0, n=12
         let v = ym_array(&[11, 12, 0, -1, 13]);
         let lo = ym_array(&[12; 5]);
         let hi = ym_array(&[0; 5]);
@@ -492,7 +478,6 @@ mod tests {
 
     #[test]
     fn test_width_bucket_wrong_arg_count() {
-        // 3 argumentos -> error
         let v = f64_array(&[1.0]);
         let lo = f64_array(&[0.0]);
         let hi = f64_array(&[10.0]);
@@ -506,7 +491,6 @@ mod tests {
 
     #[test]
     fn test_width_bucket_unsupported_type() {
-        // Int32 en v -> debe caer en unsupported types (porque sólo soportas f64/duration/ym)
         let v: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let lo = f64_array(&[0.0, 0.0, 0.0]);
         let hi = f64_array(&[10.0, 10.0, 10.0]);
