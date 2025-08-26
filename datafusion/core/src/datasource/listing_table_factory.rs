@@ -70,13 +70,19 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_extension(file_extension);
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
-            let part_cols = match cmd.table_partition_cols.is_empty() {
-                true => options
+            let infer_parts = session_state
+                .config_options()
+                .execution
+                .listing_table_factory_infer_partitions;
+            let part_cols = if cmd.table_partition_cols.is_empty() && infer_parts {
+                options
                     .infer_partitions(session_state, &table_path)
                     .await?
-                    .into_iter(),
-                false => cmd.table_partition_cols.clone().into_iter(),
+                    .into_iter()
+            } else {
+                cmd.table_partition_cols.clone().into_iter()
             };
+
             (
                 None,
                 part_cols
@@ -191,6 +197,7 @@ fn get_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_execution::config::SessionConfig;
     use glob::Pattern;
     use std::collections::HashMap;
     use std::fs;
@@ -425,5 +432,39 @@ mod tests {
             (String::from("key2"), dtype.clone()),
         ];
         assert_eq!(expected_cols, listing_options.table_partition_cols);
+
+        // Ensure partition detection can be disabled via config
+        let factory = ListingTableFactory::new();
+        let mut cfg = SessionConfig::new();
+        cfg.options_mut()
+            .execution
+            .listing_table_factory_infer_partitions = false;
+        let context = SessionContext::new_with_config(cfg);
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable {
+            name,
+            location: dir.path().to_str().unwrap().to_string(),
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert!(listing_options.table_partition_cols.is_empty());
     }
 }

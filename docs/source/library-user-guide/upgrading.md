@@ -24,6 +24,42 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### New `datafusion.execution.listing_table_factory_infer_partitions` configuration option
+
+DataFusion 50.0.0 adds support for automatic Hive partition inference when using the `ListingTableFactory`. Previously,
+when creating a `ListingTable` through the `ListingTableFactory`, datasets that use Hive partitioning (e.g.
+`/table_root/column1=value1/column2=value2/data.parquet`) would not have the Hive columns or their values reflected in
+the table's schema or data. DataFusion will now, by default, detect Hive compliant partitions and incorporate them into
+the table's schema and data, allowing users to query and filter on the Hive columns. The previous behavior can be
+restored by setting the configuration option to `false`. Note that this does not affect low-level `ListingTable` users.
+
+**Configuration:**
+
+- **Key**: `datafusion.execution.listing_table_factory_infer_partitions`
+- **Default**: `true`
+- **Valid values**: `true`, `false`
+
+**Usage:**
+
+```rust
+# /* comment to avoid running
+use datafusion::prelude::*;
+use datafusion_common::config::SpillCompression;
+
+let mut config = SessionConfig::new();
+config.options_mut().execution.listing_table_factory_infer_partitions = false;
+let ctx = SessionContext::new_with_config(config);
+# */
+```
+
+Or via SQL:
+
+```sql
+SET datafusion.execution.listing_table_factory_infer_partitions = 'false';
+```
+
+[issue #17049]: https://github.com/apache/datafusion/issues/17049
+
 ### `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
 
 To address error-proneness of `ScalarUDFImpl::equals`, `AggregateUDFImpl::equals`and
