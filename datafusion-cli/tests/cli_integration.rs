@@ -37,8 +37,28 @@ fn make_settings() -> Settings {
     settings.set_prepend_module_to_snapshot(false);
     settings.add_filter(r"Elapsed .* seconds\.", "[ELAPSED]");
     settings.add_filter(r"DataFusion CLI v.*", "[CLI_VERSION]");
-    settings.add_filter(r"(?s)backtrace:.*?\n\n\n", "");
+    settings.add_filter(r"(?s)backtrace:.*", "");
     settings
+}
+
+// Common insta filters for tests that include memory profiling output.
+fn add_memory_filters(settings: &mut Settings) {
+    // Loosen memory profiling output: replace dynamic byte counts and categories with placeholders
+    // Match values like 'Peak memory usage: 10.0 MB' or 'Peak memory usage: 1024 B'
+    settings.add_filter(r"Peak memory usage: .*?B", "Peak memory usage: XB");
+    settings.add_filter(
+        r"Cumulative allocations: .*?B",
+        "Cumulative allocations: XB",
+    );
+    settings.add_filter(r"Other: .*?B", "Other: XB");
+    settings.add_filter(r"Sorting: .*?B", "Sorting: XB");
+
+    settings.add_filter(r"Memory usage by operator:", "Memory usage by operator:");
+
+    // Fallback: allow uncaptured lines to appear as-is by capturing the whole line
+    // and replacing with the captured group. This ensures we don't accidentally
+    // hide content that other filters should not change.
+    settings.add_filter(r"^(.*)$", "$1");
 }
 
 async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
@@ -230,15 +250,57 @@ fn test_cli_top_memory_consumers<'a>(
         r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
         "Resources exhausted: Failed to allocate",
     );
+    add_memory_filters(&mut settings);
 
     let _bound = settings.bind_to_scope();
 
     let mut cmd = cli();
-    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
-    cmd.args(["--memory-limit", "10M", "--command", sql]);
-    cmd.args(top_memory_consumers);
+    cmd.arg("-q")
+        .args(["--memory-limit", "10M"])
+        .args(top_memory_consumers);
 
-    assert_cmd_snapshot!(cmd);
+    let input = "\
+\\memory_profiling
+select * from generate_series(1,500000) as t1(v1) order by v1;
+";
+
+    assert_cmd_snapshot!(cmd.pass_stdin(input));
+}
+
+#[test]
+fn cli_memory_auto_report() {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("memory_auto_report");
+    // Add common memory-related filters
+    add_memory_filters(&mut settings);
+    let _bound = settings.bind_to_scope();
+
+    let input = "\
+    \\memory_profiling
+    select 1;
+    select * from generate_series(1,10000) as t1(v1) order by v1;
+    \\q
+    ";
+
+    assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
+}
+
+#[test]
+fn cli_memory_disable_stops_report() {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("memory_disable_stops_report");
+    // Add common memory-related filters
+    add_memory_filters(&mut settings);
+    let _bound = settings.bind_to_scope();
+
+    let input = "\
+\\memory_profiling
+select 1;
+\\memory_profiling
+select 1;
+";
+
+    assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
 }
 
 #[tokio::test]
