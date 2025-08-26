@@ -37,9 +37,7 @@ use log::{debug, trace};
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    cast_column, internal_err,
-    nested_struct::validate_struct_compatibility,
-    plan_datafusion_err, plan_err,
+    cast_column, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
@@ -931,12 +929,6 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        if let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
-            (array.data_type(), stat_field.data_type())
-        {
-            // Ensure the structs are compatible before casting
-            validate_struct_compatibility(source_fields, target_fields)?;
-        }
         let array = cast_column(&array, stat_field)?;
 
         arrays.push(array);

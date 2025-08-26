@@ -25,9 +25,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-use datafusion_common::{
-    cast_column, nested_struct::validate_struct_compatibility, plan_err, ColumnStatistics,
-};
+use datafusion_common::{cast_column, plan_err, ColumnStatistics};
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
 /// the table schema.
@@ -250,9 +248,7 @@ pub(crate) fn can_cast_field(
     table_field: &Field,
 ) -> datafusion_common::Result<()> {
     match (file_field.data_type(), table_field.data_type()) {
-        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-            validate_struct_compatibility(source_fields, target_fields)
-        }
+        (DataType::Struct(_), DataType::Struct(_)) => Ok(()),
         _ => {
             if can_cast_types(file_field.data_type(), table_field.data_type()) {
                 Ok(())

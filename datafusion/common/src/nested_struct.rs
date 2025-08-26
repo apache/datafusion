@@ -115,7 +115,12 @@ fn cast_struct_column(
 /// - Invalid data type combinations are encountered
 pub fn cast_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
-        Struct(target_fields) => cast_struct_column(source_col, target_fields),
+        Struct(target_fields) => {
+            if let Struct(source_fields) = source_col.data_type() {
+                validate_struct_compatibility(source_fields, target_fields)?;
+            }
+            cast_struct_column(source_col, target_fields)
+        }
         _ => Ok(cast(source_col, target_field.data_type())?),
     }
 }
@@ -311,6 +316,8 @@ mod tests {
 
         let result = cast_column(&source_col, &target_field);
         assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot cast struct field 'a'"));
     }
 
     #[test]
