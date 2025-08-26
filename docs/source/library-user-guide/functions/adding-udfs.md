@@ -811,7 +811,7 @@ At this point, you can use the `smooth_it` function in your query:
 
 For example, if we have a [`cars.csv`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/cars.csv) whose contents like
 
-```text
+```csv
 car,speed,time
 red,20.0,1996-04-12T12:05:03.000000000
 red,20.3,1996-04-12T12:05:04.000000000

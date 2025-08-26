@@ -167,6 +167,10 @@ as a single table, matching schemas as appropriate
 
 Coming Soon
 
+```rust
+
+```
+
 ## Using `CREATE EXTERNAL TABLE` to register data sources via SQL
 
 You can also register files using SQL using the [`CREATE EXTERNAL TABLE`]
