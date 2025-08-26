@@ -499,7 +499,7 @@ logical_plan
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: Int64(1) AS a
-06)--------EmptyRelation
+06)--------EmptyRelation: rows=1
 
 query II rowsort
 SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1
@@ -619,7 +619,7 @@ logical_plan
 01)LeftSemi Join: 
 02)--TableScan: t1 projection=[t1_id, t1_name]
 03)--SubqueryAlias: __correlated_sq_1
-04)----EmptyRelation
+04)----EmptyRelation: rows=1
 
 #exists_subquery_with_limit
 #de-correlated, limit is removed
@@ -644,7 +644,7 @@ SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id
 query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 query IT rowsort
 SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
@@ -701,7 +701,7 @@ logical_plan
 01)Projection: t1.t1_id, __scalar_sq_1.t2_id AS t2_id
 02)--Left Join: 
 03)----TableScan: t1 projection=[t1_id]
-04)----EmptyRelation
+04)----EmptyRelation: rows=0
 
 query II rowsort
 SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
@@ -1453,9 +1453,7 @@ logical_plan
 01)LeftSemi Join: 
 02)--TableScan: t1 projection=[a]
 03)--SubqueryAlias: __correlated_sq_1
-04)----Projection:
-05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-06)--------TableScan: t2 projection=[]
+04)----EmptyRelation: rows=1
 
 statement count 0
 drop table t1;

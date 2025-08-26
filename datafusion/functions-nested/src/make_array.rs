@@ -64,7 +64,7 @@ make_udf_expr_and_func!(
         description = "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeArray {
     signature: Signature,
     aliases: Vec<String>,

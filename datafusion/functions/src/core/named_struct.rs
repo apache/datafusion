@@ -58,7 +58,7 @@ a struct type of fields `field_a` and `field_b`:
         description = "Expression to include in the output struct. Can be a constant, column, or function, and any combination of arithmetic or string operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NamedStructFunc {
     signature: Signature,
 }

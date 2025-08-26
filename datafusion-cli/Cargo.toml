@@ -38,8 +38,8 @@ backtrace = ["datafusion/backtrace"]
 arrow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = "1.8.3"
-aws-credential-types = "1.2.4"
-clap = { version = "4.5.41", features = ["derive", "cargo"] }
+aws-credential-types = "1.2.5"
+clap = { version = "4.5.44", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",
     "crypto_expressions",
@@ -47,6 +47,7 @@ datafusion = { workspace = true, features = [
     "encoding_expressions",
     "nested_expressions",
     "parquet",
+    "parquet_encryption",
     "recursive_protection",
     "regex_expressions",
     "unicode_expressions",
@@ -61,7 +62,7 @@ object_store = { workspace = true, features = ["aws", "gcp", "http"] }
 parking_lot = { workspace = true }
 parquet = { workspace = true, default-features = false }
 regex = { workspace = true }
-rustyline = "16.0"
+rustyline = "17.0"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = { workspace = true }
 

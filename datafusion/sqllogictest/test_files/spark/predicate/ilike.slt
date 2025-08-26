@@ -23,5 +23,52 @@
 
 ## Original Query: SELECT ilike('Spark', '_Park');
 ## PySpark 3.5.5 Result: {'ilike(Spark, _Park)': True, 'typeof(ilike(Spark, _Park))': 'boolean', 'typeof(Spark)': 'string', 'typeof(_Park)': 'string'}
-#query
-#SELECT ilike('Spark'::string, '_Park'::string);
+query B
+SELECT ilike('Spark'::string, '_Park'::string);
+----
+true
+
+query B
+SELECT ilike('Spark',  arrow_cast('_Park', 'LargeUtf8'));
+----
+true
+
+query B
+SELECT ilike(arrow_cast('Spark', 'Utf8View'),  arrow_cast('_Park', 'LargeUtf8'));
+----
+true
+
+query B
+SELECT ilike('Spark'::string, '_park'::string);
+----
+true
+
+query B
+SELECT ilike('SPARK'::string, '_park'::string);
+----
+true
+
+query B
+SELECT ilike('Spark'::string, 'SP%'::string);
+----
+true
+
+query B
+SELECT ilike('Spark'::string, '%ARK'::string);
+----
+true
+
+query B
+SELECT ilike('Spark'::string, 'xyz'::string);
+----
+false
+
+query B
+SELECT ilike(NULL::string, '_park'::string);
+----
+NULL
+
+query B
+SELECT ilike('Spark'::string, NULL::string);
+----
+NULL

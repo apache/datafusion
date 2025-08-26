@@ -26,6 +26,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::trunc;
 
 use arrow::datatypes::DataType;
+use datafusion_common::config::ConfigOptions;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -35,6 +36,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_args = vec![ColumnarValue::Array(f32_array)];
         let arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
         let return_field = Field::new("f", DataType::Float32, true).into();
+        let config_options = Arc::new(ConfigOptions::default());
+
         c.bench_function(&format!("trunc f32 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
@@ -44,6 +47,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: size,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )
@@ -62,6 +66,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: size,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )
