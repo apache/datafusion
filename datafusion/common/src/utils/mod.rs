@@ -886,11 +886,12 @@ pub fn take_function_args<const N: usize, T>(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sql"))]
 mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
+    use sqlparser::ast::Ident;
     use sqlparser::tokenizer::Span;
 
     #[test]
