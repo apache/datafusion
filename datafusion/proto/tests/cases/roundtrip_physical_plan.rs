@@ -1000,7 +1000,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             self: Arc<Self>,
             _children: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
-            todo!()
+            Ok(self)
         }
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

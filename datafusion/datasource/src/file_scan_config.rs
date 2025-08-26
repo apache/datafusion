@@ -583,7 +583,8 @@ impl DataSource for FileScanConfig {
             EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
                 .with_constraints(constraints);
         if let Some(filter) = self.file_source.filter() {
-            // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with
+            // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
+            // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
             match reassign_predicate_columns(filter, &schema, true) {
                 Ok(filter) => {
                     match Self::add_filter_equivalence_info(filter, &mut eq_properties) {
@@ -592,14 +593,14 @@ impl DataSource for FileScanConfig {
                             warn!("Failed to add filter equivalence info: {e}");
                             #[cfg(debug_assertions)]
                             panic!("Failed to add filter equivalence info: {e}");
-                        },
+                        }
                     }
                 }
                 Err(e) => {
                     warn!("Failed to reassign predicate columns: {e}");
                     #[cfg(debug_assertions)]
                     panic!("Failed to reassign predicate columns: {e}");
-                },
+                }
             };
         }
         eq_properties
