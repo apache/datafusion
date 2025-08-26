@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow::{
-    array::{new_null_array, ArrayRef, BooleanArray},
+    array::{new_null_array, ArrayRef, BooleanArray, StringArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -931,13 +931,23 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        if let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
-            (array.data_type(), stat_field.data_type())
+        let array = if matches!(array.data_type(), DataType::Binary)
+            && matches!(stat_field.data_type(), DataType::Utf8)
         {
-            // Ensure the structs are compatible before casting
-            validate_struct_compatibility(source_fields, target_fields)?;
-        }
-        let array = cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?;
+            let array = array.as_binary::<i32>();
+            let array = StringArray::from_iter(array.iter().map(|maybe_bytes| {
+                maybe_bytes.and_then(|b| String::from_utf8(b.to_vec()).ok())
+            }));
+            Arc::new(array) as ArrayRef
+        } else {
+            if let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
+                (array.data_type(), stat_field.data_type())
+            {
+                // Ensure the structs are compatible before casting
+                validate_struct_compatibility(source_fields, target_fields)?;
+            }
+            cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
+        };
 
         arrays.push(array);
     }
@@ -2769,6 +2779,37 @@ mod tests {
         +--------+
         | s1_min |
         +--------+
+        |        |
+        +--------+
+        ");
+    }
+
+    #[test]
+    fn test_build_statistics_invalid_utf8_input() {
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("s1", 1),
+            StatisticsType::Min,
+            Field::new("s1_min", DataType::Utf8, true),
+        )]);
+
+        let statistics = OneContainerStats {
+            min_values: Some(Arc::new(BinaryArray::from(vec![
+                Some(b"ok".as_ref()),
+                Some([0xffu8, 0xfeu8].as_ref()),
+                None,
+            ]))),
+            max_values: None,
+            num_containers: 3,
+        };
+
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------+
+        | s1_min |
+        +--------+
+        | ok     |
+        |        |
         |        |
         +--------+
         ");
