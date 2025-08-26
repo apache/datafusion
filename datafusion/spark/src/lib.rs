@@ -104,6 +104,7 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::function::aggregate::expr_fn::*;
     pub use super::function::array::expr_fn::*;
+    pub use super::function::bitmap::expr_fn::*;
     pub use super::function::bitwise::expr_fn::*;
     pub use super::function::collection::expr_fn::*;
     pub use super::function::conditional::expr_fn::*;
@@ -130,6 +131,7 @@ pub mod expr_fn {
 pub fn all_default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
     function::array::functions()
         .into_iter()
+        .chain(function::bitmap::functions())
         .chain(function::bitwise::functions())
         .chain(function::collection::functions())
         .chain(function::conditional::functions())
