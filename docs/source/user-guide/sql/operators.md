@@ -631,6 +631,7 @@ DataFusion currently supports the following pipe operators:
 - [SELECT](#pipe_select)
 - [EXTEND](#pipe_extend)
 - [AS](#pipe_as)
+- [JOIN](#pipe_join)
 - [UNION](#pipe_union)
 - [INTERSECT](#pipe_intersect)
 - [EXCEPT](#pipe_except)
@@ -729,6 +730,31 @@ DataFusion currently supports the following pipe operators:
 | 1     |
 | 2     |
 +-------+
+```
+
+(pipe_join)=
+
+### JOIN
+
+```sql
+> (
+  SELECT 'apples' AS item, 2 AS sales
+  UNION ALL
+  SELECT 'bananas' AS item, 5 AS sales
+)
+|> AS produce_sales
+|> LEFT JOIN
+     (
+       SELECT 'apples' AS item, 123 AS id
+     ) AS produce_data
+   ON produce_sales.item = produce_data.item
+|> SELECT produce_sales.item, sales, id;
++--------+-------+------+
+| item   | sales | id   |
++--------+-------+------+
+| apples | 2     | 123  |
+| bananas| 5     | NULL |
++--------+-------+------+
 ```
 
 (pipe_union)=

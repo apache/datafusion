@@ -43,7 +43,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok(left)
     }
 
-    fn parse_relation_join(
+    pub(crate) fn parse_relation_join(
         &self,
         left: LogicalPlan,
         join: Join,
