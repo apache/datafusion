@@ -39,7 +39,7 @@ name = "datafusion_functions_nested"
 
 [features]
 default = ["sql"]
-sql = ["datafusion-common/sql"]
+sql = ["datafusion-expr/sql"]
 
 [dependencies]
 arrow = { workspace = true }
