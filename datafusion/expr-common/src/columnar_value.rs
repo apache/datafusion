@@ -260,10 +260,11 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, Int64Array, StructArray};
-    use arrow::compute::CastOptions;
-    use arrow::datatypes::{DataType, Field};
-
+    use arrow::{
+        array::{Int32Array, Int64Array, StructArray},
+        compute::CastOptions,
+        datatypes::{DataType, Field},
+    };
     #[test]
     fn values_to_arrays() {
         // (input, expected)

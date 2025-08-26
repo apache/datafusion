@@ -30,25 +30,24 @@ use arrow::{
 };
 // pub use for backwards compatibility
 pub use datafusion_common::pruning::PruningStatistics;
-use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
-use datafusion_physical_plan::metrics::Count;
-use log::{debug, trace};
-
-use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::nested_struct::validate_struct_compatibility;
-use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    cast_column, internal_err, plan_datafusion_err, plan_err,
-    tree_node::{Transformed, TreeNode},
-    ScalarValue,
+    cast_column,
+    error::{DataFusionError, Result},
+    format::DEFAULT_CAST_OPTIONS,
+    internal_err,
+    nested_struct::validate_struct_compatibility,
+    plan_datafusion_err, plan_err,
+    tree_node::{Transformed, TransformedResult, TreeNode},
+    Column, DFSchema, ScalarValue,
 };
-use datafusion_common::{Column, DFSchema};
 use datafusion_expr_common::operator::Operator;
+use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
+use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
+use log::{debug, trace};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
 /// possibly evaluate to `true` given information about a column provided by
