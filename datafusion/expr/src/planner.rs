@@ -327,7 +327,7 @@ pub enum PlannerResult<T> {
 /// Customize planning SQL types to DataFusion (Arrow) types.
 #[cfg(feature = "sql")]
 pub trait TypePlanner: Debug + Send + Sync {
-    /// Plan SQL [`ast::DataType`] to DataFusion [`DataType`]
+    /// Plan SQL [`sqlparser::ast::DataType`] to DataFusion [`DataType`]
     ///
     /// Returns None if not possible
     fn plan_type(
