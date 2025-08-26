@@ -37,7 +37,7 @@ fn make_settings() -> Settings {
     settings.set_prepend_module_to_snapshot(false);
     settings.add_filter(r"Elapsed .* seconds\.", "[ELAPSED]");
     settings.add_filter(r"DataFusion CLI v.*", "[CLI_VERSION]");
-    settings.add_filter(r"(?s)backtrace:.*?\n\n\n", "");
+    settings.add_filter(r"(?s)backtrace:.*", "");
     settings
 }
 
