@@ -406,16 +406,16 @@ mod tests {
 
     #[test]
     fn test_table_reference_to_vector() {
-        let table_reference = TableReference::parse_str("table");
+        let table_reference = TableReference::from("table");
         assert_eq!(vec!["table".to_string()], table_reference.to_vec());
 
-        let table_reference = TableReference::parse_str("schema.table");
+        let table_reference = TableReference::from("schema.table");
         assert_eq!(
             vec!["schema".to_string(), "table".to_string()],
             table_reference.to_vec()
         );
 
-        let table_reference = TableReference::parse_str("catalog.schema.table");
+        let table_reference = TableReference::from("catalog.schema.table");
         assert_eq!(
             vec![
                 "catalog".to_string(),
