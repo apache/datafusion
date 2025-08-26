@@ -17,26 +17,28 @@
 
 //! Common behaviors that every file format needs to implement
 
-use datafusion_physical_plan::DisplayAs;
-use std::any::Any;
-use std::fmt;
-use std::fmt::Formatter;
-use std::sync::Arc;
-
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::{
     get_projected_output_ordering, FileScanConfig, FileScanConfigBuilder,
 };
 use crate::file_stream::{FileOpener, FileStream};
 use crate::schema_adapter::SchemaAdapterFactory;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, Result, Statistics};
+use datafusion_common::{
+    not_impl_err, ColumnStatistics, Constraints, Result, Statistics,
+};
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr,
 };
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::DisplayAs;
 use datafusion_physical_plan::{DisplayFormatType, ExecutionPlan};
+use std::any::Any;
+use std::fmt;
+use std::fmt::Formatter;
+use std::sync::Arc;
 
 use crate::display::FileGroupsDisplay;
 use crate::source::{DataSource, DataSourceExec};
@@ -164,6 +166,28 @@ pub trait FileSource: fmt::Debug + Send + Sync {
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }
+
+    /// Project the schema, constraints, and the statistics on the given column indices
+    fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
+        let config = self.config();
+
+        if config.projection.is_none() && config.table_partition_cols.is_empty() {
+            return (
+                Arc::clone(&config.file_schema),
+                config.constraints.clone(),
+                self.file_source_statistics(),
+                config.output_ordering.clone(),
+            );
+        }
+
+        let schema = config.projected_schema();
+        let constraints = config.projected_constraints();
+        let stats = self.as_data_source().data_source_statistics();
+
+        let output_ordering = get_projected_output_ordering(config, &schema);
+
+        (schema, constraints, stats, output_ordering)
+    }
 }
 
 impl<T: FileSource + 'static> DataSource for T {
@@ -260,8 +284,7 @@ impl<T: FileSource + 'static> DataSource for T {
     }
 
     fn eq_properties(&self) -> EquivalenceProperties {
-        let (schema, constraints, _, orderings) =
-            self.config().project(self.file_source_statistics());
+        let (schema, constraints, _, orderings) = self.project();
         EquivalenceProperties::new_with_orderings(schema, orderings)
             .with_constraints(constraints)
     }
@@ -270,8 +293,29 @@ impl<T: FileSource + 'static> DataSource for T {
         SchedulingType::Cooperative
     }
 
-    fn data_source_statistics(&self) -> Result<Statistics> {
-        Ok(self.config().projected_stats(self.file_source_statistics()))
+    fn data_source_statistics(&self) -> Statistics {
+        let file_source_statistics = self.file_source_statistics();
+
+        let table_cols_stats = self
+            .config()
+            .projection_indices()
+            .into_iter()
+            .map(|idx| {
+                if idx < self.config().file_schema.fields().len() {
+                    file_source_statistics.column_statistics[idx].clone()
+                } else {
+                    // TODO provide accurate stat for partition column (#1186)
+                    ColumnStatistics::new_unknown()
+                }
+            })
+            .collect();
+
+        Statistics {
+            num_rows: file_source_statistics.num_rows,
+            // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+            total_byte_size: file_source_statistics.total_byte_size,
+            column_statistics: table_cols_stats,
+        }
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {

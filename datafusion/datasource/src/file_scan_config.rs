@@ -41,8 +41,7 @@ use arrow::{
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
 use datafusion_common::{
-    exec_err, ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue,
-    Statistics,
+    exec_err, Constraints, DataFusionError, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions::Column;
@@ -466,35 +465,12 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
 }
 
 impl FileScanConfig {
-    fn projection_indices(&self) -> Vec<usize> {
+    pub(crate) fn projection_indices(&self) -> Vec<usize> {
         match &self.projection {
             Some(proj) => proj.clone(),
             None => (0..self.file_schema.fields().len()
                 + self.table_partition_cols.len())
                 .collect(),
-        }
-    }
-
-    /// make sure to call file_source.file_source_statistics()
-    pub fn projected_stats(&self, file_source_statistics: Statistics) -> Statistics {
-        let table_cols_stats = self
-            .projection_indices()
-            .into_iter()
-            .map(|idx| {
-                if idx < self.file_schema.fields().len() {
-                    file_source_statistics.column_statistics[idx].clone()
-                } else {
-                    // TODO provide accurate stat for partition column (#1186)
-                    ColumnStatistics::new_unknown()
-                }
-            })
-            .collect();
-
-        Statistics {
-            num_rows: file_source_statistics.num_rows,
-            // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-            total_byte_size: file_source_statistics.total_byte_size,
-            column_statistics: table_cols_stats,
         }
     }
 
@@ -535,30 +511,6 @@ impl FileScanConfig {
     pub fn newlines_in_values(&self) -> bool {
         self.new_lines_in_values
     }
-
-    /// Project the schema, constraints, and the statistics on the given column indices
-    pub fn project(
-        &self,
-        file_source_statistics: Statistics,
-    ) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
-        if self.projection.is_none() && self.table_partition_cols.is_empty() {
-            return (
-                Arc::clone(&self.file_schema),
-                self.constraints.clone(),
-                file_source_statistics,
-                self.output_ordering.clone(),
-            );
-        }
-
-        let schema = self.projected_schema();
-        let constraints = self.projected_constraints();
-        let stats = self.projected_stats(file_source_statistics);
-
-        let output_ordering = get_projected_output_ordering(self, &schema);
-
-        (schema, constraints, stats, output_ordering)
-    }
-
     pub fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
@@ -1198,7 +1150,7 @@ mod tests {
     use crate::source::DataSource;
     use arrow::array::{Int32Array, RecordBatch};
     use datafusion_common::stats::Precision;
-    use datafusion_common::{assert_batches_eq, internal_err};
+    use datafusion_common::{assert_batches_eq, internal_err, ColumnStatistics};
     use datafusion_expr::SortExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
 
@@ -1220,8 +1172,7 @@ mod tests {
             )]),
         );
 
-        let (proj_schema, _, proj_statistics, _) =
-            source.config().project(source.file_source_statistics());
+        let (proj_schema, _, proj_statistics, _) = source.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             proj_schema.field(file_schema.fields().len()).name(),
@@ -1294,8 +1245,7 @@ mod tests {
             )]),
         );
 
-        let (proj_schema, _, proj_statistics, _) =
-            source.config().project(source.file_source_statistics());
+        let (proj_schema, _, proj_statistics, _) = source.project();
         assert_eq!(
             columns(&proj_schema),
             vec!["date".to_owned(), "c1".to_owned()]
@@ -1356,7 +1306,7 @@ mod tests {
         );
 
         let source_statistics = source.file_source_statistics();
-        let conf_stats = source.data_source_statistics().unwrap();
+        let conf_stats = source.data_source_statistics();
 
         // projection should be reflected in the file source statistics
         assert_eq!(conf_stats.num_rows, Precision::Inexact(3));

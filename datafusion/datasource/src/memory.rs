@@ -194,12 +194,12 @@ impl DataSource for MemorySourceConfig {
         SchedulingType::Cooperative
     }
 
-    fn data_source_statistics(&self) -> Result<Statistics> {
-        Ok(common::compute_record_batch_statistics(
+    fn data_source_statistics(&self) -> Statistics {
+        common::compute_record_batch_statistics(
             &self.partitions,
             &self.schema,
             self.projection.clone(),
-        ))
+        )
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {

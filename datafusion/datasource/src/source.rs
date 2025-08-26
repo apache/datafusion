@@ -155,7 +155,7 @@ pub trait DataSource: Send + Sync + Debug {
     fn scheduling_type(&self) -> SchedulingType {
         SchedulingType::NonCooperative
     }
-    fn data_source_statistics(&self) -> Result<Statistics>;
+    fn data_source_statistics(&self) -> Statistics;
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
@@ -305,7 +305,7 @@ impl ExecutionPlan for DataSourceExec {
             }
             Ok(statistics)
         } else {
-            Ok(self.data_source.data_source_statistics()?)
+            Ok(self.data_source.data_source_statistics())
         }
     }
 
