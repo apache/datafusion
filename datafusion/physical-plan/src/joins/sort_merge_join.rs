@@ -2438,7 +2438,7 @@ fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayR
 }
 
 /// Get comparison result of two rows of join arrays
-fn compare_join_arrays(
+pub fn compare_join_arrays(
     left_arrays: &[ArrayRef],
     left: usize,
     right_arrays: &[ArrayRef],
