@@ -2665,13 +2665,13 @@ impl Display for OutputFormat {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parquet"))]
 mod tests {
-    #[cfg(feature = "parquet")]
-    use crate::config::TableParquetOptions;
+    // Import `TableParquetOptions` unconditionally because this module only
+    // runs with the `parquet` feature enabled.
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions,
+        Extensions, TableOptions, TableParquetOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;
