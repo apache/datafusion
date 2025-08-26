@@ -55,6 +55,8 @@ fn cast_struct_column(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
+        validate_struct_compatibility(source_struct.fields(), target_fields)?;
+
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
@@ -64,7 +66,13 @@ fn cast_struct_column(
             match source_struct.column_by_name(target_child_field.name()) {
                 Some(source_child_col) => {
                     let adapted_child =
-                        cast_column(source_child_col, target_child_field, cast_options)?;
+                        cast_column(source_child_col, target_child_field, cast_options)
+                            .map_err(|e| {
+                            e.context(format!(
+                                "While casting struct field '{}'",
+                                target_child_field.name()
+                            ))
+                        })?;
                     arrays.push(adapted_child);
                 }
                 None => {
