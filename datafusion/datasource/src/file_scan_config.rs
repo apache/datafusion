@@ -583,11 +583,15 @@ impl DataSource for FileScanConfig {
             EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
                 .with_constraints(constraints);
         if let Some(filter) = self.file_source.filter() {
-            let filter = reassign_predicate_columns(filter, &schema, false).expect(
-                "reassign_predicate_columns should succeed as schema is derived from projection",
-            );
-            Self::add_filter_equivalence_info(filter, &mut eq_properties)
-                .unwrap_or_else(|e| warn!("Failed to add filter equivalence info: {e}"));
+            match reassign_predicate_columns(filter, &schema, false) {
+                Ok(filter) => {
+                    match Self::add_filter_equivalence_info(filter, &mut eq_properties) {
+                        Ok(()) => {}
+                        Err(e) => warn!("Failed to add filter equivalence info: {e}"),
+                    }
+                }
+                Err(e) => warn!("Failed to add filter equivalence info: {e}"),
+            };
         }
         eq_properties
     }
