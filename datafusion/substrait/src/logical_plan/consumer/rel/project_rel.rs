@@ -62,7 +62,13 @@ pub async fn from_project_rel(
                 // to transform it into a column reference
                 window_exprs.insert(e.clone());
             }
-            explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
+            let maybe_apply_alias = match e {
+                lit @ Expr::Literal(_, _) => {
+                    lit.alias(uuid::Uuid::new_v4().to_string())
+                }
+                _ => e
+            };
+            explicit_exprs.push(name_tracker.get_uniquely_named_expr(maybe_apply_alias)?);
         }
 
         let input = if !window_exprs.is_empty() {
