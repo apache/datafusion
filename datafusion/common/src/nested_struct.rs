@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{DataFusionError, Result, _plan_err};
+use crate::error::{Result, _plan_err};
 use arrow::{
     array::{new_null_array, Array, ArrayRef, StructArray},
     compute::cast,
@@ -59,8 +59,7 @@ fn cast_struct_column(
         let num_rows = source_col.len();
 
         for target_child_field in target_fields {
-            let field_arc = Arc::clone(target_child_field);
-            fields.push(Arc::clone(&field_arc));
+            fields.push(Arc::clone(target_child_field));
             match source_struct.column_by_name(target_child_field.name()) {
                 Some(source_child_col) => {
                     let adapted_child =
@@ -78,10 +77,10 @@ fn cast_struct_column(
         Ok(Arc::new(struct_array))
     } else {
         // Return error if source is not a struct type
-        Err(DataFusionError::Plan(format!(
+        _plan_err!(
             "Cannot cast column of type {:?} to struct type. Source must be a struct to cast to struct.",
             source_col.data_type()
-        )))
+        )
     }
 }
 
