@@ -58,7 +58,8 @@ fn memory_catalog_dereg_nonempty_schema_with_table_removal() {
 
     cat.register_schema("foo", schema.clone()).unwrap();
     schema.deregister_table("t").unwrap();
-    assert!(cat.deregister_schema("foo", false).unwrap().is_some());
+    let err = cat.deregister_schema("foo", false).unwrap_err().to_string();
+    assert!(err.contains("expected error message"), "Can't find expected in {err}");
 }
 
 #[test]
