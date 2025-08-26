@@ -15,28 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Make sure fast / cheap clones on Arc are explicit:
-// https://github.com/apache/datafusion/issues/11143
-#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+//! Sum distinct accumulator implementations
 
-pub mod access_plan;
-pub mod file_format;
-pub mod metadata;
-mod metrics;
-mod opener;
-mod page_filter;
-mod reader;
-mod row_filter;
-mod row_group_filter;
-pub mod source;
-mod writer;
+pub mod numeric;
 
-pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
-pub use file_format::*;
-pub use metrics::ParquetFileMetrics;
-pub use page_filter::PagePruningAccessPlanFilter;
-pub use reader::*; // Expose so downstream crates can use it
-pub use row_filter::build_row_filter;
-pub use row_filter::can_expr_be_pushed_down_with_schemas;
-pub use row_group_filter::RowGroupAccessPlanFilter;
-pub use writer::plan_to_parquet;
+pub use numeric::DistinctSumAccumulator;

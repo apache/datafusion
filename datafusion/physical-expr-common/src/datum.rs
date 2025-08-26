@@ -154,9 +154,26 @@ pub fn compare_op_for_nested(
     if matches!(op, Operator::IsDistinctFrom | Operator::IsNotDistinctFrom) {
         Ok(BooleanArray::new(values, None))
     } else {
-        // If one of the side is NULL, we returns NULL
+        // If one of the side is NULL, we return NULL
         // i.e. NULL eq NULL -> NULL
-        let nulls = NullBuffer::union(l.nulls(), r.nulls());
+        // For nested comparisons, we need to ensure the null buffer matches the result length
+        let nulls = match (is_l_scalar, is_r_scalar) {
+            (false, false) | (true, true) => NullBuffer::union(l.nulls(), r.nulls()),
+            (true, false) => {
+                // When left is null-scalar and right is array, expand left nulls to match result length
+                match l.nulls().filter(|nulls| !nulls.is_valid(0)) {
+                    Some(_) => Some(NullBuffer::new_null(len)), // Left scalar is null
+                    None => r.nulls().cloned(),                 // Left scalar is non-null
+                }
+            }
+            (false, true) => {
+                // When right is null-scalar and left is array, expand right nulls to match result length
+                match r.nulls().filter(|nulls| !nulls.is_valid(0)) {
+                    Some(_) => Some(NullBuffer::new_null(len)), // Right scalar is null
+                    None => l.nulls().cloned(), // Right scalar is non-null
+                }
+            }
+        };
         Ok(BooleanArray::new(values, nulls))
     }
 }
