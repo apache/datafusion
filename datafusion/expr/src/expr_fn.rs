@@ -17,7 +17,11 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery, NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction, WindowFunctionParams};
+use crate::expr::{
+    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
+    NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    WindowFunctionParams,
+};
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
     StateFieldsArgs,

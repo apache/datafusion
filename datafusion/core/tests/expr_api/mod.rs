@@ -24,6 +24,7 @@ use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr::NullTreatment;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::ExprFunctionExt;
 use datafusion_functions::core::expr_ext::FieldAccessor;
@@ -33,7 +34,6 @@ use datafusion_functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, LazyLock};
-use datafusion_expr::expr::NullTreatment;
 
 mod parse_sql_expr;
 mod simplification;

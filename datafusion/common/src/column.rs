@@ -24,9 +24,7 @@ use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
 use std::collections::HashSet;
-use std::convert::Infallible;
 use std::fmt;
-use std::str::FromStr;
 
 /// A named reference to a qualified field in a schema.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -90,6 +88,7 @@ impl Column {
     ///
     /// For example, `foo.bar` would be represented as a two element vector
     /// `["foo", "bar"]`
+    #[cfg(feature = "sql")]
     fn from_idents(mut idents: Vec<String>) -> Option<Self> {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
@@ -371,8 +370,8 @@ impl From<(Option<&TableReference>, &FieldRef)> for Column {
 }
 
 #[cfg(feature = "sql")]
-impl FromStr for Column {
-    type Err = Infallible;
+impl std::str::FromStr for Column {
+    type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(s.into())

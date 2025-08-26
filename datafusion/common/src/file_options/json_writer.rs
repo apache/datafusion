@@ -20,7 +20,7 @@
 use crate::{
     config::JsonOptions,
     error::{DataFusionError, Result},
-    parsers::CompressionTypeVariant
+    parsers::CompressionTypeVariant,
 };
 
 /// Options for writing JSON files
