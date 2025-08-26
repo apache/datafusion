@@ -17,6 +17,12 @@
 
 //! Demonstrates how to track and report memory usage of a query.
 //!
+//! This example enables per-consumer memory tracking while running a query.
+//! It collects detailed metrics for each memory consumer (for example, operators
+//! or execution stages), including peak memory and cumulative allocation bytes,
+//! and then prints a short summary that aggregates metrics by operator
+//! category.
+//!
 //! Run with `cargo run --example memory_profiling`.
 
 use std::{collections::BTreeMap, fmt::Write, num::NonZeroUsize, sync::Arc};
