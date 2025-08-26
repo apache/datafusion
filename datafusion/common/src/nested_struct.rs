@@ -254,23 +254,23 @@ mod tests {
 
     #[test]
     fn test_cast_column_with_options() {
-        let source = Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef;
+        let source = Arc::new(Int64Array::from(vec![1, i64::MAX])) as ArrayRef;
         let target_field = Field::new("ints", DataType::Int32, true);
 
         let safe_opts = CastOptions {
-            safe: true,
+            safe: false,
             ..DEFAULT_CAST_OPTIONS
         };
         assert!(cast_column(&source, &target_field, &safe_opts).is_err());
 
         let unsafe_opts = CastOptions {
-            safe: false,
+            safe: true,
             ..DEFAULT_CAST_OPTIONS
         };
         let result = cast_column(&source, &target_field, &unsafe_opts).unwrap();
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(result.value(0), 1);
-        assert_eq!(result.value(1), 2);
+        assert!(result.is_null(1));
     }
 
     #[test]
@@ -346,6 +346,7 @@ mod tests {
         let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
+        println!("error: {}", error_msg);
         assert!(error_msg.contains("Cannot cast struct field 'a'"));
     }
 
