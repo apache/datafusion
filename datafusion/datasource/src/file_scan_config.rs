@@ -580,17 +580,26 @@ impl DataSource for FileScanConfig {
     fn eq_properties(&self) -> EquivalenceProperties {
         let (schema, constraints, _, orderings) = self.project();
         let mut eq_properties =
-            EquivalenceProperties::new_with_orderings(schema, orderings)
+            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
                 .with_constraints(constraints);
         if let Some(filter) = self.file_source.filter() {
-            match reassign_predicate_columns(filter, &self.file_schema, false) {
+            // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with
+            match reassign_predicate_columns(filter, &schema, true) {
                 Ok(filter) => {
                     match Self::add_filter_equivalence_info(filter, &mut eq_properties) {
                         Ok(()) => {}
-                        Err(e) => warn!("Failed to add filter equivalence info: {e}"),
+                        Err(e) => {
+                            warn!("Failed to add filter equivalence info: {e}");
+                            #[cfg(debug_assertions)]
+                            panic!("Failed to add filter equivalence info: {e}");
+                        },
                     }
                 }
-                Err(e) => warn!("Failed to reassign predicate columns: {e}"),
+                Err(e) => {
+                    warn!("Failed to reassign predicate columns: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to reassign predicate columns: {e}");
+                },
             };
         }
         eq_properties
