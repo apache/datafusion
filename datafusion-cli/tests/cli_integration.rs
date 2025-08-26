@@ -262,7 +262,6 @@ fn test_cli_top_memory_consumers<'a>(
     let input = "\
 \\memory_profiling
 select * from generate_series(1,500000) as t1(v1) order by v1;
-\\q
 ";
 
     assert_cmd_snapshot!(cmd.pass_stdin(input));
