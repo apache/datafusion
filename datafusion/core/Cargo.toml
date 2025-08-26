@@ -63,6 +63,7 @@ default = [
     "compression",
     "parquet",
     "recursive_protection",
+    "sql",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -93,6 +94,11 @@ serde = [
     # Enable `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
     # statements in `arrow-schema` crate
     "arrow-schema/serde",
+]
+sql = [
+    "datafusion-common/sql",
+    "datafusion-sql",
+    "sqlparser",
 ]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
@@ -145,7 +151,7 @@ parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
 regex = { workspace = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
