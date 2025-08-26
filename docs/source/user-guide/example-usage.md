@@ -19,7 +19,7 @@
 
 # Example Usage
 
-In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
+In this example some simple processing is performed on the [`example.csv`](../../../datafusion/core/tests/data/example.csv) file.
 
 Even [`more code examples`](https://github.com/apache/datafusion/tree/main/datafusion-examples) attached to the project.
 
