@@ -74,6 +74,15 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// [`execute`]: ExecutionPlan::execute
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
+///
+/// # Examples
+///
+/// See [`datafusion-examples`] for examples, including
+/// [`memory_pool_execution_plan.rs`] which shows how to implement a custom
+/// `ExecutionPlan` with memory tracking and spilling support.
+///
+/// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
+/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///

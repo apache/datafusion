@@ -40,6 +40,7 @@ use datafusion_expr::{
     ReversedUDAF, Signature,
 };
 
+use datafusion_functions_aggregate_common::aggregate::avg_distinct::Float64DistinctAvgAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
@@ -114,79 +115,95 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if acc_args.is_distinct {
-            return exec_err!("avg(DISTINCT) aggregations are not available");
-        }
+        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         use DataType::*;
 
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         // instantiate specialized accumulator based for the type
-        match (&data_type, acc_args.return_field.data_type()) {
-            (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
-            (
-                Decimal128(sum_precision, sum_scale),
-                Decimal128(target_precision, target_scale),
-            ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type> {
-                sum: None,
-                count: 0,
-                sum_scale: *sum_scale,
-                sum_precision: *sum_precision,
-                target_precision: *target_precision,
-                target_scale: *target_scale,
-            })),
-
-            (
-                Decimal256(sum_precision, sum_scale),
-                Decimal256(target_precision, target_scale),
-            ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal256Type> {
-                sum: None,
-                count: 0,
-                sum_scale: *sum_scale,
-                sum_precision: *sum_precision,
-                target_precision: *target_precision,
-                target_scale: *target_scale,
-            })),
-
-            (Duration(time_unit), Duration(result_unit)) => {
-                Ok(Box::new(DurationAvgAccumulator {
+        if acc_args.is_distinct {
+            match &data_type {
+                // Numeric types are converted to Float64 via `coerce_avg_type` during logical plan creation
+                Float64 => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
+                _ => exec_err!("AVG(DISTINCT) for {} not supported", data_type),
+            }
+        } else {
+            match (&data_type, acc_args.return_field.data_type()) {
+                (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
+                (
+                    Decimal128(sum_precision, sum_scale),
+                    Decimal128(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type> {
                     sum: None,
                     count: 0,
-                    time_unit: *time_unit,
-                    result_unit: *result_unit,
-                }))
-            }
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
 
-            _ => exec_err!(
-                "AvgAccumulator for ({} --> {})",
-                &data_type,
-                acc_args.return_field.data_type()
-            ),
+                (
+                    Decimal256(sum_precision, sum_scale),
+                    Decimal256(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal256Type> {
+                    sum: None,
+                    count: 0,
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
+
+                (Duration(time_unit), Duration(result_unit)) => {
+                    Ok(Box::new(DurationAvgAccumulator {
+                        sum: None,
+                        count: 0,
+                        time_unit: *time_unit,
+                        result_unit: *result_unit,
+                    }))
+                }
+
+                _ => exec_err!(
+                    "AvgAccumulator for ({} --> {})",
+                    &data_type,
+                    acc_args.return_field.data_type()
+                ),
+            }
         }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(args.name, "count"),
-                DataType::UInt64,
-                true,
-            ),
-            Field::new(
-                format_state_name(args.name, "sum"),
-                args.input_fields[0].data_type().clone(),
-                true,
-            ),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect())
+        if args.is_distinct {
+            // Copied from datafusion_functions_aggregate::sum::Sum::state_fields
+            // since the accumulator uses DistinctSumAccumulator internally.
+            Ok(vec![Field::new_list(
+                format_state_name(args.name, "avg distinct"),
+                Field::new_list_field(args.return_type().clone(), true),
+                false,
+            )
+            .into()])
+        } else {
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "count"),
+                    DataType::UInt64,
+                    true,
+                ),
+                Field::new(
+                    format_state_name(args.name, "sum"),
+                    args.input_fields[0].data_type().clone(),
+                    true,
+                ),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect())
+        }
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         matches!(
             args.return_field.data_type(),
             DataType::Float64 | DataType::Decimal128(_, _) | DataType::Duration(_)
-        )
+        ) && !args.is_distinct
     }
 
     fn create_groups_accumulator(
