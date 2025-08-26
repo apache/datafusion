@@ -255,11 +255,17 @@ fn test_cli_top_memory_consumers<'a>(
     let _bound = settings.bind_to_scope();
 
     let mut cmd = cli();
-    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
-    cmd.args(["--memory-limit", "10M", "--command", sql]);
-    cmd.args(top_memory_consumers);
+    cmd.arg("-q")
+        .args(["--memory-limit", "10M"])
+        .args(top_memory_consumers);
 
-    assert_cmd_snapshot!(cmd);
+    let input = "\
+\\memory_profiling
+select * from generate_series(1,500000) as t1(v1) order by v1;
+\\q
+";
+
+    assert_cmd_snapshot!(cmd.pass_stdin(input));
 }
 
 #[test]
