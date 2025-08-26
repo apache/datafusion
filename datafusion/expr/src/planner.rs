@@ -20,17 +20,16 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::expr::NullTreatment;
+use crate::{
+    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
+};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
-use datafusion_expr_common::operator::Operator;
-use crate::{
-    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
-};
-use crate::expr::NullTreatment;
 
 /// Provides the `SQL` query planner meta-data about tables and
 /// functions referenced in SQL statements, without a direct dependency on the
@@ -263,7 +262,7 @@ pub trait ExprPlanner: Debug + Send + Sync {
 #[derive(Debug, Clone)]
 pub struct RawBinaryExpr {
     #[cfg(not(feature = "sql"))]
-    pub op: Operator,
+    pub op: datafusion_expr_common::operator::Operator,
     #[cfg(feature = "sql")]
     pub op: sqlparser::ast::BinaryOperator,
     pub left: Expr,
@@ -331,7 +330,10 @@ pub trait TypePlanner: Debug + Send + Sync {
     /// Plan SQL [`ast::DataType`] to DataFusion [`DataType`]
     ///
     /// Returns None if not possible
-    fn plan_type(&self, _sql_type: &sqlparser::ast::DataType) -> Result<Option<DataType>> {
+    fn plan_type(
+        &self,
+        _sql_type: &sqlparser::ast::DataType,
+    ) -> Result<Option<DataType>> {
         Ok(None)
     }
 }

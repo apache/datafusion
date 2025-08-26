@@ -50,7 +50,11 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
-use datafusion_common::{exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError, TableReference, UnnestOptions};
+use datafusion_common::{
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
+    DataFusionError, ParamValues, ScalarValue, SchemaError, TableReference,
+    UnnestOptions,
+};
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     case,

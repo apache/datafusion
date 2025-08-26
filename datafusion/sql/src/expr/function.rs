@@ -22,7 +22,9 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction};
+use datafusion_expr::expr::{
+    NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction,
+};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
 use sqlparser::ast::{

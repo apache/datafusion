@@ -24,18 +24,12 @@
 //! - An EXCLUDE clause.
 
 use crate::{expr::Sort, lit};
-use arrow::datatypes::DataType;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 
-use datafusion_common::{
-    exec_err, plan_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{plan_err, Result, ScalarValue};
 #[cfg(feature = "sql")]
-use sqlparser::{
-    ast::{self, ValueWithSpan},
-    parser::ParserError::ParserError,
-};
+use sqlparser::ast::{self, ValueWithSpan};
 
 /// The frame specification determines which output rows are read by an aggregate
 /// window function. The ending frame boundary can be omitted if the `BETWEEN`
@@ -122,7 +116,7 @@ impl fmt::Debug for WindowFrame {
 
 #[cfg(feature = "sql")]
 impl TryFrom<ast::WindowFrame> for WindowFrame {
-    type Error = DataFusionError;
+    type Error = datafusion_common::error::DataFusionError;
 
     fn try_from(value: ast::WindowFrame) -> Result<Self> {
         let start_bound = WindowFrameBound::try_parse(value.start_bound, &value.units)?;
@@ -377,6 +371,8 @@ fn convert_frame_bound_to_scalar_value(
     v: ast::Expr,
     units: &ast::WindowFrameUnits,
 ) -> Result<ScalarValue> {
+    use arrow::datatypes::DataType;
+    use datafusion_common::exec_err;
     match units {
         // For ROWS and GROUPS we are sure that the ScalarValue must be a non-negative integer ...
         ast::WindowFrameUnits::Rows | ast::WindowFrameUnits::Groups => match v {

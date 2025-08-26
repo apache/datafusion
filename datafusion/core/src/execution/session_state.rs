@@ -1618,8 +1618,7 @@ impl Debug for SessionStateBuilder {
     /// Prefer having short fields at the top and long vector fields near the end
     /// Group fields by
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut debug_struct = f
-            .debug_struct("SessionStateBuilder");
+        let mut debug_struct = f.debug_struct("SessionStateBuilder");
         let ret = debug_struct
             .field("session_id", &self.session_id)
             .field("config", &self.config)

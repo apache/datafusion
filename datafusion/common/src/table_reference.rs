@@ -346,7 +346,9 @@ impl<'a> From<&'a str> for TableReference {
 #[cfg(not(feature = "sql"))]
 impl<'a> From<&'a String> for TableReference {
     fn from(s: &'a String) -> Self {
-        Self::Bare { table: s.as_str().into() }
+        Self::Bare {
+            table: s.as_str().into(),
+        }
     }
 }
 

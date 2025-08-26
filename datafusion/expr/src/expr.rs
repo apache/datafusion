@@ -41,7 +41,7 @@ use datafusion_common::{
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{
-    display_comma_separated, ExceptSelectItem, ExcludeSelectItem, Ident, IdentWithAlias, IlikeSelectItem,
+    display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     RenameSelectItem, ReplaceSelectElement,
 };
 
@@ -71,7 +71,6 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
         }
     }
 }
-
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
@@ -1412,17 +1411,13 @@ impl GroupingSet {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 #[cfg(not(feature = "sql"))]
-pub struct IlikeSelectItem{
+pub struct IlikeSelectItem {
     pub pattern: String,
 }
 #[cfg(not(feature = "sql"))]
 impl Display for IlikeSelectItem {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "ILIKE '{}'",
-            &self.pattern
-        )?;
+        write!(f, "ILIKE '{}'", &self.pattern)?;
         Ok(())
     }
 }
@@ -1474,7 +1469,8 @@ impl Display for ExceptSelectItem {
 #[cfg(not(feature = "sql"))]
 pub fn display_comma_separated<T>(slice: &[T]) -> String
 where
-    T: Display {
+    T: Display,
+{
     use itertools::Itertools;
     slice.iter().map(|v| format!("{v}")).join(", ")
 }

@@ -71,7 +71,10 @@ use datafusion_common::{
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
-use datafusion_expr::expr::{physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams};
+use datafusion_expr::expr::{
+    physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
+    NullTreatment, WindowFunction, WindowFunctionParams,
+};
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
