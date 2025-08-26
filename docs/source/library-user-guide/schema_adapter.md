@@ -33,6 +33,7 @@ use std::sync::Arc;
 use arrow::array::{Int32Array, StructArray};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::nested_struct::cast_column;
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 
 // source schema: { info: { id: Int32 } }
 let source_field = Field::new(
@@ -52,7 +53,12 @@ let target_field = Field::new(
 
 let id = Arc::new(Int32Array::from(vec![Some(1), None])) as _;
 let source_struct = StructArray::from(vec![(source_field.children()[0].clone(), id)]);
-let casted = cast_column(&Arc::new(source_struct) as _, &target_field).unwrap();
+let casted = cast_column(
+    &Arc::new(source_struct) as _,
+    &target_field,
+    &DEFAULT_CAST_OPTIONS,
+)
+.unwrap();
 assert_eq!(casted.data_type(), target_field.data_type());
 ```
 

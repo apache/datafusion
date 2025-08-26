@@ -214,7 +214,11 @@ impl ColumnarValue {
                 // fix https://github.com/apache/datafusion/issues/17285
                 DataType::Struct(_) => {
                     let field = Field::new("", cast_type.clone(), true);
-                    Ok(ColumnarValue::Array(cast_column(array, &field)?))
+                    Ok(ColumnarValue::Array(cast_column(
+                        array,
+                        &field,
+                        &DEFAULT_CAST_OPTIONS,
+                    )?))
                 }
                 _ => Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
                     array,
