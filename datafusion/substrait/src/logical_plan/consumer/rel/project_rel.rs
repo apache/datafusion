@@ -62,6 +62,11 @@ pub async fn from_project_rel(
                 // to transform it into a column reference
                 window_exprs.insert(e.clone());
             }
+            // Since substrait removes aliases, we need to assign literals with a UUID alias to avoid
+            // ambiguous names when the same literal is used before and after a join.
+            // The name tracker will ensure that two literals in the same project would have
+            // unique names but, it does not ensure that if a literal column exists in a previous
+            // project say before a join that it is deduplicated with respect to those columns.
             let maybe_apply_alias = match e {
                 lit @ Expr::Literal(_, _) => {
                     lit.alias(uuid::Uuid::new_v4().to_string())

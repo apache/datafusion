@@ -45,17 +45,13 @@ use substrait::proto::expression::literal::{
     LiteralType,
 };
 use substrait::proto::expression::Literal;
-use uuid::Uuid;
 
 pub async fn from_literal(
     consumer: &impl SubstraitConsumer,
     expr: &Literal,
 ) -> datafusion::common::Result<Expr> {
     let scalar_value = from_substrait_literal_without_names(consumer, expr)?;
-    // Since substrait removes aliases, we need to assign literals with a UUID alias to avoid
-    // ambiguous names when the same literal is used before and after a join.
-    let name = Uuid::new_v4().to_string();
-    Ok(Expr::Literal(scalar_value, None).alias(name))
+    Ok(Expr::Literal(scalar_value, None))
 }
 
 pub(crate) fn from_substrait_literal_without_names(
