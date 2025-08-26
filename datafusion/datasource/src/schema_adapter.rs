@@ -25,14 +25,8 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
-<<<<<<< ours
-use datafusion_common::{cast_column, plan_err, ColumnStatistics};
-=======
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{
-    cast_column, nested_struct::validate_struct_compatibility, plan_err, ColumnStatistics,
-};
->>>>>>> theirs
+use datafusion_common::{cast_column, plan_err, ColumnStatistics};
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
 /// the table schema.
