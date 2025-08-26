@@ -169,7 +169,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
 /// - All column references in `lhs` are from the left schema, and all in `rhs` are from the right schema
 ///
 /// According to the above rule, `expr1` is the equijoin predicate, while `expr2` and `expr3` are not.
-/// The function returns Ok([expr1], Some(expr2 AND expr3))
+/// The function returns Ok(\[expr1\], Some(expr2 AND expr3))
 fn split_eq_and_noneq_join_predicate(
     filter: Expr,
     left_schema: &DFSchema,
