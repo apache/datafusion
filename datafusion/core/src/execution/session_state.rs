@@ -24,8 +24,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
-use crate::datasource::cte_worktable::CteWorkTable;
-use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
+use crate::datasource::file_format::FileFormatFactory;
+#[cfg(feature = "sql")]
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
@@ -34,16 +34,15 @@ use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::DataType;
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
-use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    config_err, exec_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
+    config_err, exec_err, plan_datafusion_err, DFSchema, DataFusionError,
     ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
@@ -56,10 +55,10 @@ use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::planner::TypePlanner;
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_expr::var_provider::{is_system_variables, VarType};
+#[cfg(feature = "sql")]
+use datafusion_expr::TableSource;
 use datafusion_expr::{
-    AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, TableSource,
-    WindowUDF,
+    AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, WindowUDF,
 };
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
@@ -394,7 +393,7 @@ impl SessionState {
             .parse_statements()?;
 
         if statements.len() > 1 {
-            return not_impl_err!(
+            return datafusion_common::not_impl_err!(
                 "The context currently only supports a single SQL statement"
             );
         }
@@ -1664,6 +1663,7 @@ impl From<SessionState> for SessionStateBuilder {
 ///
 /// This is used so the SQL planner can access the state of the session without
 /// having a direct dependency on the [`SessionState`] struct (and core crate)
+#[cfg(feature = "sql")]
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
@@ -1723,9 +1723,11 @@ impl ContextProvider for SessionContextProvider<'_> {
     fn create_cte_work_table(
         &self,
         name: &str,
-        schema: SchemaRef,
+        schema: arrow::datatypes::SchemaRef,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
-        let table = Arc::new(CteWorkTable::new(name, schema));
+        let table = Arc::new(crate::datasource::cte_worktable::CteWorkTable::new(
+            name, schema,
+        ));
         Ok(provider_as_source(table))
     }
 
@@ -1742,6 +1744,8 @@ impl ContextProvider for SessionContextProvider<'_> {
     }
 
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+        use datafusion_expr::var_provider::{is_system_variables, VarType};
+
         if variable_names.is_empty() {
             return None;
         }
@@ -1775,14 +1779,21 @@ impl ContextProvider for SessionContextProvider<'_> {
         self.state.window_functions().keys().cloned().collect()
     }
 
-    fn get_file_type(&self, ext: &str) -> datafusion_common::Result<Arc<dyn FileType>> {
+    fn get_file_type(
+        &self,
+        ext: &str,
+    ) -> datafusion_common::Result<
+        Arc<dyn datafusion_common::file_options::file_type::FileType>,
+    > {
         self.state
             .file_formats
             .get(&ext.to_lowercase())
             .ok_or(plan_datafusion_err!(
                 "There is no registered file format with ext {ext}"
             ))
-            .map(|file_type| format_as_file_type(Arc::clone(file_type)))
+            .map(|file_type| {
+                crate::datasource::file_format::format_as_file_type(Arc::clone(file_type))
+            })
     }
 }
 
