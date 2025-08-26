@@ -84,3 +84,4 @@ web-time = "1.1.0"
 chrono = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
+sqlparser = { workspace = true }

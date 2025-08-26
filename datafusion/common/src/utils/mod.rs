@@ -1088,6 +1088,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "sql")]
     #[test]
     fn test_quote_identifier() -> Result<()> {
         let cases = vec![
