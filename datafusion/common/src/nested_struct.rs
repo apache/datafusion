@@ -102,16 +102,39 @@ fn cast_struct_column(
 /// - **Struct Types**: Delegates to `cast_struct_column` for struct-to-struct casting only
 /// - **Non-Struct Types**: Uses Arrow's standard `cast` function for primitive type conversions
 ///
+/// ## Cast Options
+/// The [`cast_options`] argument controls how Arrow handles values that cannot be represented
+/// in the target type. When `safe` is `false` (DataFusion's default) the cast will return an
+/// error if such a value is encountered. Setting `safe` to `true` instead produces `NULL`
+/// for out-of-range or otherwise invalid values. The options also allow customizing how
+/// temporal values are formatted when cast to strings.
+///
+/// ```
+/// use std::sync::Arc;
+/// use arrow::array::{Int64Array, ArrayRef};
+/// use arrow::compute::CastOptions;
+/// use arrow::datatypes::{DataType, Field};
+/// use datafusion_common::nested_struct::cast_column;
+///
+/// let source: ArrayRef = Arc::new(Int64Array::from(vec![1, i64::MAX]));
+/// let target = Field::new("ints", DataType::Int32, true);
+/// // Permit lossy conversions by producing NULL on overflow instead of erroring
+/// let options = CastOptions { safe: true, ..Default::default() };
+/// let result = cast_column(&source, &target, &options).unwrap();
+/// assert!(result.is_null(1));
+/// ```
+///
 /// ## Struct Casting Requirements
 /// The struct casting logic requires that the source column must already be a struct type.
 /// This makes the function useful for:
 /// - Schema evolution scenarios where struct layouts change over time
-/// - Data migration between different struct schemas  
+/// - Data migration between different struct schemas
 /// - Type-safe data processing pipelines that maintain struct type integrity
 ///
 /// # Arguments
 /// * `source_col` - The source array to cast
 /// * `target_field` - The target field definition (including type and metadata)
+/// * `cast_options` - Options that govern strictness and formatting of the cast
 ///
 /// # Returns
 /// A `Result<ArrayRef>` containing the cast array
