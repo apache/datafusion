@@ -2683,7 +2683,10 @@ impl TableScan {
         })
     }
 
-    pub fn with_preferred_ordering(mut self, preferred_ordering: Option<Vec<SortExpr>>) -> Self {
+    pub fn with_preferred_ordering(
+        mut self,
+        preferred_ordering: Option<Vec<SortExpr>>,
+    ) -> Self {
         self.preferred_ordering = preferred_ordering;
         self
     }
