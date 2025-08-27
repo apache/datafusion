@@ -2762,13 +2762,15 @@ impl TableScan {
     ///
     /// ```rust
     /// use datafusion_expr::{col, SortExpr};
-    /// # use datafusion_expr::logical_plan::TableScan;
+    /// # use datafusion_expr::logical_plan::{TableScan, builder::table_source};
     /// # use std::sync::Arc;
-    /// # use datafusion_common::TableReference;
+    /// # use datafusion_common::{TableReference, DFSchema};
+    /// # use arrow::datatypes::{Schema, Field, DataType};
     ///
     /// // Create a table scan with preferred ordering by column 'a' ascending
     /// # let table_name = TableReference::bare("test");
-    /// # let source = Arc::new(datafusion_expr::test::table_source(vec![]));
+    /// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    /// # let source = table_source(&schema);
     /// # let projection = None;
     /// # let projected_schema = Arc::new(datafusion_common::DFSchema::empty());
     /// # let filters = vec![];
