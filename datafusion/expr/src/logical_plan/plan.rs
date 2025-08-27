@@ -2608,6 +2608,8 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Optional preferred ordering for the scan
+    pub preferred_ordering: Option<Vec<SortExpr>>,
 }
 
 impl Debug for TableScan {
@@ -2619,6 +2621,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
+            .field("preferred_ordering", &self.preferred_ordering)
             .finish_non_exhaustive()
     }
 }
@@ -2630,6 +2633,7 @@ impl PartialEq for TableScan {
             && self.projected_schema == other.projected_schema
             && self.filters == other.filters
             && self.fetch == other.fetch
+            && self.preferred_ordering == other.preferred_ordering
     }
 }
 
@@ -2649,18 +2653,22 @@ impl PartialOrd for TableScan {
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
+            /// Optional preferred ordering for the scan
+            pub preferred_ordering: &'a Option<Vec<SortExpr>>,
         }
         let comparable_self = ComparableTableScan {
             table_name: &self.table_name,
             projection: &self.projection,
             filters: &self.filters,
             fetch: &self.fetch,
+            preferred_ordering: &self.preferred_ordering,
         };
         let comparable_other = ComparableTableScan {
             table_name: &other.table_name,
             projection: &other.projection,
             filters: &other.filters,
             fetch: &other.fetch,
+            preferred_ordering: &other.preferred_ordering,
         };
         comparable_self
             .partial_cmp(&comparable_other)
@@ -2676,6 +2684,7 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+        self.preferred_ordering.hash(state);
     }
 }
 
@@ -2729,7 +2738,21 @@ impl TableScan {
             projected_schema,
             filters,
             fetch,
+            preferred_ordering: None,
         })
+    }
+
+    pub fn try_new_with_preferred_ordering(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+        preferred_ordering: Option<Vec<SortExpr>>,
+    ) -> Result<Self> {
+        let mut table_scan = Self::try_new(table_name, table_source, projection, filters, fetch)?;
+        table_scan.preferred_ordering = preferred_ordering;
+        Ok(table_scan)
     }
 }
 
@@ -4823,6 +4846,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
+            preferred_ordering: None,
         }));
         let col = schema.field_names()[0].clone();
 
@@ -4853,6 +4877,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
+            preferred_ordering: None,
         }));
         let col = schema.field_names()[0].clone();
 
