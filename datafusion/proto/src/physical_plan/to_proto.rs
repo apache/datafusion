@@ -20,9 +20,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::physical_expr::window::{
-    BuiltInWindowExpr, NthValueKind, SlidingAggregateWindowExpr,
-};
+use datafusion::physical_expr::window::{BuiltInWindowExpr, NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
@@ -43,8 +41,8 @@ use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::WindowFrame;
 
 use crate::protobuf::{
-    self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
-    PhysicalSortExprNodeCollection,
+    self, physical_aggregate_expr_node, physical_window_expr_node, BuiltInWindowFunction,
+    PhysicalSortExprNode, PhysicalSortExprNodeCollection,
 };
 
 use super::PhysicalExtensionCodec;
@@ -132,6 +130,34 @@ pub fn serialize_physical_window_expr(
                     expr.fun().name().to_string(),
                 ),
                 (!buf.is_empty()).then_some(buf),
+            )
+        }
+        // Note: newer version of DataFusion encodes everthing is UDF
+        // NOTE FirstValue / LastValue also compile to NthValue
+        else if let Some(nth_value) = built_in_window_expr
+            .get_built_in_func_expr()
+            .as_any()
+            .downcast_ref::<NthValue>()
+        {
+            (
+                match nth_value.get_kind() {
+                    NthValueKind::First => {
+                        physical_window_expr_node::WindowFunction::BuiltInFunction(
+                            BuiltInWindowFunction::FirstValue.into(),
+                        )
+                    }
+                    NthValueKind::Last => {
+                        physical_window_expr_node::WindowFunction::BuiltInFunction(
+                            BuiltInWindowFunction::LastValue.into(),
+                        )
+                    }
+                    NthValueKind::Nth(_n) => {
+                        physical_window_expr_node::WindowFunction::BuiltInFunction(
+                            BuiltInWindowFunction::NthValue.into(),
+                        )
+                    }
+                },
+                None,
             )
         } else {
             return not_impl_err!(
