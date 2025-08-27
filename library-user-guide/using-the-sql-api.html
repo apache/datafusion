@@ -739,7 +739,8 @@ work with DataFrames.</p>
 <section id="read-an-apache-avro-file">
 <h3>Read an Apache Avro file<a class="headerlink" href="#read-an-apache-avro-file" title="Link to this heading">¶</a></h3>
 <p>DataFusion can also read Avro files using the <code class="docutils literal notranslate"><span class="pre">register_avro</span></code> method.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">util</span><span class="p">::</span><span class="n">pretty</span><span class="p">;</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">util</span><span class="p">::</span><span class="n">pretty</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
 
@@ -773,6 +774,7 @@ work with DataFrames.</p>
 <span class="w">        </span><span class="o">&amp;</span><span class="n">results</span>
 <span class="w">    </span><span class="p">);</span>
 <span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
 </div>
