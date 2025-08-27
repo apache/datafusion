@@ -17,7 +17,6 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
-use datafusion::physical_plan::memory::MemoryExec;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -945,18 +944,6 @@ impl DefaultPhysicalPlanner {
                     schema,
                     options.clone(),
                 ))
-            }
-
-            // Handle caching logical plan
-            LogicalPlan::Cache { id, lineage } => {
-                // Step 1: Plan the child logical plan first
-                let child_exec =
-                    self.create_physical_plan(lineage, session_state).await?;
-
-                // Step 2: Wrap in a caching execution plan if you want to actually cache in-memory
-                // For now, we just pass through the child plan
-                // TODO: later you can wrap this in a memory cache executor
-                child_exec
             }
 
             // 2 Children

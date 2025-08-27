@@ -72,16 +72,6 @@ use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_sql::TableReference;
 
-use std::sync::Arc;
-use uuid::Uuid;
-
-use crate::dataframe::DataFrame;
-use crate::error::Result;
-use crate::execution::context::SessionContext;
-use crate::logical_plan::LogicalPlan;
-use crate::physical_plan::collect_partitioned;
-use crate::physical_plan::memory::MemTable; // for returning Result<DataFrame>
-
 /// Contains options that control how data is
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
@@ -242,31 +232,19 @@ pub struct DataFrame {
     projection_requires_validation: bool,
 }
 
-pub async fn cache(self) -> Result<DataFrame> {
-    if self.session_state.config.local_cache {
-        // Eager caching (current behavior)
-        let context = SessionContext::new_with_state((*self.session_state).clone());
-        let plan = self.clone().create_physical_plan().await?;
-        let schema = plan.schema();
-
-        // collect_partitioned now only needs the plan
-        let partitions = collect_partitioned(plan).await?;
-        
-        let mem_table = MemTable::try_new(schema, partitions)?;
-        context.read_table(Arc::new(mem_table))
-    } else {
-        // Lazy caching: return LogicalPlan::Cache
-        let lineage = self.to_logical_plan(); // get the logical plan so far
-        Ok(DataFrame::new(
-            (*self.session_state).clone(),
-            LogicalPlan::Cache {
-                id: Uuid::new_v4().to_string(),
-                lineage: Arc::new(lineage),
-            },
-        ))
+impl DataFrame {
+    /// Create a new `DataFrame ` based on an existing `LogicalPlan`
+    ///
+    /// This is a low-level method and is not typically used by end users. See
+    /// [`SessionContext::read_csv`] and other methods for creating a
+    /// `DataFrame` from an existing datasource.
+    pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
+        Self {
+            session_state: Box::new(session_state),
+            plan,
+            projection_requires_validation: true,
+        }
     }
-}
-
 
     /// Creates logical expression from a SQL query text.
     /// The expression is created and processed against the current schema.
@@ -2227,26 +2205,43 @@ pub async fn cache(self) -> Result<DataFrame> {
         })
     }
 
-    /// Cache DataFrame as a memory table.
+    /// Cache `DataFrame` as an in-memory table (eager materialization).
     ///
-    /// ```
+    /// This eagerly executes the current plan, collects all partitions, and
+    /// registers a `MemTable` backed by the collected batches. This matches the
+    /// existing behavior and is suitable for single-process execution.
+    ///
+    /// ```no_run
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.cache().await?;
+    /// let df = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let df = df.cache().await?; // materialize into memory
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// NOTE: This eager caching materializes the entire dataset in the local
+    /// process. It is **not** suitable for distributed environments (e.g.
+    /// Ballista). See issue #17297 for a follow-up design to make caching
+    /// configurable and/or lazy via a logical plan node.
     pub async fn cache(self) -> Result<DataFrame> {
+        // Use the same session state for the new context
         let context = SessionContext::new_with_state((*self.session_state).clone());
-        // The schema is consistent with the output
+
+        // Build and run the physical plan
         let plan = self.clone().create_physical_plan().await?;
         let schema = plan.schema();
+
+        // IMPORTANT: `collect_partitioned` requires a TaskContext
         let task_ctx = Arc::new(self.task_ctx());
         let partitions = collect_partitioned(plan, task_ctx).await?;
+
+        // Wrap the materialized data in a MemTable and return it as a new DataFrame
         let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }
