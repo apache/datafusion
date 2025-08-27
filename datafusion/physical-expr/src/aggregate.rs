@@ -24,6 +24,92 @@ pub(crate) mod groups_accumulator {
         accumulate::NullState, GroupsAccumulatorAdapter,
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::Literal;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
+    use std::{any::Any, sync::Arc};
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct DummyUdf {
+        signature: Signature,
+    }
+
+    impl DummyUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for DummyUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt64)
+        }
+        fn accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            unimplemented!()
+        }
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+            true
+        }
+        fn create_groups_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_args_schema_and_groups_path() {
+        // literal-only: empty physical schema synthesizes schema from literal expr
+        let udf = Arc::new(AggregateUDF::from(DummyUdf::new()));
+        let lit_expr =
+            Arc::new(Literal::new(ScalarValue::UInt32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let agg =
+            AggregateExprBuilder::new(Arc::clone(&udf), vec![Arc::clone(&lit_expr)])
+                .alias("x")
+                .schema(Arc::new(Schema::empty()))
+                .build()
+                .unwrap();
+        match agg.args_schema() {
+            Cow::Owned(s) => assert_eq!(s.field(0).name(), "lit"),
+            _ => panic!("expected owned schema"),
+        }
+        assert!(agg.groups_accumulator_supported());
+
+        // non-empty physical schema should be borrowed
+        let f = Field::new("b", DataType::Int32, false);
+        let phys_schema = Schema::new(vec![f.clone()]);
+        let col_expr = Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>;
+        let agg2 = AggregateExprBuilder::new(udf, vec![col_expr])
+            .alias("x")
+            .schema(Arc::new(phys_schema))
+            .build()
+            .unwrap();
+        match agg2.args_schema() {
+            Cow::Borrowed(s) => assert_eq!(s.field(0).name(), "b"),
+            _ => panic!("expected borrowed schema"),
+        }
+        assert!(agg2.groups_accumulator_supported());
+    }
+}
 pub(crate) mod stats {
     pub use datafusion_functions_aggregate_common::stats::StatsType;
 }
@@ -379,51 +465,27 @@ impl AggregateFunctionExpr {
     /// Returns a schema containing the fields corresponding to this
     /// aggregate's input expressions in the same order as `input_fields`/`exprs`.
     ///
-    /// Merges the provided physical input [`Schema`] with synthesized
-    /// fields for literal expressions so that `exprs[i]` always
-    /// corresponds to `schema.field(i)`. Column expressions retain their
-    /// original field metadata while new fields are created for literals.
+    /// If the physical input schema is empty (literal-only inputs),
+    /// synthesizes a new schema from the literal expressions to preserve
+    /// field-level metadata (such as Arrow extension types).
+    /// Field order is guaranteed to match the order of input expressions.
+    /// In mixed column and literal inputs, existing physical schema fields
+    /// win; synthesized metadata is only applied when the physical schema
+    /// has no fields.
     ///
     /// Uses [`std::borrow::Cow`] to avoid allocation when the existing
-    /// schema already matches the expressions (that is, only column
-    /// expressions in the same order as the schema). In all other cases a
-    /// new [`Schema`] is constructed.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_common::ScalarValue;
-    /// use datafusion_physical_expr::expressions::{col, lit};
-    /// use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    /// # let udf = /* create an `AggregateUDF` */;
-    /// let exprs = vec![col("a"), lit(ScalarValue::UInt32(Some(1)))];
-    /// let agg = AggregateExprBuilder::new(udf, exprs)
-    ///     .alias("x")
-    ///     .schema(Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)])))
-    ///     .build()
-    ///     .unwrap();
-    /// let schema = agg.args_schema();
-    /// assert_eq!(schema.field(0).name(), "a");
-    /// assert_eq!(schema.field(1).name(), "lit");
-    /// ```
+    /// schema is non-empty. For micro-optimizations, implementers may
+    /// cache the owned schema if multiple calls are made per instance.
     fn args_schema(&self) -> Cow<'_, Schema> {
-        let can_borrow = self.schema.fields().len() == self.args.len()
-            && self.args.iter().enumerate().all(|(i, e)| {
-                e.as_any()
-                    .downcast_ref::<Column>()
-                    .map(|c| c.index() == i)
-                    .unwrap_or(false)
-            });
-        if can_borrow {
-            Cow::Borrowed(&self.schema)
-        } else {
+        if self.schema.fields().is_empty() {
             Cow::Owned(Schema::new(
                 self.input_fields
                     .iter()
                     .map(|f| f.as_ref().clone())
                     .collect::<Vec<_>>(),
             ))
+        } else {
+            Cow::Borrowed(&self.schema)
         }
     }
     /// Construct AccumulatorArgs for this aggregate using a given schema slice.
@@ -440,23 +502,13 @@ impl AggregateFunctionExpr {
         }
     }
 
-    /// Builds [`AccumulatorArgs`] for this aggregate and executes the provided
-    /// closure with them, keeping the underlying schema alive for the duration
-    /// of the closure.
-    fn build_acc_args<F, T>(&self, f: F) -> T
-    where
-        F: FnOnce(AccumulatorArgs) -> T,
-    {
-        let schema = self.args_schema();
-        let args = self.make_acc_args(schema.as_ref());
-        f(args)
-    }
-
     /// the accumulator used to accumulate values from the expressions.
     /// the accumulator expects the same number of arguments as `expressions` and must
     /// return states with the same description as `state_fields`
     pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        self.build_acc_args(|args| self.fun.accumulator(args))
+        let schema = self.args_schema();
+        let acc_args = self.make_acc_args(schema.as_ref());
+        self.fun.accumulator(acc_args)
     }
 
     /// the field of the final result of this aggregation.
@@ -529,67 +581,69 @@ impl AggregateFunctionExpr {
 
     /// Creates accumulator implementation that supports retract
     pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        self.build_acc_args(|args| {
-            let accumulator = self.fun.create_sliding_accumulator(args)?;
+        let schema = self.args_schema();
+        let args = self.make_acc_args(schema.as_ref());
+        let accumulator = self.fun.create_sliding_accumulator(args)?;
 
-            // Accumulators that have window frame startings different
-            // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
-            // implement retract_batch method in order to run correctly
-            // currently in DataFusion.
-            //
-            // If this `retract_batches` is not present, there is no way
-            // to calculate result correctly. For example, the query
-            //
-            // ```sql
-            // SELECT
-            //  SUM(a) OVER(ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS sum_a
-            // FROM
-            //  t
-            // ```
-            //
-            // 1. First sum value will be the sum of rows between `[0, 1)`,
-            //
-            // 2. Second sum value will be the sum of rows between `[0, 2)`
-            //
-            // 3. Third sum value will be the sum of rows between `[1, 3)`, etc.
-            //
-            // Since the accumulator keeps the running sum:
-            //
-            // 1. First sum we add to the state sum value between `[0, 1)`
-            //
-            // 2. Second sum we add to the state sum value between `[1, 2)`
-            // (`[0, 1)` is already in the state sum, hence running sum will
-            // cover `[0, 2)` range)
-            //
-            // 3. Third sum we add to the state sum value between `[2, 3)`
-            // (`[0, 2)` is already in the state sum).  Also we need to
-            // retract values between `[0, 1)` by this way we can obtain sum
-            // between [1, 3) which is indeed the appropriate range.
-            //
-            // When we use `UNBOUNDED PRECEDING` in the query starting
-            // index will always be 0 for the desired range, and hence the
-            // `retract_batch` method will not be called. In this case
-            // having retract_batch is not a requirement.
-            //
-            // This approach is a a bit different than window function
-            // approach. In window function (when they use a window frame)
-            // they get all the desired range during evaluation.
-            if !accumulator.supports_retract_batch() {
-                return not_impl_err!(
-                    "Aggregate can not be used as a sliding accumulator because \
+        // Accumulators that have window frame startings different
+        // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
+        // implement retract_batch method in order to run correctly
+        // currently in DataFusion.
+        //
+        // If this `retract_batches` is not present, there is no way
+        // to calculate result correctly. For example, the query
+        //
+        // ```sql
+        // SELECT
+        //  SUM(a) OVER(ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS sum_a
+        // FROM
+        //  t
+        // ```
+        //
+        // 1. First sum value will be the sum of rows between `[0, 1)`,
+        //
+        // 2. Second sum value will be the sum of rows between `[0, 2)`
+        //
+        // 3. Third sum value will be the sum of rows between `[1, 3)`, etc.
+        //
+        // Since the accumulator keeps the running sum:
+        //
+        // 1. First sum we add to the state sum value between `[0, 1)`
+        //
+        // 2. Second sum we add to the state sum value between `[1, 2)`
+        // (`[0, 1)` is already in the state sum, hence running sum will
+        // cover `[0, 2)` range)
+        //
+        // 3. Third sum we add to the state sum value between `[2, 3)`
+        // (`[0, 2)` is already in the state sum).  Also we need to
+        // retract values between `[0, 1)` by this way we can obtain sum
+        // between [1, 3) which is indeed the appropriate range.
+        //
+        // When we use `UNBOUNDED PRECEDING` in the query starting
+        // index will always be 0 for the desired range, and hence the
+        // `retract_batch` method will not be called. In this case
+        // having retract_batch is not a requirement.
+        //
+        // This approach is a a bit different than window function
+        // approach. In window function (when they use a window frame)
+        // they get all the desired range during evaluation.
+        if !accumulator.supports_retract_batch() {
+            return not_impl_err!(
+                "Aggregate can not be used as a sliding accumulator because \
                      `retract_batch` is not implemented: {}",
-                    self.name
-                );
-            }
-            Ok(accumulator)
-        })
+                self.name
+            );
+        }
+        Ok(accumulator)
     }
 
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator`] will be called.
     pub fn groups_accumulator_supported(&self) -> bool {
-        self.build_acc_args(|args| self.fun.groups_accumulator_supported(args))
+        let schema = self.args_schema();
+        let args = self.make_acc_args(schema.as_ref());
+        self.fun.groups_accumulator_supported(args)
     }
 
     /// Return a specialized [`GroupsAccumulator`] that manages state
@@ -598,7 +652,9 @@ impl AggregateFunctionExpr {
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        self.build_acc_args(|args| self.fun.create_groups_accumulator(args))
+        let schema = self.args_schema();
+        let args = self.make_acc_args(schema.as_ref());
+        self.fun.create_groups_accumulator(args)
     }
 
     /// Construct an expression that calculates the aggregate in reverse.
@@ -779,98 +835,4 @@ fn replace_order_by_clause(order_by: &mut String) {
 
 fn replace_fn_name_clause(aggr_name: &mut String, fn_name_old: &str, fn_name_new: &str) {
     *aggr_name = aggr_name.replace(fn_name_old, fn_name_new);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::expressions::Literal;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
-    use std::{any::Any, sync::Arc};
-
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct DummyUdf {
-        signature: Signature,
-    }
-
-    impl DummyUdf {
-        fn new() -> Self {
-            Self {
-                signature: Signature::any(1, Volatility::Immutable),
-            }
-        }
-    }
-
-    impl AggregateUDFImpl for DummyUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn name(&self) -> &str {
-            "dummy"
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            Ok(DataType::UInt64)
-        }
-
-        fn accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-            unimplemented!()
-        }
-
-        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-            unimplemented!()
-        }
-
-        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-            true
-        }
-
-        fn create_groups_accumulator(
-            &self,
-            _args: AccumulatorArgs,
-        ) -> Result<Box<dyn GroupsAccumulator>> {
-            unimplemented!()
-        }
-    }
-
-    #[test]
-    fn test_args_schema_and_groups_path() {
-        // literal-only: empty physical schema synthesizes schema from literal expr
-        let udf = Arc::new(AggregateUDF::from(DummyUdf::new()));
-        let lit_expr =
-            Arc::new(Literal::new(ScalarValue::UInt32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let agg =
-            AggregateExprBuilder::new(Arc::clone(&udf), vec![Arc::clone(&lit_expr)])
-                .alias("x")
-                .schema(Arc::new(Schema::empty()))
-                .build()
-                .unwrap();
-        match agg.args_schema() {
-            Cow::Owned(s) => assert_eq!(s.field(0).name(), "lit"),
-            _ => panic!("expected owned schema"),
-        }
-        assert!(agg.groups_accumulator_supported());
-
-        // non-empty physical schema should be borrowed
-        let f = Field::new("b", DataType::Int32, false);
-        let phys_schema = Schema::new(vec![f.clone()]);
-        let col_expr = Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>;
-        let agg2 = AggregateExprBuilder::new(udf, vec![col_expr])
-            .alias("x")
-            .schema(Arc::new(phys_schema))
-            .build()
-            .unwrap();
-        match agg2.args_schema() {
-            Cow::Borrowed(s) => assert_eq!(s.field(0).name(), "b"),
-            _ => panic!("expected borrowed schema"),
-        }
-        assert!(agg2.groups_accumulator_supported());
-    }
 }
