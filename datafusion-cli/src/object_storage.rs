@@ -563,6 +563,424 @@ pub(crate) async fn get_object_store(
     Ok(store)
 }
 
+pub mod instrumented {
+    use core::fmt;
+    use std::{cmp, default, ops::AddAssign, sync::Arc, time::Duration};
+
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use datafusion::{
+        common::{instant::Instant, HashMap},
+        execution::object_store::ObjectStoreRegistry,
+    };
+    use futures::stream::BoxStream;
+    use object_store::{
+        path::Path, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
+        ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        Result,
+    };
+    use parking_lot::{Mutex, RwLock};
+    use url::Url;
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    enum Operation {
+        Copy,
+        Delete,
+        Get,
+        Head,
+        List,
+        Put,
+    }
+
+    #[derive(Debug)]
+    struct RequestDetails {
+        op: Operation,
+        path: Path,
+        timestamp: chrono::DateTime<Utc>,
+        duration: Option<Duration>,
+        size: Option<usize>,
+        range: Option<GetRange>,
+        extra_display: Option<String>,
+    }
+
+    impl fmt::Display for RequestDetails {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut output_parts = vec![format!(
+                "{} operation={:?}",
+                self.timestamp.to_rfc3339(),
+                self.op
+            )];
+
+            if let Some(d) = self.duration {
+                output_parts.push(format!("duration={:.6}s", d.as_secs_f32()));
+            }
+            if let Some(s) = self.size {
+                output_parts.push(format!("size={}", s));
+            }
+            if let Some(r) = &self.range {
+                output_parts.push(format!("range: {}", r));
+            }
+            output_parts.push(format!("path={}", self.path));
+
+            if let Some(ed) = &self.extra_display {
+                output_parts.push(ed.clone());
+            }
+
+            write!(f, "{}", output_parts.join(" "))
+        }
+    }
+
+    #[derive(Default)]
+    struct RequestSummary {
+        count: usize,
+        duration_stats: Option<Stats<Duration>>,
+        size_stats: Option<Stats<usize>>,
+    }
+
+    impl RequestSummary {
+        fn push(&mut self, request: &RequestDetails) {
+            self.count += 1;
+            if let Some(dur) = request.duration {
+                self.duration_stats.get_or_insert_default().push(dur)
+            }
+            if let Some(size) = request.size {
+                self.size_stats.get_or_insert_default().push(size)
+            }
+        }
+    }
+
+    impl fmt::Display for RequestSummary {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "  count: {}", self.count)?;
+
+            if let Some(dur_stats) = &self.duration_stats {
+                write!(f, "\n  duration min: {:.6}s", dur_stats.min.as_secs_f32())?;
+                write!(f, "\n  duration max: {:.6}s", dur_stats.max.as_secs_f32())?;
+                let avg = dur_stats.sum.as_secs_f32() / (self.count as f32);
+                write!(f, "\n  duration avg: {:.6}s", avg)?;
+            }
+
+            if let Some(size_stats) = &self.size_stats {
+                write!(f, "\n  size min: {}", size_stats.min)?;
+                write!(f, "\n  size max: {}", size_stats.max)?;
+                let avg = size_stats.sum / self.count;
+                write!(f, "\n  size avg: {}", avg)?;
+                write!(f, "\n  size sum: {}", size_stats.sum)?;
+            }
+
+            Ok(())
+        }
+    }
+
+    struct Stats<T: Copy + Ord + AddAssign<T>> {
+        min: T,
+        max: T,
+        sum: T,
+    }
+
+    impl<T: Copy + Ord + AddAssign<T>> Stats<T> {
+        fn push(&mut self, val: T) {
+            self.min = cmp::min(val, self.min);
+            self.max = cmp::max(val, self.max);
+            self.sum += val;
+        }
+    }
+
+    impl default::Default for Stats<Duration> {
+        fn default() -> Self {
+            Self {
+                min: Duration::MAX,
+                max: Duration::ZERO,
+                sum: Duration::ZERO,
+            }
+        }
+    }
+
+    impl default::Default for Stats<usize> {
+        fn default() -> Self {
+            Self {
+                min: usize::MAX,
+                max: usize::MIN,
+                sum: 0,
+            }
+        }
+    }
+
+    pub struct InstrumentedObjectStore {
+        inner: Arc<dyn ObjectStore>,
+        requests: Mutex<Vec<RequestDetails>>,
+    }
+
+    impl InstrumentedObjectStore {
+        pub fn new(object_store: Arc<dyn ObjectStore>) -> Self {
+            Self {
+                inner: object_store,
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        pub fn print_details(&self) {
+            let mut summaries = HashMap::new();
+            let mut reqs = self.requests.lock();
+            for rd in reqs.drain(..) {
+                match summaries.get_mut(&rd.op) {
+                    None => {
+                        let mut summary = RequestSummary::default();
+                        summary.push(&rd);
+                        summaries.insert(rd.op, summary);
+                    }
+                    Some(summary) => summary.push(&rd),
+                }
+
+                // TODO: conditional if trace is enabled
+                println!("{rd}");
+            }
+
+            for (op, summary) in summaries.iter() {
+                println!("{:?} Summary:", op);
+                println!("{summary}");
+            }
+        }
+    }
+
+    impl fmt::Display for InstrumentedObjectStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "InstrumentedObjectStore: {}", self.inner)
+        }
+    }
+
+    impl fmt::Debug for InstrumentedObjectStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "InstrumentedObjectStore: {:?}", self.inner)
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for InstrumentedObjectStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> Result<PutResult> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            let size = payload.content_length();
+            let ret = self.inner.put_opts(location, payload, opts).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Put,
+                path: location.clone(),
+                timestamp,
+                duration: Some(elapsed),
+                size: Some(size),
+                range: None,
+                extra_display: None,
+            });
+
+            Ok(ret)
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> Result<Box<dyn MultipartUpload>> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            let ret = self.inner.put_multipart_opts(location, opts).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Put,
+                path: location.clone(),
+                timestamp,
+                duration: Some(elapsed),
+                size: None,
+                range: None,
+                extra_display: None,
+            });
+
+            Ok(ret)
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> Result<GetResult> {
+            let timestamp = Utc::now();
+            let range = options.range.clone();
+            let start = Instant::now();
+            let ret = self.inner.get_opts(location, options).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Get,
+                path: location.clone(),
+                timestamp,
+                duration: Some(elapsed),
+                size: Some((ret.range.end - ret.range.start) as usize),
+                range,
+                extra_display: None,
+            });
+
+            Ok(ret)
+        }
+
+        async fn delete(&self, location: &Path) -> Result<()> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            self.inner.delete(location).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Delete,
+                path: location.clone(),
+                timestamp,
+                duration: Some(elapsed),
+                size: None,
+                range: None,
+                extra_display: None,
+            });
+
+            Ok(())
+        }
+
+        fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+            let timestamp = Utc::now();
+            let ret = self.inner.list(prefix);
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::List,
+                path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+                timestamp,
+                duration: None, // list returns a future, so the duration isn't meaningful
+                size: None,
+                range: None,
+                extra_display: None,
+            });
+
+            ret
+        }
+
+        async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            let ret = self.inner.list_with_delimiter(prefix).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::List,
+                path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+                timestamp,
+                duration: Some(elapsed),
+                size: None,
+                range: None,
+                extra_display: None,
+            });
+
+            Ok(ret)
+        }
+
+        async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            self.inner.copy(from, to).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Copy,
+                path: from.clone(),
+                timestamp,
+                duration: Some(elapsed),
+                size: None,
+                range: None,
+                extra_display: Some(format!("copy_to: {to}")),
+            });
+
+            Ok(())
+        }
+
+        async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            self.inner.copy_if_not_exists(from, to).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Copy,
+                path: from.clone(),
+                timestamp,
+                duration: Some(elapsed),
+                size: None,
+                range: None,
+                extra_display: Some(format!("copy_to: {to}")),
+            });
+
+            Ok(())
+        }
+
+        async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            let ret = self.inner.head(location).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Head,
+                path: location.clone(),
+                timestamp,
+                duration: Some(elapsed),
+                size: None,
+                range: None,
+                extra_display: None,
+            });
+
+            Ok(ret)
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct InstrumentedObjectStoreRegistry {
+        inner: Arc<dyn ObjectStoreRegistry>,
+        stores: RwLock<Vec<Arc<InstrumentedObjectStore>>>,
+    }
+
+    impl InstrumentedObjectStoreRegistry {
+        pub fn new(registry: Arc<dyn ObjectStoreRegistry>) -> Self {
+            Self {
+                inner: registry,
+                stores: RwLock::new(Vec::new()),
+            }
+        }
+
+        pub fn stores(&self) -> Vec<Arc<InstrumentedObjectStore>> {
+            self.stores.read().clone()
+        }
+    }
+
+    impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
+        fn register_store(
+            &self,
+            url: &Url,
+            store: Arc<dyn ObjectStore>,
+        ) -> Option<Arc<dyn ObjectStore>> {
+            let instrumented = Arc::new(InstrumentedObjectStore::new(store));
+            self.stores.write().push(Arc::clone(&instrumented));
+            self.inner.register_store(url, instrumented)
+        }
+
+        fn get_store(
+            &self,
+            url: &Url,
+        ) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
+            self.inner.get_store(url)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cli_context::CliSessionContext;
