@@ -34,11 +34,47 @@ use datafusion_expr::{Expr, SortExpr};
 /// This rule looks for `Sort -> TableScan` patterns and moves the sort
 /// expressions into the `TableScan.preferred_ordering` field, allowing
 /// table providers to potentially optimize the scan based on sort requirements.
+///
+/// # Behavior
+///
+/// The optimizer preserves the original `Sort` node as a fallback while passing
+/// the ordering preference to the `TableScan` as an optimization hint. This ensures
+/// correctness even if the table provider cannot satisfy the requested ordering.
+///
+/// # Supported Sort Expressions
+///
+/// Currently, only simple column references are supported for pushdown because
+/// table providers typically cannot optimize complex expressions in sort operations.
+/// Complex expressions like `col("a") + col("b")` or function calls are not pushed down.
+///
+/// # Examples
+///
+/// ```text
+/// Before optimization:
+/// Sort: test.a ASC NULLS LAST
+///   TableScan: test
+///
+/// After optimization:
+/// Sort: test.a ASC NULLS LAST  -- Preserved as fallback
+///   TableScan: test            -- Now includes preferred_ordering hint
+/// ```
 #[derive(Default, Debug)]
 pub struct PushDownSort {}
 
 impl PushDownSort {
-    #[allow(missing_docs)]
+    /// Creates a new instance of the `PushDownSort` optimizer rule.
+    ///
+    /// # Returns
+    ///
+    /// A new `PushDownSort` optimizer rule that can be added to the optimization pipeline.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use datafusion_optimizer::push_down_sort::PushDownSort;
+    ///
+    /// let rule = PushDownSort::new();
+    /// ```
     pub fn new() -> Self {
         Self {}
     }
