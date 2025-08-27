@@ -1213,9 +1213,7 @@ impl TableProvider for ListingTable {
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
             let projected_schema = project_schema(&self.schema(), projection.as_ref())?;
-            return Ok(ScanResult::new(
-                Arc::new(EmptyExec::new(projected_schema)),
-            ));
+            return Ok(ScanResult::new(Arc::new(EmptyExec::new(projected_schema))));
         }
 
         let output_ordering = self.try_create_output_ordering()?;
@@ -1249,9 +1247,9 @@ impl TableProvider for ListingTable {
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
         else {
-            return Ok(ScanResult::new(
-                Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
-            ));
+            return Ok(ScanResult::new(Arc::new(EmptyExec::new(Arc::new(
+                Schema::empty(),
+            )))));
         };
 
         let file_source = self.create_file_source_with_schema_adapter()?;
