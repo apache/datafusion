@@ -465,7 +465,6 @@ impl DefaultPhysicalPlanner {
                     .with_filters(Some(filters))
                     .with_limit(*fetch);
                 let res = source.scan_with_args(session_state, opts).await?;
-                // TODO: move FilterExec wrapping logic from filter pushdown rule to here?
                 res.plan()
             }
             LogicalPlan::Values(Values { values, schema }) => {

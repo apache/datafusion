@@ -1224,7 +1224,6 @@ impl TableProvider for ListingTable {
             let projected_schema = project_schema(&self.schema(), projection.as_ref())?;
             return Ok(ScanResult::new(
                 Arc::new(EmptyExec::new(projected_schema)),
-                other_filters.clone(),
             ));
         }
 
@@ -1261,7 +1260,6 @@ impl TableProvider for ListingTable {
         else {
             return Ok(ScanResult::new(
                 Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
-                other_filters.clone(),
             ));
         };
 
@@ -1290,7 +1288,7 @@ impl TableProvider for ListingTable {
             )
             .await?;
 
-        Ok(ScanResult::new(plan, other_filters.clone()))
+        Ok(ScanResult::new(plan))
     }
 
     fn supports_filters_pushdown(

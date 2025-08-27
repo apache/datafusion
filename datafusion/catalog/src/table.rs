@@ -32,7 +32,6 @@ use datafusion_expr::{
     CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
 use datafusion_physical_plan::ExecutionPlan;
-use itertools::Itertools;
 
 /// A table which can be queried and modified.
 ///
@@ -184,20 +183,10 @@ pub trait TableProvider: Debug + Sync + Send {
             limit,
         } = args;
         let filters = filters.unwrap_or_default();
-        let unsupported_filters = self
-            .supports_filters_pushdown(&filters.iter().collect_vec())?
-            .into_iter()
-            .zip(&filters)
-            .filter_map(|(support, expr)| match support {
-                TableProviderFilterPushDown::Inexact
-                | TableProviderFilterPushDown::Unsupported => Some(expr.clone()),
-                TableProviderFilterPushDown::Exact => None,
-            })
-            .collect_vec();
         let plan = self
             .scan(state, projection.as_ref(), &filters, limit)
             .await?;
-        Ok(ScanResult::new(plan, unsupported_filters))
+        Ok(ScanResult::new(plan))
     }
 
     /// Specify if DataFusion should provide filter expressions to the
@@ -378,22 +367,15 @@ impl ScanArgs {
 pub struct ScanResult {
     /// The ExecutionPlan to run.
     plan: Arc<dyn ExecutionPlan>,
-    // Remaining filters that were not completely evaluated during `scan_with_args()`.
-    // These were previously referred to as "unsupported filters" or "inexact filters".
-    filters: Vec<Expr>,
 }
 
 impl ScanResult {
-    pub fn new(plan: Arc<dyn ExecutionPlan>, filters: Vec<Expr>) -> Self {
-        Self { plan, filters }
+    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+        Self { plan }
     }
 
     pub fn plan(&self) -> Arc<dyn ExecutionPlan> {
         Arc::clone(&self.plan)
-    }
-
-    pub fn filters(&self) -> &[Expr] {
-        &self.filters
     }
 }
 
