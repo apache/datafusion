@@ -2750,7 +2750,8 @@ impl TableScan {
         fetch: Option<usize>,
         preferred_ordering: Option<Vec<SortExpr>>,
     ) -> Result<Self> {
-        let mut table_scan = Self::try_new(table_name, table_source, projection, filters, fetch)?;
+        let mut table_scan =
+            Self::try_new(table_name, table_source, projection, filters, fetch)?;
         table_scan.preferred_ordering = preferred_ordering;
         Ok(table_scan)
     }

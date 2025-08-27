@@ -44,7 +44,7 @@ impl PushDownSort {
     }
 
     /// Checks if a sort expression can be pushed down to a table scan.
-    /// 
+    ///
     /// Currently, we only support pushing down simple column references
     /// because table providers typically can't optimize complex expressions
     /// in sort pushdown.
@@ -108,7 +108,7 @@ impl OptimizerRule for PushDownSort {
         // The table provider may or may not be able to satisfy the ordering,
         // but that's up to the table provider to decide
         let new_plan = LogicalPlan::TableScan(new_table_scan);
-        
+
         Ok(Transformed::yes(new_plan))
     }
 
@@ -129,11 +129,7 @@ mod tests {
         assert!(PushDownSort::can_pushdown_sort_expr(&sort_expr));
 
         // Complex expression should not be pushable
-        let sort_expr = SortExpr::new(
-            col("a") + col("b"), 
-            true, 
-            false
-        );
+        let sort_expr = SortExpr::new(col("a") + col("b"), true, false);
         assert!(!PushDownSort::can_pushdown_sort_expr(&sort_expr));
     }
 
