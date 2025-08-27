@@ -219,8 +219,8 @@ fn test_cli_top_memory_consumers<'a>(
     settings.set_snapshot_suffix(snapshot_name);
 
     settings.add_filter(
-        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B",
-        "Consumer(can spill: bool) consumed XB",
+        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B, peak .*?B",
+        "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
         r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
@@ -340,6 +340,7 @@ SELECT COUNT(*) FROM hits;
 #[rstest]
 #[case("SELECT pow(1,'foo')")]
 #[case("SELECT CAST('not_a_number' AS INTEGER);")]
+#[cfg(feature = "backtrace")]
 fn test_backtrace_output(#[case] query: &str) {
     let mut cmd = cli();
     // Use a command that will cause an error and trigger backtrace
