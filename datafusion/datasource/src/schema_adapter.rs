@@ -751,7 +751,7 @@ mod tests {
 
         // Define compatible file schema (missing column c)
         let compatible_file_schema = schema(vec![
-            field("a", DataType::Int64), // Can be cast to Int32
+            field("a", DataType::Int64),   // Can be cast to Int32
             field("b", DataType::Float64), // Can be cast to Utf8
         ]);
 
@@ -864,7 +864,8 @@ mod tests {
             (arc_field("age", DataType::Int32), age),
             (arc_field("address", DataType::Utf8), address),
         ]);
-        let batch = RecordBatch::try_new(Arc::new(file_schema.clone()), vec![Arc::new(person)])?;
+        let batch =
+            RecordBatch::try_new(Arc::new(file_schema.clone()), vec![Arc::new(person)])?;
 
         let adapter = DefaultSchemaAdapter {
             projected_table_schema: Arc::clone(&table_schema),

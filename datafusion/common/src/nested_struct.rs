@@ -377,10 +377,8 @@ mod tests {
             Some(b"a".as_ref()),
             Some(b"b".as_ref()),
         ])) as ArrayRef;
-        let source_struct = StructArray::from(vec![(
-            arc_field("a", DataType::Binary),
-            a_array,
-        )]);
+        let source_struct =
+            StructArray::from(vec![(arc_field("a", DataType::Binary), a_array)]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
         let target_field = struct_field("s", vec![field("a", DataType::Int32)]);
