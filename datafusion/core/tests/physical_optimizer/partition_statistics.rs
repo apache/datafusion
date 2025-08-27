@@ -33,6 +33,7 @@ mod test {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
+    use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use datafusion_physical_plan::aggregates::{
@@ -47,6 +48,7 @@ mod test {
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
     use datafusion_physical_plan::projection::ProjectionExec;
+    use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
     use datafusion_physical_plan::{
@@ -758,6 +760,106 @@ mod test {
         let actual = plan.partition_statistics(None)?;
         let expected = compute_record_batch_statistics(&all_batches, &schema, None);
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_repartition() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+
+        let repartition = Arc::new(RepartitionExec::try_new(
+            scan.clone(),
+            Partitioning::RoundRobinBatch(3),
+        )?);
+
+        let statistics = (0..repartition.partitioning().partition_count())
+            .map(|idx| repartition.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(statistics.len(), 3);
+
+        let expected_stats = Statistics {
+            num_rows: Precision::Inexact(1),
+            total_byte_size: Precision::Inexact(73),
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+
+        // All partitions should have the same statistics
+        for stat in statistics.iter() {
+            assert_eq!(stat, &expected_stats);
+        }
+
+        // Verify that the result has exactly 3 partitions
+        let partitions = execute_stream_partitioned(
+            repartition.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(partitions.len(), 3);
+
+        // Collect row counts from each partition
+        let mut partition_row_counts = Vec::new();
+        for partition_stream in partitions.into_iter() {
+            let results: Vec<RecordBatch> = partition_stream.try_collect().await?;
+            let total_rows: usize = results.iter().map(|batch| batch.num_rows()).sum();
+            partition_row_counts.push(total_rows);
+        }
+        assert_eq!(partition_row_counts.len(), 3);
+        assert_eq!(partition_row_counts[0], 2);
+        assert_eq!(partition_row_counts[1], 2);
+        assert_eq!(partition_row_counts[2], 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_repartition_invalid_partition() -> Result<()>
+    {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+
+        let repartition = Arc::new(RepartitionExec::try_new(
+            scan.clone(),
+            Partitioning::RoundRobinBatch(2),
+        )?);
+
+        let result = repartition.partition_statistics(Some(2));
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("RepartitionExec invalid partition 2 (expected less than 2)"));
+
+        let partitions = execute_stream_partitioned(
+            repartition.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(partitions.len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_repartition_zero_partitions() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        let scan_schema = scan.schema();
+
+        // Create a repartition with 0 partitions
+        let repartition = Arc::new(RepartitionExec::try_new(
+            Arc::new(EmptyExec::new(scan_schema.clone())),
+            Partitioning::RoundRobinBatch(0),
+        )?);
+
+        let result = repartition.partition_statistics(Some(0))?;
+        assert_eq!(result, Statistics::new_unknown(&scan_schema));
+
+        // Verify that the result has exactly 0 partitions
+        let partitions = execute_stream_partitioned(
+            repartition.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(partitions.len(), 0);
 
         Ok(())
     }
