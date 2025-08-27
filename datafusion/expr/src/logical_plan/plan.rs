@@ -2742,6 +2742,55 @@ impl TableScan {
         })
     }
 
+    /// Sets the preferred ordering for this table scan using the builder pattern.
+    ///
+    /// The preferred ordering serves as a hint to table providers about the desired
+    /// sort order for the data. Table providers can use this information to optimize
+    /// data access patterns, choose appropriate indexes, or leverage existing sort
+    /// orders in the underlying storage.
+    ///
+    /// # Parameters
+    ///
+    /// * `preferred_ordering` - An optional vector of sort expressions representing
+    ///   the desired ordering. `None` indicates no specific ordering preference.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` to enable method chaining in the builder pattern.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use datafusion_expr::{col, SortExpr};
+    /// # use datafusion_expr::logical_plan::TableScan;
+    /// # use std::sync::Arc;
+    /// # use datafusion_common::TableReference;
+    ///
+    /// // Create a table scan with preferred ordering by column 'a' ascending
+    /// # let table_name = TableReference::bare("test");
+    /// # let source = Arc::new(datafusion_expr::test::table_source(vec![]));
+    /// # let projection = None;
+    /// # let projected_schema = Arc::new(datafusion_common::DFSchema::empty());
+    /// # let filters = vec![];
+    /// # let fetch = None;
+    /// let table_scan = TableScan {
+    ///     table_name,
+    ///     source,
+    ///     projection,
+    ///     projected_schema,
+    ///     filters,
+    ///     fetch,
+    ///     preferred_ordering: None,
+    /// }.with_preferred_ordering(Some(vec![
+    ///     SortExpr::new(col("a"), true, false) // ASC NULLS LAST
+    /// ]));
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// This is purely an optimization hint. The table provider may choose to ignore
+    /// the preferred ordering if it cannot be efficiently satisfied, and the query
+    /// execution engine should not rely on the data being returned in this order.
     pub fn with_preferred_ordering(
         mut self,
         preferred_ordering: Option<Vec<SortExpr>>,
