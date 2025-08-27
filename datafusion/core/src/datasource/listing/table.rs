@@ -1194,26 +1194,17 @@ impl TableProvider for ListingTable {
             .iter()
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
+
         // If the filters can be resolved using only partition cols, there is no need to
-        // collect statistics for files
-        let (partition_filters, other_filters): (Vec<_>, Vec<_>) =
-            filters.into_iter().partition(|f| {
-                can_be_evaluted_for_partition_pruning(&table_partition_col_names, f)
+        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
+        let (partition_filters, filters): (Vec<_>, Vec<_>) =
+            filters.iter().cloned().partition(|filter| {
+                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
             });
 
-        // Apply partition pruning.  Although we only use the partition filtering, we
-        // need to include both the partition column filters and their unfiltered
-        // counterparts since we want the statistics to be accurate.  If a file is not
-        // included because it doesn't match the partition filters, we should not include
-        // the statistics for that file.  But if a file is included, the statistics for
-        // that file should not have the partition filter applied to it.  For example
-        // if we have the query `SELECT sum(col1) FROM tbl WHERE date='2023-01-01'
-        // and the table is partitioned by `date`, we want to only consider files that
-        // match the predicate `date='2023-01-01'` but we don't want to apply the
-        // predicate to the statistics for that file as the whole file matches that
-        // predicate and the statistics for `col1` are from the entire file.
+        // We should not limit the number of partitioned files to scan if there are filters and limit
         // at the same time. This is because the limit should be applied after the filters are applied.
-        let statistic_file_limit = if other_filters.is_empty() { limit } else { None };
+        let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let (mut partitioned_file_lists, statistics) = self
             .list_files_for_scan(state, &partition_filters, statistic_file_limit)
