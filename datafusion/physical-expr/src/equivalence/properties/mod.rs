@@ -315,7 +315,7 @@ impl EquivalenceProperties {
             self.oeq_class.extend(orderings);
             // Normalize given orderings to update the cache:
             self.oeq_cache.normal_cls.extend(normal_orderings);
-            // TODO: If no ordering is found to be redunant during extension, we
+            // TODO: If no ordering is found to be redundant during extension, we
             //       can use a shortcut algorithm to update the leading map.
             self.oeq_cache.update_map();
         }
