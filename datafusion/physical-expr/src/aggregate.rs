@@ -549,13 +549,23 @@ impl AggregateFunctionExpr {
         }
     }
 
+    /// Builds [`AccumulatorArgs`] for this aggregate and executes the provided
+    /// closure with them, keeping the underlying schema alive for the duration
+    /// of the closure.
+    fn build_acc_args<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(AccumulatorArgs) -> T,
+    {
+        let schema = self.args_schema();
+        let args = self.make_acc_args(schema.as_ref());
+        f(args)
+    }
+
     /// the accumulator used to accumulate values from the expressions.
     /// the accumulator expects the same number of arguments as `expressions` and must
     /// return states with the same description as `state_fields`
     pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let schema = self.args_schema();
-        let acc_args = self.make_acc_args(schema.as_ref());
-        self.fun.accumulator(acc_args)
+        self.build_acc_args(|args| self.fun.accumulator(args))
     }
 
     /// the field of the final result of this aggregation.
@@ -628,69 +638,67 @@ impl AggregateFunctionExpr {
 
     /// Creates accumulator implementation that supports retract
     pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let schema = self.args_schema();
-        let args = self.make_acc_args(schema.as_ref());
-        let accumulator = self.fun.create_sliding_accumulator(args)?;
+        self.build_acc_args(|args| {
+            let accumulator = self.fun.create_sliding_accumulator(args)?;
 
-        // Accumulators that have window frame startings different
-        // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
-        // implement retract_batch method in order to run correctly
-        // currently in DataFusion.
-        //
-        // If this `retract_batches` is not present, there is no way
-        // to calculate result correctly. For example, the query
-        //
-        // ```sql
-        // SELECT
-        //  SUM(a) OVER(ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS sum_a
-        // FROM
-        //  t
-        // ```
-        //
-        // 1. First sum value will be the sum of rows between `[0, 1)`,
-        //
-        // 2. Second sum value will be the sum of rows between `[0, 2)`
-        //
-        // 3. Third sum value will be the sum of rows between `[1, 3)`, etc.
-        //
-        // Since the accumulator keeps the running sum:
-        //
-        // 1. First sum we add to the state sum value between `[0, 1)`
-        //
-        // 2. Second sum we add to the state sum value between `[1, 2)`
-        // (`[0, 1)` is already in the state sum, hence running sum will
-        // cover `[0, 2)` range)
-        //
-        // 3. Third sum we add to the state sum value between `[2, 3)`
-        // (`[0, 2)` is already in the state sum).  Also we need to
-        // retract values between `[0, 1)` by this way we can obtain sum
-        // between [1, 3) which is indeed the appropriate range.
-        //
-        // When we use `UNBOUNDED PRECEDING` in the query starting
-        // index will always be 0 for the desired range, and hence the
-        // `retract_batch` method will not be called. In this case
-        // having retract_batch is not a requirement.
-        //
-        // This approach is a a bit different than window function
-        // approach. In window function (when they use a window frame)
-        // they get all the desired range during evaluation.
-        if !accumulator.supports_retract_batch() {
-            return not_impl_err!(
-                "Aggregate can not be used as a sliding accumulator because \
+            // Accumulators that have window frame startings different
+            // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
+            // implement retract_batch method in order to run correctly
+            // currently in DataFusion.
+            //
+            // If this `retract_batches` is not present, there is no way
+            // to calculate result correctly. For example, the query
+            //
+            // ```sql
+            // SELECT
+            //  SUM(a) OVER(ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS sum_a
+            // FROM
+            //  t
+            // ```
+            //
+            // 1. First sum value will be the sum of rows between `[0, 1)`,
+            //
+            // 2. Second sum value will be the sum of rows between `[0, 2)`
+            //
+            // 3. Third sum value will be the sum of rows between `[1, 3)`, etc.
+            //
+            // Since the accumulator keeps the running sum:
+            //
+            // 1. First sum we add to the state sum value between `[0, 1)`
+            //
+            // 2. Second sum we add to the state sum value between `[1, 2)`
+            // (`[0, 1)` is already in the state sum, hence running sum will
+            // cover `[0, 2)` range)
+            //
+            // 3. Third sum we add to the state sum value between `[2, 3)`
+            // (`[0, 2)` is already in the state sum).  Also we need to
+            // retract values between `[0, 1)` by this way we can obtain sum
+            // between [1, 3) which is indeed the appropriate range.
+            //
+            // When we use `UNBOUNDED PRECEDING` in the query starting
+            // index will always be 0 for the desired range, and hence the
+            // `retract_batch` method will not be called. In this case
+            // having retract_batch is not a requirement.
+            //
+            // This approach is a a bit different than window function
+            // approach. In window function (when they use a window frame)
+            // they get all the desired range during evaluation.
+            if !accumulator.supports_retract_batch() {
+                return not_impl_err!(
+                    "Aggregate can not be used as a sliding accumulator because \
                      `retract_batch` is not implemented: {}",
-                self.name
-            );
-        }
-        Ok(accumulator)
+                    self.name
+                );
+            }
+            Ok(accumulator)
+        })
     }
 
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator`] will be called.
     pub fn groups_accumulator_supported(&self) -> bool {
-        let schema = self.args_schema();
-        let args = self.make_acc_args(schema.as_ref());
-        self.fun.groups_accumulator_supported(args)
+        self.build_acc_args(|args| self.fun.groups_accumulator_supported(args))
     }
 
     /// Return a specialized [`GroupsAccumulator`] that manages state
@@ -699,9 +707,7 @@ impl AggregateFunctionExpr {
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        let schema = self.args_schema();
-        let args = self.make_acc_args(schema.as_ref());
-        self.fun.create_groups_accumulator(args)
+        self.build_acc_args(|args| self.fun.create_groups_accumulator(args))
     }
 
     /// Construct an expression that calculates the aggregate in reverse.
