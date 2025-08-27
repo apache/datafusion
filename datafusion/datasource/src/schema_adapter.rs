@@ -470,7 +470,7 @@ mod tests {
             TimestampMillisecondArray,
         },
         compute::cast,
-        datatypes::{DataType, Field, Fields, Int32Type, TimeUnit},
+        datatypes::{DataType, Field, Int32Type, TimeUnit},
         record_batch::RecordBatch,
     };
     use datafusion_common::{stats::Precision, Result, ScalarValue, Statistics};
@@ -493,10 +493,6 @@ mod tests {
 
     fn arc_field(name: &str, data_type: DataType) -> Arc<Field> {
         Arc::new(field(name, data_type))
-    }
-
-    fn arc_struct_field(name: &str, fields: Vec<Field>) -> Arc<Field> {
-        Arc::new(struct_field(name, fields))
     }
 
     #[test]
