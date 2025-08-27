@@ -34,9 +34,7 @@ use datafusion_common::{
     cast_column,
     error::{DataFusionError, Result},
     format::DEFAULT_CAST_OPTIONS,
-    internal_err,
-    nested_struct::validate_struct_compatibility,
-    plan_datafusion_err, plan_err,
+    internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Column, DFSchema, ScalarValue,
 };
@@ -939,12 +937,6 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
             }));
             Arc::new(array) as ArrayRef
         } else {
-            if let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
-                (array.data_type(), stat_field.data_type())
-            {
-                // Ensure the structs are compatible before casting
-                validate_struct_compatibility(source_fields, target_fields)?;
-            }
             cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
         };
 

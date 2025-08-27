@@ -103,7 +103,7 @@ fn cast_struct_column(
 /// - **Non-Struct Types**: Uses Arrow's standard `cast` function for primitive type conversions
 ///
 /// ## Cast Options
-/// The [`cast_options`] argument controls how Arrow handles values that cannot be represented
+/// The `cast_options` argument controls how Arrow handles values that cannot be represented
 /// in the target type. When `safe` is `false` (DataFusion's default) the cast will return an
 /// error if such a value is encountered. Setting `safe` to `true` instead produces `NULL`
 /// for out-of-range or otherwise invalid values. The options also allow customizing how
