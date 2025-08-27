@@ -26,7 +26,8 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion_common::{
-    cast_column, format::DEFAULT_CAST_OPTIONS, plan_err, ColumnStatistics,
+    cast_column, format::DEFAULT_CAST_OPTIONS, nested_struct::validate_struct_compatibility,
+    plan_err, ColumnStatistics,
 };
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
@@ -250,7 +251,9 @@ pub(crate) fn can_cast_field(
     table_field: &Field,
 ) -> datafusion_common::Result<()> {
     match (file_field.data_type(), table_field.data_type()) {
-        (DataType::Struct(_), DataType::Struct(_)) => Ok(()),
+        (DataType::Struct(file_fields), DataType::Struct(table_fields)) => {
+            validate_struct_compatibility(file_fields, table_fields)
+        }
         _ => {
             if can_cast_types(file_field.data_type(), table_field.data_type()) {
                 Ok(())
@@ -467,7 +470,7 @@ mod tests {
             TimestampMillisecondArray,
         },
         compute::cast,
-        datatypes::{DataType, Field, Int32Type, TimeUnit},
+        datatypes::{DataType, Field, Fields, Int32Type, TimeUnit},
         record_batch::RecordBatch,
     };
     use datafusion_common::{stats::Precision, Result, ScalarValue, Statistics};
@@ -572,6 +575,35 @@ mod tests {
         let from_field = Field::new("col", DataType::Float64, true);
         let to_field = Field::new("col", DataType::Utf8, true);
         can_cast_field(&from_field, &to_field).unwrap();
+
+        // Struct fields with compatible child types should work
+        let from_field = Field::new(
+            "col",
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new("a", DataType::Int32, true))])),
+            true,
+        );
+        let to_field = Field::new(
+            "col",
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new("a", DataType::Int64, true))])),
+            true,
+        );
+        can_cast_field(&from_field, &to_field).unwrap();
+
+        // Struct fields with incompatible child types should fail
+        let from_field = Field::new(
+            "col",
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new("a", DataType::Binary, true))])),
+            true,
+        );
+        let to_field = Field::new(
+            "col",
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new("a", DataType::Int32, true))])),
+            true,
+        );
+        let result = can_cast_field(&from_field, &to_field);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot cast struct field 'a'"));
 
         // Binary to Utf8 is not supported - this is an example of a cast that should fail
         // Note: We use Binary instead of Utf8->Int32 because Arrow actually supports that cast
