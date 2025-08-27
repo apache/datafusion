@@ -23,9 +23,7 @@ use arrow::array::{
     Array, ArrayRef, DurationMicrosecondArray, Float64Array, IntervalYearMonthArray,
 };
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{
-    Duration, Float64, Int32, Interval,
-};
+use arrow::datatypes::DataType::{Duration, Float64, Int32, Interval};
 use arrow::datatypes::IntervalUnit::YearMonth;
 use datafusion_common::cast::{
     as_duration_microsecond_array, as_float64_array, as_int32_array, as_interval_ym_array,
@@ -370,7 +368,6 @@ mod tests {
         assert_eq!(out.values(), &[1, 11, 11]);
     }
 
-
     #[test]
     fn test_width_bucket_f64_edge_cases() {
         let v = f64_array(&[1.0, 5.0, 9.0]);
@@ -473,7 +470,6 @@ mod tests {
         assert_eq!(out.values(), &[2, 1, 13, 13, 0]);
     }
 
-
     // --- Errores -------------------------------------------------------------
 
     #[test]
@@ -483,10 +479,7 @@ mod tests {
         let hi = f64_array(&[10.0]);
         let err = width_bucket_kern(&[v, lo, hi]).unwrap_err();
         let msg = format!("{err}");
-        assert!(
-            msg.contains("expects exactly 4"),
-            "unexpected error: {msg}"
-        );
+        assert!(msg.contains("expects exactly 4"), "unexpected error: {msg}");
     }
 
     #[test]
@@ -499,7 +492,8 @@ mod tests {
         let err = width_bucket_kern(&[v, lo, hi, n]).unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("unsupported data types") || msg.contains("Float/Decimal OR Duration OR Interval(YearMonth)"),
+            msg.contains("unsupported data types")
+                || msg.contains("Float/Decimal OR Duration OR Interval(YearMonth)"),
             "unexpected error: {msg}"
         );
     }

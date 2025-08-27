@@ -51,5 +51,13 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![expm1(), factorial(), hex(), modulus(), pmod(), rint(), width_bucket()]
+    vec![
+        expm1(),
+        factorial(),
+        hex(),
+        modulus(),
+        pmod(),
+        rint(),
+        width_bucket(),
+    ]
 }
