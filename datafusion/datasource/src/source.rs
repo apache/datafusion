@@ -359,7 +359,6 @@ impl ExecutionPlan for DataSourceExec {
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        println!("pushing down {:?}", child_pushdown_result);
         // Push any remaining filters into our data source
         let parent_filters = child_pushdown_result
             .parent_filters
