@@ -20,13 +20,15 @@ use std::sync::Arc;
 
 use crate::function::error_utils::unsupported_data_types_exec_err;
 use arrow::array::{
-    Array, ArrayRef, DurationMicrosecondArray, Float64Array, IntervalYearMonthArray,
+    Array, ArrayRef, DurationMicrosecondArray, Float64Array, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray,
 };
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Duration, Float64, Int32, Interval};
-use arrow::datatypes::IntervalUnit::YearMonth;
+use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion_common::cast::{
-    as_duration_microsecond_array, as_float64_array, as_int32_array, as_interval_ym_array,
+    as_duration_microsecond_array, as_float64_array, as_int32_array,
+    as_interval_mdn_array, as_interval_ym_array,
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -106,6 +108,19 @@ impl ScalarUDFImpl for SparkWidthBucket {
             ]);
         }
 
+        if matches!(v, Interval(MonthDayNano))
+            && matches!(lo, Interval(MonthDayNano))
+            && matches!(hi, Interval(MonthDayNano))
+            && is_int(n)
+        {
+            return Ok(vec![
+                Interval(MonthDayNano),
+                Interval(MonthDayNano),
+                Interval(MonthDayNano),
+                Int32,
+            ]);
+        }
+
         if matches!(v, Interval(YearMonth))
             && matches!(lo, Interval(YearMonth))
             && matches!(hi, Interval(YearMonth))
@@ -119,7 +134,13 @@ impl ScalarUDFImpl for SparkWidthBucket {
             ]);
         }
 
-        exec_err!("rint expects a numeric argument, got {}", types[0])
+        exec_err!(
+            "width_bucket expects a numeric argument, got {} {} {} {}",
+            types[0],
+            types[1],
+            types[2],
+            types[3]
+        )
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
@@ -136,7 +157,10 @@ impl ScalarUDFImpl for SparkWidthBucket {
 
 fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [v, minv, maxv, nb] = args else {
-        return exec_err!("rint expects exactly 4 argument, got {}", args.len());
+        return exec_err!(
+            "width_bucket expects exactly 4 argument, got {}",
+            args.len()
+        );
     };
 
     match v.data_type() {
@@ -161,6 +185,14 @@ fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
             let n_bucket = as_int32_array(nb)?;
             Ok(Arc::new(width_bucket_i32_as_float(v, min, max, n_bucket)))
         }
+        Interval(MonthDayNano) => {
+            let v = as_interval_mdn_array(v)?;
+            let min = as_interval_mdn_array(minv)?;
+            let max = as_interval_mdn_array(maxv)?;
+            let n_bucket = as_int32_array(nb)?;
+            Ok(Arc::new(width_bucket_interval_mdn_exact(v, min, max, n_bucket)))
+        }
+
 
         other => Err(unsupported_data_types_exec_err(
             "width_bucket",
@@ -282,6 +314,138 @@ width_bucket_kernel_impl!(
     |arr: &IntervalYearMonthArray, i: usize| arr.value(i) as f64,
     false
 );
+const NS_PER_DAY_I128: i128 = 86_400_000_000_000;
+pub(crate) fn width_bucket_interval_mdn_exact(
+    v: &IntervalMonthDayNanoArray,
+    lo: &IntervalMonthDayNanoArray,
+    hi: &IntervalMonthDayNanoArray,
+    n: &Int32Array,
+) -> Int32Array {
+    let len = v.len();
+    let mut b = Int32Builder::with_capacity(len);
+
+    for i in 0..len {
+        if v.is_null(i) || lo.is_null(i) || hi.is_null(i) || n.is_null(i) {
+            b.append_null();
+            continue;
+        }
+        let buckets = n.value(i);
+        if buckets <= 0 {
+            b.append_null();
+            continue;
+        }
+
+        let x = v.value(i);
+        let l = lo.value(i);
+        let h = hi.value(i);
+
+        // asc/desc
+        // Values of IntervalMonthDayNano are compared using their binary representation, which can lead to surprising results.
+        let asc = (l.months, l.days, l.nanoseconds) < (h.months, h.days, h.nanoseconds);
+        if (l.months, l.days, l.nanoseconds) == (h.months, h.days, h.nanoseconds) {
+            b.append_null();
+            continue;
+        }
+
+        // ------------------- only month -------------------
+        if l.days == h.days && l.nanoseconds == h.nanoseconds && l.months != h.months {
+            let x_m = x.months as f64;
+            let l_m = l.months as f64;
+            let h_m = h.months as f64;
+
+            if asc {
+                if x_m < l_m {
+                    b.append_value(0);
+                    continue;
+                }
+                if x_m >= h_m {
+                    b.append_value(buckets + 1);
+                    continue;
+                }
+            } else {
+                if x_m > l_m {
+                    b.append_value(0);
+                    continue;
+                }
+                if x_m <= h_m {
+                    b.append_value(buckets + 1);
+                    continue;
+                }
+            }
+
+            let width = (h_m - l_m) / (buckets as f64);
+            if width == 0.0 || !width.is_finite() {
+                b.append_null();
+                continue;
+            }
+
+            let mut bucket = ((x_m - l_m) / width).floor() as i32 + 1;
+            if bucket < 1 {
+                bucket = 1;
+            }
+            if bucket > buckets + 1 {
+                bucket = buckets + 1;
+            }
+            b.append_value(bucket);
+            continue;
+        }
+
+        // ---------------  months equals -------------------
+        if l.months == h.months {
+            let base_days = l.days as i128;
+            let base_ns = l.nanoseconds as i128;
+
+            let xf = (x.days as i128 - base_days) * NS_PER_DAY_I128
+                + (x.nanoseconds as i128 - base_ns);
+            let hf = (h.days as i128 - base_days) * NS_PER_DAY_I128
+                + (h.nanoseconds as i128 - base_ns);
+
+            let x_f = xf as f64;
+            let l_f = 0.0;
+            let h_f = hf as f64;
+
+            if asc {
+                if x_f < l_f {
+                    b.append_value(0);
+                    continue;
+                }
+                if x_f >= h_f {
+                    b.append_value(buckets + 1);
+                    continue;
+                }
+            } else {
+                if x_f > l_f {
+                    b.append_value(0);
+                    continue;
+                }
+                if x_f <= h_f {
+                    b.append_value(buckets + 1);
+                    continue;
+                }
+            }
+
+            let width = (h_f - l_f) / (buckets as f64);
+            if width == 0.0 || !width.is_finite() {
+                b.append_null();
+                continue;
+            }
+
+            let mut bucket = ((x_f - l_f) / width).floor() as i32 + 1;
+            if bucket < 1 {
+                bucket = 1;
+            }
+            if bucket > buckets + 1 {
+                bucket = buckets + 1;
+            }
+            b.append_value(bucket);
+            continue;
+        }
+
+        b.append_null();
+    }
+
+    b.finish()
+}
 
 #[cfg(test)]
 mod tests {
@@ -292,6 +456,8 @@ mod tests {
         ArrayRef, DurationMicrosecondArray, Float64Array, Int32Array,
         IntervalYearMonthArray,
     };
+    use arrow::datatypes::IntervalMonthDayNano;
+
     // --- Helpers -------------------------------------------------------------
 
     fn i32_array_all(len: usize, val: i32) -> Arc<Int32Array> {
@@ -316,6 +482,14 @@ mod tests {
 
     fn downcast_i32(arr: &ArrayRef) -> &Int32Array {
         arr.as_any().downcast_ref::<Int32Array>().unwrap()
+    }
+
+    fn mdn_array(vals: &[(i32, i32, i64)]) -> Arc<IntervalMonthDayNanoArray> {
+        let data: Vec<IntervalMonthDayNano> = vals
+            .iter()
+            .map(|(m, d, ns)| IntervalMonthDayNano::new(*m, *d, *ns))
+            .collect();
+        Arc::new(IntervalMonthDayNanoArray::from(data))
     }
 
     // --- Float64 -------------------------------------------------------------
@@ -468,6 +642,128 @@ mod tests {
         let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
         let out = downcast_i32(&out);
         assert_eq!(out.values(), &[2, 1, 13, 13, 0]);
+    }
+
+    // --- Interval(MonthDayNano) --------------------------------------------
+
+    #[test]
+    fn test_width_bucket_interval_mdn_months_only_basic() {
+        let v = mdn_array(&[(0, 0, 0), (5, 0, 0), (11, 0, 0), (12, 0, 0), (13, 0, 0)]);
+        let lo = mdn_array(&[(0, 0, 0); 5]);
+        let hi = mdn_array(&[(12, 0, 0); 5]);
+        let n = i32_array_all(5, 12);
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        let out = downcast_i32(&out);
+        assert_eq!(out.values(), &[1, 6, 12, 13, 13]);
+    }
+
+    #[test]
+    fn test_width_bucket_interval_mdn_months_only_desc() {
+        let v = mdn_array(&[(11, 0, 0), (12, 0, 0), (0, 0, 0), (-1, 0, 0), (13, 0, 0)]);
+        let lo = mdn_array(&[(12, 0, 0); 5]);
+        let hi = mdn_array(&[(0, 0, 0); 5]);
+        let n = i32_array_all(5, 12);
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        let out = downcast_i32(&out);
+        // Mismo patrón que YM descendente
+        assert_eq!(out.values(), &[2, 1, 13, 13, 0]);
+    }
+
+    #[test]
+    fn test_width_bucket_interval_mdn_day_nano_basic() {
+        let v = mdn_array(&[
+            (0, 0, 0),
+            (0, 5, 0),
+            (0, 9, 0),
+            (0, 10, 0),
+            (0, -1, 0),
+            (0, 11, 0),
+        ]);
+        let lo = mdn_array(&[(0, 0, 0); 6]);
+        let hi = mdn_array(&[(0, 10, 0); 6]);
+        let n = i32_array_all(6, 10);
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        let out = downcast_i32(&out);
+        // x==hi -> n+1, x<lo -> 0, x>hi -> n+1
+        assert_eq!(out.values(), &[1, 6, 10, 11, 0, 11]);
+    }
+
+    #[test]
+    fn test_width_bucket_interval_mdn_day_nano_desc() {
+        let v = mdn_array(&[(0, 9, 0), (0, 10, 0), (0, 0, 0), (0, -1, 0), (0, 11, 0)]);
+        let lo = mdn_array(&[(0, 10, 0); 5]);
+        let hi = mdn_array(&[(0, 0, 0); 5]);
+        let n = i32_array_all(5, 10);
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        let out = downcast_i32(&out);
+
+        assert_eq!(out.values(), &[2, 1, 11, 11, 0]);
+    }
+    #[test]
+    fn test_width_bucket_interval_mdn_day_nano_desc_inside() {
+        let v = mdn_array(&[(0, 9, 1), (0, 10, 0), (0, 0, 0), (0, -1, 0), (0, 11, 0)]);
+        let lo = mdn_array(&[(0, 10, 0); 5]);
+        let hi = mdn_array(&[(0, 0, 0); 5]);
+        let n = i32_array_all(5, 10);
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        let out = downcast_i32(&out);
+
+        assert_eq!(out.values(), &[1, 1, 11, 11, 0]);
+    }
+
+    #[test]
+    fn test_width_bucket_interval_mdn_mixed_months_and_days_is_null() {
+        let v = mdn_array(&[(0, 1, 0)]);
+        let lo = mdn_array(&[(0, 0, 0)]);
+        let hi = mdn_array(&[(1, 1, 0)]);
+        let n = i32_array_all(1, 4);
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        let out = downcast_i32(&out);
+        assert!(out.is_null(0));
+    }
+
+    #[test]
+    fn test_width_bucket_interval_mdn_equal_bounds_is_null() {
+        let v = mdn_array(&[(0, 0, 0)]);
+        let lo = mdn_array(&[(1, 2, 3)]);
+        let hi = mdn_array(&[(1, 2, 3)]); // lo == hi
+        let n = i32_array_all(1, 10);
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        assert!(downcast_i32(&out).is_null(0));
+    }
+
+    #[test]
+    fn test_width_bucket_interval_mdn_invalid_n_is_null() {
+        let v = mdn_array(&[(0, 0, 0)]);
+        let lo = mdn_array(&[(0, 0, 0)]);
+        let hi = mdn_array(&[(0, 10, 0)]);
+        let n = Arc::new(Int32Array::from(vec![0])); // n <= 0
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        assert!(downcast_i32(&out).is_null(0));
+    }
+
+    #[test]
+    fn test_width_bucket_interval_mdn_nulls_propagate() {
+        let v = Arc::new(IntervalMonthDayNanoArray::from(vec![
+            None,
+            Some(IntervalMonthDayNano::new(0, 5, 0)),
+        ]));
+        let lo = mdn_array(&[(0, 0, 0), (0, 0, 0)]);
+        let hi = mdn_array(&[(0, 10, 0), (0, 10, 0)]);
+        let n = i32_array_all(2, 10);
+
+        let out = width_bucket_kern(&[v, lo, hi, n]).unwrap();
+        let out = downcast_i32(&out);
+        assert!(out.is_null(0));
+        assert_eq!(out.value(1), 6);
     }
 
     // --- Errores -------------------------------------------------------------
