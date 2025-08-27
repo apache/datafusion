@@ -1095,7 +1095,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     // Top-level CoalesceBatchesExec
     let cb =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
-    // Top-level CoalesceParititionsExec
+    // Top-level CoalescePartitionsxec
     let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
     // Add a sort for determistic output
     let plan = Arc::new(SortExec::new(
