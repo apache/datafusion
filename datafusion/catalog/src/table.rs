@@ -25,13 +25,14 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, SortExpr};
 
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
 use datafusion_physical_plan::ExecutionPlan;
+use itertools::Itertools;
 
 /// A table which can be queried and modified.
 ///
@@ -171,6 +172,34 @@ pub trait TableProvider: Debug + Sync + Send {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
+    async fn scan_with_args(
+        &self,
+        state: &dyn Session,
+        args: ScanArgs,
+    ) -> Result<ScanResult> {
+        let ScanArgs {
+            preferred_ordering: _,
+            filters,
+            projection,
+            limit,
+        } = args;
+        let filters = filters.unwrap_or_default();
+        let unsupported_filters = self
+            .supports_filters_pushdown(&filters.iter().collect_vec())?
+            .into_iter()
+            .zip(&filters)
+            .filter_map(|(support, expr)| match support {
+                TableProviderFilterPushDown::Inexact
+                | TableProviderFilterPushDown::Unsupported => Some(expr.clone()),
+                TableProviderFilterPushDown::Exact => None,
+            })
+            .collect_vec();
+        let plan = self
+            .scan(state, projection.as_ref(), &filters, limit)
+            .await?;
+        Ok(ScanResult::new(plan, unsupported_filters))
+    }
+
     /// Specify if DataFusion should provide filter expressions to the
     /// TableProvider to apply *during* the scan.
     ///
@@ -296,6 +325,75 @@ pub trait TableProvider: Debug + Sync + Send {
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Insert into not implemented for this table")
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ScanArgs {
+    preferred_ordering: Option<Vec<SortExpr>>,
+    filters: Option<Vec<Expr>>,
+    projection: Option<Vec<usize>>,
+    limit: Option<usize>,
+}
+
+impl ScanArgs {
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    pub fn projection(&self) -> Option<Vec<usize>> {
+        self.projection.clone()
+    }
+
+    pub fn with_filters(mut self, filters: Option<Vec<Expr>>) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    pub fn filters(&self) -> Option<&[Expr]> {
+        self.filters.as_deref()
+    }
+
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+
+    pub fn with_preferred_ordering(mut self, ordering: Option<Vec<SortExpr>>) -> Self {
+        self.preferred_ordering = ordering;
+        self
+    }
+
+    pub fn preferred_ordering(&self) -> Option<&[SortExpr]> {
+        self.preferred_ordering.as_deref()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScanResult {
+    /// The ExecutionPlan to run.
+    plan: Arc<dyn ExecutionPlan>,
+    // Remaining filters that were not completely evaluated during `scan_with_args()`.
+    // These were previously referred to as "unsupported filters" or "inexact filters".
+    filters: Vec<Expr>,
+}
+
+impl ScanResult {
+    pub fn new(plan: Arc<dyn ExecutionPlan>, filters: Vec<Expr>) -> Self {
+        Self { plan, filters }
+    }
+
+    pub fn plan(&self) -> Arc<dyn ExecutionPlan> {
+        Arc::clone(&self.plan)
+    }
+
+    pub fn filters(&self) -> &[Expr] {
+        &self.filters
     }
 }
 

@@ -29,7 +29,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
-use datafusion_catalog::{Session, TableProvider};
+use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
     stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
@@ -1166,6 +1166,22 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let options = ScanArgs::default()
+            .with_projection(projection.cloned())
+            .with_filters(Some(filters.to_vec()))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.plan())
+    }
+
+    async fn scan_with_args(
+        &self,
+        state: &dyn Session,
+        args: ScanArgs,
+    ) -> Result<ScanResult> {
+        let projection = args.projection();
+        let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
+        let limit = args.limit();
+
         // extract types of partition columns
         let table_partition_cols = self
             .options
@@ -1179,15 +1195,25 @@ impl TableProvider for ListingTable {
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
         // If the filters can be resolved using only partition cols, there is no need to
-        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
-        let (partition_filters, filters): (Vec<_>, Vec<_>) =
-            filters.iter().cloned().partition(|filter| {
-                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+        // collect statistics for files
+        let (partition_filters, other_filters): (Vec<_>, Vec<_>) =
+            filters.into_iter().partition(|f| {
+                can_be_evaluted_for_partition_pruning(&table_partition_col_names, f)
             });
 
-        // We should not limit the number of partitioned files to scan if there are filters and limit
+        // Apply partition pruning.  Although we only use the partition filtering, we
+        // need to include both the partition column filters and their unfiltered
+        // counterparts since we want the statistics to be accurate.  If a file is not
+        // included because it doesn't match the partition filters, we should not include
+        // the statistics for that file.  But if a file is included, the statistics for
+        // that file should not have the partition filter applied to it.  For example
+        // if we have the query `SELECT sum(col1) FROM tbl WHERE date='2023-01-01'
+        // and the table is partitioned by `date`, we want to only consider files that
+        // match the predicate `date='2023-01-01'` but we don't want to apply the
+        // predicate to the statistics for that file as the whole file matches that
+        // predicate and the statistics for `col1` are from the entire file.
         // at the same time. This is because the limit should be applied after the filters are applied.
-        let statistic_file_limit = if filters.is_empty() { limit } else { None };
+        let statistic_file_limit = if other_filters.is_empty() { limit } else { None };
 
         let (mut partitioned_file_lists, statistics) = self
             .list_files_for_scan(state, &partition_filters, statistic_file_limit)
@@ -1195,8 +1221,11 @@ impl TableProvider for ListingTable {
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
-            let projected_schema = project_schema(&self.schema(), projection)?;
-            return Ok(Arc::new(EmptyExec::new(projected_schema)));
+            let projected_schema = project_schema(&self.schema(), projection.as_ref())?;
+            return Ok(ScanResult::new(
+                Arc::new(EmptyExec::new(projected_schema)),
+                other_filters.clone(),
+            ));
         }
 
         let output_ordering = self.try_create_output_ordering()?;
@@ -1230,13 +1259,17 @@ impl TableProvider for ListingTable {
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
         else {
-            return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
+            return Ok(ScanResult::new(
+                Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+                other_filters.clone(),
+            ));
         };
 
         let file_source = self.create_file_source_with_schema_adapter()?;
 
         // create the execution plan
-        self.options
+        let plan = self
+            .options
             .format
             .create_physical_plan(
                 state,
@@ -1248,14 +1281,16 @@ impl TableProvider for ListingTable {
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
                 .with_statistics(statistics)
-                .with_projection(projection.cloned())
+                .with_projection(projection)
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
                 .with_expr_adapter(self.expr_adapter_factory.clone())
                 .build(),
             )
-            .await
+            .await?;
+
+        Ok(ScanResult::new(plan, other_filters.clone()))
     }
 
     fn supports_filters_pushdown(
