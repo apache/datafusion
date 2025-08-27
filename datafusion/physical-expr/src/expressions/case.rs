@@ -323,12 +323,14 @@ impl CaseExpr {
         }
 
         if let Some(e) = self.else_expr() {
-            // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-            let else_ = expr
-                .evaluate_selection(batch, &remainder)?
-                .into_array(batch.num_rows())?;
-            current_value = zip(&remainder, &else_, &current_value)?;
+            if remainder.true_count() > 0 {
+                // keep `else_expr`'s data type and return type consistent
+                let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
+                let else_ = expr
+                    .evaluate_selection(batch, &remainder)?
+                    .into_array(batch.num_rows())?;
+                current_value = zip(&remainder, &else_, &current_value)?;
+            }
         }
 
         Ok(ColumnarValue::Array(current_value))
