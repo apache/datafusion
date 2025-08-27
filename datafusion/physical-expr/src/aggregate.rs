@@ -39,10 +39,8 @@ mod tests {
     }
 
     impl DummyUdf {
-        fn new() -> Self {
-            Self {
-                signature: Signature::any(1, Volatility::Immutable),
-            }
+        fn new(signature: Signature) -> Self {
+            Self { signature }
         }
     }
 
@@ -79,7 +77,10 @@ mod tests {
     #[test]
     fn test_args_schema_and_groups_path() {
         // literal-only: empty physical schema synthesizes schema from literal expr
-        let udf = Arc::new(AggregateUDF::from(DummyUdf::new()));
+        let udf = Arc::new(AggregateUDF::from(DummyUdf::new(Signature::any(
+            1,
+            Volatility::Immutable,
+        ))));
         let lit_expr =
             Arc::new(Literal::new(ScalarValue::UInt32(Some(1)))) as Arc<dyn PhysicalExpr>;
         let agg =
@@ -98,7 +99,7 @@ mod tests {
         let f = Field::new("b", DataType::Int32, false);
         let phys_schema = Schema::new(vec![f.clone()]);
         let col_expr = Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>;
-        let agg2 = AggregateExprBuilder::new(udf, vec![col_expr])
+        let agg2 = AggregateExprBuilder::new(Arc::clone(&udf), vec![col_expr])
             .alias("x")
             .schema(Arc::new(phys_schema))
             .build()
@@ -108,6 +109,28 @@ mod tests {
             _ => panic!("expected borrowed schema"),
         }
         assert!(agg2.groups_accumulator_supported());
+
+        // mixed column and literal requires synthesized field
+        let udf2 = Arc::new(AggregateUDF::from(DummyUdf::new(Signature::any(
+            2,
+            Volatility::Immutable,
+        ))));
+        let col_expr = Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>;
+        let lit_expr =
+            Arc::new(Literal::new(ScalarValue::UInt32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let agg3 = AggregateExprBuilder::new(udf2, vec![col_expr, lit_expr])
+            .alias("x")
+            .schema(Arc::new(Schema::new(vec![f])))
+            .build()
+            .unwrap();
+        match agg3.args_schema() {
+            Cow::Owned(s) => {
+                assert_eq!(s.field(0).name(), "b");
+                assert_eq!(s.field(1).name(), "lit");
+            }
+            _ => panic!("expected owned schema"),
+        }
+        assert!(agg3.groups_accumulator_supported());
     }
 }
 pub(crate) mod stats {
@@ -465,27 +488,51 @@ impl AggregateFunctionExpr {
     /// Returns a schema containing the fields corresponding to this
     /// aggregate's input expressions in the same order as `input_fields`/`exprs`.
     ///
-    /// If the physical input schema is empty (literal-only inputs),
-    /// synthesizes a new schema from the literal expressions to preserve
-    /// field-level metadata (such as Arrow extension types).
-    /// Field order is guaranteed to match the order of input expressions.
-    /// In mixed column and literal inputs, existing physical schema fields
-    /// win; synthesized metadata is only applied when the physical schema
-    /// has no fields.
+    /// Merges the provided physical input [`Schema`] with synthesized
+    /// fields for literal expressions so that `exprs[i]` always
+    /// corresponds to `schema.field(i)`. Column expressions retain their
+    /// original field metadata while new fields are created for literals.
     ///
     /// Uses [`std::borrow::Cow`] to avoid allocation when the existing
-    /// schema is non-empty. For micro-optimizations, implementers may
-    /// cache the owned schema if multiple calls are made per instance.
+    /// schema already matches the expressions (that is, only column
+    /// expressions in the same order as the schema). In all other cases a
+    /// new [`Schema`] is constructed.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_common::ScalarValue;
+    /// use datafusion_physical_expr::expressions::{col, lit};
+    /// use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    /// # let udf = /* create an `AggregateUDF` */;
+    /// let exprs = vec![col("a"), lit(ScalarValue::UInt32(Some(1)))];
+    /// let agg = AggregateExprBuilder::new(udf, exprs)
+    ///     .alias("x")
+    ///     .schema(Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)])))
+    ///     .build()
+    ///     .unwrap();
+    /// let schema = agg.args_schema();
+    /// assert_eq!(schema.field(0).name(), "a");
+    /// assert_eq!(schema.field(1).name(), "lit");
+    /// ```
     fn args_schema(&self) -> Cow<'_, Schema> {
-        if self.schema.fields().is_empty() {
+        let can_borrow = self.schema.fields().len() == self.args.len()
+            && self.args.iter().enumerate().all(|(i, e)| {
+                e.as_any()
+                    .downcast_ref::<Column>()
+                    .map(|c| c.index() == i)
+                    .unwrap_or(false)
+            });
+        if can_borrow {
+            Cow::Borrowed(&self.schema)
+        } else {
             Cow::Owned(Schema::new(
                 self.input_fields
                     .iter()
                     .map(|f| f.as_ref().clone())
                     .collect::<Vec<_>>(),
             ))
-        } else {
-            Cow::Borrowed(&self.schema)
         }
     }
     /// Construct AccumulatorArgs for this aggregate using a given schema slice.
