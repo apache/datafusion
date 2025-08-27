@@ -1359,7 +1359,7 @@ for more details.</p>
 </section>
 <section id="added-executionplan-reset-state">
 <h3>Added <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::reset_state</span></code><a class="headerlink" href="#added-executionplan-reset-state" title="Link to this heading">¶</a></h3>
-<p>In order to fix a bug in DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code> where dynamic filters (currently only generated in the precense of a query such as <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">...</span> <span class="pre">LIMIT</span> <span class="pre">...</span></code>)
+<p>In order to fix a bug in DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code> where dynamic filters (currently only generated in the presence of a query such as <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">...</span> <span class="pre">LIMIT</span> <span class="pre">...</span></code>)
 produced incorrect results in recursive queries, a new method <code class="docutils literal notranslate"><span class="pre">reset_state</span></code> has been added to the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> trait.</p>
 <p>Any <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
 See <a class="reference external" href="https://github.com/apache/datafusion/pull/17028">#17028</a> for more details and an example implementation for <code class="docutils literal notranslate"><span class="pre">SortExec</span></code>.</p>
@@ -1695,7 +1695,7 @@ to access the metadata associated with the columnar values during invocation.</p
 <p>To upgrade user defined aggregate functions, there is now a function
 <code class="docutils literal notranslate"><span class="pre">return_field</span></code> that will allow you to specify both metadata and nullability of
 your function. You are not required to implement this if you do not need to
-handle metatdata.</p>
+handle metadata.</p>
 <p>The largest change to aggregate functions happens in the accumulator arguments.
 Both the <code class="docutils literal notranslate"><span class="pre">AccumulatorArgs</span></code> and <code class="docutils literal notranslate"><span class="pre">StateFieldsArgs</span></code> now contain <code class="docutils literal notranslate"><span class="pre">FieldRef</span></code> rather
 than <code class="docutils literal notranslate"><span class="pre">DataType</span></code>.</p>
@@ -1978,8 +1978,8 @@ the following must be changed:</p>
 <p>DataFusion 46 has changed the way scalar array function signatures are
 declared. Previously, functions needed to select from a list of predefined
 signatures within the <code class="docutils literal notranslate"><span class="pre">ArrayFunctionSignature</span></code> enum. Now the signatures
-can be defined via a <code class="docutils literal notranslate"><span class="pre">Vec</span></code> of psuedo-types, which each correspond to a
-single argument. Those psuedo-types are the variants of the
+can be defined via a <code class="docutils literal notranslate"><span class="pre">Vec</span></code> of pseudo-types, which each correspond to a
+single argument. Those pseudo-types are the variants of the
 <code class="docutils literal notranslate"><span class="pre">ArrayFunctionArgument</span></code> enum and are as follows:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">Array</span></code>: An argument of type List/LargeList/FixedSizeList. All Array
