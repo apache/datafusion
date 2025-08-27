@@ -155,7 +155,7 @@ Public methods in Apache DataFusion evolve over time: while we try to maintain a
 stable API, we also improve the API over time. As a result, we typically
 deprecate methods before removing them, according to the [deprecation guidelines].
 
-[deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html
+[deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html
 
 ## Dependencies and `Cargo.lock`
 
