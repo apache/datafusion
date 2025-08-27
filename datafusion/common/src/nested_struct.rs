@@ -128,7 +128,7 @@ fn cast_struct_column(
 /// The struct casting logic requires that the source column must already be a struct type.
 /// This makes the function useful for:
 /// - Schema evolution scenarios where struct layouts change over time
-/// - Data migration between different struct schemas
+/// - Data migration between different struct schemas  
 /// - Type-safe data processing pipelines that maintain struct type integrity
 ///
 /// # Arguments
@@ -289,12 +289,14 @@ mod tests {
         let target_field = Field::new("ints", DataType::Int32, true);
 
         let safe_opts = CastOptions {
+            // safe: false - return Err for failure
             safe: false,
             ..DEFAULT_CAST_OPTIONS
         };
         assert!(cast_column(&source, &target_field, &safe_opts).is_err());
 
         let unsafe_opts = CastOptions {
+            // safe: true - return Null for failure
             safe: true,
             ..DEFAULT_CAST_OPTIONS
         };
