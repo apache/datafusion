@@ -26,8 +26,8 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion_common::{
-    cast_column, format::DEFAULT_CAST_OPTIONS, nested_struct::validate_struct_compatibility,
-    plan_err, ColumnStatistics,
+    cast_column, format::DEFAULT_CAST_OPTIONS,
+    nested_struct::validate_struct_compatibility, plan_err, ColumnStatistics,
 };
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
@@ -579,12 +579,20 @@ mod tests {
         // Struct fields with compatible child types should work
         let from_field = Field::new(
             "col",
-            DataType::Struct(Fields::from(vec![Arc::new(Field::new("a", DataType::Int32, true))])),
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "a",
+                DataType::Int32,
+                true,
+            ))])),
             true,
         );
         let to_field = Field::new(
             "col",
-            DataType::Struct(Fields::from(vec![Arc::new(Field::new("a", DataType::Int64, true))])),
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "a",
+                DataType::Int64,
+                true,
+            ))])),
             true,
         );
         can_cast_field(&from_field, &to_field).unwrap();
@@ -592,12 +600,20 @@ mod tests {
         // Struct fields with incompatible child types should fail
         let from_field = Field::new(
             "col",
-            DataType::Struct(Fields::from(vec![Arc::new(Field::new("a", DataType::Binary, true))])),
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "a",
+                DataType::Binary,
+                true,
+            ))])),
             true,
         );
         let to_field = Field::new(
             "col",
-            DataType::Struct(Fields::from(vec![Arc::new(Field::new("a", DataType::Int32, true))])),
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "a",
+                DataType::Int32,
+                true,
+            ))])),
             true,
         );
         let result = can_cast_field(&from_field, &to_field);
