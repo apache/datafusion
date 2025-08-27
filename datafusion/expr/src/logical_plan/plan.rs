@@ -2742,18 +2742,9 @@ impl TableScan {
         })
     }
 
-    pub fn try_new_with_preferred_ordering(
-        table_name: impl Into<TableReference>,
-        table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
-        filters: Vec<Expr>,
-        fetch: Option<usize>,
-        preferred_ordering: Option<Vec<SortExpr>>,
-    ) -> Result<Self> {
-        let mut table_scan =
-            Self::try_new(table_name, table_source, projection, filters, fetch)?;
-        table_scan.preferred_ordering = preferred_ordering;
-        Ok(table_scan)
+    pub fn with_preferred_ordering(mut self, preferred_ordering: Option<Vec<SortExpr>>) -> Self {
+        self.preferred_ordering = preferred_ordering;
+        self
     }
 }
 

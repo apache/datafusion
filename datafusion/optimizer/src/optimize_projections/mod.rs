@@ -269,14 +269,14 @@ fn optimize_projections(
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            return TableScan::try_new_with_preferred_ordering(
+            return TableScan::try_new(
                 table_name,
                 source,
                 Some(projection),
                 filters,
                 fetch,
-                preferred_ordering,
             )
+            .map(|s| s.with_preferred_ordering(preferred_ordering))
             .map(LogicalPlan::TableScan)
             .map(Transformed::yes);
         }
