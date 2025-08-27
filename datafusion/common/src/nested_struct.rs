@@ -257,7 +257,7 @@ mod tests {
             MapBuilder, StringArray, StringBuilder,
         },
         buffer::NullBuffer,
-        datatypes::{DataType, Field, Int32Type},
+        datatypes::{DataType, Field, FieldRef, Int32Type},
     };
     /// Macro to extract and downcast a column from a StructArray
     macro_rules! get_column_as {
@@ -271,10 +271,34 @@ mod tests {
         };
     }
 
+    fn field(name: &str, data_type: DataType) -> Field {
+        Field::new(name, data_type, true)
+    }
+
+    fn non_null_field(name: &str, data_type: DataType) -> Field {
+        Field::new(name, data_type, false)
+    }
+
+    fn arc_field(name: &str, data_type: DataType) -> FieldRef {
+        Arc::new(field(name, data_type))
+    }
+
+    fn struct_type(fields: Vec<Field>) -> DataType {
+        Struct(fields.into())
+    }
+
+    fn struct_field(name: &str, fields: Vec<Field>) -> Field {
+        field(name, struct_type(fields))
+    }
+
+    fn arc_struct_field(name: &str, fields: Vec<Field>) -> FieldRef {
+        Arc::new(struct_field(name, fields))
+    }
+
     #[test]
     fn test_cast_simple_column() {
         let source = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-        let target_field = Field::new("ints", DataType::Int64, true);
+        let target_field = field("ints", DataType::Int64);
         let result = cast_column(&source, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
         let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(result.len(), 3);
@@ -286,7 +310,7 @@ mod tests {
     #[test]
     fn test_cast_column_with_options() {
         let source = Arc::new(Int64Array::from(vec![1, i64::MAX])) as ArrayRef;
-        let target_field = Field::new("ints", DataType::Int32, true);
+        let target_field = field("ints", DataType::Int32);
 
         let safe_opts = CastOptions {
             // safe: false - return Err for failure
@@ -310,21 +334,14 @@ mod tests {
     fn test_cast_struct_with_missing_field() {
         let a_array = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
         let source_struct = StructArray::from(vec![(
-            Arc::new(Field::new("a", DataType::Int32, true)),
+            arc_field("a", DataType::Int32),
             Arc::clone(&a_array),
         )]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
-        let target_field = Field::new(
+        let target_field = struct_field(
             "s",
-            Struct(
-                vec![
-                    Arc::new(Field::new("a", DataType::Int32, true)),
-                    Arc::new(Field::new("b", DataType::Utf8, true)),
-                ]
-                .into(),
-            ),
-            true,
+            vec![field("a", DataType::Int32), field("b", DataType::Utf8)],
         );
 
         let result =
@@ -344,11 +361,7 @@ mod tests {
     #[test]
     fn test_cast_struct_source_not_struct() {
         let source = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
-        let target_field = Field::new(
-            "s",
-            Struct(vec![Arc::new(Field::new("a", DataType::Int32, true))].into()),
-            true,
-        );
+        let target_field = struct_field("s", vec![field("a", DataType::Int32)]);
 
         let result = cast_column(&source, &target_field, &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
@@ -365,16 +378,12 @@ mod tests {
             Some(b"b".as_ref()),
         ])) as ArrayRef;
         let source_struct = StructArray::from(vec![(
-            Arc::new(Field::new("a", DataType::Binary, true)),
+            arc_field("a", DataType::Binary),
             a_array,
         )]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
-        let target_field = Field::new(
-            "s",
-            Struct(vec![Arc::new(Field::new("a", DataType::Int32, true))].into()),
-            true,
-        );
+        let target_field = struct_field("s", vec![field("a", DataType::Int32)]);
 
         let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
@@ -386,12 +395,12 @@ mod tests {
     fn test_validate_struct_compatibility_incompatible_types() {
         // Source struct: {field1: Binary, field2: String}
         let source_fields = vec![
-            Arc::new(Field::new("field1", DataType::Binary, true)),
-            Arc::new(Field::new("field2", DataType::Utf8, true)),
+            arc_field("field1", DataType::Binary),
+            arc_field("field2", DataType::Utf8),
         ];
 
         // Target struct: {field1: Int32}
-        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
+        let target_fields = vec![arc_field("field1", DataType::Int32)];
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
@@ -405,12 +414,12 @@ mod tests {
     fn test_validate_struct_compatibility_compatible_types() {
         // Source struct: {field1: Int32, field2: String}
         let source_fields = vec![
-            Arc::new(Field::new("field1", DataType::Int32, true)),
-            Arc::new(Field::new("field2", DataType::Utf8, true)),
+            arc_field("field1", DataType::Int32),
+            arc_field("field2", DataType::Utf8),
         ];
 
         // Target struct: {field1: Int64} (Int32 can cast to Int64)
-        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int64, true))];
+        let target_fields = vec![arc_field("field1", DataType::Int64)];
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
@@ -419,10 +428,10 @@ mod tests {
     #[test]
     fn test_validate_struct_compatibility_missing_field_in_source() {
         // Source struct: {field2: String} (missing field1)
-        let source_fields = vec![Arc::new(Field::new("field2", DataType::Utf8, true))];
+        let source_fields = vec![arc_field("field2", DataType::Utf8)];
 
         // Target struct: {field1: Int32}
-        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
+        let target_fields = vec![arc_field("field1", DataType::Int32)];
 
         // Should be OK - missing fields will be filled with nulls
         let result = validate_struct_compatibility(&source_fields, &target_fields);
@@ -433,12 +442,12 @@ mod tests {
     fn test_validate_struct_compatibility_additional_field_in_source() {
         // Source struct: {field1: Int32, field2: String} (extra field2)
         let source_fields = vec![
-            Arc::new(Field::new("field1", DataType::Int32, true)),
-            Arc::new(Field::new("field2", DataType::Utf8, true)),
+            arc_field("field1", DataType::Int32),
+            arc_field("field2", DataType::Utf8),
         ];
 
         // Target struct: {field1: Int32}
-        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
+        let target_fields = vec![arc_field("field1", DataType::Int32)];
 
         // Should be OK - extra fields in source are ignored
         let result = validate_struct_compatibility(&source_fields, &target_fields);
@@ -448,16 +457,12 @@ mod tests {
     #[test]
     fn test_cast_struct_parent_nulls_retained() {
         let a_array = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
-        let fields = vec![Arc::new(Field::new("a", DataType::Int32, true))];
+        let fields = vec![arc_field("a", DataType::Int32)];
         let nulls = Some(NullBuffer::from(vec![true, false]));
         let source_struct = StructArray::new(fields.clone().into(), vec![a_array], nulls);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
-        let target_field = Field::new(
-            "s",
-            Struct(vec![Arc::new(Field::new("a", DataType::Int64, true))].into()),
-            true,
-        );
+        let target_field = struct_field("s", vec![field("a", DataType::Int64)]);
 
         let result =
             cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
@@ -474,10 +479,10 @@ mod tests {
     #[test]
     fn test_validate_struct_compatibility_nullable_to_non_nullable() {
         // Source struct: {field1: Int32 nullable}
-        let source_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
+        let source_fields = vec![arc_field("field1", DataType::Int32)];
 
         // Target struct: {field1: Int32 non-nullable}
-        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, false))];
+        let target_fields = vec![Arc::new(non_null_field("field1", DataType::Int32))];
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
@@ -489,10 +494,10 @@ mod tests {
     #[test]
     fn test_validate_struct_compatibility_non_nullable_to_nullable() {
         // Source struct: {field1: Int32 non-nullable}
-        let source_fields = vec![Arc::new(Field::new("field1", DataType::Int32, false))];
+        let source_fields = vec![Arc::new(non_null_field("field1", DataType::Int32))];
 
         // Target struct: {field1: Int32 nullable}
-        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
+        let target_fields = vec![arc_field("field1", DataType::Int32)];
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
@@ -501,17 +506,15 @@ mod tests {
     #[test]
     fn test_validate_struct_compatibility_nested_nullable_to_non_nullable() {
         // Source struct: {field1: {nested: Int32 nullable}}
-        let source_fields = vec![Arc::new(Field::new(
+        let source_fields = vec![Arc::new(non_null_field(
             "field1",
-            Struct(vec![Arc::new(Field::new("nested", DataType::Int32, true))].into()),
-            false,
+            struct_type(vec![field("nested", DataType::Int32)]),
         ))];
 
         // Target struct: {field1: {nested: Int32 non-nullable}}
-        let target_fields = vec![Arc::new(Field::new(
+        let target_fields = vec![Arc::new(non_null_field(
             "field1",
-            Struct(vec![Arc::new(Field::new("nested", DataType::Int32, false))].into()),
-            false,
+            struct_type(vec![non_null_field("nested", DataType::Int32)]),
         ))];
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
@@ -529,47 +532,35 @@ mod tests {
         let extra = Arc::new(Int32Array::from(vec![Some(9), Some(10)])) as ArrayRef;
 
         let inner = StructArray::from(vec![
-            (Arc::new(Field::new("a", DataType::Int32, true)), a),
-            (Arc::new(Field::new("b", DataType::Int32, true)), b),
-            (Arc::new(Field::new("extra", DataType::Int32, true)), extra),
+            (arc_field("a", DataType::Int32), a),
+            (arc_field("b", DataType::Int32), b),
+            (arc_field("extra", DataType::Int32), extra),
         ]);
 
         let source_struct = StructArray::from(vec![(
-            Arc::new(Field::new(
+            arc_struct_field(
                 "inner",
-                Struct(
-                    vec![
-                        Field::new("a", DataType::Int32, true),
-                        Field::new("b", DataType::Int32, true),
-                        Field::new("extra", DataType::Int32, true),
-                    ]
-                    .into(),
-                ),
-                true,
-            )),
+                vec![
+                    field("a", DataType::Int32),
+                    field("b", DataType::Int32),
+                    field("extra", DataType::Int32),
+                ],
+            ),
             Arc::new(inner) as ArrayRef,
         )]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
         // Target inner struct reorders fields, adds "missing", and drops "extra"
-        let target_field = Field::new(
+        let target_field = struct_field(
             "outer",
-            Struct(
-                vec![Arc::new(Field::new(
-                    "inner",
-                    Struct(
-                        vec![
-                            Arc::new(Field::new("b", DataType::Int64, true)),
-                            Arc::new(Field::new("a", DataType::Int32, true)),
-                            Arc::new(Field::new("missing", DataType::Int32, true)),
-                        ]
-                        .into(),
-                    ),
-                    true,
-                ))]
-                .into(),
-            ),
-            true,
+            vec![struct_field(
+                "inner",
+                vec![
+                    field("b", DataType::Int64),
+                    field("a", DataType::Int32),
+                    field("missing", DataType::Int32),
+                ],
+            )],
         );
 
         let result =
@@ -613,72 +604,52 @@ mod tests {
 
         let source_struct = StructArray::from(vec![
             (
-                Arc::new(Field::new(
+                arc_field(
                     "arr",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                    true,
-                )),
+                    DataType::List(Arc::new(field("item", DataType::Int32))),
+                ),
                 arr_array,
             ),
             (
-                Arc::new(Field::new(
+                arc_field(
                     "map",
                     DataType::Map(
-                        Arc::new(Field::new(
+                        Arc::new(non_null_field(
                             "entries",
-                            Struct(
-                                vec![
-                                    Field::new("keys", DataType::Utf8, false),
-                                    Field::new("values", DataType::Int32, true),
-                                ]
-                                .into(),
-                            ),
-                            false,
+                            struct_type(vec![
+                                non_null_field("keys", DataType::Utf8),
+                                field("values", DataType::Int32),
+                            ]),
                         )),
                         false,
                     ),
-                    true,
-                )),
+                ),
                 map_array,
             ),
         ]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
-        let target_field = Field::new(
+        let target_field = struct_field(
             "s",
-            Struct(
-                vec![
-                    Arc::new(Field::new(
-                        "arr",
-                        DataType::List(Arc::new(Field::new(
-                            "item",
-                            DataType::Int32,
-                            true,
-                        ))),
-                        true,
-                    )),
-                    Arc::new(Field::new(
-                        "map",
-                        DataType::Map(
-                            Arc::new(Field::new(
-                                "entries",
-                                Struct(
-                                    vec![
-                                        Field::new("keys", DataType::Utf8, false),
-                                        Field::new("values", DataType::Int32, true),
-                                    ]
-                                    .into(),
-                                ),
-                                false,
-                            )),
-                            false,
-                        ),
-                        true,
-                    )),
-                ]
-                .into(),
-            ),
-            true,
+            vec![
+                field(
+                    "arr",
+                    DataType::List(Arc::new(field("item", DataType::Int32))),
+                ),
+                field(
+                    "map",
+                    DataType::Map(
+                        Arc::new(non_null_field(
+                            "entries",
+                            struct_type(vec![
+                                non_null_field("keys", DataType::Utf8),
+                                field("values", DataType::Int32),
+                            ]),
+                        )),
+                        false,
+                    ),
+                ),
+            ],
         );
 
         let result =
@@ -710,21 +681,14 @@ mod tests {
         let b = Arc::new(Int32Array::from(vec![Some(3), None])) as ArrayRef;
 
         let source_struct = StructArray::from(vec![
-            (Arc::new(Field::new("a", DataType::Int32, true)), a),
-            (Arc::new(Field::new("b", DataType::Int32, true)), b),
+            (arc_field("a", DataType::Int32), a),
+            (arc_field("b", DataType::Int32), b),
         ]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
-        let target_field = Field::new(
+        let target_field = struct_field(
             "s",
-            Struct(
-                vec![
-                    Arc::new(Field::new("b", DataType::Int64, true)),
-                    Arc::new(Field::new("a", DataType::Int32, true)),
-                ]
-                .into(),
-            ),
-            true,
+            vec![field("b", DataType::Int64), field("a", DataType::Int32)],
         );
 
         let result =

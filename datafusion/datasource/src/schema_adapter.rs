@@ -475,19 +475,43 @@ mod tests {
     };
     use datafusion_common::{stats::Precision, Result, ScalarValue, Statistics};
 
+    fn field(name: &str, data_type: DataType) -> Field {
+        Field::new(name, data_type, true)
+    }
+
+    fn schema(fields: Vec<Field>) -> Schema {
+        Schema::new(fields)
+    }
+
+    fn schema_ref(fields: Vec<Field>) -> SchemaRef {
+        Arc::new(schema(fields))
+    }
+
+    fn struct_field(name: &str, fields: Vec<Field>) -> Field {
+        field(name, DataType::Struct(fields.into()))
+    }
+
+    fn arc_field(name: &str, data_type: DataType) -> Arc<Field> {
+        Arc::new(field(name, data_type))
+    }
+
+    fn arc_struct_field(name: &str, fields: Vec<Field>) -> Arc<Field> {
+        Arc::new(struct_field(name, fields))
+    }
+
     #[test]
     fn test_schema_mapping_map_statistics_basic() {
         // Create table schema (a, b, c)
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Float64, true),
-        ]));
+        let table_schema = schema_ref(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+            field("c", DataType::Float64),
+        ]);
 
         // Create file schema (b, a) - different order, missing c
-        let file_schema = Schema::new(vec![
-            Field::new("b", DataType::Utf8, true),
-            Field::new("a", DataType::Int32, true),
+        let file_schema = schema(vec![
+            field("b", DataType::Utf8),
+            field("a", DataType::Int32),
         ]);
 
         // Create SchemaAdapter
@@ -533,13 +557,13 @@ mod tests {
     #[test]
     fn test_schema_mapping_map_statistics_empty() {
         // Create schemas
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-        ]));
-        let file_schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
+        let table_schema = schema_ref(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+        ]);
+        let file_schema = schema(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
         ]);
 
         let adapter = DefaultSchemaAdapter {
@@ -562,60 +586,28 @@ mod tests {
     #[test]
     fn test_can_cast_field() {
         // Same type should work
-        let from_field = Field::new("col", DataType::Int32, true);
-        let to_field = Field::new("col", DataType::Int32, true);
+        let from_field = field("col", DataType::Int32);
+        let to_field = field("col", DataType::Int32);
         can_cast_field(&from_field, &to_field).unwrap();
 
         // Casting Int32 to Float64 is allowed
-        let from_field = Field::new("col", DataType::Int32, true);
-        let to_field = Field::new("col", DataType::Float64, true);
+        let from_field = field("col", DataType::Int32);
+        let to_field = field("col", DataType::Float64);
         can_cast_field(&from_field, &to_field).unwrap();
 
         // Casting Float64 to Utf8 should work (converts to string)
-        let from_field = Field::new("col", DataType::Float64, true);
-        let to_field = Field::new("col", DataType::Utf8, true);
+        let from_field = field("col", DataType::Float64);
+        let to_field = field("col", DataType::Utf8);
         can_cast_field(&from_field, &to_field).unwrap();
 
         // Struct fields with compatible child types should work
-        let from_field = Field::new(
-            "col",
-            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
-                "a",
-                DataType::Int32,
-                true,
-            ))])),
-            true,
-        );
-        let to_field = Field::new(
-            "col",
-            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
-                "a",
-                DataType::Int64,
-                true,
-            ))])),
-            true,
-        );
+        let from_field = struct_field("col", vec![field("a", DataType::Int32)]);
+        let to_field = struct_field("col", vec![field("a", DataType::Int64)]);
         can_cast_field(&from_field, &to_field).unwrap();
 
         // Struct fields with incompatible child types should fail
-        let from_field = Field::new(
-            "col",
-            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
-                "a",
-                DataType::Binary,
-                true,
-            ))])),
-            true,
-        );
-        let to_field = Field::new(
-            "col",
-            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
-                "a",
-                DataType::Int32,
-                true,
-            ))])),
-            true,
-        );
+        let from_field = struct_field("col", vec![field("a", DataType::Binary)]);
+        let to_field = struct_field("col", vec![field("a", DataType::Int32)]);
         let result = can_cast_field(&from_field, &to_field);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -623,8 +615,8 @@ mod tests {
 
         // Binary to Utf8 is not supported - this is an example of a cast that should fail
         // Note: We use Binary instead of Utf8->Int32 because Arrow actually supports that cast
-        let from_field = Field::new("col", DataType::Binary, true);
-        let to_field = Field::new("col", DataType::Decimal128(10, 2), true);
+        let from_field = field("col", DataType::Binary);
+        let to_field = field("col", DataType::Decimal128(10, 2));
         let result = can_cast_field(&from_field, &to_field);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -634,17 +626,17 @@ mod tests {
     #[test]
     fn test_create_field_mapping() {
         // Define the table schema
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Float64, true),
-        ]));
+        let table_schema = schema_ref(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+            field("c", DataType::Float64),
+        ]);
 
         // Define file schema: different order, missing column c, and b has different type
-        let file_schema = Schema::new(vec![
-            Field::new("b", DataType::Float64, true), // Different type but castable to Utf8
-            Field::new("a", DataType::Int32, true),   // Same type
-            Field::new("d", DataType::Boolean, true), // Not in table schema
+        let file_schema = schema(vec![
+            field("b", DataType::Float64), // Different type but castable to Utf8
+            field("a", DataType::Int32),   // Same type
+            field("d", DataType::Boolean), // Not in table schema
         ]);
 
         // Custom can_map_field function that allows all mappings for testing
@@ -671,10 +663,10 @@ mod tests {
     #[test]
     fn test_schema_mapping_new() {
         // Define the projected table schema
-        let projected_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-        ]));
+        let projected_schema = schema_ref(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+        ]);
 
         // Define field mappings from table to file
         let field_mappings = vec![Some(1), Some(0)];
@@ -694,10 +686,10 @@ mod tests {
 
         // Test with a batch to ensure it works properly
         let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("b_file", DataType::Utf8, true),
-                Field::new("a_file", DataType::Int32, true),
-            ])),
+            schema_ref(vec![
+                field("b_file", DataType::Utf8),
+                field("a_file", DataType::Int32),
+            ]),
             vec![
                 Arc::new(StringArray::from(vec!["hello", "world"])),
                 Arc::new(Int32Array::from(vec![1, 2])),
@@ -718,17 +710,17 @@ mod tests {
     #[test]
     fn test_map_schema_error_path() {
         // Define the table schema
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Decimal128(10, 2), true), // Use Decimal which has stricter cast rules
-        ]));
+        let table_schema = schema_ref(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+            field("c", DataType::Decimal128(10, 2)), // Use Decimal which has stricter cast rules
+        ]);
 
         // Define file schema with incompatible type for column c
-        let file_schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Float64, true), // Different but castable
-            Field::new("c", DataType::Binary, true),  // Not castable to Decimal128
+        let file_schema = schema(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Float64), // Different but castable
+            field("c", DataType::Binary),  // Not castable to Decimal128
         ]);
 
         // Create DefaultSchemaAdapter
@@ -746,11 +738,11 @@ mod tests {
     #[test]
     fn test_map_schema_happy_path() {
         // Define the table schema
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Decimal128(10, 2), true),
-        ]));
+        let table_schema = schema_ref(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+            field("c", DataType::Decimal128(10, 2)),
+        ]);
 
         // Create DefaultSchemaAdapter
         let adapter = DefaultSchemaAdapter {
@@ -758,9 +750,9 @@ mod tests {
         };
 
         // Define compatible file schema (missing column c)
-        let compatible_file_schema = Schema::new(vec![
-            Field::new("a", DataType::Int64, true), // Can be cast to Int32
-            Field::new("b", DataType::Float64, true), // Can be cast to Utf8
+        let compatible_file_schema = schema(vec![
+            field("a", DataType::Int64), // Can be cast to Int32
+            field("b", DataType::Float64), // Can be cast to Utf8
         ]);
 
         // Test successful schema mapping
@@ -845,46 +837,34 @@ mod tests {
     #[test]
     fn test_map_batch_nested_struct_with_extra_and_missing_fields() -> Result<()> {
         // File schema has extra field "address"; table schema adds field "salary" and casts age
-        let file_schema = Schema::new(vec![Field::new(
+        let file_schema = schema(vec![struct_field(
             "person",
-            DataType::Struct(
-                vec![
-                    Field::new("name", DataType::Utf8, true),
-                    Field::new("age", DataType::Int32, true),
-                    Field::new("address", DataType::Utf8, true),
-                ]
-                .into(),
-            ),
-            true,
+            vec![
+                field("name", DataType::Utf8),
+                field("age", DataType::Int32),
+                field("address", DataType::Utf8),
+            ],
         )]);
 
-        let table_schema = Arc::new(Schema::new(vec![Field::new(
+        let table_schema = schema_ref(vec![struct_field(
             "person",
-            DataType::Struct(
-                vec![
-                    Field::new("age", DataType::Int64, true),
-                    Field::new("name", DataType::Utf8, true),
-                    Field::new("salary", DataType::Int32, true),
-                ]
-                .into(),
-            ),
-            true,
-        )]));
+            vec![
+                field("age", DataType::Int64),
+                field("name", DataType::Utf8),
+                field("salary", DataType::Int32),
+            ],
+        )]);
 
         let name = Arc::new(StringArray::from(vec![Some("Alice"), None])) as ArrayRef;
         let age = Arc::new(Int32Array::from(vec![Some(30), Some(40)])) as ArrayRef;
         let address =
             Arc::new(StringArray::from(vec![Some("Earth"), Some("Mars")])) as ArrayRef;
         let person = StructArray::from(vec![
-            (Arc::new(Field::new("name", DataType::Utf8, true)), name),
-            (Arc::new(Field::new("age", DataType::Int32, true)), age),
-            (
-                Arc::new(Field::new("address", DataType::Utf8, true)),
-                address,
-            ),
+            (arc_field("name", DataType::Utf8), name),
+            (arc_field("age", DataType::Int32), age),
+            (arc_field("address", DataType::Utf8), address),
         ]);
-        let batch =
-            RecordBatch::try_new(Arc::new(file_schema.clone()), vec![Arc::new(person)])?;
+        let batch = RecordBatch::try_new(Arc::new(file_schema.clone()), vec![Arc::new(person)])?;
 
         let adapter = DefaultSchemaAdapter {
             projected_table_schema: Arc::clone(&table_schema),
