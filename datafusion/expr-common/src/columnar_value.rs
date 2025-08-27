@@ -19,10 +19,10 @@
 
 use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{cast_column, internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
