@@ -220,7 +220,7 @@ impl SortQueryFuzzer {
                         .test_gen
                         .fuzzer_run(init_seed, query_seed, config_seed)
                         .await?;
-                    println!("\n"); // Seperator between tested runs
+                    println!("\n"); // Separator between tested runs
 
                     if expected_results.is_none() {
                         expected_results = Some(results);
