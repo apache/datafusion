@@ -16,7 +16,7 @@
 # under the License.
 
 query I
-SELECT SELECT length('Spark SQL ');
+SELECT length('Spark SQL ');
 ----
 10
 
