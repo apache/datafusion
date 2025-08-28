@@ -40,7 +40,7 @@ use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
 mod partition_evaluator;
@@ -98,6 +98,9 @@ pub struct FFI_WindowUDF {
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(udf: &mut Self),
+
+    /// Hash function for the UDWF. Used for equality comparison.
+    pub hash: unsafe extern "C" fn(udwf: &Self) -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the udf.
     /// A [`ForeignWindowUDF`] should never attempt to access this data.
@@ -197,8 +200,16 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         field: field_fn_wrapper,
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
+        hash: hash_fn_wrapper,
         private_data: Box::into_raw(private_data) as *mut c_void,
     }
+}
+
+unsafe extern "C" fn hash_fn_wrapper(udwf: &FFI_WindowUDF) -> u64 {
+    let inner = udwf.inner();
+    let mut hasher = DefaultHasher::new();
+    inner.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Clone for FFI_WindowUDF {
@@ -226,6 +237,7 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             field: field_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
+            hash: hash_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
@@ -256,14 +268,32 @@ unsafe impl Sync for ForeignWindowUDF {}
 
 impl PartialEq for ForeignWindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        // FFI_WindowUDF cannot be compared, so identity equality is the best we can do.
-        std::ptr::eq(self, other)
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        name == &other.name
+            && aliases == &other.aliases
+            && unsafe { (udf.hash)(udf) == (other.udf.hash)(&other.udf) }
+            && signature == &other.signature
     }
 }
 impl Eq for ForeignWindowUDF {}
 impl Hash for ForeignWindowUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        std::ptr::hash(self, state)
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        name.hash(state);
+        aliases.hash(state);
+        let udf_hash = unsafe { (udf.hash)(udf) };
+        udf_hash.hash(state);
+        signature.hash(state);
     }
 }
 
@@ -440,6 +470,20 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].column(1), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eq() -> datafusion::common::Result<()> {
+        // Test that identical UDWFs are equal (using hash-based comparison)
+        let lag_udwf1 = create_test_foreign_udwf(WindowShift::lag())?;
+        let lag_udwf2 = create_test_foreign_udwf(WindowShift::lag())?;
+        assert_eq!(lag_udwf1, lag_udwf2);
+
+        // Test that different UDWFs are not equal
+        let lead_udwf = create_test_foreign_udwf(WindowShift::lead())?;
+        assert_ne!(lag_udwf1, lead_udwf);
 
         Ok(())
     }

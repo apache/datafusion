@@ -47,7 +47,7 @@ use datafusion::{
 use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
 pub mod return_type_args;
@@ -110,6 +110,9 @@ pub struct FFI_ScalarUDF {
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(udf: &mut Self),
+
+    /// Hash function for the UDF. Used for equality comparison.
+    pub hash: unsafe extern "C" fn(udf: &Self) -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the udf.
     /// A [`ForeignScalarUDF`] should never attempt to access this data.
@@ -236,6 +239,14 @@ unsafe extern "C" fn clone_fn_wrapper(udf: &FFI_ScalarUDF) -> FFI_ScalarUDF {
     Arc::clone(&udf_data.udf).into()
 }
 
+unsafe extern "C" fn hash_fn_wrapper(udf: &FFI_ScalarUDF) -> u64 {
+    let private_data = udf.private_data as *const ScalarUDFPrivateData;
+    let udf = &(*private_data).udf;
+    let mut hasher = DefaultHasher::new();
+    udf.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl Clone for FFI_ScalarUDF {
     fn clone(&self) -> Self {
         unsafe { (self.clone)(self) }
@@ -262,6 +273,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
+            hash: hash_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
@@ -300,8 +312,8 @@ impl PartialEq for ForeignScalarUDF {
         } = self;
         name == &other.name
             && aliases == &other.aliases
-            && std::ptr::eq(udf, &other.udf)
             && signature == &other.signature
+            && unsafe { (udf.hash)(&udf) == (other.udf.hash)(&other.udf) }
     }
 }
 impl Eq for ForeignScalarUDF {}
@@ -316,8 +328,9 @@ impl Hash for ForeignScalarUDF {
         } = self;
         name.hash(state);
         aliases.hash(state);
-        std::ptr::hash(udf, state);
         signature.hash(state);
+        let udf_hash = unsafe { (udf.hash)(udf) };
+        udf_hash.hash(state);
     }
 }
 
@@ -460,6 +473,32 @@ mod tests {
         let foreign_udf: ForeignScalarUDF = (&local_udf).try_into()?;
 
         assert_eq!(original_udf.name(), foreign_udf.name());
+
+        Ok(())
+    }
+
+    fn create_test_foreign_udf(
+        original_udf: impl ScalarUDFImpl + 'static,
+    ) -> Result<ScalarUDF> {
+        let original_udf = Arc::new(ScalarUDF::from(original_udf));
+        let local_udf: FFI_ScalarUDF = Arc::clone(&original_udf).into();
+        let foreign_udf: ForeignScalarUDF = (&local_udf).try_into()?;
+        Ok(foreign_udf.into())
+    }
+
+    #[test]
+    fn test_eq() -> Result<()> {
+        // Test that identical UDFs are equal
+        let abs_udf1 =
+            create_test_foreign_udf(datafusion::functions::math::abs::AbsFunc::new())?;
+        let abs_udf2 =
+            create_test_foreign_udf(datafusion::functions::math::abs::AbsFunc::new())?;
+        assert_eq!(abs_udf1, abs_udf2);
+
+        // Test that different UDFs are not equal
+        let sqrt_udf =
+            create_test_foreign_udf(datafusion::functions::math::gcd::GcdFunc::new())?;
+        assert_ne!(abs_udf1, sqrt_udf);
 
         Ok(())
     }
