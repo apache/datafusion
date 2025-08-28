@@ -23,7 +23,7 @@ use datafusion_common::{
     RecursionUnnestOption, Result, ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{Alias, Placeholder, Sort};
+use datafusion_expr::expr::{Alias, LambdaFunction, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::{
     expr::{self, InList, WindowFunction},
@@ -601,6 +601,15 @@ pub fn parse_expr(
                 Some(data_type.try_into()?),
             ))),
         },
+        ExprType::Lambda(lambda) => Ok(Expr::Lambda(LambdaFunction::new(
+            lambda.params.clone(),
+            Box::new(parse_required_expr(
+                lambda.body.as_deref(),
+                registry,
+                "body",
+                codec,
+            )?),
+        ))),
     }
 }
 

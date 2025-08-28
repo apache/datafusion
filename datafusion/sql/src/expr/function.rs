@@ -270,7 +270,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
-            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
+            return fm.try_call(args);
         }
 
         // Build Unnest expression

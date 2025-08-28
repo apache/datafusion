@@ -37,6 +37,7 @@
 #[macro_use]
 pub mod macros;
 
+pub mod array_filter;
 pub mod array_has;
 pub mod cardinality;
 pub mod concat;
@@ -76,6 +77,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::array_filter::array_filter;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
@@ -126,6 +128,7 @@ pub mod expr_fn {
 /// Return all default nested type functions
 pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        array_filter::array_filter_udf(),
         string::array_to_string_udf(),
         string::string_to_array_udf(),
         range::range_udf(),
