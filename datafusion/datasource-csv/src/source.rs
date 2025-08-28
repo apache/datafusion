@@ -19,13 +19,11 @@
 
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use std::any::Any;
-use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
 use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
-use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
@@ -35,7 +33,7 @@ use datafusion_datasource::{
 
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -46,6 +44,7 @@ use datafusion_physical_plan::{
 };
 
 use crate::file_format::CsvDecoder;
+use datafusion_datasource::source::DataSource;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
@@ -66,25 +65,24 @@ use tokio::io::AsyncWriteExt;
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let file_schema = Arc::new(Schema::empty());
 ///
-/// let source = Arc::new(CsvSource::new(
-///         true,
-///         b',',
-///         b'"',
-///     )
-///     .with_terminator(Some(b'#')
-/// ));
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
-/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+/// let config = FileScanConfigBuilder::new(object_store_url, file_schema)
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
 ///     .with_newlines_in_values(true) // The file contains newlines in values;
 ///     .build();
-/// let exec = (DataSourceExec::from_data_source(config));
+///
+/// let source = CsvSource::new(
+///         true,
+///         b',',
+///         b'"',
+///         config
+///     )
+///     .with_terminator(Some(b'#')
+/// );
+/// let exec = (DataSourceExec::from_data_source(source));
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
 pub struct CsvSource {
-    batch_size: Option<usize>,
-    file_schema: Option<SchemaRef>,
-    file_projection: Option<Vec<usize>>,
     pub(crate) has_header: bool,
     delimiter: u8,
     quote: u8,
@@ -92,18 +90,29 @@ pub struct CsvSource {
     escape: Option<u8>,
     comment: Option<u8>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+
+    config: FileScanConfig,
 }
 
 impl CsvSource {
     /// Returns a [`CsvSource`]
-    pub fn new(has_header: bool, delimiter: u8, quote: u8) -> Self {
+    pub fn new(
+        has_header: bool,
+        delimiter: u8,
+        quote: u8,
+        config: FileScanConfig,
+    ) -> Self {
         Self {
             has_header,
             delimiter,
             quote,
-            ..Self::default()
+            terminator: None,
+            escape: None,
+            comment: None,
+            metrics: Default::default(),
+            schema_adapter_factory: None,
+            config,
         }
     }
 
@@ -159,27 +168,35 @@ impl CsvSource {
 }
 
 impl CsvSource {
-    fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        Ok(self.builder().build(reader)?)
+    fn open<R: Read>(
+        &self,
+        reader: R,
+        file_schema: SchemaRef,
+        batch_size: Option<usize>,
+        file_column_projection_indices: Option<Vec<usize>>,
+    ) -> Result<csv::Reader<R>> {
+        Ok(self
+            .builder(file_schema, batch_size, file_column_projection_indices)
+            .build(reader)?)
     }
 
-    fn builder(&self) -> csv::ReaderBuilder {
-        let mut builder = csv::ReaderBuilder::new(Arc::clone(
-            self.file_schema
-                .as_ref()
-                .expect("Schema must be set before initializing builder"),
-        ))
-        .with_delimiter(self.delimiter)
-        .with_batch_size(
-            self.batch_size
-                .expect("Batch size must be set before initializing builder"),
-        )
-        .with_header(self.has_header)
-        .with_quote(self.quote);
+    fn builder(
+        &self,
+        file_schema: SchemaRef,
+        batch_size: Option<usize>,
+        file_column_projection_indices: Option<Vec<usize>>,
+    ) -> csv::ReaderBuilder {
+        let mut builder = csv::ReaderBuilder::new(Arc::clone(&file_schema))
+            .with_delimiter(self.delimiter)
+            .with_batch_size(
+                batch_size.expect("Batch size must be set before initializing builder"),
+            )
+            .with_header(self.has_header)
+            .with_quote(self.quote);
         if let Some(terminator) = self.terminator {
             builder = builder.with_terminator(terminator);
         }
-        if let Some(proj) = &self.file_projection {
+        if let Some(proj) = &file_column_projection_indices {
             builder = builder.with_projection(proj.clone());
         }
         if let Some(escape) = self.escape {
@@ -195,21 +212,15 @@ impl CsvSource {
 
 /// A [`FileOpener`] that opens a CSV file and yields a [`FileOpenFuture`]
 pub struct CsvOpener {
-    config: Arc<CsvSource>,
-    file_compression_type: FileCompressionType,
+    source: Arc<CsvSource>,
     object_store: Arc<dyn ObjectStore>,
 }
 
 impl CsvOpener {
     /// Returns a [`CsvOpener`]
-    pub fn new(
-        config: Arc<CsvSource>,
-        file_compression_type: FileCompressionType,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Self {
+    pub fn new(source: Arc<CsvSource>, object_store: Arc<dyn ObjectStore>) -> Self {
         Self {
-            config,
-            file_compression_type,
+            source,
             object_store,
         }
     }
@@ -222,15 +233,28 @@ impl From<CsvSource> for Arc<dyn FileSource> {
 }
 
 impl FileSource for CsvSource {
+    fn config(&self) -> &FileScanConfig {
+        &self.config
+    }
+
+    fn with_config(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        let mut this = self.clone();
+        this.config = config;
+
+        Arc::new(this)
+    }
+
+    fn as_data_source(&self) -> Arc<dyn DataSource> {
+        Arc::new(self.clone())
+    }
+
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(CsvOpener {
-            config: Arc::new(self.clone()),
-            file_compression_type: base_config.file_compression_type,
+            source: Arc::new(self.clone()),
             object_store,
         })
     }
@@ -239,43 +263,18 @@ impl FileSource for CsvSource {
         self
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
-    }
-
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_schema = Some(schema);
-        Arc::new(conf)
-    }
-
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_projection = config.file_column_projection_indices();
-        Arc::new(conf)
-    }
-
-    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+    fn metrics_inner(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set"))
-    }
+
     fn file_type(&self) -> &str {
         "csv"
     }
-    fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt_extra(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, ", has_header={}", self.has_header)
@@ -296,6 +295,15 @@ impl FileSource for CsvSource {
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
+    }
+}
+
+impl std::fmt::Debug for CsvSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {{ ", self.file_type())?;
+        write!(f, "statistics={:?}, ", self.file_source_statistics())?;
+        write!(f, "config={:?}, ", self.config())?;
+        write!(f, " }}")
     }
 }
 
@@ -331,19 +339,19 @@ impl FileOpener for CsvOpener {
         // `self.config.has_header` controls whether to skip reading the 1st line header
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line
-        let mut csv_has_header = self.config.has_header;
+        let mut csv_has_header = self.source.has_header;
         if let Some(FileRange { start, .. }) = file_meta.range {
             if start != 0 {
                 csv_has_header = false;
             }
         }
 
-        let config = CsvSource {
+        let source = CsvSource {
             has_header: csv_has_header,
-            ..(*self.config).clone()
+            ..(*self.source).clone()
         };
 
-        let file_compression_type = self.file_compression_type.to_owned();
+        let file_compression_type = source.config.file_compression_type.to_owned();
 
         if file_meta.range.is_some() {
             assert!(
@@ -353,7 +361,12 @@ impl FileOpener for CsvOpener {
         }
 
         let store = Arc::clone(&self.object_store);
-        let terminator = self.config.terminator;
+        let terminator = self.source.terminator;
+
+        let file_schema = Arc::clone(&source.config.file_schema);
+        let batch_size = source.config.batch_size;
+        let file_column_projection_indices =
+            source.config.file_column_projection_indices().clone();
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
@@ -392,10 +405,18 @@ impl FileOpener for CsvOpener {
                         )?
                     };
 
-                    Ok(futures::stream::iter(config.open(decoder)?).boxed())
+                    Ok(futures::stream::iter(source.open(
+                        decoder,
+                        file_schema,
+                        batch_size,
+                        file_column_projection_indices,
+                    )?)
+                    .boxed())
                 }
                 GetResultPayload::Stream(s) => {
-                    let decoder = config.builder().build_decoder();
+                    let decoder = source
+                        .builder(file_schema, batch_size, file_column_projection_indices)
+                        .build_decoder();
                     let s = s.map_err(DataFusionError::from);
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 

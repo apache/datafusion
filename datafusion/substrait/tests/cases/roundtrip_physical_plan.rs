@@ -30,17 +30,15 @@ use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_substrait::physical_plan::{consumer, producer};
 
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
 use substrait::proto::extensions;
 
 #[tokio::test]
 async fn parquet_exec() -> Result<()> {
-    let source = Arc::new(ParquetSource::default());
-
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         Arc::new(Schema::empty()),
-        source,
     )
     .with_file_groups(vec![
         FileGroup::new(vec![PartitionedFile::new(
@@ -53,8 +51,9 @@ async fn parquet_exec() -> Result<()> {
         )]),
     ])
     .build();
-    let parquet_exec: Arc<dyn ExecutionPlan> =
-        DataSourceExec::from_data_source(scan_config);
+
+    let source = ParquetSource::new(TableParquetOptions::default(), scan_config.clone());
+    let parquet_exec: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(source);
 
     let mut extension_info: (
         Vec<extensions::SimpleExtensionDeclaration>,

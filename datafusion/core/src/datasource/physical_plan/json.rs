@@ -23,7 +23,6 @@ pub use datafusion_datasource_json::source::*;
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     use std::fs;
@@ -176,13 +175,14 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
-        let exec = DataSourceExec::from_data_source(conf);
+
+        let source = JsonSource::new(conf.clone());
+        let exec = DataSourceExec::from_data_source(source);
 
         // TODO: this is not where schema inference should be tested
 
@@ -251,13 +251,13 @@ mod tests {
         let file_schema = Arc::new(builder.finish());
         let missing_field_idx = file_schema.fields.len() - 1;
 
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
-        let exec = DataSourceExec::from_data_source(conf);
+        let source = JsonSource::new(conf.clone());
+        let exec = DataSourceExec::from_data_source(source);
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
@@ -294,13 +294,13 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![0, 2]))
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
-        let exec = DataSourceExec::from_data_source(conf);
+        let source = JsonSource::new(conf.clone());
+        let exec = DataSourceExec::from_data_source(source);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -342,13 +342,13 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
-        let exec = DataSourceExec::from_data_source(conf);
+        let source = JsonSource::new(conf.clone());
+        let exec = DataSourceExec::from_data_source(source);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);
 

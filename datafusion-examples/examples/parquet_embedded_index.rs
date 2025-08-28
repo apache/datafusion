@@ -117,6 +117,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{exec_err, HashMap, HashSet, Result};
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
@@ -426,8 +427,8 @@ impl TableProvider for DistinctIndexTable {
 
         // Build ParquetSource to actually read the files
         let url = ObjectStoreUrl::parse("file://")?;
-        let source = Arc::new(ParquetSource::default().with_enable_page_index(true));
-        let mut builder = FileScanConfigBuilder::new(url, self.schema.clone(), source);
+
+        let mut builder = FileScanConfigBuilder::new(url, self.schema.clone());
         for file in files_to_scan {
             let path = self.dir.join(file);
             let len = std::fs::metadata(&path)?.len();
@@ -438,7 +439,11 @@ impl TableProvider for DistinctIndexTable {
                 PartitionedFile::new(path.to_str().unwrap().to_string(), len);
             builder = builder.with_file(partitioned_file);
         }
-        Ok(DataSourceExec::from_data_source(builder.build()))
+
+        Ok(DataSourceExec::from_data_source(
+            ParquetSource::new(TableParquetOptions::default(), builder.build())
+                .with_enable_page_index(true),
+        ))
     }
 
     /// Tell DataFusion that we can handle filters on the "category" column

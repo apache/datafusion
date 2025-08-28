@@ -37,7 +37,6 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use object_store::path::Path;
@@ -156,11 +155,9 @@ impl TestParquetFile {
         maybe_filter: Option<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let parquet_options = ctx.copied_table_options().parquet;
-        let source = Arc::new(ParquetSource::new(parquet_options.clone()));
         let scan_config_builder = FileScanConfigBuilder::new(
             self.object_store_url.clone(),
             Arc::clone(&self.schema),
-            source,
         )
         .with_file(PartitionedFile {
             object_meta: self.object_meta.clone(),
@@ -182,19 +179,20 @@ impl TestParquetFile {
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
-            let source = Arc::new(
-                ParquetSource::new(parquet_options)
-                    .with_predicate(Arc::clone(&physical_filter_expr)),
-            )
-            .with_schema(Arc::clone(&self.schema));
-            let config = scan_config_builder.with_source(source).build();
-            let parquet_exec = DataSourceExec::from_data_source(config);
+            let config = scan_config_builder.build();
+            let source = ParquetSource::new(parquet_options, config.clone())
+                .with_predicate(Arc::clone(&physical_filter_expr));
+
+            let parquet_exec = DataSourceExec::from_data_source(source);
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
             let config = scan_config_builder.build();
-            Ok(DataSourceExec::from_data_source(config))
+
+            let source = ParquetSource::new(parquet_options, config.clone());
+
+            Ok(DataSourceExec::from_data_source(source))
         }
     }
 

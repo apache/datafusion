@@ -774,7 +774,7 @@ let config = FileScanConfigBuilder::new(url, schema, Arc::new(file_source))
   .with_statistics(stats)
   ...
   .build();
-let scan = DataSourceExec::from_data_source(config);
+let scan =DataSourceExec::from_data_source(source);
 # */
 ```
 
