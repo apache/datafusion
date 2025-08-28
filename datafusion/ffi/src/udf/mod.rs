@@ -95,7 +95,7 @@ pub struct FFI_ScalarUDF {
     /// See [`ScalarUDFImpl`] for details on short_circuits
     pub short_circuits: bool,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`ScalarUDF`]
