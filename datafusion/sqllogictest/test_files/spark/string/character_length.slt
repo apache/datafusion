@@ -15,17 +15,17 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query T
+query I
 SELECT CHARACTER_LENGTH('Spark SQL ');
 ----
 10
 
-query T
+query I
 SELECT character_length('Spark SQL ');
 ----
 10
 
-query T
+query I
 SELECT character_length(x'537061726b2053514c');
 ----
 9

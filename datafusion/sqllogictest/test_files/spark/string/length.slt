@@ -15,12 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query T
+query I
 SELECT SELECT length('Spark SQL ');
 ----
 10
 
-query T
+query I
 SELECT length(x'537061726b2053514c');
 ----
 9
