@@ -401,14 +401,14 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         if self.is_volatile_node() {
             return true;
         }
-        
+
         // Recursively check children
         for child in self.children() {
             if child.is_volatile() {
                 return true;
             }
         }
-        
+
         false
     }
 }

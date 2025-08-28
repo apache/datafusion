@@ -326,7 +326,8 @@ mod tests {
     #[test]
     fn test_is_volatile_default_behavior() {
         // Test that default PhysicalExpr implementations are not volatile
-        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+        let literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
         let column = Arc::new(Column::new("test", 0)) as Arc<dyn PhysicalExpr>;
 
         // Test is_volatile_node() - should return false by default
