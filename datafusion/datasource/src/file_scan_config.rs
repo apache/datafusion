@@ -105,9 +105,8 @@ use log::{debug, warn};
 /// #    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>
 /// # };
 /// # impl FileSource for ParquetSource {
-/// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
+/// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
-/// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { Arc::new(self.clone()) as Arc<dyn FileSource> }
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics), schema_adapter_factory: self.schema_adapter_factory.clone()} ) }
@@ -504,12 +503,9 @@ impl DataSource for FileScanConfig {
             .batch_size
             .unwrap_or_else(|| context.session_config().batch_size());
 
-        let source = self
-            .file_source
-            .with_batch_size(batch_size)
-            .with_projection(self);
+        let source = self.file_source.with_projection(self);
 
-        let opener = source.create_file_opener(object_store, self, partition);
+        let opener = source.create_file_opener(object_store, self, partition, batch_size);
 
         let stream = FileStream::new(self, partition, opener, source.metrics())?;
         Ok(Box::pin(cooperative(stream)))

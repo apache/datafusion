@@ -42,16 +42,13 @@ impl FileSource for MockSource {
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
+        _batch_size: usize,
     ) -> Arc<dyn FileOpener> {
         unimplemented!()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
-    }
-
-    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
     }
 
     fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {

@@ -38,7 +38,6 @@ use object_store::ObjectStore;
 #[derive(Clone, Default)]
 pub struct AvroSource {
     schema: Option<SchemaRef>,
-    batch_size: Option<usize>,
     projection: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
@@ -51,11 +50,15 @@ impl AvroSource {
         Self::default()
     }
 
-    fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
+    fn open<R: std::io::Read>(
+        &self,
+        reader: R,
+        batch_size: usize,
+    ) -> Result<AvroReader<'static, R>> {
         AvroReader::try_new(
             reader,
             Arc::clone(self.schema.as_ref().expect("Schema must set before open")),
-            self.batch_size.expect("Batch size must set before open"),
+            batch_size,
             self.projection.clone(),
         )
     }
@@ -67,21 +70,17 @@ impl FileSource for AvroSource {
         object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
+        batch_size: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(private::AvroOpener {
             config: Arc::new(self.clone()),
             object_store,
+            batch_size,
         })
     }
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
     }
 
     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
@@ -154,6 +153,7 @@ mod private {
     pub struct AvroOpener {
         pub config: Arc<AvroSource>,
         pub object_store: Arc<dyn ObjectStore>,
+        pub batch_size: usize,
     }
 
     impl FileOpener for AvroOpener {
@@ -164,16 +164,19 @@ mod private {
         ) -> Result<FileOpenFuture> {
             let config = Arc::clone(&self.config);
             let object_store = Arc::clone(&self.object_store);
+
+            let batch_size = self.batch_size;
+
             Ok(Box::pin(async move {
                 let r = object_store.get(file_meta.location()).await?;
                 match r.payload {
                     GetResultPayload::File(file, _) => {
-                        let reader = config.open(file)?;
+                        let reader = config.open(file, batch_size)?;
                         Ok(futures::stream::iter(reader).boxed())
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
-                        let reader = config.open(bytes.reader())?;
+                        let reader = config.open(bytes.reader(), batch_size)?;
                         Ok(futures::stream::iter(reader).boxed())
                     }
                 }
