@@ -977,16 +977,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 returning,
                 or,
             } => {
-                let froms =
+                let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
-                        UpdateTableFromKind::BeforeSet(froms) => froms,
-                        UpdateTableFromKind::AfterSet(froms) => froms,
+                        UpdateTableFromKind::BeforeSet(from_clauses) => from_clauses,
+                        UpdateTableFromKind::AfterSet(from_clauses) => from_clauses,
                     });
                 // TODO: support multiple tables in UPDATE SET FROM
-                if froms.as_ref().is_some_and(|f| f.len() > 1) {
+                if from_clauses.as_ref().is_some_and(|f| f.len() > 1) {
                     plan_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
                 }
-                let update_from = froms.and_then(|mut f| f.pop());
+                let update_from = from_clauses.and_then(|mut f| f.pop());
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }

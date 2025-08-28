@@ -305,7 +305,7 @@ fn create_q20_like_batches(
     (schema, batches)
 }
 
-/// Genereate `num_batches` wide RecordBatches resembling sort-tpch Q10 for benchmarking.
+/// Generate `num_batches` wide RecordBatches resembling sort-tpch Q10 for benchmarking.
 /// This includes multiple numeric, date, and Utf8View columns (15 total).
 pub fn create_wide_batches(
     num_batches: usize,

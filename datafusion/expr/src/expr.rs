@@ -642,6 +642,65 @@ impl From<&HashMap<String, String>> for FieldMetadata {
     }
 }
 
+/// The metadata used in [`Field::metadata`].
+///
+/// This represents the metadata associated with an Arrow [`Field`]. The metadata consists of key-value pairs.
+///
+/// # Common Use Cases
+///
+/// Field metadata is commonly used to store:
+/// - Default values for columns when data is missing
+/// - Column descriptions or documentation
+/// - Data lineage information
+/// - Custom application-specific annotations
+/// - Encoding hints or display formatting preferences
+///
+/// # Example: Storing Default Values
+///
+/// A practical example of using field metadata is storing default values for columns
+/// that may be missing in the physical data but present in the logical schema.
+/// See the [default_column_values.rs] example implementation.
+///
+/// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs
+pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
+
+/// Intersects multiple metadata instances for UNION operations.
+///
+/// This function implements the intersection strategy used by UNION operations,
+/// where only metadata keys that exist in ALL inputs with identical values
+/// are preserved in the result.
+///
+/// # Union Metadata Behavior
+///
+/// Union operations require consistent metadata across all branches:
+/// - Only metadata keys present in ALL union branches are kept
+/// - For each kept key, the value must be identical across all branches
+/// - If a key has different values across branches, it is excluded from the result
+/// - If any input has no metadata, the result will be empty
+///
+/// # Arguments
+///
+/// * `metadatas` - An iterator of `SchemaFieldMetadata` instances to intersect
+///
+/// # Returns
+///
+/// A new `SchemaFieldMetadata` containing only the intersected metadata
+pub fn intersect_metadata_for_union<'a>(
+    metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
+) -> SchemaFieldMetadata {
+    let mut metadatas = metadatas.into_iter();
+    let Some(mut intersected) = metadatas.next().cloned() else {
+        return Default::default();
+    };
+
+    for metadata in metadatas {
+        // Only keep keys that exist in both with the same value
+        intersected.retain(|k, v| metadata.get(k) == Some(v));
+    }
+
+    intersected
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {

@@ -349,7 +349,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// Systems that implement remote execution of plans, e.g. serialize a portion of the query plan
     /// and send it across the wire to a remote executor may want to call this method after
-    /// every batch on the source side and brodcast / update the current snaphot to the remote executor.
+    /// every batch on the source side and broadcast / update the current snapshot to the remote executor.
     ///
     /// Note for implementers: this method should *not* handle recursion.
     /// Recursion is handled in [`snapshot_physical_expr`].
@@ -363,7 +363,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// Returns the generation of this `PhysicalExpr` for snapshotting purposes.
     /// The generation is an arbitrary u64 that can be used to track changes
     /// in the state of the `PhysicalExpr` over time without having to do an exhaustive comparison.
-    /// This is useful to avoid unecessary computation or serialization if there are no changes to the expression.
+    /// This is useful to avoid unnecessary computation or serialization if there are no changes to the expression.
     /// In particular, dynamic expressions that may change over time; this allows cheap checks for changes.
     /// Static expressions that do not change over time should return 0, as does the default implementation.
     /// You should not call this method directly as it does not handle recursion.
