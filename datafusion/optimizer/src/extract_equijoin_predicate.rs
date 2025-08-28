@@ -217,7 +217,7 @@ fn split_op_and_other_join_predicates(
 
     let exprs = split_conjunction_owned(filter);
 
-    // Treat 'is not distinct from' comparision as join key in equal joins
+    // Treat 'is not distinct from' comparison as join key in equal joins
     let mut accum_join_keys: Vec<(Expr, Expr)> = vec![];
     let mut accum_filters: Vec<Expr> = vec![];
     for expr in exprs {
