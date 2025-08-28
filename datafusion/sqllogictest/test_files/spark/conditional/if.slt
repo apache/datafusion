@@ -153,3 +153,14 @@ SELECT if(1, 10.5, 20);
 
 statement error Utf8 is not a boolean or null
 SELECT if('x', 10.5, 20);
+
+query II
+SELECT v, IF(v < 0, 10/0, 1) FROM (VALUES (1), (2)) t(v)
+----
+1 1
+2 1
+
+query I
+SELECT IF(true, 1 / 1, 1 / 0);
+----
+1
