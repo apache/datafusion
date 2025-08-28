@@ -36,7 +36,7 @@ macro_rules! df_result {
     };
 }
 
-/// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
+/// This macro is a helpful conversion utility to convert from a DataFusion Result to an abi_stable::RResult
 #[macro_export]
 macro_rules! rresult {
     ( $x:expr ) => {
@@ -49,7 +49,7 @@ macro_rules! rresult {
     };
 }
 
-/// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
+/// This macro is a helpful conversion utility to convert from a DataFusion Result to an abi_stable::RResult
 /// and to also call return when it is an error. Since you cannot use `?` on an RResult, this is designed
 /// to mimic the pattern.
 #[macro_export]

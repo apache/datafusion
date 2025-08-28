@@ -102,7 +102,7 @@ fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
     plan.schema().check_names()
 }
 
-/// Returns an error if the plan is not sematically valid.
+/// Returns an error if the plan is not semantically valid.
 fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
     assert_subqueries_are_valid(plan)?;
 

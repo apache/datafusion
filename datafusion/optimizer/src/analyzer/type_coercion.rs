@@ -2451,9 +2451,9 @@ mod test {
         let map_type_entries = DataType::Map(Arc::new(fields), false);
 
         let fields = Field::new("key_value", DataType::Struct(struct_fields), false);
-        let may_type_cutsom = DataType::Map(Arc::new(fields), false);
+        let may_type_custom = DataType::Map(Arc::new(fields), false);
 
-        let expr = col("a").eq(cast(col("a"), may_type_cutsom));
+        let expr = col("a").eq(cast(col("a"), may_type_custom));
         let empty = empty_with_type(map_type_entries);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
 
