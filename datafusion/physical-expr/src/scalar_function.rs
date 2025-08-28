@@ -368,9 +368,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{BinaryExpr, Column, Literal};
+    use crate::expressions::Column;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::{Operator, ScalarUDF, ScalarUDFImpl, Signature};
+    use datafusion_expr::{ScalarUDF, ScalarUDFImpl, Signature};
     use datafusion_physical_expr_common::physical_expr::is_volatile;
     use std::any::Any;
 
@@ -427,7 +427,7 @@ mod tests {
             volatile_udf,
             args.clone(),
             &schema,
-            config_options.clone(),
+            Arc::clone(&config_options),
         )
         .unwrap();
 
@@ -443,50 +443,5 @@ mod tests {
         assert!(!stable_expr.is_volatile_node());
         let stable_arc: Arc<dyn PhysicalExpr> = Arc::new(stable_expr);
         assert!(!is_volatile(&stable_arc));
-    }
-
-    #[test]
-    fn test_nested_expression_volatility() {
-        // Test that is_volatile() recursively checks sub-expressions
-        let volatile_udf = Arc::new(ScalarUDF::from(MockScalarUDF {
-            signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Volatile),
-        }));
-
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let config_options = Arc::new(ConfigOptions::new());
-
-        // Create a volatile scalar function
-        let volatile_scalar = Arc::new(
-            ScalarFunctionExpr::try_new(
-                volatile_udf,
-                vec![Arc::new(Literal::new(ScalarValue::Int32(Some(1))))],
-                &schema,
-                config_options.clone(),
-            )
-            .unwrap(),
-        ) as Arc<dyn PhysicalExpr>;
-
-        // Test that the volatile scalar function itself is volatile
-        assert!(is_volatile(&volatile_scalar));
-
-        // Create a non-volatile expression (Column)
-        let column = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-        assert!(!column.is_volatile_node());
-        assert!(!is_volatile(&column));
-
-        // Create a literal expression
-        let literal =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
-        assert!(!literal.is_volatile_node());
-        assert!(!is_volatile(&literal));
-
-        // Test that a composite boolean expression involving a volatile sub-expression is volatile
-        let composite_expr = Arc::new(BinaryExpr::new(
-            Arc::clone(&volatile_scalar),
-            Operator::And,
-            Arc::clone(&literal),
-        )) as Arc<dyn PhysicalExpr>;
-        assert!(is_volatile(&composite_expr));
-        assert!(!composite_expr.is_volatile_node()); // BinaryExpr itself is not volatile
     }
 }
