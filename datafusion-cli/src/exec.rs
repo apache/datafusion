@@ -19,7 +19,6 @@
 
 use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
-use crate::object_storage::instrumented::InstrumentedObjectStoreRegistry;
 use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
@@ -49,7 +48,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::sync::Arc;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -57,10 +55,9 @@ pub async fn exec_from_commands(
     ctx: &dyn CliSessionContext,
     commands: Vec<String>,
     print_options: &PrintOptions,
-    registry: &Option<Arc<InstrumentedObjectStoreRegistry>>,
 ) -> Result<()> {
     for sql in commands {
-        exec_and_print(ctx, print_options, sql, registry).await?;
+        exec_and_print(ctx, print_options, sql).await?;
     }
 
     Ok(())
@@ -71,7 +68,6 @@ pub async fn exec_from_lines(
     ctx: &dyn CliSessionContext,
     reader: &mut BufReader<File>,
     print_options: &PrintOptions,
-    registry: &Option<Arc<InstrumentedObjectStoreRegistry>>,
 ) -> Result<()> {
     let mut query = "".to_owned();
 
@@ -87,7 +83,7 @@ pub async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(ctx, print_options, query, registry).await {
+                    match exec_and_print(ctx, print_options, query).await {
                         Ok(_) => {}
                         Err(err) => eprintln!("{err}"),
                     }
@@ -105,7 +101,7 @@ pub async fn exec_from_lines(
     // run the left over query if the last statement doesn't contain ‘;’
     // ignore if it only consists of '\n'
     if query.contains(|c| c != '\n') {
-        exec_and_print(ctx, print_options, query, registry).await?;
+        exec_and_print(ctx, print_options, query).await?;
     }
 
     Ok(())
@@ -115,7 +111,6 @@ pub async fn exec_from_files(
     ctx: &dyn CliSessionContext,
     files: Vec<String>,
     print_options: &PrintOptions,
-    registry: &Option<Arc<InstrumentedObjectStoreRegistry>>,
 ) -> Result<()> {
     let files = files
         .into_iter()
@@ -124,7 +119,7 @@ pub async fn exec_from_files(
 
     for file in files {
         let mut reader = BufReader::new(file);
-        exec_from_lines(ctx, &mut reader, print_options, registry).await?;
+        exec_from_lines(ctx, &mut reader, print_options).await?;
     }
 
     Ok(())
@@ -134,7 +129,6 @@ pub async fn exec_from_files(
 pub async fn exec_from_repl(
     ctx: &dyn CliSessionContext,
     print_options: &mut PrintOptions,
-    registry: &Option<Arc<InstrumentedObjectStoreRegistry>>,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
     rl.set_helper(Some(CliHelper::new(
@@ -182,7 +176,7 @@ pub async fn exec_from_repl(
                 for line in lines {
                     rl.add_history_entry(line.trim_end())?;
                     tokio::select! {
-                        res = exec_and_print(ctx, print_options, line, registry) => match res {
+                        res = exec_and_print(ctx, print_options, line) => match res {
                             Ok(_) => {}
                             Err(err) => eprintln!("{err}"),
                         },
@@ -219,7 +213,6 @@ pub(super) async fn exec_and_print(
     ctx: &dyn CliSessionContext,
     print_options: &PrintOptions,
     sql: String,
-    registry: &Option<Arc<InstrumentedObjectStoreRegistry>>,
 ) -> Result<()> {
     let task_ctx = ctx.task_ctx();
     let options = task_ctx.session_config().options();
@@ -235,7 +228,7 @@ pub(super) async fn exec_and_print(
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
         StatementExecutor::new(statement)
-            .execute(ctx, print_options, registry)
+            .execute(ctx, print_options)
             .await?;
     }
 
@@ -263,7 +256,6 @@ impl StatementExecutor {
         self,
         ctx: &dyn CliSessionContext,
         print_options: &PrintOptions,
-        registry: &Option<Arc<InstrumentedObjectStoreRegistry>>,
     ) -> Result<()> {
         let now = Instant::now();
         let (df, adjusted) = self
@@ -320,12 +312,6 @@ impl StatementExecutor {
                 &options.format,
             )?;
             reservation.free();
-        }
-
-        if let Some(registry) = registry {
-            for store in registry.stores() {
-                store.print_details();
-            }
         }
 
         Ok(())

@@ -565,12 +565,22 @@ pub(crate) async fn get_object_store(
 
 pub mod instrumented {
     use core::fmt;
-    use std::{cmp, default, ops::AddAssign, sync::Arc, time::Duration};
+    use std::{
+        cmp, default,
+        ops::AddAssign,
+        str::FromStr,
+        sync::{
+            atomic::{AtomicU8, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
 
     use async_trait::async_trait;
     use chrono::Utc;
     use datafusion::{
         common::{instant::Instant, HashMap},
+        error::DataFusionError,
         execution::object_store::ObjectStoreRegistry,
     };
     use futures::stream::BoxStream;
@@ -651,21 +661,21 @@ pub mod instrumented {
 
     impl fmt::Display for RequestSummary {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "  count: {}", self.count)?;
+            writeln!(f, "  count: {}", self.count)?;
 
             if let Some(dur_stats) = &self.duration_stats {
-                write!(f, "\n  duration min: {:.6}s", dur_stats.min.as_secs_f32())?;
-                write!(f, "\n  duration max: {:.6}s", dur_stats.max.as_secs_f32())?;
+                writeln!(f, "  duration min: {:.6}s", dur_stats.min.as_secs_f32())?;
+                writeln!(f, "  duration max: {:.6}s", dur_stats.max.as_secs_f32())?;
                 let avg = dur_stats.sum.as_secs_f32() / (self.count as f32);
-                write!(f, "\n  duration avg: {:.6}s", avg)?;
+                writeln!(f, "  duration avg: {:.6}s", avg)?;
             }
 
             if let Some(size_stats) = &self.size_stats {
-                write!(f, "\n  size min: {}", size_stats.min)?;
-                write!(f, "\n  size max: {}", size_stats.max)?;
+                writeln!(f, "  size min: {} B", size_stats.min)?;
+                writeln!(f, "  size max: {} B", size_stats.max)?;
                 let avg = size_stats.sum / self.count;
-                write!(f, "\n  size avg: {}", avg)?;
-                write!(f, "\n  size sum: {}", size_stats.sum)?;
+                writeln!(f, "  size avg: {} B", avg)?;
+                writeln!(f, "  size sum: {} B", size_stats.sum)?;
             }
 
             Ok(())
@@ -706,20 +716,42 @@ pub mod instrumented {
         }
     }
 
+    #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+    pub enum InstrumentedObjectStoreMode {
+        #[default]
+        Disabled,
+        Summary,
+        Trace,
+    }
+
+    impl fmt::Display for InstrumentedObjectStoreMode {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{:?}", self)
+        }
+    }
+
+    impl FromStr for InstrumentedObjectStoreMode {
+        type Err = DataFusionError;
+
+        fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+            match s.to_lowercase().as_str() {
+                "disabled" => Ok(Self::Disabled),
+                "summary" => Ok(Self::Summary),
+                "trace" => Ok(Self::Trace),
+                _ => Err(DataFusionError::Execution(format!("Unrecognized mode {s}"))),
+            }
+        }
+    }
+
+    #[derive(Debug)]
     pub struct InstrumentedObjectStore {
         inner: Arc<dyn ObjectStore>,
+        instrument_mode: AtomicU8,
         requests: Mutex<Vec<RequestDetails>>,
     }
 
-    impl InstrumentedObjectStore {
-        pub fn new(object_store: Arc<dyn ObjectStore>) -> Self {
-            Self {
-                inner: object_store,
-                requests: Mutex::new(Vec::new()),
-            }
-        }
-
-        pub fn print_details(&self) {
+    impl fmt::Display for InstrumentedObjectStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             let mut summaries = HashMap::new();
             let mut reqs = self.requests.lock();
             for rd in reqs.drain(..) {
@@ -732,32 +764,43 @@ pub mod instrumented {
                     Some(summary) => summary.push(&rd),
                 }
 
-                // TODO: conditional if trace is enabled
-                println!("{rd}");
+                if self.instrument_mode.load(Ordering::Relaxed)
+                    == InstrumentedObjectStoreMode::Trace as u8
+                {
+                    writeln!(f, "{rd}")?;
+                }
             }
 
-            for (op, summary) in summaries.iter() {
-                println!("{:?} Summary:", op);
-                println!("{summary}");
+            if self.instrument_mode.load(Ordering::Relaxed)
+                >= InstrumentedObjectStoreMode::Summary as u8
+            {
+                for (op, summary) in summaries.iter() {
+                    writeln!(f, "{:?} Summary:", op)?;
+                    writeln!(f, "{summary}")?;
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    impl InstrumentedObjectStore {
+        pub fn new(
+            object_store: Arc<dyn ObjectStore>,
+            instrument_mode: AtomicU8,
+        ) -> Self {
+            Self {
+                inner: object_store,
+                instrument_mode,
+                requests: Mutex::new(Vec::new()),
             }
         }
-    }
 
-    impl fmt::Display for InstrumentedObjectStore {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "InstrumentedObjectStore: {}", self.inner)
+        pub fn set_instrument_mode(&self, mode: InstrumentedObjectStoreMode) {
+            self.instrument_mode.store(mode as u8, Ordering::Relaxed)
         }
-    }
 
-    impl fmt::Debug for InstrumentedObjectStore {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "InstrumentedObjectStore: {:?}", self.inner)
-        }
-    }
-
-    #[async_trait]
-    impl ObjectStore for InstrumentedObjectStore {
-        async fn put_opts(
+        async fn inst_put_opts(
             &self,
             location: &Path,
             payload: PutPayload,
@@ -782,7 +825,7 @@ pub mod instrumented {
             Ok(ret)
         }
 
-        async fn put_multipart_opts(
+        async fn inst_put_multipart_opts(
             &self,
             location: &Path,
             opts: PutMultipartOptions,
@@ -805,7 +848,7 @@ pub mod instrumented {
             Ok(ret)
         }
 
-        async fn get_opts(
+        async fn inst_get_opts(
             &self,
             location: &Path,
             options: GetOptions,
@@ -829,7 +872,7 @@ pub mod instrumented {
             Ok(ret)
         }
 
-        async fn delete(&self, location: &Path) -> Result<()> {
+        async fn inst_delete(&self, location: &Path) -> Result<()> {
             let timestamp = Utc::now();
             let start = Instant::now();
             self.inner.delete(location).await?;
@@ -848,7 +891,10 @@ pub mod instrumented {
             Ok(())
         }
 
-        fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        fn inst_list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, Result<ObjectMeta>> {
             let timestamp = Utc::now();
             let ret = self.inner.list(prefix);
 
@@ -865,7 +911,10 @@ pub mod instrumented {
             ret
         }
 
-        async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        async fn inst_list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> Result<ListResult> {
             let timestamp = Utc::now();
             let start = Instant::now();
             let ret = self.inner.list_with_delimiter(prefix).await?;
@@ -884,7 +933,7 @@ pub mod instrumented {
             Ok(ret)
         }
 
-        async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+        async fn inst_copy(&self, from: &Path, to: &Path) -> Result<()> {
             let timestamp = Utc::now();
             let start = Instant::now();
             self.inner.copy(from, to).await?;
@@ -903,7 +952,7 @@ pub mod instrumented {
             Ok(())
         }
 
-        async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        async fn inst_copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
             let timestamp = Utc::now();
             let start = Instant::now();
             self.inner.copy_if_not_exists(from, to).await?;
@@ -922,7 +971,7 @@ pub mod instrumented {
             Ok(())
         }
 
-        async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+        async fn inst_head(&self, location: &Path) -> Result<ObjectMeta> {
             let timestamp = Utc::now();
             let start = Instant::now();
             let ret = self.inner.head(location).await?;
@@ -942,22 +991,139 @@ pub mod instrumented {
         }
     }
 
+    #[async_trait]
+    impl ObjectStore for InstrumentedObjectStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> Result<PutResult> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_put_opts(location, payload, opts).await;
+            }
+
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> Result<Box<dyn MultipartUpload>> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_put_multipart_opts(location, opts).await;
+            }
+
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> Result<GetResult> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_get_opts(location, options).await;
+            }
+
+            self.inner.get_opts(location, options).await
+        }
+
+        async fn delete(&self, location: &Path) -> Result<()> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_delete(location).await;
+            }
+
+            self.inner.delete(location).await
+        }
+
+        fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_list(prefix);
+            }
+
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_list_with_delimiter(prefix).await;
+            }
+
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_copy(from, to).await;
+            }
+
+            self.inner.copy(from, to).await
+        }
+
+        async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_copy_if_not_exists(from, to).await;
+            }
+
+            self.inner.copy_if_not_exists(from, to).await
+        }
+
+        async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+            if self.instrument_mode.load(Ordering::Relaxed)
+                != InstrumentedObjectStoreMode::Disabled as u8
+            {
+                return self.inst_head(location).await;
+            }
+
+            self.inner.head(location).await
+        }
+    }
+
     #[derive(Debug)]
     pub struct InstrumentedObjectStoreRegistry {
         inner: Arc<dyn ObjectStoreRegistry>,
+        instrument_mode: AtomicU8,
         stores: RwLock<Vec<Arc<InstrumentedObjectStore>>>,
     }
 
     impl InstrumentedObjectStoreRegistry {
-        pub fn new(registry: Arc<dyn ObjectStoreRegistry>) -> Self {
+        pub fn new(
+            registry: Arc<dyn ObjectStoreRegistry>,
+            default_mode: InstrumentedObjectStoreMode,
+        ) -> Self {
             Self {
                 inner: registry,
+                instrument_mode: AtomicU8::new(default_mode as u8),
                 stores: RwLock::new(Vec::new()),
             }
         }
 
         pub fn stores(&self) -> Vec<Arc<InstrumentedObjectStore>> {
             self.stores.read().clone()
+        }
+
+        pub fn set_instrument_mode(&self, mode: InstrumentedObjectStoreMode) {
+            for s in self.stores.read().iter() {
+                s.set_instrument_mode(mode)
+            }
         }
     }
 
@@ -967,7 +1133,9 @@ pub mod instrumented {
             url: &Url,
             store: Arc<dyn ObjectStore>,
         ) -> Option<Arc<dyn ObjectStore>> {
-            let instrumented = Arc::new(InstrumentedObjectStore::new(store));
+            let mode = self.instrument_mode.load(Ordering::Relaxed);
+            let instrumented =
+                Arc::new(InstrumentedObjectStore::new(store, AtomicU8::new(mode)));
             self.stores.write().push(Arc::clone(&instrumented));
             self.inner.register_store(url, instrumented)
         }
