@@ -208,6 +208,7 @@ mod tests {
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
+    use datafusion_physical_expr_common::physical_expr::is_volatile;
 
     use datafusion_common::ScalarValue;
 
@@ -335,7 +336,7 @@ mod tests {
         assert!(!column.is_volatile_node());
 
         // Test is_volatile() - should return false for non-volatile expressions
-        assert!(!literal.is_volatile());
-        assert!(!column.is_volatile());
+        assert!(!is_volatile(&literal));
+        assert!(!is_volatile(&column));
     }
 }

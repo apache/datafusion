@@ -390,29 +390,6 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn is_volatile_node(&self) -> bool {
         false
     }
-
-    /// Returns true if the expression is volatile, i.e. whether it can return different
-    /// results when evaluated multiple times with the same input.
-    ///
-    /// For example the function call `RANDOM()` is volatile as each call will
-    /// return a different value.
-    ///
-    /// This method recursively checks if any sub-expression is volatile, for example
-    /// `1 + RANDOM()` will return `true.
-    fn is_volatile(&self) -> bool {
-        if self.is_volatile_node() {
-            return true;
-        }
-
-        // Recursively check children
-        for child in self.children() {
-            if child.is_volatile() {
-                return true;
-            }
-        }
-
-        false
-    }
 }
 
 #[deprecated(
@@ -595,4 +572,27 @@ pub fn snapshot_generation(expr: &Arc<dyn PhysicalExpr>) -> u64 {
 pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     // If the generation is non-zero, then this `PhysicalExpr` is dynamic.
     snapshot_generation(expr) != 0
+}
+
+/// Returns true if the expression is volatile, i.e. whether it can return different
+/// results when evaluated multiple times with the same input.
+///
+/// For example the function call `RANDOM()` is volatile as each call will
+/// return a different value.
+///
+/// This method recursively checks if any sub-expression is volatile, for example
+/// `1 + RANDOM()` will return `true`.
+pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut is_volatile = expr.is_volatile_node();
+    expr.apply(|e| {
+        is_volatile = is_volatile || e.is_volatile_node();
+        if is_volatile {
+            // Stop recursion as soon as we find a volatile node
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("infalible closure should not fail");
+    is_volatile
 }
