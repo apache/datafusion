@@ -781,3 +781,11 @@ jobs:
       - name: Check datafusion-proto
         working-directory: datafusion/proto
         run: cargo msrv --output-format json --log-target stdout verify
+  typos:
+    name: Spell Check with Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: crate-ci/typos@v1
