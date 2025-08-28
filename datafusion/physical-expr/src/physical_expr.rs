@@ -322,4 +322,19 @@ mod tests {
         assert!(physical_exprs_bag_equal(list3.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list4.as_slice(), list4.as_slice()));
     }
+
+    #[test]
+    fn test_is_volatile_default_behavior() {
+        // Test that default PhysicalExpr implementations are not volatile
+        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+        let column = Arc::new(Column::new("test", 0)) as Arc<dyn PhysicalExpr>;
+
+        // Test is_volatile_node() - should return false by default
+        assert!(!literal.is_volatile_node());
+        assert!(!column.is_volatile_node());
+
+        // Test is_volatile() - should return false for non-volatile expressions
+        assert!(!literal.is_volatile());
+        assert!(!column.is_volatile());
+    }
 }

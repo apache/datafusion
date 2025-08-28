@@ -45,7 +45,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, Volatility,
 };
 
 /// Physical expression of a scalar function
@@ -357,5 +357,117 @@ impl PhysicalExpr for ScalarFunctionExpr {
             expr.fmt_sql(f)?;
         }
         write!(f, ")")
+    }
+
+    fn is_volatile_node(&self) -> bool {
+        self.fun.signature().volatility == Volatility::Volatile
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::{Column, Literal};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::{ScalarUDF, ScalarUDFImpl, Signature};
+    use std::any::Any;
+
+    /// Test helper to create a mock UDF with a specific volatility
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockScalarUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for MockScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "mock_function"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))))
+        }
+    }
+
+    #[test]
+    fn test_scalar_function_volatile_node() {
+        // Create a volatile UDF
+        let volatile_udf = Arc::new(ScalarUDF::from(MockScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Volatile),
+        }));
+
+        // Create a non-volatile UDF  
+        let stable_udf = Arc::new(ScalarUDF::from(MockScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        }));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
+        let args = vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>];
+        let config_options = Arc::new(ConfigOptions::new());
+
+        // Test volatile function
+        let volatile_expr = ScalarFunctionExpr::try_new(
+            volatile_udf, 
+            args.clone(), 
+            &schema, 
+            config_options.clone()
+        ).unwrap();
+        
+        assert!(volatile_expr.is_volatile_node());
+        assert!(volatile_expr.is_volatile());
+
+        // Test non-volatile function
+        let stable_expr = ScalarFunctionExpr::try_new(
+            stable_udf, 
+            args, 
+            &schema, 
+            config_options
+        ).unwrap();
+        
+        assert!(!stable_expr.is_volatile_node());
+        assert!(!stable_expr.is_volatile());
+    }
+
+    #[test]
+    fn test_nested_expression_volatility() {
+        // Test that is_volatile() recursively checks sub-expressions
+        let volatile_udf = Arc::new(ScalarUDF::from(MockScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Volatile),
+        }));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let config_options = Arc::new(ConfigOptions::new());
+        
+        // Create a volatile scalar function
+        let volatile_scalar = Arc::new(ScalarFunctionExpr::try_new(
+            volatile_udf,
+            vec![Arc::new(Literal::new(ScalarValue::Int32(Some(1))))],
+            &schema,
+            config_options.clone()
+        ).unwrap()) as Arc<dyn PhysicalExpr>;
+
+        // Test that the volatile scalar function itself is volatile
+        assert!(volatile_scalar.is_volatile());
+
+        // Create a non-volatile expression (Column)
+        let column = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        assert!(!column.is_volatile_node());
+        assert!(!column.is_volatile());
+
+        // Create a literal expression
+        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+        assert!(!literal.is_volatile_node());
+        assert!(!literal.is_volatile());
     }
 }

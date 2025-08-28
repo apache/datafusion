@@ -711,7 +711,7 @@ impl<T: Clone> FilteredVec<T> {
 fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut allow_pushdown = true;
     expr.apply(|e| {
-        allow_pushdown = allow_pushdown && allow_pushdown_for_expr_inner(e);
+        allow_pushdown = allow_pushdown && !e.is_volatile();
         if allow_pushdown {
             Ok(TreeNodeRecursion::Continue)
         } else {
@@ -720,20 +720,6 @@ fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     })
     .expect("Infallible traversal of PhysicalExpr tree failed");
     allow_pushdown
-}
-
-fn allow_pushdown_for_expr_inner(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    if let Some(scalar_function) =
-        expr.as_any()
-            .downcast_ref::<datafusion_physical_expr::ScalarFunctionExpr>()
-    {
-        // Check if the function is volatile using the proper volatility API
-        if scalar_function.fun().signature().volatility == Volatility::Volatile {
-            // Volatile functions should not be pushed down
-            return false;
-        }
-    }
-    true
 }
 
 #[cfg(test)]

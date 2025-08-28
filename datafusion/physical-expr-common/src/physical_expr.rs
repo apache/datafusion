@@ -377,6 +377,40 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         // static expressions will always return 0.
         0
     }
+
+    /// Returns true if the expression node is volatile, i.e. whether it can return
+    /// different results when evaluated multiple times with the same input.
+    ///
+    /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
+    /// - `random()` returns `true`,
+    /// - `a + random()` returns `false`
+    ///
+    /// By default, expressions are not volatile.
+    fn is_volatile_node(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the expression is volatile, i.e. whether it can return different
+    /// results when evaluated multiple times with the same input.
+    ///
+    /// For example the function call `RANDOM()` is volatile as each call will
+    /// return a different value.
+    ///
+    /// This method recursively checks if any sub-expression is volatile.
+    fn is_volatile(&self) -> bool {
+        if self.is_volatile_node() {
+            return true;
+        }
+        
+        // Recursively check children
+        for child in self.children() {
+            if child.is_volatile() {
+                return true;
+            }
+        }
+        
+        false
+    }
 }
 
 #[deprecated(
