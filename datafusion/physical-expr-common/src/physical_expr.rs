@@ -397,7 +397,8 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// For example the function call `RANDOM()` is volatile as each call will
     /// return a different value.
     ///
-    /// This method recursively checks if any sub-expression is volatile.
+    /// This method recursively checks if any sub-expression is volatile, for example
+    /// `1 + RANDOM()` will return `true.
     fn is_volatile(&self) -> bool {
         if self.is_volatile_node() {
             return true;
