@@ -144,8 +144,6 @@ impl ScalarUDFImpl for SparkWidthBucket {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        // FIXME copy
-        // round preserves the order of the first argument
         if input.len() == 1 {
             let value = &input[0];
             Ok(value.sort_properties)
