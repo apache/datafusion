@@ -474,10 +474,12 @@ fn make_uint_batches(start: u8, end: u8) -> RecordBatch {
         Field::new("u32", DataType::UInt32, true),
         Field::new("u64", DataType::UInt64, true),
     ]));
-    let v8: Vec<u8> = (start..end).collect();
-    let v16: Vec<u16> = (start as _..end as _).collect();
-    let v32: Vec<u32> = (start as _..end as _).collect();
-    let v64: Vec<u64> = (start as _..end as _).collect();
+
+    let v8: Vec<u8> = (start..end).collect::<Vec<u8>>();
+    let v16: Vec<u16> = ((start as u16)..(end as u16)).collect::<Vec<u16>>();
+    let v32: Vec<u32> = ((start as u32)..(end as u32)).collect::<Vec<u32>>();
+    let v64: Vec<u64> = ((start as u64)..(end as u64)).collect::<Vec<u64>>();
+
     RecordBatch::try_new(
         schema,
         vec![
