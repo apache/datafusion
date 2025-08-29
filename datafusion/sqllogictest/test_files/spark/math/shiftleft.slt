@@ -134,3 +134,13 @@ query I
 SELECT shiftleft(NULL::int, NULL::int);
 ----
 NULL
+
+query I
+select shiftleft(3::int,-31);
+----
+6
+
+query I
+select shiftleft(3::int,-32);
+----
+3

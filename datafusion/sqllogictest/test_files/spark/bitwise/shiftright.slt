@@ -135,3 +135,13 @@ query I
 SELECT shiftright(NULL::int, NULL::int);
 ----
 NULL
+
+query I
+select shiftright(3::int,-31);
+----
+1
+
+query I
+select shiftright(3::int,-32);
+----
+3

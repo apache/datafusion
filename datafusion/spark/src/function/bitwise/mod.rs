@@ -40,17 +40,17 @@ pub mod expr_fn {
     ));
     export_functions!((
         shiftleft,
-        "Shifts the bits of the first argument left by the number of positions specified by the second argument.",
+        "Shifts the bits of the first argument left by the number of positions specified by the second argument. If the shift amount is negative or greater than or equal to the bit width, it is normalized to the bit width (i.e., pmod(shift, bit_width)).",
         value shift
     ));
     export_functions!((
         shiftright,
-        "Shifts the bits of the first argument right by the number of positions specified by the second argument (arithmetic shift).",
+        "Shifts the bits of the first argument right by the number of positions specified by the second argument (arithmetic/signed shift). If the shift amount is negative or greater than or equal to the bit width, it is normalized to the bit width (i.e., pmod(shift, bit_width)).",
         value shift
     ));
     export_functions!((
         shiftrightunsigned,
-        "Shifts the bits of the first argument right by the number of positions specified by the second argument (logical shift).",
+        "Shifts the bits of the first argument right by the number of positions specified by the second argument (logical/unsigned shift). If the shift amount is negative or greater than or equal to the bit width, it is normalized to the bit width (i.e., pmod(shift, bit_width)).",
         value shift
     ));
 }

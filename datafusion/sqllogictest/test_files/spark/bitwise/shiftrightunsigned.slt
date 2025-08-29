@@ -136,3 +136,13 @@ query I
 SELECT shiftrightunsigned(NULL::int, NULL::int);
 ----
 NULL
+
+query I
+select shiftrightunsigned(3::int,-31);
+----
+1
+
+query I
+select shiftrightunsigned(3::int,-32);
+----
+3

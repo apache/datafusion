@@ -33,6 +33,16 @@ use crate::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err,
 };
 
+/// Performs a bitwise left shift on each element of the `value` array by the corresponding amount in the `shift` array.
+/// The shift amount is normalized to the bit width of the type, matching Spark/Java semantics for negative and large shifts.
+///
+/// # Arguments
+/// * `value` - The array of values to shift.
+/// * `shift` - The array of shift amounts (must be Int32).
+///
+/// # Returns
+/// A new array with the shifted values.
+///
 fn shift_left<T: ArrowPrimitiveType>(
     value: &PrimitiveArray<T>,
     shift: &PrimitiveArray<Int32Type>,
@@ -52,6 +62,16 @@ where
     Ok(result)
 }
 
+/// Performs a bitwise right shift on each element of the `value` array by the corresponding amount in the `shift` array.
+/// The shift amount is normalized to the bit width of the type, matching Spark/Java semantics for negative and large shifts.
+///
+/// # Arguments
+/// * `value` - The array of values to shift.
+/// * `shift` - The array of shift amounts (must be Int32).
+///
+/// # Returns
+/// A new array with the shifted values.
+///
 fn shift_right<T: ArrowPrimitiveType>(
     value: &PrimitiveArray<T>,
     shift: &PrimitiveArray<Int32Type>,
@@ -71,6 +91,10 @@ where
     Ok(result)
 }
 
+/// Trait for performing an unsigned right shift (logical shift right).
+/// This is used to mimic Java's `>>>` operator, which does not exist in Rust.
+/// For unsigned types, this is just the normal right shift.
+/// For signed types, this casts to the unsigned type, shifts, then casts back.
 pub trait UShr<Rhs = Self> {
     type Output;
 
@@ -106,6 +130,16 @@ impl UShr<i32> for i64 {
     }
 }
 
+/// Performs a bitwise unsigned right shift on each element of the `value` array by the corresponding amount in the `shift` array.
+/// The shift amount is normalized to the bit width of the type, matching Spark/Java semantics for negative and large shifts.
+///
+/// # Arguments
+/// * `value` - The array of values to shift.
+/// * `shift` - The array of shift amounts (must be Int32).
+///
+/// # Returns
+/// A new array with the shifted values.
+///
 fn shift_right_unsigned<T: ArrowPrimitiveType>(
     value: &PrimitiveArray<T>,
     shift: &PrimitiveArray<Int32Type>,
@@ -123,6 +157,57 @@ where
         },
     )?;
     Ok(result)
+}
+
+trait BitShiftUDF: ScalarUDFImpl {
+    fn shift<T: ArrowPrimitiveType>(
+        &self,
+        value: &PrimitiveArray<T>,
+        shift: &PrimitiveArray<Int32Type>,
+    ) -> Result<PrimitiveArray<T>>
+    where
+        T::Native: ArrowNativeType
+            + std::ops::Shl<i32, Output = T::Native>
+            + std::ops::Shr<i32, Output = T::Native>
+            + UShr<i32, Output = T::Native>;
+
+    fn spark_shift(&self, arrays: &[ArrayRef]) -> Result<ArrayRef> {
+        let value_array = arrays[0].as_ref();
+        let shift_array = arrays[1].as_ref();
+
+        // Ensure shift array is Int32
+        let shift_array = if shift_array.data_type() != &DataType::Int32 {
+            return plan_err!("{} shift amount must be Int32", self.name());
+        } else {
+            shift_array.as_primitive::<Int32Type>()
+        };
+
+        match value_array.data_type() {
+            DataType::Int32 => {
+                let value_array = value_array.as_primitive::<Int32Type>();
+                Ok(Arc::new(self.shift(value_array, shift_array)?))
+            }
+            DataType::Int64 => {
+                let value_array = value_array.as_primitive::<Int64Type>();
+                Ok(Arc::new(self.shift(value_array, shift_array)?))
+            }
+            DataType::UInt32 => {
+                let value_array = value_array.as_primitive::<UInt32Type>();
+                Ok(Arc::new(self.shift(value_array, shift_array)?))
+            }
+            DataType::UInt64 => {
+                let value_array = value_array.as_primitive::<UInt64Type>();
+                Ok(Arc::new(self.shift(value_array, shift_array)?))
+            }
+            _ => {
+                plan_err!(
+                    "{} function does not support data type: {:?}",
+                    self.name(),
+                    value_array.data_type()
+                )
+            }
+        }
+    }
 }
 
 fn bit_shift_coerce_types(arg_types: &[DataType], func: &str) -> Result<Vec<DataType>> {
@@ -173,6 +258,22 @@ impl SparkShiftLeft {
     }
 }
 
+impl BitShiftUDF for SparkShiftLeft {
+    fn shift<T: ArrowPrimitiveType>(
+        &self,
+        value: &PrimitiveArray<T>,
+        shift: &PrimitiveArray<Int32Type>,
+    ) -> Result<PrimitiveArray<T>>
+    where
+        T::Native: ArrowNativeType
+            + std::ops::Shl<i32, Output = T::Native>
+            + std::ops::Shr<i32, Output = T::Native>
+            + UShr<i32, Output = T::Native>,
+    {
+        shift_left(value, shift)
+    }
+}
+
 impl ScalarUDFImpl for SparkShiftLeft {
     fn as_any(&self) -> &dyn Any {
         self
@@ -202,44 +303,8 @@ impl ScalarUDFImpl for SparkShiftLeft {
         if args.args.len() != 2 {
             return plan_err!("shiftleft expects exactly 2 arguments");
         }
-        make_scalar_function(spark_shift_left, vec![])(&args.args)
-    }
-}
-
-fn spark_shift_left(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let value_array = arrays[0].as_ref();
-    let shift_array = arrays[1].as_ref();
-
-    // Ensure shift array is Int32
-    let shift_array = if shift_array.data_type() != &DataType::Int32 {
-        return plan_err!("shiftleft shift amount must be Int32");
-    } else {
-        shift_array.as_primitive::<Int32Type>()
-    };
-
-    match value_array.data_type() {
-        DataType::Int32 => {
-            let value_array = value_array.as_primitive::<Int32Type>();
-            Ok(Arc::new(shift_left(value_array, shift_array)?))
-        }
-        DataType::Int64 => {
-            let value_array = value_array.as_primitive::<Int64Type>();
-            Ok(Arc::new(shift_left(value_array, shift_array)?))
-        }
-        DataType::UInt32 => {
-            let value_array = value_array.as_primitive::<UInt32Type>();
-            Ok(Arc::new(shift_left(value_array, shift_array)?))
-        }
-        DataType::UInt64 => {
-            let value_array = value_array.as_primitive::<UInt64Type>();
-            Ok(Arc::new(shift_left(value_array, shift_array)?))
-        }
-        _ => {
-            plan_err!(
-                "shiftleft function does not support data type: {:?}",
-                value_array.data_type()
-            )
-        }
+        let inner = |arr: &[ArrayRef]| -> Result<ArrayRef> { self.spark_shift(arr) };
+        make_scalar_function(inner, vec![])(&args.args)
     }
 }
 
@@ -259,6 +324,22 @@ impl SparkShiftRightUnsigned {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
         }
+    }
+}
+
+impl BitShiftUDF for SparkShiftRightUnsigned {
+    fn shift<T: ArrowPrimitiveType>(
+        &self,
+        value: &PrimitiveArray<T>,
+        shift: &PrimitiveArray<Int32Type>,
+    ) -> Result<PrimitiveArray<T>>
+    where
+        T::Native: ArrowNativeType
+            + std::ops::Shl<i32, Output = T::Native>
+            + std::ops::Shr<i32, Output = T::Native>
+            + UShr<i32, Output = T::Native>,
+    {
+        shift_right_unsigned(value, shift)
     }
 }
 
@@ -291,44 +372,8 @@ impl ScalarUDFImpl for SparkShiftRightUnsigned {
         if args.args.len() != 2 {
             return plan_err!("shiftrightunsigned expects exactly 2 arguments");
         }
-        make_scalar_function(spark_shift_right_unsigned, vec![])(&args.args)
-    }
-}
-
-fn spark_shift_right_unsigned(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let value_array = arrays[0].as_ref();
-    let shift_array = arrays[1].as_ref();
-
-    // Ensure shift array is Int32
-    let shift_array = if shift_array.data_type() != &DataType::Int32 {
-        return plan_err!("shiftrightunsigned shift amount must be Int32");
-    } else {
-        shift_array.as_primitive::<Int32Type>()
-    };
-
-    match value_array.data_type() {
-        DataType::Int32 => {
-            let value_array = value_array.as_primitive::<Int32Type>();
-            Ok(Arc::new(shift_right_unsigned(value_array, shift_array)?))
-        }
-        DataType::Int64 => {
-            let value_array = value_array.as_primitive::<Int64Type>();
-            Ok(Arc::new(shift_right_unsigned(value_array, shift_array)?))
-        }
-        DataType::UInt32 => {
-            let value_array = value_array.as_primitive::<UInt32Type>();
-            Ok(Arc::new(shift_right_unsigned(value_array, shift_array)?))
-        }
-        DataType::UInt64 => {
-            let value_array = value_array.as_primitive::<UInt64Type>();
-            Ok(Arc::new(shift_right_unsigned(value_array, shift_array)?))
-        }
-        _ => {
-            plan_err!(
-                "shiftrightunsigned function does not support data type: {:?}",
-                value_array.data_type()
-            )
-        }
+        let inner = |arr: &[ArrayRef]| -> Result<ArrayRef> { self.spark_shift(arr) };
+        make_scalar_function(inner, vec![])(&args.args)
     }
 }
 
@@ -348,6 +393,22 @@ impl SparkShiftRight {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
         }
+    }
+}
+
+impl BitShiftUDF for SparkShiftRight {
+    fn shift<T: ArrowPrimitiveType>(
+        &self,
+        value: &PrimitiveArray<T>,
+        shift: &PrimitiveArray<Int32Type>,
+    ) -> Result<PrimitiveArray<T>>
+    where
+        T::Native: ArrowNativeType
+            + std::ops::Shl<i32, Output = T::Native>
+            + std::ops::Shr<i32, Output = T::Native>
+            + UShr<i32, Output = T::Native>,
+    {
+        shift_right(value, shift)
     }
 }
 
@@ -380,44 +441,8 @@ impl ScalarUDFImpl for SparkShiftRight {
         if args.args.len() != 2 {
             return plan_err!("shiftright expects exactly 2 arguments");
         }
-        make_scalar_function(spark_shift_right, vec![])(&args.args)
-    }
-}
-
-fn spark_shift_right(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let value_array = arrays[0].as_ref();
-    let shift_array = arrays[1].as_ref();
-
-    // Ensure shift array is Int32
-    let shift_array = if shift_array.data_type() != &DataType::Int32 {
-        return plan_err!("shiftright shift amount must be Int32");
-    } else {
-        shift_array.as_primitive::<Int32Type>()
-    };
-
-    match value_array.data_type() {
-        DataType::Int32 => {
-            let value_array = value_array.as_primitive::<Int32Type>();
-            Ok(Arc::new(shift_right(value_array, shift_array)?))
-        }
-        DataType::Int64 => {
-            let value_array = value_array.as_primitive::<Int64Type>();
-            Ok(Arc::new(shift_right(value_array, shift_array)?))
-        }
-        DataType::UInt32 => {
-            let value_array = value_array.as_primitive::<UInt32Type>();
-            Ok(Arc::new(shift_right(value_array, shift_array)?))
-        }
-        DataType::UInt64 => {
-            let value_array = value_array.as_primitive::<UInt64Type>();
-            Ok(Arc::new(shift_right(value_array, shift_array)?))
-        }
-        _ => {
-            plan_err!(
-                "shiftright function does not support data type: {:?}",
-                value_array.data_type()
-            )
-        }
+        let inner = |arr: &[ArrayRef]| -> Result<ArrayRef> { self.spark_shift(arr) };
+        make_scalar_function(inner, vec![])(&args.args)
     }
 }
 
@@ -430,7 +455,9 @@ mod tests {
     fn test_shift_right_unsigned_int32() {
         let value_array = Arc::new(Int32Array::from(vec![4, 8, 16, 32]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
-        let result = spark_shift_right_unsigned(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRightUnsigned::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 2); // 4 >>> 1 = 2
         assert_eq!(arr.value(1), 2); // 8 >>> 2 = 2
@@ -442,7 +469,9 @@ mod tests {
     fn test_shift_right_unsigned_int64() {
         let value_array = Arc::new(Int64Array::from(vec![4i64, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_right_unsigned(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRightUnsigned::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int64Type>();
         assert_eq!(arr.value(0), 2); // 4 >>> 1 = 2
         assert_eq!(arr.value(1), 2); // 8 >>> 2 = 2
@@ -453,7 +482,9 @@ mod tests {
     fn test_shift_right_unsigned_uint32() {
         let value_array = Arc::new(UInt32Array::from(vec![4u32, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_right_unsigned(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRightUnsigned::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<UInt32Type>();
         assert_eq!(arr.value(0), 2); // 4 >>> 1 = 2
         assert_eq!(arr.value(1), 2); // 8 >>> 2 = 2
@@ -464,7 +495,9 @@ mod tests {
     fn test_shift_right_unsigned_uint64() {
         let value_array = Arc::new(UInt64Array::from(vec![4u64, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_right_unsigned(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRightUnsigned::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<UInt64Type>();
         assert_eq!(arr.value(0), 2); // 4 >>> 1 = 2
         assert_eq!(arr.value(1), 2); // 8 >>> 2 = 2
@@ -475,7 +508,9 @@ mod tests {
     fn test_shift_right_unsigned_nulls() {
         let value_array = Arc::new(Int32Array::from(vec![Some(4), None, Some(8)]));
         let shift_array = Arc::new(Int32Array::from(vec![Some(1), Some(2), None]));
-        let result = spark_shift_right_unsigned(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRightUnsigned::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 2); // 4 >>> 1 = 2
         assert!(arr.is_null(1)); // null >>> 2 = null
@@ -486,7 +521,9 @@ mod tests {
     fn test_shift_right_unsigned_negative_shift() {
         let value_array = Arc::new(Int32Array::from(vec![4, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![-1, -2, -3]));
-        let result = spark_shift_right_unsigned(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRightUnsigned::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 0); // 4 >>> -1 = 0
         assert_eq!(arr.value(1), 0); // 8 >>> -2 = 0
@@ -497,7 +534,9 @@ mod tests {
     fn test_shift_right_unsigned_negative_values() {
         let value_array = Arc::new(Int32Array::from(vec![-4, -8, -16]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_right_unsigned(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRightUnsigned::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         // For unsigned right shift, negative values are treated as large positive values
         // -4 as u32 = 4294967292, -4 >>> 1 = 2147483646
@@ -512,7 +551,9 @@ mod tests {
     fn test_shift_right_int32() {
         let value_array = Arc::new(Int32Array::from(vec![4, 8, 16, 32]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
-        let result = spark_shift_right(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRight::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 2); // 4 >> 1 = 2
         assert_eq!(arr.value(1), 2); // 8 >> 2 = 2
@@ -524,7 +565,9 @@ mod tests {
     fn test_shift_right_int64() {
         let value_array = Arc::new(Int64Array::from(vec![4i64, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_right(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRight::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int64Type>();
         assert_eq!(arr.value(0), 2); // 4 >> 1 = 2
         assert_eq!(arr.value(1), 2); // 8 >> 2 = 2
@@ -535,7 +578,9 @@ mod tests {
     fn test_shift_right_uint32() {
         let value_array = Arc::new(UInt32Array::from(vec![4u32, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_right(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRight::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<UInt32Type>();
         assert_eq!(arr.value(0), 2); // 4 >> 1 = 2
         assert_eq!(arr.value(1), 2); // 8 >> 2 = 2
@@ -546,7 +591,9 @@ mod tests {
     fn test_shift_right_uint64() {
         let value_array = Arc::new(UInt64Array::from(vec![4u64, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_right(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRight::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<UInt64Type>();
         assert_eq!(arr.value(0), 2); // 4 >> 1 = 2
         assert_eq!(arr.value(1), 2); // 8 >> 2 = 2
@@ -557,7 +604,9 @@ mod tests {
     fn test_shift_right_nulls() {
         let value_array = Arc::new(Int32Array::from(vec![Some(4), None, Some(8)]));
         let shift_array = Arc::new(Int32Array::from(vec![Some(1), Some(2), None]));
-        let result = spark_shift_right(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRight::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 2); // 4 >> 1 = 2
         assert!(arr.is_null(1)); // null >> 2 = null
@@ -568,7 +617,9 @@ mod tests {
     fn test_shift_right_large_shift() {
         let value_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let shift_array = Arc::new(Int32Array::from(vec![32, 33, 64]));
-        let result = spark_shift_right(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRight::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 1); // 1 >> 32 = 1
         assert_eq!(arr.value(1), 1); // 2 >> 33 = 1
@@ -579,7 +630,9 @@ mod tests {
     fn test_shift_right_negative_shift() {
         let value_array = Arc::new(Int32Array::from(vec![4, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![-1, -2, -3]));
-        let result = spark_shift_right(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRight::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 0); // 4 >> -1 = 0
         assert_eq!(arr.value(1), 0); // 8 >> -2 = 0
@@ -590,7 +643,9 @@ mod tests {
     fn test_shift_right_negative_values() {
         let value_array = Arc::new(Int32Array::from(vec![-4, -8, -16]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_right(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftRight::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         // For signed integers, right shift preserves the sign bit
         assert_eq!(arr.value(0), -2); // -4 >> 1 = -2
@@ -602,7 +657,9 @@ mod tests {
     fn test_shift_left_int32() {
         let value_array = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
-        let result = spark_shift_left(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftLeft::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 2); // 1 << 1 = 2
         assert_eq!(arr.value(1), 8); // 2 << 2 = 8
@@ -614,7 +671,9 @@ mod tests {
     fn test_shift_left_int64() {
         let value_array = Arc::new(Int64Array::from(vec![1i64, 2, 3]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_left(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftLeft::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int64Type>();
         assert_eq!(arr.value(0), 2); // 1 << 1 = 2
         assert_eq!(arr.value(1), 8); // 2 << 2 = 8
@@ -625,7 +684,9 @@ mod tests {
     fn test_shift_left_uint32() {
         let value_array = Arc::new(UInt32Array::from(vec![1u32, 2, 3]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_left(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftLeft::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<UInt32Type>();
         assert_eq!(arr.value(0), 2); // 1 << 1 = 2
         assert_eq!(arr.value(1), 8); // 2 << 2 = 8
@@ -636,7 +697,9 @@ mod tests {
     fn test_shift_left_uint64() {
         let value_array = Arc::new(UInt64Array::from(vec![1u64, 2, 3]));
         let shift_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let result = spark_shift_left(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftLeft::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<UInt64Type>();
         assert_eq!(arr.value(0), 2); // 1 << 1 = 2
         assert_eq!(arr.value(1), 8); // 2 << 2 = 8
@@ -647,7 +710,9 @@ mod tests {
     fn test_shift_left_nulls() {
         let value_array = Arc::new(Int32Array::from(vec![Some(2), None, Some(3)]));
         let shift_array = Arc::new(Int32Array::from(vec![Some(1), Some(2), None]));
-        let result = spark_shift_left(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftLeft::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 4); // 2 << 1 = 4
         assert!(arr.is_null(1)); // null << 2 = null
@@ -658,7 +723,9 @@ mod tests {
     fn test_shift_left_large_shift() {
         let value_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let shift_array = Arc::new(Int32Array::from(vec![32, 33, 64]));
-        let result = spark_shift_left(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftLeft::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 1); // 1 << 32 = 0 (overflow)
         assert_eq!(arr.value(1), 4); // 2 << 33 = 0 (overflow)
@@ -669,7 +736,9 @@ mod tests {
     fn test_shift_left_negative_shift() {
         let value_array = Arc::new(Int32Array::from(vec![4, 8, 16]));
         let shift_array = Arc::new(Int32Array::from(vec![-1, -2, -3]));
-        let result = spark_shift_left(&[value_array, shift_array]).unwrap();
+        let result = SparkShiftLeft::new()
+            .spark_shift(&[value_array, shift_array])
+            .unwrap();
         let arr = result.as_primitive::<Int32Type>();
         assert_eq!(arr.value(0), 0); // 4 << -1 = 0
         assert_eq!(arr.value(1), 0); // 8 << -2 = 0
