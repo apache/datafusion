@@ -19,6 +19,7 @@
 
 use apache_avro::schema::RecordSchema;
 use apache_avro::{
+    error::Details as AvroErrorDetails,
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
     Error as AvroError, Reader as AvroReader,
@@ -929,11 +930,11 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
     match v {
         Value::String(s) => Ok(Some(s.clone())),
         Value::Bytes(bytes) => String::from_utf8(bytes.to_vec())
-            .map_err(AvroError::ConvertToUtf8)
+            .map_err(|e| AvroError::new(AvroErrorDetails::ConvertToUtf8(e)))
             .map(Some),
         Value::Enum(_, s) => Ok(Some(s.clone())),
         Value::Null => Ok(None),
-        other => Err(AvroError::GetString(other.into())),
+        other => Err(AvroError::new(AvroErrorDetails::GetString(other.clone()))),
     }
     .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))
 }
