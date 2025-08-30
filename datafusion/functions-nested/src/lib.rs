@@ -66,6 +66,7 @@ pub mod reverse;
 pub mod set_ops;
 pub mod sort;
 pub mod string;
+pub mod transform;
 pub mod utils;
 
 use datafusion_common::Result;
