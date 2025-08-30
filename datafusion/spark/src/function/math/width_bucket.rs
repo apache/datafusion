@@ -90,57 +90,55 @@ impl ScalarUDFImpl for SparkWidthBucket {
                 Int8 | Int16 | Int32 | Int64 | Float32 | Float64 | Decimal128(_, _)
             )
         };
-        let is_int = |t: &DataType| matches!(t, Int8 | Int16 | Int32 | Int64);
 
-        if is_num(v) && is_num(lo) && is_num(hi) && is_int(n) {
-            return Ok(vec![Float64, Float64, Float64, Int32]);
-        }
-
-        let all_duration = matches!(v, Duration(_))
-            && matches!(lo, Duration(_))
-            && matches!(hi, Duration(_));
-        if all_duration && is_int(n) {
-            return Ok(vec![
+        match (v, lo, hi, n) {
+            (a, b, c, &(Int8 | Int16 | Int32 | Int64))
+                if is_num(a) && is_num(b) && is_num(c) =>
+            {
+                Ok(vec![Float64, Float64, Float64, Int32])
+            }
+            (
+                &Duration(_),
+                &Duration(_),
+                &Duration(_),
+                &(Int8 | Int16 | Int32 | Int64),
+            ) => Ok(vec![
                 Duration(Microsecond),
                 Duration(Microsecond),
                 Duration(Microsecond),
                 Int32,
-            ]);
-        }
-
-        if matches!(v, Interval(MonthDayNano))
-            && matches!(lo, Interval(MonthDayNano))
-            && matches!(hi, Interval(MonthDayNano))
-            && is_int(n)
-        {
-            return Ok(vec![
+            ]),
+            (
+                &Interval(MonthDayNano),
+                &Interval(MonthDayNano),
+                &Interval(MonthDayNano),
+                &(Int8 | Int16 | Int32 | Int64),
+            ) => Ok(vec![
                 Interval(MonthDayNano),
                 Interval(MonthDayNano),
                 Interval(MonthDayNano),
                 Int32,
-            ]);
-        }
-
-        if matches!(v, Interval(YearMonth))
-            && matches!(lo, Interval(YearMonth))
-            && matches!(hi, Interval(YearMonth))
-            && is_int(n)
-        {
-            return Ok(vec![
+            ]),
+            (
+                &Interval(YearMonth),
+                &Interval(YearMonth),
+                &Interval(YearMonth),
+                &(Int8 | Int16 | Int32 | Int64),
+            ) => Ok(vec![
                 Interval(YearMonth),
                 Interval(YearMonth),
                 Interval(YearMonth),
                 Int32,
-            ]);
-        }
+            ]),
 
-        exec_err!(
-            "width_bucket expects a numeric argument, got {} {} {} {}",
-            types[0],
-            types[1],
-            types[2],
-            types[3]
-        )
+            _ => exec_err!(
+                "width_bucket expects a numeric argument, got {} {} {} {}",
+                types[0],
+                types[1],
+                types[2],
+                types[3]
+            ),
+        }
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
