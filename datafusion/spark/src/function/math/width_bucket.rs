@@ -79,6 +79,15 @@ impl ScalarUDFImpl for SparkWidthBucket {
         make_scalar_function(width_bucket_kern, vec![])(&args.args)
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if input.len() == 1 {
+            let value = &input[0];
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::default())
+        }
+    }
+
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
         use DataType::*;
 
@@ -138,15 +147,6 @@ impl ScalarUDFImpl for SparkWidthBucket {
                 types[2],
                 types[3]
             ),
-        }
-    }
-
-    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        if input.len() == 1 {
-            let value = &input[0];
-            Ok(value.sort_properties)
-        } else {
-            Ok(SortProperties::default())
         }
     }
 }
