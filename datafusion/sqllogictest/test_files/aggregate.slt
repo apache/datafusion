@@ -505,7 +505,6 @@ SELECT covar(c2, c12) FROM aggregate_test_100
 query R
 select covar_samp(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 ----
-NULL
 
 # single_row_query_covar_2
 query R
@@ -523,7 +522,6 @@ with data as (
 select covar_samp(f, b), covar_pop(f, b)
 from data
 ----
-NULL NULL
 
 # covar_query_with_nulls
 query RR
@@ -567,7 +565,6 @@ with data as (
 select corr(f, b)
 from data
 ----
-NULL
 
 # correlation_query_with_nulls
 query R
@@ -921,7 +918,6 @@ create table t(c decimal(10, 4)) as values (null), (null), (null);
 query RT
 select median(c), arrow_typeof(median(c)) from t;
 ----
-NULL Decimal128(10, 4)
 
 statement ok
 drop table t;
@@ -969,7 +965,6 @@ create table t(c int) as values (null), (null), (null);
 query I
 select median(c) from t;
 ----
-NULL
 
 statement ok
 drop table t;
@@ -1524,7 +1519,6 @@ SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (
 query I
 SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
 ----
-NULL
 
 #
 # percentile_cont edge cases
@@ -2089,7 +2083,6 @@ SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 
 query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
 ----
-NULL
 
 # csv_query_array_agg_one
 query ?
@@ -2206,7 +2199,6 @@ SELECT SUM(c1), SUM(c2) FROM test
 query II
 SELECT SUM(c1), SUM(c2) FROM test where c1 > 100000
 ----
-NULL NULL
 
 # aggregate_avg
 query RR
@@ -2546,7 +2538,6 @@ create table t (c1 decimal(10, 0)) as values (NULL), (NULL), (NULL), (NULL), (NU
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-NULL Decimal128(14, 4)
 
 statement ok
 drop table t;
@@ -2582,7 +2573,6 @@ create table t (c1 int) as values (NULL), (NULL);
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-NULL Float64
 
 statement ok
 drop table t;
@@ -2740,7 +2730,6 @@ CREATE OR REPLACE TABLE corr_all_nulls(
 query R
 SELECT corr(x, y) FROM corr_all_nulls;
 ----
-NULL
 
 statement ok
 drop table corr_test;
@@ -2872,7 +2861,6 @@ create table t (c1 int, c2 int) as values (null, null), (null, null);
 query RT
 select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
 ----
-NULL Float64
 
 statement ok
 drop table t;
@@ -2884,7 +2872,6 @@ create table t (c1 int, c2 int) as values (null, null), (null, null);
 query RT
 select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
 ----
-NULL Float64
 
 statement ok
 drop table t;
@@ -2896,7 +2883,6 @@ create table t (c1 double, c2 double) as values (1, 2);
 query RT
 select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
 ----
-NULL Float64
 
 statement ok
 drop table t;
@@ -3040,7 +3026,6 @@ create table t (c1 int) as values (null), (null);
 query RT
 select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
 ----
-NULL Float64
 
 statement ok
 drop table t;
@@ -3112,7 +3097,6 @@ create table t (a double not null) as values (1);
 query RT
 select var(a), arrow_typeof(var(a)) from t;
 ----
-NULL Float64
 
 statement ok
 drop table t;
@@ -3124,7 +3108,6 @@ create table t (a int) as values (null), (null);
 query RT
 select var(a), arrow_typeof(var(a)) from t;
 ----
-NULL Float64
 
 statement ok
 drop table t;
@@ -3196,7 +3179,6 @@ create table t (c1 int) as values (null), (null);
 query RT
 select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
 ----
-NULL Float64
 
 statement ok
 drop table t;
@@ -3309,17 +3291,14 @@ create table t(a int, b float, c bigint) as values (1, 1.2, 2);
 query ?
 select array_agg(a) from t where a > 2;
 ----
-NULL
 
 query ?
 select array_agg(b) from t where b > 3.1;
 ----
-NULL
 
 query ?
 select array_agg(c) from t where c > 3;
 ----
-NULL
 
 query ?I
 select array_agg(c), count(1) from t where c > 3;
@@ -3339,7 +3318,6 @@ select array_agg(a), count(1) from t where a > 3 group by a;
 query ?
 select array_agg(distinct a) from t where a > 3;
 ----
-NULL
 
 query ?I
 select array_agg(distinct a), count(1) from t where a > 3;
@@ -3359,7 +3337,6 @@ select array_agg(distinct a), count(1) from t where a > 3 group by a;
 query ?
 select array_agg(a order by a) from t where a > 3;
 ----
-NULL
 
 query ?
 select array_agg(a order by a) from t where a > 3 group by a;
@@ -3379,17 +3356,14 @@ create table t(a int, b float, c bigint);
 query ?
 select array_agg(a) from t;
 ----
-NULL
 
 query ?
 select array_agg(b) from t;
 ----
-NULL
 
 query ?
 select array_agg(c) from t;
 ----
-NULL
 
 query ?I
 select array_agg(distinct a), count(1) from t;
@@ -3648,7 +3622,6 @@ create table t (c int) as values (NULL), (NULL);
 query IT
 Select bit_and(c), arrow_typeof(bit_and(c)) from t;
 ----
-NULL Int32
 
 statement ok
 drop table t;
@@ -3696,7 +3669,6 @@ create table t (c int) as values (NULL), (NULL);
 query IT
 Select bit_or(c), arrow_typeof(bit_or(c))  from t;
 ----
-NULL Int32
 
 statement ok
 drop table t;
@@ -3745,7 +3717,6 @@ create table t (c int) as values (NULL), (NULL);
 query IT
 Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
 ----
-NULL Int32
 
 statement ok
 drop table t;
@@ -3794,7 +3765,6 @@ create table t (c int ) as values (NULL), (NULL);
 query IT
 Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
 ----
-NULL Int32
 
 
 statement ok
@@ -3865,7 +3835,6 @@ INSERT INTO decimals_all_nulls VALUES (NULL), (NULL), (NULL), (NULL), (NULL), (N
 query RR
 SELECT MIN(value), MAX(value) FROM decimals_all_nulls;
 ----
-NULL NULL
 
 statement ok
 DROP TABLE decimals_all_nulls;
@@ -5005,12 +4974,10 @@ drop table t;
 query I
 select median(a) from (select 1 as a where 1=0);
 ----
-NULL
 
 query I
 select approx_median(a) from (select 1 as a where 1=0);
 ----
-NULL
 
 # aggregate_decimal_sum
 query RT
@@ -5052,7 +5019,6 @@ select
   sum(c2), arrow_typeof(sum(c2))
 from t;
 ----
-NULL Decimal128(20, 0) NULL Int64
 
 statement ok
 drop table t;
@@ -5230,7 +5196,6 @@ SELECT
   SUM(c2) FILTER (WHERE c2 >= 20000000) AS sum_c2
 FROM test_table;
 ----
-NULL
 
 # Creating the decimal table
 statement ok
@@ -6062,12 +6027,10 @@ SELECT g, STRING_AGG(x,'|') FROM strings GROUP BY g ORDER BY g
 query T
 SELECT STRING_AGG(x,',') FROM strings WHERE g > 100
 ----
-NULL
 
 query T
 SELECT STRING_AGG(DISTINCT x,',') FROM strings WHERE g > 100
 ----
-NULL
 
 query T
 SELECT STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
@@ -6396,12 +6359,10 @@ CREATE TABLE empty(col0 INTEGER);
 query I
 SELECT MIN(col0) FROM empty WHERE col0=1;
 ----
-NULL
 
 query I
 SELECT MAX(col0) FROM empty WHERE col0=1;
 ----
-NULL
 
 query TT
 EXPLAIN SELECT MIN(col0) FROM empty;
@@ -6444,12 +6405,10 @@ CREATE TABLE t(col0 INTEGER) as VALUES(2);
 query I
 SELECT MIN(col0) FROM t WHERE col0=1;
 ----
-NULL
 
 query I
 SELECT MAX(col0) FROM t WHERE col0=1;
 ----
-NULL
 
 statement ok
 DROP TABLE t;
@@ -6490,12 +6449,10 @@ CREATE TABLE t AS VALUES (null::bigint), (3), (4);
 query I
 SELECT FIRST_VALUE(column1) FROM t;
 ----
-NULL
 
 query I
 SELECT FIRST_VALUE(column1) RESPECT NULLS FROM t;
 ----
-NULL
 
 query I
 SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
@@ -6520,12 +6477,10 @@ NULL
 query I
 SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
 ----
-NULL
 
 query I
 SELECT FIRST_VALUE(column1 ORDER BY column2) RESPECT NULLS FROM t;
 ----
-NULL
 
 query I
 SELECT FIRST_VALUE(column1 ORDER BY column2) IGNORE NULLS FROM t;
@@ -6542,12 +6497,10 @@ CREATE TABLE t AS VALUES (3), (4), (null::bigint);
 query I
 SELECT LAST_VALUE(column1) FROM t;
 ----
-NULL
 
 query I
 SELECT LAST_VALUE(column1) RESPECT NULLS FROM t;
 ----
-NULL
 
 query I
 SELECT LAST_VALUE(column1) IGNORE NULLS FROM t;
@@ -6572,12 +6525,10 @@ NULL
 query I
 SELECT LAST_VALUE(column1 ORDER BY column2 DESC) FROM t;
 ----
-NULL
 
 query I
 SELECT LAST_VALUE(column1 ORDER BY column2 DESC) RESPECT NULLS FROM t;
 ----
-NULL
 
 query I
 SELECT LAST_VALUE(column1 ORDER BY column2 DESC) IGNORE NULLS FROM t;
@@ -7440,8 +7391,6 @@ select
 from distinct_avg
 where a is null and b is null;
 ----
-NULL NULL
 
 statement ok
 drop table distinct_avg;
-

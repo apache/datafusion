@@ -4940,7 +4940,6 @@ SELECT sum(k1), sum(v1), sum(k2), sum(v2)
 FROM t1
 JOIN t2 ON k1 = k2
 ----
-NULL NULL NULL NULL
 
 # LEFT JOIN
 query TT
@@ -4982,7 +4981,6 @@ SELECT sum(k1), sum(v1), sum(k2), sum(v2)
 FROM t1
 RIGHT JOIN t2 ON k1 = k2
 ----
-NULL NULL NULL NULL
 
 # LEFT SEMI JOIN
 query TT
@@ -5002,7 +5000,6 @@ SELECT sum(k1), sum(v1)
 FROM t1
 LEFT SEMI JOIN t2 ON k1 = k2
 ----
-NULL NULL
 
 # RIGHT SEMI JOIN
 query TT
@@ -5022,7 +5019,6 @@ SELECT sum(k2), sum(v2)
 FROM t1
 RIGHT SEMI JOIN t2 ON k1 = k2
 ----
-NULL NULL
 
 # LEFT ANTI JOIN
 query TT
@@ -5062,7 +5058,6 @@ SELECT sum(k2), sum(v2)
 FROM t1
 RIGHT ANTI JOIN t2 ON k1 = k2
 ----
-NULL NULL
 
 # FULL JOIN
 query TT
