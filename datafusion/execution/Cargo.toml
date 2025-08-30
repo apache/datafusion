@@ -44,6 +44,7 @@ parquet_encryption = [
 
 [dependencies]
 arrow = { workspace = true }
+async-trait = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
