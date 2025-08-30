@@ -50,7 +50,7 @@ mod test {
     use datafusion_physical_plan::projection::ProjectionExec;
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
-    use datafusion_physical_plan::union::UnionExec;
+    use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
     use datafusion_physical_plan::{
         execute_stream_partitioned, get_plan_string, ExecutionPlan,
         ExecutionPlanProperties,
@@ -68,6 +68,7 @@ mod test {
     ///   - Second partition: [1, 2]
     /// - Each row is 110 bytes in size
     ///
+    /// @param create_table_sql Optional parameter to set the create table SQL
     /// @param target_partition Optional parameter to set the target partitions
     /// @return ExecutionPlan representing the scan of the table with statistics
     async fn create_scan_exec_with_statistics(
@@ -386,6 +387,64 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_statistics_by_partition_of_interleave() -> Result<()> {
+        let scan1 = create_scan_exec_with_statistics(None, Some(1)).await;
+        let scan2 = create_scan_exec_with_statistics(None, Some(1)).await;
+
+        // Create same hash partitioning on the 'id' column as InterleaveExec
+        // requires all children have a consistent hash partitioning
+        let hash_expr1 = vec![col("id", &scan1.schema())?];
+        let repartition1 = Arc::new(RepartitionExec::try_new(
+            scan1,
+            Partitioning::Hash(hash_expr1, 2),
+        )?);
+        let hash_expr2 = vec![col("id", &scan2.schema())?];
+        let repartition2 = Arc::new(RepartitionExec::try_new(
+            scan2,
+            Partitioning::Hash(hash_expr2, 2),
+        )?);
+
+        let interleave: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![repartition1, repartition2])?);
+
+        // Verify the result of partition statistics
+        let stats = (0..interleave.output_partitioning().partition_count())
+            .map(|idx| interleave.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(stats.len(), 2);
+
+        let expected_stats = Statistics {
+            num_rows: Precision::Inexact(4),
+            total_byte_size: Precision::Inexact(220),
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+        assert_eq!(stats[0], expected_stats);
+        assert_eq!(stats[1], expected_stats);
+
+        // Verify the execution results
+        let partitions = execute_stream_partitioned(
+            interleave.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(partitions.len(), 2);
+
+        let mut partition_row_counts = Vec::new();
+        for partition_stream in partitions.into_iter() {
+            let results: Vec<RecordBatch> = partition_stream.try_collect().await?;
+            let total_rows: usize = results.iter().map(|batch| batch.num_rows()).sum();
+            partition_row_counts.push(total_rows);
+        }
+        assert_eq!(partition_row_counts.len(), 2);
+        assert_eq!(partition_row_counts[0], 2);
+        assert_eq!(partition_row_counts[1], 6);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_statistic_by_partition_of_cross_join() -> Result<()> {
         let left_scan = create_scan_exec_with_statistics(None, Some(1)).await;
         let right_create_table_sql = "CREATE EXTERNAL TABLE t2 (id INT NOT NULL) \
@@ -551,7 +610,6 @@ mod test {
         let _ = plan_string.swap_remove(1);
         let expected_plan = vec![
             "AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",
-            //"  DataSourceExec: file_groups={2 groups: [[.../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, .../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [.../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, .../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id, date], file_type=parquet
         ];
         assert_eq!(plan_string, expected_plan);
 
