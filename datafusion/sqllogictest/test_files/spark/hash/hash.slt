@@ -1,0 +1,282 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file contains tests for hash function in Spark compatibility mode
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
+# Test hash function with simple strings
+query I
+SELECT hash('Spark');
+----
+228093765
+
+# Test hash with multiple values
+query I
+SELECT hash(expr) FROM VALUES ('foo'), ('bar'), ('baz') AS t(expr);
+----
+1015597510
+-1808790533
+103115168
+
+# Test hash with empty string
+query I
+SELECT hash('');
+----
+142593372
+
+# Test hash with NULL values
+query I
+SELECT hash(NULL);
+----
+42
+
+# Test hash with binary data
+query I
+SELECT hash(X'48656c6c6f');  -- 'Hello' in hex
+----
+825079905
+
+query I
+SELECT hash(X'537061726b');  -- 'Spark' in hex
+----
+228093765
+
+# Test hash with integer types
+query I
+SELECT hash(arrow_cast(42, 'Int8'));
+----
+29417773
+
+query I
+SELECT hash(arrow_cast(42, 'UInt8'));
+----
+29417773
+
+query I
+SELECT hash(arrow_cast(42, 'Int16'));
+----
+29417773
+
+query I
+SELECT hash(arrow_cast(42, 'UInt16'));
+----
+29417773
+
+query I
+SELECT hash(arrow_cast(42, 'Int32'));
+----
+29417773
+
+query I
+SELECT hash(arrow_cast(42, 'UInt32'));
+----
+29417773
+
+query I
+SELECT hash(arrow_cast(42, 'Int64'));
+----
+1316951768
+
+query I
+SELECT hash(arrow_cast(42, 'UInt64'));
+----
+1316951768
+
+# Test hash with float types
+query I
+SELECT hash(arrow_cast(3.14, 'Float32'));
+----
+808195277
+
+query I
+SELECT hash(arrow_cast(3.14, 'Float64'));
+----
+834561050
+
+query I
+SELECT hash(arrow_cast(0.0, 'Float32'));
+----
+933211791
+
+query I
+SELECT hash(arrow_cast(-0.0, 'Float32'));
+----
+933211791
+
+# Test hash with boolean types
+query I
+SELECT hash(true);
+----
+-559580957
+
+query I
+SELECT hash(false);
+----
+933211791
+
+# Test hash with decimal types
+query I
+SELECT hash(arrow_cast(123.45, 'Decimal128(10,2)'));
+----
+1416086240
+
+query I
+SELECT hash(arrow_cast(123456789012345678901234567890, 'Decimal256(30,0)'));
+----
+737165439
+
+# Test hash with timestamp types
+query I
+SELECT hash(TIMESTAMP '2023-01-01 12:00:00');
+----
+-263031675
+
+query I
+SELECT hash(TIMESTAMP '2023-01-01 12:00:00.123');
+----
+-800911551
+
+query I
+SELECT hash(TIMESTAMP '2023-01-01 12:00:00.123456');
+----
+-1123047081
+
+query I
+SELECT hash(TIMESTAMP '2023-01-01 12:00:00.123456789');
+----
+-1901595533
+
+# Test hash with date types
+query I
+SELECT hash(arrow_cast('2023-01-01', 'Date32'));
+----
+-69933992
+
+query I
+SELECT hash(arrow_cast('2023-01-01', 'Date64'));
+----
+473315330
+
+# Test hash with time types
+query I
+SELECT hash(arrow_cast('12:00:00', 'Time32(Second)'));
+----
+-326478418
+
+query I
+SELECT hash(arrow_cast('12:00:00.123', 'Time32(Millisecond)'));
+----
+-1564477167
+
+query I
+SELECT hash(arrow_cast('12:00:00.123456', 'Time64(Microsecond)'));
+----
+362963970
+
+query I
+SELECT hash(arrow_cast('12:00:00.123456789', 'Time64(Nanosecond)'));
+----
+-982328121
+
+# Test hash with interval types
+query I
+SELECT hash(INTERVAL '1 day');
+----
+-269872653
+
+query I
+SELECT hash(INTERVAL '1 month 1 day 1 nanosecond');
+----
+-262533637
+
+query I
+SELECT hash(INTERVAL '1 year 1 month');
+----
+1281874930
+
+# Test hash with duration types
+query I
+SELECT hash(arrow_cast(INTERVAL '1 second', 'Duration(Second)'));
+----
+-1712319331
+
+query I
+SELECT hash(arrow_cast(INTERVAL '1 millisecond', 'Duration(Millisecond)'));
+----
+-1712319331
+
+query I
+SELECT hash(arrow_cast(INTERVAL '1 microsecond', 'Duration(Microsecond)'));
+----
+-1712319331
+
+query I
+SELECT hash(arrow_cast(INTERVAL '1 nanosecond', 'Duration(Nanosecond)'));
+----
+-1712319331
+
+# Test hash with fixed size binary
+query I
+SELECT hash(arrow_cast(X'0102030405', 'FixedSizeBinary(5)'));
+----
+-2064006189
+
+# Test hash with list types
+query I
+SELECT hash(arrow_cast([1, 2, 3], 'List(Int32)'));
+----
+-912918097
+
+query I
+SELECT hash(arrow_cast(['a', 'b', 'c'], 'List(Utf8)'));
+----
+-1512497118
+
+# Test hash with struct types
+query I
+SELECT hash(named_struct('a', 1, 'b', 'test'));
+----
+-1005837579
+
+# Test hash with map types
+query I
+SELECT hash({'key1': 'value1', 'key2': 'value2'});
+----
+941599363
+
+# Test hash with dictionary types
+query I
+SELECT hash(arrow_cast('test', 'Dictionary(Int32, Utf8)'));
+----
+-2131272640
+
+query I
+SELECT hash('foo', 42);
+----
+1697442603
+
+# Test hash with multiple columns
+query I
+SELECT hash(col1, col2) FROM VALUES 
+    ('foo', 42), 
+    ('bar', 123), 
+    ('baz', 456) AS t(col1, col2);
+----
+1697442603
+-150815381
+-1728587230
