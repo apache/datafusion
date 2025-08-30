@@ -21,21 +21,21 @@ use crate::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
     AggregateMode,
 };
+use crate::filter::batch_filter;
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
+use arrow::array::Array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::BoxStream;
+use futures::stream::{Stream, StreamExt};
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-
-use crate::filter::batch_filter;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 
@@ -140,11 +140,20 @@ impl AggregateStream {
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)
                                 .and_then(|columns| {
-                                    RecordBatch::try_new(
-                                        Arc::clone(&this.schema),
-                                        columns,
-                                    )
-                                    .map_err(Into::into)
+                                    let all_empty =
+                                        columns.iter().all(|v| v.null_count() == v.len());
+
+                                    if all_empty {
+                                        Ok(RecordBatch::new_empty(Arc::clone(
+                                            &this.schema,
+                                        )))
+                                    } else {
+                                        RecordBatch::try_new(
+                                            Arc::clone(&this.schema),
+                                            columns,
+                                        )
+                                        .map_err(Into::into)
+                                    }
                                 })
                                 .record_output(&this.baseline_metrics);
 

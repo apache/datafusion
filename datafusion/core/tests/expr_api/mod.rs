@@ -17,7 +17,7 @@
 
 use arrow::array::{
     builder::{ListBuilder, StringBuilder},
-    ArrayRef, Int64Array, RecordBatch, StringArray, StructArray,
+    ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
 };
 use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
@@ -284,13 +284,7 @@ async fn test_aggregate_ext_null_treatment() {
 
     evaluate_agg_test(
         agg_respect,
-        vec![
-            "+---------+",
-            "| respect |",
-            "+---------+",
-            "|         |",
-            "+---------+",
-        ],
+        vec!["+---------+", "| respect |", "+---------+", "+---------+"],
     )
     .await;
 
@@ -305,6 +299,86 @@ async fn test_aggregate_ext_null_treatment() {
         ],
     )
     .await;
+}
+
+#[tokio::test]
+async fn test_first_value_empty() {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion::assert_batches_eq;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::SessionContext;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("value", DataType::Int32, true),
+    ]));
+    let batch = RecordBatch::new_empty(schema);
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch).unwrap();
+
+    let plan = ctx
+        .sql("select first_value(value) from t")
+        .await
+        .unwrap()
+        .logical_plan()
+        .clone();
+    let exec_plan = ctx.state().create_physical_plan(&plan).await.unwrap();
+    let batches = collect(exec_plan, ctx.task_ctx()).await.unwrap();
+
+    assert_batches_eq!(
+        &[
+            "+----------------------+",
+            "| first_value(t.value) |",
+            "+----------------------+",
+            "+----------------------+",
+        ],
+        &batches
+    );
+}
+
+#[tokio::test]
+async fn test_first_value() {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion::assert_batches_eq;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::SessionContext;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("value", DataType::Int32, true),
+    ]));
+    let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    let value_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    let batch =
+        RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(value_array)])
+            .unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch).unwrap();
+
+    let plan = ctx
+        .sql("select first_value(value) from t")
+        .await
+        .unwrap()
+        .logical_plan()
+        .clone();
+    let exec_plan = ctx.state().create_physical_plan(&plan).await.unwrap();
+    let batches = collect(exec_plan, ctx.task_ctx()).await.unwrap();
+
+    assert_batches_eq!(
+        &[
+            "+----------------------+",
+            "| first_value(t.value) |",
+            "+----------------------+",
+            "| 1                    |",
+            "+----------------------+",
+        ],
+        &batches
+    );
 }
 
 #[tokio::test]
