@@ -204,6 +204,46 @@ Marketing 70000
 Marketing 70000
 Marketing 70000
 
+# QUALIFY with aggregate function reference from projection
+query TR
+SELECT dept, SUM(salary) AS s
+FROM users
+GROUP BY dept
+QUALIFY RANK() OVER (ORDER BY dept DESC) = 1 AND s > 1000
+ORDER BY dept;
+----
+Marketing 210000
+
+# QUALIFY with aggregate function
+query T
+SELECT dept
+FROM users
+GROUP BY dept
+QUALIFY RANK() OVER (ORDER BY dept DESC) = 1 AND SUM(salary) > 1000
+ORDER BY dept;
+----
+Marketing
+
+# QUALIFY with aggregate function within window function
+query TR
+SELECT dept, SUM(salary) AS s
+FROM users
+GROUP BY dept
+QUALIFY RANK() OVER (ORDER BY SUM(salary) DESC) = 1
+ORDER BY dept;
+----
+Engineering 279000
+
+# QUALIFY with aggregate function reference from projection within window function
+query TR
+SELECT dept, SUM(salary) AS s
+FROM users
+GROUP BY dept
+QUALIFY RANK() OVER (ORDER BY s DESC) = 1
+ORDER BY dept;
+----
+Engineering 279000
+
 # Error: QUALIFY without window functions
 query error
 SELECT id, name FROM users QUALIFY id > 1;
@@ -295,6 +335,38 @@ physical_plan
 16)------------------------------CoalesceBatchesExec: target_batch_size=8192
 17)--------------------------------FilterExec: salary@0 > Some(500000),10,2
 18)----------------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# plan with aggregate function
+query TT
+EXPLAIN SELECT dept, SUM(salary) AS s
+FROM users
+GROUP BY dept
+QUALIFY RANK() OVER (ORDER BY s DESC) = 1
+ORDER BY dept;
+----
+logical_plan
+01)Sort: users.dept ASC NULLS LAST
+02)--Projection: users.dept, sum(users.salary) AS s
+03)----Filter: rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
+04)------WindowAggr: windowExpr=[[rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------Aggregate: groupBy=[[users.dept]], aggr=[[sum(users.salary)]]
+06)----------TableScan: users projection=[salary, dept]
+physical_plan
+01)SortPreservingMergeExec: [dept@0 ASC NULLS LAST]
+02)--SortExec: expr=[dept@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[dept@0 as dept, sum(users.salary)@1 as s]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------FilterExec: rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 = 1, projection=[dept@0, sum(users.salary)@1]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------BoundedWindowAggExec: wdw=[rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+08)--------------SortPreservingMergeExec: [sum(users.salary)@1 DESC]
+09)----------------SortExec: expr=[sum(users.salary)@1 DESC], preserve_partitioning=[true]
+10)------------------AggregateExec: mode=FinalPartitioned, gby=[dept@0 as dept], aggr=[sum(users.salary)]
+11)--------------------CoalesceBatchesExec: target_batch_size=8192
+12)----------------------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=4
+13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------------------------AggregateExec: mode=Partial, gby=[dept@1 as dept], aggr=[sum(users.salary)]
+15)----------------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Clean up
 statement ok
