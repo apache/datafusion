@@ -20,6 +20,7 @@ pub mod factorial;
 pub mod hex;
 pub mod modulus;
 pub mod rint;
+pub mod width_bucket;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -31,6 +32,7 @@ make_udf_function!(hex::SparkHex, hex);
 make_udf_function!(modulus::SparkMod, modulus);
 make_udf_function!(modulus::SparkPmod, pmod);
 make_udf_function!(rint::SparkRint, rint);
+make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -45,8 +47,17 @@ pub mod expr_fn {
     export_functions!((modulus, "Returns the remainder of division of the first argument by the second argument.", arg1 arg2));
     export_functions!((pmod, "Returns the positive remainder of division of the first argument by the second argument.", arg1 arg2));
     export_functions!((rint, "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.", arg1));
+    export_functions!((width_bucket, "Returns the bucket number into which the value of this expression would fall after being evaluated.", arg1 arg2 arg3 arg4));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![expm1(), factorial(), hex(), modulus(), pmod(), rint()]
+    vec![
+        expm1(),
+        factorial(),
+        hex(),
+        modulus(),
+        pmod(),
+        rint(),
+        width_bucket(),
+    ]
 }
