@@ -17,10 +17,13 @@
 
 //! [`ScalarUDFImpl`] definition for array_transform function.
 
-use arrow::array::{Array, ArrayRef, GenericListArray, GenericListViewArray};
+use arrow::array::{
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, GenericListViewArray,
+};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{
-    as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
+    as_fixed_size_list_array, as_large_list_array, as_large_list_view_array,
+    as_list_array, as_list_view_array,
 };
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
@@ -120,6 +123,37 @@ macro_rules! invoke_by_list_type {
         }
     };
 }
+macro_rules! invoke_by_fixed_size_type {
+    ($fn_name:ident, $downcast_fn:ident, $return_type:ty) => {
+        fn $fn_name(
+            &self,
+            replacement_array: ArrayRef,
+            mut args: ScalarFunctionArgs,
+            return_field: FieldRef,
+        ) -> Result<ColumnarValue> {
+            let array = $downcast_fn(&replacement_array)?;
+            let size = array.value_length();
+            let nulls = array.nulls().cloned();
+
+            let values = array.values();
+
+            args.args[self.argument_index] = ColumnarValue::Array(Arc::clone(values));
+
+            let results = self.function.invoke_with_args(args)?;
+
+            let ColumnarValue::Array(result_array) = results else {
+                return Ok(results);
+            };
+
+            Ok(ColumnarValue::Array(Arc::new(<$return_type>::try_new(
+                return_field,
+                size,
+                result_array,
+                nulls,
+            )?) as ArrayRef))
+        }
+    };
+}
 macro_rules! invoke_by_list_view_type {
     ($fn_name:ident, $downcast_fn:ident, $return_type:ty) => {
         fn $fn_name(
@@ -170,6 +204,11 @@ impl ArrayTransform {
         invoke_large_list_view,
         as_large_list_view_array,
         GenericListViewArray<i64>
+    );
+    invoke_by_fixed_size_type!(
+        invoke_fixed_size_list,
+        as_fixed_size_list_array,
+        FixedSizeListArray
     );
 }
 
@@ -228,7 +267,8 @@ impl ScalarUDFImpl for ArrayTransform {
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::ListView(field)
-            | DataType::LargeListView(field) => Ok(Arc::clone(field)),
+            | DataType::LargeListView(field)
+            | DataType::FixedSizeList(field, _) => Ok(Arc::clone(field)),
             arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
         }?;
 
@@ -262,6 +302,11 @@ impl ScalarUDFImpl for ArrayTransform {
             DataType::LargeListView(_) => Ok(Arc::new(Field::new(
                 name,
                 DataType::LargeListView(inner_return),
+                true,
+            ))),
+            DataType::FixedSizeList(_, size) => Ok(Arc::new(Field::new(
+                name,
+                DataType::FixedSizeList(inner_return, *size),
                 true,
             ))),
             _ => unreachable!(),
@@ -324,7 +369,8 @@ impl ScalarUDFImpl for ArrayTransform {
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::ListView(field)
-            | DataType::LargeListView(field) => Arc::clone(field),
+            | DataType::LargeListView(field)
+            | DataType::FixedSizeList(field, _) => Arc::clone(field),
             _ => {
                 return exec_err!(
                 "Unexpected return field for array_transform. Expected list data type."
@@ -357,6 +403,9 @@ impl ScalarUDFImpl for ArrayTransform {
             DataType::LargeListView(_) => {
                 self.invoke_large_list_view(replacement_array, args, return_field)
             }
+            DataType::FixedSizeList(_, _) => {
+                self.invoke_fixed_size_list(replacement_array, args, return_field)
+            }
             arg_type => {
                 exec_err!("array_transform does not support type {arg_type}")
             }
@@ -378,7 +427,8 @@ impl ScalarUDFImpl for ArrayTransform {
 mod tests {
     use super::array_transform_udf;
     use arrow::array::{
-        create_array, Array, ArrayRef, GenericListArray, GenericListViewArray, Int32Array,
+        create_array, Array, ArrayRef, FixedSizeListArray, GenericListArray,
+        GenericListViewArray, Int32Array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field};
@@ -545,6 +595,64 @@ mod tests {
         LargeListView,
         i64
     );
+
+    #[test]
+    fn test_array_transform_fixed_size_list_array_test() -> Result<(), DataFusionError> {
+        let udf = array_transform_udf(abs(), 0);
+
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = Int32Array::from(vec![
+            Some(0),
+            Some(-1),
+            Some(-2),
+            None,
+            Some(4),
+            Some(-5),
+            Some(-6),
+            Some(7),
+            None,
+        ]);
+        let nulls = NullBuffer::from(vec![true, true, false]);
+        let data = FixedSizeListArray::new(field, 3, Arc::new(values), Some(nulls));
+
+        let data = Arc::new(data) as ArrayRef;
+        let input_field = Arc::new(Field::new(
+            "a",
+            DataType::FixedSizeList(Field::new("b", DataType::Int32, true).into(), 3),
+            true,
+        ));
+        let return_field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&input_field)],
+            scalar_arguments: &[None],
+        })?;
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(data)],
+            arg_fields: vec![input_field],
+            number_rows: 3,
+            return_field,
+            config_options: Arc::new(Default::default()),
+        };
+
+        let ColumnarValue::Array(result) = udf.invoke_with_args(args)? else {
+            return exec_err!("Invalid return type");
+        };
+        let list_array = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+
+        let expected = create_array!(Int32, [Some(0), Some(1), Some(2)]) as ArrayRef;
+        assert_eq!(&list_array.value(0), &expected);
+
+        // assert!(list_array.is_null(1));
+        let expected = create_array!(Int32, [None, Some(4), Some(5)]) as ArrayRef;
+        assert_eq!(&list_array.value(1), &expected);
+
+        assert!(list_array.is_null(2));
+
+        Ok(())
+    }
 
     #[test]
     fn test_array_transform_test_argument_index() -> Result<(), DataFusionError> {
