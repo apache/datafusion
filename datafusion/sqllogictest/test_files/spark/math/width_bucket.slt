@@ -76,3 +76,35 @@ query I
 SELECT width_bucket(10.0, 0.0, 0.0, 5)
 ----
 NULL
+
+# lo == hi
+query I
+SELECT width_bucket(10.0, 0.0, 0.0, 5);
+----
+NULL
+
+# n <= 0
+query I
+SELECT width_bucket(5.0, 0.0, 10.0, 0);
+----
+NULL
+
+query I
+SELECT width_bucket(arrow_cast('NaN','Float64'),5.0, 0.0, 5)
+----
+NULL
+
+query I
+SELECT width_bucket(5.0, arrow_cast('NaN','Float64'), 0.0, 5)
+----
+NULL
+
+query I
+SELECT width_bucket(5.0, 0.0, arrow_cast('NaN','Float64'), 5)
+----
+NULL
+
+query I
+SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '5' YEAR, INTERVAL '5' YEAR, 10)
+----
+NULL
