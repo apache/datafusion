@@ -1927,7 +1927,6 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "datafusion-session",
- "datafusion-sql",
  "futures",
  "itertools 0.14.0",
  "log",
@@ -2241,6 +2240,7 @@ dependencies = [
  "env_logger",
  "indexmap 2.11.0",
  "insta",
+ "itertools 0.14.0",
  "paste",
  "recursive",
  "serde_json",
@@ -2353,6 +2353,7 @@ dependencies = [
  "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
@@ -2608,22 +2609,12 @@ dependencies = [
 name = "datafusion-session"
 version = "49.0.2"
 dependencies = [
- "arrow",
  "async-trait",
- "dashmap",
  "datafusion-common",
- "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr",
  "datafusion-physical-plan",
- "datafusion-sql",
- "futures",
- "itertools 0.14.0",
- "log",
- "object_store",
  "parking_lot",
- "tokio",
 ]
 
 [[package]]

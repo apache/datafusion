@@ -41,7 +41,6 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, row_number};
 use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
-use sqlparser::ast::NullTreatment;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -71,7 +70,9 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_expr::expr::{FieldMetadata, GroupingSet, Sort, WindowFunction};
+use datafusion_expr::expr::{
+    FieldMetadata, GroupingSet, NullTreatment, Sort, WindowFunction,
+};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
