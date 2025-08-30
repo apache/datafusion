@@ -17,23 +17,23 @@
 
 //! [`ScalarUDFImpl`] definition for array_transform function.
 
-use arrow::array::{Array, ArrayRef, GenericListArray, NullArray};
+use arrow::array::{Array, ArrayRef, GenericListArray, GenericListViewArray};
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::cast::as_large_list_array;
-use datafusion_common::cast::as_list_array;
+use datafusion_common::cast::{
+    as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
+};
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
-    TypeSignature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature,
 };
 use datafusion_expr::{Expr, ScalarUDF};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
-#[doc = "ScalarFunction that returns a [`ScalarUDF`](datafusion_expr::ScalarUDF) for "]
-#[doc = "ArrayTransform"]
+#[doc = "ScalarFunction that returns a [`ScalarUDF`] for ArrayTransform"]
 pub fn array_transform_udf(
     inner: Arc<ScalarUDF>,
     argument_index: usize,
@@ -46,7 +46,7 @@ pub fn array_transform_udf(
 
 #[user_doc(
     doc_section(label = "Array Transform"),
-    description = "Transform every element of an array according to a scalar function.",
+    description = "Transform every element of an array according to a scalar function. This work is under development and currently only supports passing a single ListArray as input to the inner function. Other inputs must be scalar values.",
     syntax_example = "array_transform(inner_function(arg1, arg2, arg3), arg_index)",
     sql_example = r#"```sql
 > select array_transform(abs([-3,1,-4,2]), 0);
@@ -87,6 +87,90 @@ impl ArrayTransform {
             argument_index,
         }
     }
+}
+
+macro_rules! invoke_by_list_type {
+    ($fn_name:ident, $downcast_fn:ident, $return_type:ty) => {
+        fn $fn_name(
+            &self,
+            replacement_array: ArrayRef,
+            mut args: ScalarFunctionArgs,
+            return_field: FieldRef,
+        ) -> Result<ColumnarValue> {
+            let array = $downcast_fn(&replacement_array)?;
+            let offsets = array.offsets().clone();
+            let nulls = array.nulls().cloned();
+
+            let values = array.values();
+
+            args.args[self.argument_index] = ColumnarValue::Array(Arc::clone(values));
+
+            let results = self.function.invoke_with_args(args)?;
+
+            let ColumnarValue::Array(result_array) = results else {
+                return Ok(results);
+            };
+
+            Ok(ColumnarValue::Array(Arc::new(<$return_type>::try_new(
+                return_field,
+                offsets,
+                result_array,
+                nulls,
+            )?) as ArrayRef))
+        }
+    };
+}
+macro_rules! invoke_by_list_view_type {
+    ($fn_name:ident, $downcast_fn:ident, $return_type:ty) => {
+        fn $fn_name(
+            &self,
+            replacement_array: ArrayRef,
+            mut args: ScalarFunctionArgs,
+            return_field: FieldRef,
+        ) -> Result<ColumnarValue> {
+            let array = $downcast_fn(&replacement_array)?;
+            let offsets = array.offsets().clone();
+            let nulls = array.nulls().cloned();
+            let sizes = array.sizes().clone();
+
+            let values = array.values();
+
+            args.args[self.argument_index] = ColumnarValue::Array(Arc::clone(values));
+
+            let results = self.function.invoke_with_args(args)?;
+
+            let ColumnarValue::Array(result_array) = results else {
+                return Ok(results);
+            };
+
+            Ok(ColumnarValue::Array(Arc::new(<$return_type>::try_new(
+                return_field,
+                offsets,
+                sizes,
+                result_array,
+                nulls,
+            )?) as ArrayRef))
+        }
+    };
+}
+
+impl ArrayTransform {
+    invoke_by_list_type!(invoke_list, as_list_array, GenericListArray<i32>);
+    invoke_by_list_type!(
+        invoke_large_list,
+        as_large_list_array,
+        GenericListArray<i64>
+    );
+    invoke_by_list_view_type!(
+        invoke_list_view,
+        as_list_view_array,
+        GenericListViewArray<i32>
+    );
+    invoke_by_list_view_type!(
+        invoke_large_list_view,
+        as_large_list_view_array,
+        GenericListViewArray<i64>
+    );
 }
 
 impl ScalarUDFImpl for ArrayTransform {
@@ -235,10 +319,7 @@ impl ScalarUDFImpl for ArrayTransform {
         Ok(return_types)
     }
 
-    fn invoke_with_args(
-        &self,
-        mut args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let return_field = match args.return_field.data_type() {
             DataType::List(field)
             | DataType::LargeList(field)
@@ -263,61 +344,25 @@ impl ScalarUDFImpl for ArrayTransform {
         let ColumnarValue::Array(replacement_array) = replacement_array else {
             return exec_err!("Unexpected scalar value in array_transform");
         };
+        let replacement_array = Arc::clone(replacement_array);
 
         let result = match &replacement_array.data_type() {
-            DataType::Null => {
-                Ok(Arc::new(NullArray::new(replacement_array.len())) as ArrayRef)
-            }
-            DataType::List(_) => {
-                let array = as_list_array(&replacement_array)?;
-                let offsets = array.offsets().clone();
-                let nulls = array.nulls().cloned();
-
-                let values = array.values();
-
-                args.args[self.argument_index] = ColumnarValue::Array(Arc::clone(values));
-
-                let results = self.function.invoke_with_args(args)?;
-
-                let ColumnarValue::Array(result_array) = results else {
-                    return Ok(results);
-                };
-
-                Ok(Arc::new(GenericListArray::try_new(
-                    return_field,
-                    offsets,
-                    result_array,
-                    nulls,
-                )?) as ArrayRef)
+            DataType::List(_) => self.invoke_list(replacement_array, args, return_field),
+            DataType::ListView(_) => {
+                self.invoke_list_view(replacement_array, args, return_field)
             }
             DataType::LargeList(_) => {
-                let array = as_large_list_array(&replacement_array)?;
-                let offsets = array.offsets().clone();
-                let nulls = array.nulls().cloned();
-
-                let values = array.values();
-
-                args.args[self.argument_index] = ColumnarValue::Array(Arc::clone(values));
-
-                let results = self.function.invoke_with_args(args)?;
-
-                let ColumnarValue::Array(result_array) = results else {
-                    return Ok(results);
-                };
-
-                Ok(Arc::new(GenericListArray::try_new(
-                    return_field,
-                    offsets,
-                    result_array,
-                    nulls,
-                )?) as ArrayRef)
+                self.invoke_large_list(replacement_array, args, return_field)
+            }
+            DataType::LargeListView(_) => {
+                self.invoke_large_list_view(replacement_array, args, return_field)
             }
             arg_type => {
                 exec_err!("array_transform does not support type {arg_type}")
             }
         }?;
 
-        Ok(ColumnarValue::Array(result))
+        Ok(result)
     }
 
     fn aliases(&self) -> &[String] {
@@ -332,7 +377,10 @@ impl ScalarUDFImpl for ArrayTransform {
 #[cfg(test)]
 mod tests {
     use super::array_transform_udf;
-    use arrow::array::{create_array, ArrayRef, GenericListArray};
+    use arrow::array::{
+        create_array, Array, ArrayRef, GenericListArray, GenericListViewArray, Int32Array,
+    };
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::utils::SingleRowListArrayBuilder;
     use datafusion_common::{exec_err, DataFusionError, ScalarValue};
@@ -340,49 +388,163 @@ mod tests {
     use datafusion_functions::math::{abs, round};
     use std::sync::Arc;
 
-    #[test]
-    fn test_array_transform_apply_single_valued_function() -> Result<(), DataFusionError>
-    {
-        let udf = array_transform_udf(abs(), 0);
+    macro_rules! test_array_transform_generic_list_test {
+        ($test_name:ident, $array_type:ty, $data_type:ident, $offset_type:ty) => {
+            #[test]
+            fn $test_name() -> Result<(), DataFusionError> {
+                let udf = array_transform_udf(abs(), 0);
 
-        let data = SingleRowListArrayBuilder::new(create_array!(
-            Int32,
-            [Some(1), Some(-2), None]
-        ))
-        .build_list_array();
-        let data = Arc::new(data) as ArrayRef;
-        let input_field = Arc::new(Field::new(
-            "a",
-            DataType::List(Field::new("b", DataType::Int32, true).into()),
-            true,
-        ));
-        let return_field = udf.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[Arc::clone(&input_field)],
-            scalar_arguments: &[None],
-        })?;
+                let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+                let offsets: OffsetBuffer<$offset_type> =
+                    OffsetBuffer::from_lengths(vec![3, 3, 2]);
+                let values = Int32Array::from(vec![
+                    Some(0),
+                    Some(-1),
+                    Some(-2),
+                    None,
+                    Some(4),
+                    Some(-5),
+                    Some(-6),
+                    Some(7),
+                ]);
+                let nulls = NullBuffer::from(vec![true, true, false]);
+                let data =
+                    <$array_type>::new(field, offsets, Arc::new(values), Some(nulls));
 
-        let args = ScalarFunctionArgs {
-            args: vec![ColumnarValue::Array(data)],
-            arg_fields: vec![input_field],
-            number_rows: 3,
-            return_field,
-            config_options: Arc::new(Default::default()),
+                let data = Arc::new(data) as ArrayRef;
+                let input_field = Arc::new(Field::new(
+                    "a",
+                    DataType::$data_type(Field::new("b", DataType::Int32, true).into()),
+                    true,
+                ));
+                let return_field = udf.return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &[Arc::clone(&input_field)],
+                    scalar_arguments: &[None],
+                })?;
+
+                let args = ScalarFunctionArgs {
+                    args: vec![ColumnarValue::Array(data)],
+                    arg_fields: vec![input_field],
+                    number_rows: 3,
+                    return_field,
+                    config_options: Arc::new(Default::default()),
+                };
+
+                let ColumnarValue::Array(result) = udf.invoke_with_args(args)? else {
+                    return exec_err!("Invalid return type");
+                };
+                let list_array = result.as_any().downcast_ref::<$array_type>().unwrap();
+
+                let expected =
+                    create_array!(Int32, [Some(0), Some(1), Some(2)]) as ArrayRef;
+                assert_eq!(&list_array.value(0), &expected);
+
+                // assert!(list_array.is_null(1));
+                let expected = create_array!(Int32, [None, Some(4), Some(5)]) as ArrayRef;
+                assert_eq!(&list_array.value(1), &expected);
+
+                assert!(list_array.is_null(2));
+
+                Ok(())
+            }
         };
-
-        let ColumnarValue::Array(result) = udf.invoke_with_args(args)? else {
-            return exec_err!("Invalid return type");
-        };
-        let list_array = result
-            .as_any()
-            .downcast_ref::<GenericListArray<i32>>()
-            .unwrap();
-
-        let expected = create_array!(Int32, [Some(1), Some(2), None]) as ArrayRef;
-
-        assert_eq!(&list_array.value(0), &expected);
-
-        Ok(())
     }
+
+    macro_rules! test_array_transform_generic_view_test {
+        ($test_name:ident, $array_type:ty, $data_type:ident, $offset_type:ty) => {
+            #[test]
+            fn $test_name() -> Result<(), DataFusionError> {
+                let udf = array_transform_udf(abs(), 0);
+
+                let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+                let sizes: ScalarBuffer<$offset_type> = ScalarBuffer::from(vec![3, 3, 2]);
+                let offsets: ScalarBuffer<$offset_type> =
+                    ScalarBuffer::from(vec![0, 3, 6]);
+                let values = Int32Array::from(vec![
+                    Some(0),
+                    Some(-1),
+                    Some(-2),
+                    None,
+                    Some(4),
+                    Some(-5),
+                    Some(-6),
+                    Some(7),
+                ]);
+                let nulls = NullBuffer::from(vec![true, true, false]);
+                let data = <$array_type>::new(
+                    field,
+                    offsets,
+                    sizes,
+                    Arc::new(values),
+                    Some(nulls),
+                );
+
+                let data = Arc::new(data) as ArrayRef;
+                let input_field = Arc::new(Field::new(
+                    "a",
+                    DataType::$data_type(Field::new("b", DataType::Int32, true).into()),
+                    true,
+                ));
+                let return_field = udf.return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &[Arc::clone(&input_field)],
+                    scalar_arguments: &[None],
+                })?;
+
+                let args = ScalarFunctionArgs {
+                    args: vec![ColumnarValue::Array(data)],
+                    arg_fields: vec![input_field],
+                    number_rows: 3,
+                    return_field,
+                    config_options: Arc::new(Default::default()),
+                };
+
+                let ColumnarValue::Array(result) = udf.invoke_with_args(args)? else {
+                    return exec_err!("Invalid return type");
+                };
+                let list_array = result.as_any().downcast_ref::<$array_type>().unwrap();
+
+                let expected =
+                    create_array!(Int32, [Some(0), Some(1), Some(2)]) as ArrayRef;
+                assert_eq!(&list_array.value(0), &expected);
+
+                // assert!(list_array.is_null(1));
+                let expected = create_array!(Int32, [None, Some(4), Some(5)]) as ArrayRef;
+                assert_eq!(&list_array.value(1), &expected);
+
+                assert!(list_array.is_null(2));
+
+                Ok(())
+            }
+        };
+    }
+
+    test_array_transform_generic_list_test!(
+        test_array_transform_list_array_test,
+        GenericListArray<i32>,
+        List,
+        i32
+    );
+
+    test_array_transform_generic_list_test!(
+        test_array_transform_large_list_array_test,
+        GenericListArray<i64>,
+        LargeList,
+        i64
+    );
+
+    test_array_transform_generic_view_test!(
+        test_array_transform_list_view_array_test,
+        GenericListViewArray<i32>,
+        ListView,
+        i32
+    );
+
+    test_array_transform_generic_view_test!(
+        test_array_transform_large_list_view_array_test,
+        GenericListViewArray<i64>,
+        LargeListView,
+        i64
+    );
 
     #[test]
     fn test_array_transform_test_argument_index() -> Result<(), DataFusionError> {

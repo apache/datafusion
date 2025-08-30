@@ -24,7 +24,8 @@ use crate::{downcast_value, Result};
 use arrow::array::{
     BinaryViewArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, Float16Array, Int16Array, Int8Array,
-    LargeBinaryArray, LargeStringArray, StringViewArray, UInt16Array,
+    LargeBinaryArray, LargeListViewArray, LargeStringArray, ListViewArray,
+    StringViewArray, UInt16Array,
 };
 use arrow::{
     array::{
@@ -145,6 +146,16 @@ pub fn as_boolean_array(array: &dyn Array) -> Result<&BooleanArray> {
 // Downcast Array to ListArray
 pub fn as_list_array(array: &dyn Array) -> Result<&ListArray> {
     Ok(downcast_value!(array, ListArray))
+}
+
+// Downcast Array to ListViewArray
+pub fn as_list_view_array(array: &dyn Array) -> Result<&ListViewArray> {
+    Ok(downcast_value!(array, ListViewArray))
+}
+
+// Downcast Array to LargeListViewArray
+pub fn as_large_list_view_array(array: &dyn Array) -> Result<&LargeListViewArray> {
+    Ok(downcast_value!(array, LargeListViewArray))
 }
 
 // Downcast Array to DictionaryArray
