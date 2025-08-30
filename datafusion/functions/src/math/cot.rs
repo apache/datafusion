@@ -32,6 +32,14 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = "Returns the cotangent of a number.",
     syntax_example = r#"cot(numeric_expression)"#,
+    sql_example = r#"```sql
+> SELECT cot(1);
++---------+
+| cot(1)  |
++---------+
+| 0.64209 |
++---------+
+```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
