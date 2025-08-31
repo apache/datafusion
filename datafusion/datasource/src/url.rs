@@ -259,17 +259,23 @@ impl ListingTableUrl {
                         Ok(futures::stream::iter(
                             res.as_ref().clone().into_iter().map(Ok),
                         )
-                        .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
+                        .map(|res| {
+                            res.map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                        })
                         .boxed())
                     } else {
                         let vec = store
                             .list(Some(prefix))
-                            .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
+                            .map(|res| {
+                                res.map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                            })
                             .try_collect::<Vec<ObjectMeta>>()
                             .await?;
                         cache.put(prefix, Arc::new(vec.clone()));
                         Ok(futures::stream::iter(vec.into_iter().map(Ok))
-                            .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
+                            .map(|res| {
+                                res.map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                            })
                             .boxed())
                     }
                 }
