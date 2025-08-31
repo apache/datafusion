@@ -251,7 +251,7 @@ impl ListingTableUrl {
             match ctx.runtime_env().cache_manager.get_list_files_cache() {
                 None => Ok(store
                     .list(Some(prefix))
-                    .map(|res| res.map_err(DataFusionError::ObjectStore))
+                    .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
                     .boxed()),
                 Some(cache) => {
                     if let Some(res) = cache.get(prefix) {
@@ -259,17 +259,17 @@ impl ListingTableUrl {
                         Ok(futures::stream::iter(
                             res.as_ref().clone().into_iter().map(Ok),
                         )
-                        .map(|res| res.map_err(DataFusionError::ObjectStore))
+                        .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
                         .boxed())
                     } else {
                         let vec = store
                             .list(Some(prefix))
-                            .map(|res| res.map_err(DataFusionError::ObjectStore))
+                            .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
                             .try_collect::<Vec<ObjectMeta>>()
                             .await?;
                         cache.put(prefix, Arc::new(vec.clone()));
                         Ok(futures::stream::iter(vec.into_iter().map(Ok))
-                            .map(|res| res.map_err(DataFusionError::ObjectStore))
+                            .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
                             .boxed())
                     }
                 }
@@ -281,7 +281,7 @@ impl ListingTableUrl {
         } else {
             match store.head(&self.prefix).await {
                 Ok(meta) => futures::stream::once(async { Ok(meta) })
-                    .map(|res| res.map_err(DataFusionError::ObjectStore))
+                    .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
                     .boxed(),
                 Err(_) => list_with_cache(ctx, store, &self.prefix).await?,
             }
@@ -294,7 +294,6 @@ impl ListingTableUrl {
                 let glob_match = self.contains(path, ignore_subdirectory);
                 futures::future::ready(extension_match && glob_match)
             })
-            .map_err(DataFusionError::ObjectStore)
             .boxed())
     }
 

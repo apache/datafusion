@@ -360,3 +360,42 @@ fn test_backtrace_output(#[case] query: &str) {
         stderr
     );
 }
+
+#[tokio::test]
+async fn test_s3_url_fallback() {
+    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
+        eprintln!("Skipping external storages integration tests");
+        return;
+    }
+
+    let container = setup_minio_container().await;
+
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("s3_fallback");
+    let _bound = settings.bind_to_scope();
+
+    let port = container.get_host_port_ipv4(9000).await.unwrap();
+
+    // Create a table using a prefix path (without trailing slash)
+    // This should trigger the fallback logic where head() fails on the prefix
+    // and list() is used to discover the actual files
+    let input = format!(
+        r#"CREATE EXTERNAL TABLE partitioned_data
+STORED AS CSV
+LOCATION 's3://data/partitioned_csv'
+OPTIONS (
+    'format.has_header' 'false'
+);
+
+SELECT * FROM partitioned_data ORDER BY column_1, column_2 LIMIT 5;
+"#
+    );
+
+    assert_cmd_snapshot!(cli()
+        .env_clear()
+        .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
+        .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+        .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
+        .env("AWS_ALLOW_HTTP", "true")
+        .pass_stdin(input));
+}
