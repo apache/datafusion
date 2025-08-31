@@ -184,7 +184,7 @@ pub(crate) struct FilterCandidate {
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
     /// The projection to read from the file schema to get the columns
-    /// required to pass thorugh a `SchemaMapper` to the table schema
+    /// required to pass through a `SchemaMapper` to the table schema
     /// upon which we then evaluate the filter expression.
     projection: Vec<usize>,
     ///  A `SchemaMapper` used to map batches read from the file schema to

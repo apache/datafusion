@@ -441,7 +441,7 @@ impl TestConfig {
 
     /// Perform a series of runs using the current [`TestConfig`],
     /// assert the expected plan result,
-    /// and return the result plan (for potentional subsequent runs).
+    /// and return the result plan (for potential subsequent runs).
     fn run(
         &self,
         expected_lines: &[&str],
@@ -2610,7 +2610,7 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
         "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        // Multiple source files splitted across partitions
+        // Multiple source files split across partitions
         "      DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
     test_config.run(
@@ -2625,7 +2625,7 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
         "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        // Multiple source files splitted across partitions
+        // Multiple source files split across partitions
         "      DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
     test_config.run(&expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;

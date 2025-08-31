@@ -52,17 +52,19 @@ use datafusion_common::{
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{expressions::Column, utils::reassign_predicate_columns};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
     projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
     DisplayAs, DisplayFormatType, ExecutionPlan,
+};
+use datafusion_physical_plan::{
+    filter::collect_columns_from_predicate, filter_pushdown::FilterPushdownPropagation,
 };
 use object_store::ObjectStore;
 
@@ -604,8 +606,31 @@ impl DataSource for FileScanConfig {
 
     fn eq_properties(&self) -> EquivalenceProperties {
         let (schema, constraints, _, orderings) = self.project();
-        EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints)
+        let mut eq_properties =
+            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
+                .with_constraints(constraints);
+        if let Some(filter) = self.file_source.filter() {
+            // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
+            // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
+            match reassign_predicate_columns(filter, &schema, true) {
+                Ok(filter) => {
+                    match Self::add_filter_equivalence_info(filter, &mut eq_properties) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            warn!("Failed to add filter equivalence info: {e}");
+                            #[cfg(debug_assertions)]
+                            panic!("Failed to add filter equivalence info: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to reassign predicate columns: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to reassign predicate columns: {e}");
+                }
+            };
+        }
+        eq_properties
     }
 
     fn scheduling_type(&self) -> SchedulingType {
@@ -749,6 +774,17 @@ impl FileScanConfig {
             table_fields,
             self.file_schema.metadata().clone(),
         ))
+    }
+
+    fn add_filter_equivalence_info(
+        filter: Arc<dyn PhysicalExpr>,
+        eq_properties: &mut EquivalenceProperties,
+    ) -> Result<()> {
+        let (equal_pairs, _) = collect_columns_from_predicate(&filter);
+        for (lhs, rhs) in equal_pairs {
+            eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
+        }
+        Ok(())
     }
 
     pub fn projected_constraints(&self) -> Constraints {

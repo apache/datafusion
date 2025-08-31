@@ -142,6 +142,10 @@ impl FileSource for TestSource {
         })
     }
 
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.predicate.clone()
+    }
+
     fn as_any(&self) -> &dyn Any {
         todo!("should not be called")
     }
