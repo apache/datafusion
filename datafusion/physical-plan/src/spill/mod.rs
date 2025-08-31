@@ -28,7 +28,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::ArrayData;
+use arrow::array::{layout, ArrayData, BufferSpec};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{
     reader::StreamReader,
@@ -308,7 +308,7 @@ impl IPCStreamWriter {
         })?;
 
         let metadata_version = MetadataVersion::V5;
-        let alignment = 8;
+        let alignment = get_max_alignment_for_schema(schema);
         let mut write_options =
             IpcWriteOptions::try_new(alignment, false, metadata_version)?;
         write_options = write_options.try_with_compression(compression_type.into())?;
@@ -339,6 +339,29 @@ impl IPCStreamWriter {
     pub fn finish(&mut self) -> Result<()> {
         self.writer.finish().map_err(Into::into)
     }
+}
+
+// Returns the maximum byte alignment required by any field in the schema (>= 8), derived from Arrow buffer layouts.
+fn get_max_alignment_for_schema(schema: &Schema) -> usize {
+    let minimum_alignment = 8;
+    let mut max_alignment = minimum_alignment;
+    for field in schema.fields() {
+        let layout = layout(field.data_type());
+        let required_alignment = layout
+            .buffers
+            .iter()
+            .map(|buffer_spec| {
+                if let BufferSpec::FixedWidth { alignment, .. } = buffer_spec {
+                    *alignment
+                } else {
+                    minimum_alignment
+                }
+            })
+            .max()
+            .unwrap_or(minimum_alignment);
+        max_alignment = std::cmp::max(max_alignment, required_alignment);
+    }
+    max_alignment
 }
 
 #[cfg(test)]
@@ -910,5 +933,20 @@ mod tests {
 
                 Ok(())
             })
+    }
+
+    #[test]
+    fn test_alignment_for_schema() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("strings", DataType::Utf8View, false)]);
+        let alignment = get_max_alignment_for_schema(&schema);
+        assert_eq!(alignment, 16);
+
+        let schema = Schema::new(vec![
+            Field::new("int32", DataType::Int32, false),
+            Field::new("int64", DataType::Int64, false),
+        ]);
+        let alignment = get_max_alignment_for_schema(&schema);
+        assert_eq!(alignment, 8);
+        Ok(())
     }
 }
