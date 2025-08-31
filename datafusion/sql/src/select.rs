@@ -78,19 +78,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
 
-        // Process `where` clause
-        let base_plan = self.plan_selection(select.selection, plan, planner_context)?;
-
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         self.match_window_definitions(&mut select.projection, &select.named_window)?;
-        // Process the SELECT expressions
+        planner_context.new_expr_alias_context();
+        // Process the SELECT expressions prior to WHERE, so we can later
+        // intercept and rewrite aliases
         let select_exprs = self.prepare_select_exprs(
-            &base_plan,
+            &plan,
             select.projection,
             empty_from,
             planner_context,
         )?;
+
+        // Process `where` clause
+        let base_plan = self.plan_selection(select.selection, plan, planner_context)?;
 
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
@@ -116,32 +118,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?;
         let order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
 
-        // This alias map is resolved and looked up in both having exprs and group by exprs
-        let alias_map = extract_aliases(&select_exprs);
-
         // Optionally the HAVING expression.
         let having_expr_opt = select
             .having
             .map::<Result<Expr>, _>(|having_expr| {
-                let having_expr = self.sql_expr_to_logical_expr(
-                    having_expr,
-                    &combined_schema,
-                    planner_context,
-                )?;
-                // This step "dereferences" any aliases in the HAVING clause.
-                //
-                // This is how we support queries with HAVING expressions that
-                // refer to aliased columns.
-                //
-                // For example:
-                //
-                //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING m > 10;
-                //
-                // are rewritten as, respectively:
-                //
-                //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
-                //
-                let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
+                let having_expr =
+                    self.sql_to_expr(having_expr, &combined_schema, planner_context)?;
+
                 normalize_col(having_expr, &projected_plan)
             })
             .transpose()?;
@@ -150,25 +133,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let qualify_expr_opt = select
             .qualify
             .map::<Result<Expr>, _>(|qualify_expr| {
-                let qualify_expr = self.sql_expr_to_logical_expr(
-                    qualify_expr,
-                    &combined_schema,
-                    planner_context,
-                )?;
-                // This step "dereferences" any aliases in the QUALIFY clause.
-                //
-                // This is how we support queries with QUALIFY expressions that
-                // refer to aliased columns.
-                //
-                // For example:
-                //
-                //   select row_number() over (PARTITION BY id) as rk from users qualify rk > 1;
-                //
-                // are rewritten as, respectively:
-                //
-                //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
-                //
-                let qualify_expr = resolve_aliases_to_exprs(qualify_expr, &alias_map)?;
+                let qualify_expr =
+                    self.sql_to_expr(qualify_expr, &combined_schema, planner_context)?;
+
                 normalize_col(qualify_expr, &projected_plan)
             })
             .transpose()?;
@@ -191,7 +158,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )?;
 
                     // Aliases from the projection can conflict with same-named expressions in the input
-                    let mut alias_map = alias_map.clone();
+                    let mut alias_map = planner_context.expr_aliases().clone();
                     for f in base_plan.schema().fields() {
                         alias_map.remove(f.name());
                     }
@@ -713,7 +680,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // avoiding adding an alias if the column name is the same.
                 let expr = match &col {
                     Expr::Column(column) if column.name.eq(&name) => col,
-                    _ => col.alias(name),
+                    _ => {
+                        if planner_context.expr_aliases().contains_key(&name) {
+                            return plan_err!(
+                                "Duplicate alias '{}' in SELECT clause",
+                                name
+                            );
+                        }
+
+                        planner_context.insert_expr_alias(name.clone(), col.clone());
+                        col.alias(name)
+                    }
                 };
 
                 Ok(SelectExpr::Expression(expr))

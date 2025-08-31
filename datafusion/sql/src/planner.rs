@@ -16,7 +16,6 @@
 // under the License.
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
@@ -26,7 +25,7 @@ use datafusion_common::config::SqlParserOptions;
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::TableReference;
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
+    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic, HashMap,
     SchemaError,
 };
 use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
@@ -267,6 +266,8 @@ pub struct PlannerContext {
     outer_from_schema: Option<DFSchemaRef>,
     /// The query schema defined by the table
     create_table_schema: Option<DFSchemaRef>,
+    /// Aliases gathered so far when planning a SELECT statement.
+    expr_aliases: HashMap<String, Expr>,
 }
 
 impl Default for PlannerContext {
@@ -284,7 +285,23 @@ impl PlannerContext {
             outer_query_schema: None,
             outer_from_schema: None,
             create_table_schema: None,
+            expr_aliases: HashMap::new(),
         }
+    }
+
+    /// Push a new expression alias context
+    pub fn new_expr_alias_context(&mut self) {
+        self.expr_aliases.clear();
+    }
+
+    /// Get a reference to the current context's expression aliases
+    pub fn expr_aliases(&self) -> &HashMap<String, Expr> {
+        &self.expr_aliases
+    }
+
+    /// Add expression aliases to the context
+    pub fn insert_expr_alias(&mut self, alias: String, expr: Expr) {
+        self.expr_aliases.insert(alias, expr);
     }
 
     /// Update the PlannerContext with provided prepare_param_data_types
