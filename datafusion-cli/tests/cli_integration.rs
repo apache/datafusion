@@ -371,7 +371,7 @@ async fn test_s3_url_fallback() {
     let container = setup_minio_container().await;
 
     let mut settings = make_settings();
-    settings.set_snapshot_suffix("s3_fallback");
+    settings.set_snapshot_suffix("s3_url_fallback");
     let _bound = settings.bind_to_scope();
 
     let port = container.get_host_port_ipv4(9000).await.unwrap();

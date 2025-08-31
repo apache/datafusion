@@ -6,7 +6,7 @@ info:
   env:
     AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
     AWS_ALLOW_HTTP: "true"
-    AWS_ENDPOINT: "http://localhost:32768"
+    AWS_ENDPOINT: "http://localhost:32771"
     AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
   stdin: "CREATE EXTERNAL TABLE partitioned_data\nSTORED AS CSV\nLOCATION 's3://data/partitioned_csv'\nOPTIONS (\n    'format.has_header' 'false'\n);\n\nSELECT * FROM partitioned_data ORDER BY column_1, column_2 LIMIT 5;\n"
 ---
