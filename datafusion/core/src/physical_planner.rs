@@ -2355,7 +2355,7 @@ impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         // Checks for the more permissive `InvariantLevel::Always`.
-        // Plans are not guarenteed to be executable after each physical optimizer run.
+        // Plans are not guaranteed to be executable after each physical optimizer run.
         node.check_invariants(InvariantLevel::Always).map_err(|e|
             e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
         )?;

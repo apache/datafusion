@@ -84,7 +84,7 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
 
     match container {
         Ok(container) => {
-            // We wait for MinIO to be healthy and preprare test files. We do it via CLI to avoid s3 dependency
+            // We wait for MinIO to be healthy and prepare test files. We do it via CLI to avoid s3 dependency
             let commands = [
                 ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
                 ExecCommand::new([
@@ -239,8 +239,8 @@ fn test_cli_top_memory_consumers<'a>(
     settings.set_snapshot_suffix(snapshot_name);
 
     settings.add_filter(
-        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B",
-        "Consumer(can spill: bool) consumed XB",
+        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B, peak .*?B",
+        "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
         r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
