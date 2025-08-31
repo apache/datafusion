@@ -379,8 +379,7 @@ async fn test_s3_url_fallback() {
     // Create a table using a prefix path (without trailing slash)
     // This should trigger the fallback logic where head() fails on the prefix
     // and list() is used to discover the actual files
-    let input = format!(
-        r#"CREATE EXTERNAL TABLE partitioned_data
+    let input = r#"CREATE EXTERNAL TABLE partitioned_data
 STORED AS CSV
 LOCATION 's3://data/partitioned_csv'
 OPTIONS (
@@ -388,8 +387,7 @@ OPTIONS (
 );
 
 SELECT * FROM partitioned_data ORDER BY column_1, column_2 LIMIT 5;
-"#
-    );
+"#;
 
     assert_cmd_snapshot!(cli()
         .env_clear()

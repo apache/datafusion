@@ -1,6 +1,5 @@
 ---
 source: datafusion-cli/tests/cli_integration.rs
-assertion_line: 396
 info:
   program: datafusion-cli
   args: []
