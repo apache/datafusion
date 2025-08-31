@@ -628,7 +628,7 @@ impl BatchSplitStream {
         let to_take = remaining.min(self.batch_size);
         let out = batch.slice(self.offset, to_take);
 
-        self.metrics.batches_splitted.add(1);
+        self.metrics.batches_split.add(1);
         self.offset += to_take;
         if self.offset < batch.num_rows() {
             // More data remains in this batch, store it back

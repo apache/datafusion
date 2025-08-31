@@ -198,7 +198,7 @@ impl FileOpener for ParquetOpener {
 
             // Don't load the page index yet. Since it is not stored inline in
             // the footer, loading the page index if it is not needed will do
-            // unecessary I/O. We decide later if it is needed to evaluate the
+            // unnecessary I/O. We decide later if it is needed to evaluate the
             // pruning predicates. Thus default to not requesting if from the
             // underlying reader.
             let mut options = ArrowReaderOptions::new().with_page_index(false);
@@ -1352,7 +1352,7 @@ mod test {
             }
         }
 
-        // Test that if no expression rewriter is provided we use a schemaadapter to adapt the data to the expresssion
+        // Test that if no expression rewriter is provided we use a schemaadapter to adapt the data to the expression
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
         // Write out the batch to a Parquet file

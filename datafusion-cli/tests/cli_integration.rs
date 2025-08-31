@@ -64,7 +64,7 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
 
     match container {
         Ok(container) => {
-            // We wait for MinIO to be healthy and preprare test files. We do it via CLI to avoid s3 dependency
+            // We wait for MinIO to be healthy and prepare test files. We do it via CLI to avoid s3 dependency
             let commands = [
                 ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
                 ExecCommand::new([
