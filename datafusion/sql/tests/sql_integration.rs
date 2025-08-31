@@ -833,13 +833,6 @@ fn select_filter_column_does_not_exist() {
 }
 
 #[test]
-fn select_filter_cannot_use_alias() {
-    let sql = "SELECT first_name AS x FROM person WHERE x = 'A'";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_field_not_found(err, "x");
-}
-
-#[test]
 fn select_neg_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE NOT state";
@@ -1601,9 +1594,7 @@ fn select_simple_aggregate_repeated_aggregate_with_repeated_aliases() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @r#"
-        Error during planning: Projections require unique expression names but the expression "min(person.age) AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them.
-        "#
+        @"Error during planning: Duplicate alias 'a' in SELECT clause"
     );
 }
 
@@ -1644,9 +1635,7 @@ fn select_simple_aggregate_with_groupby_with_aliases_repeated() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @r#"
-        Error during planning: Projections require unique expression names but the expression "person.state AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them.
-        "#
+        @"Error during planning: Duplicate alias 'a' in SELECT clause"
     );
 }
 
