@@ -75,8 +75,8 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
-    SymmetricHashJoinExec,
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
@@ -399,7 +399,7 @@ fn roundtrip_window() -> Result<()> {
     let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
     let sum_expr = AggregateExprBuilder::new(sum_udaf(), args)
         .schema(Arc::clone(&schema))
-        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING")
+        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEDING")
         .build()
         .map(Arc::new)?;
 
@@ -527,7 +527,7 @@ fn test_distinct_window_serialization_end_to_end() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate() -> Result<()> {
+fn roundtrip_aggregate() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -575,7 +575,7 @@ fn rountrip_aggregate() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_limit() -> Result<()> {
+fn roundtrip_aggregate_with_limit() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -605,7 +605,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
+fn roundtrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -634,7 +634,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_sort() -> Result<()> {
+fn roundtrip_aggregate_with_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -1000,7 +1000,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             self: Arc<Self>,
             _children: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
-            todo!()
+            Ok(self)
         }
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -2124,4 +2124,88 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
         datafusion::physical_planner::DefaultPhysicalPlanner::default();
     physical_planner.optimize_physical_plan(unoptimized, &session_state, |_, _| {})?;
     Ok(())
+}
+
+#[test]
+fn roundtrip_sort_merge_join() -> Result<()> {
+    let field_a = Field::new("col_a", DataType::Int64, false);
+    let field_b = Field::new("col_b", DataType::Int64, false);
+    let schema_left = Schema::new(vec![field_a.clone()]);
+    let schema_right = Schema::new(vec![field_b.clone()]);
+    let on = vec![(
+        Arc::new(Column::new("col_a", schema_left.index_of("col_a")?)) as _,
+        Arc::new(Column::new("col_b", schema_right.index_of("col_b")?)) as _,
+    )];
+
+    let filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("col_a", 1)),
+            Operator::Gt,
+            Arc::new(Column::new("col_b", 0)),
+        )),
+        vec![
+            datafusion::physical_plan::joins::utils::ColumnIndex {
+                index: 0,
+                side: datafusion_common::JoinSide::Left,
+            },
+            datafusion::physical_plan::joins::utils::ColumnIndex {
+                index: 0,
+                side: datafusion_common::JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![field_a, field_b])),
+    );
+
+    let schema_left = Arc::new(schema_left);
+    let schema_right = Arc::new(schema_right);
+    for filter in [None, Some(filter)] {
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+        ] {
+            roundtrip_test(Arc::new(SortMergeJoinExec::try_new(
+                Arc::new(EmptyExec::new(schema_left.clone())),
+                Arc::new(EmptyExec::new(schema_right.clone())),
+                on.clone(),
+                filter.clone(),
+                join_type,
+                vec![Default::default()],
+                NullEquality::NullEqualsNothing,
+            )?))?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_sort_merge_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv(
+        "t0",
+        "tests/testdata/test.csv",
+        datafusion::prelude::CsvReadOptions::default().has_header(true),
+    )
+    .await?;
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        datafusion::prelude::CsvReadOptions::default().has_header(true),
+    )
+    .await?;
+
+    ctx.sql("SET datafusion.optimizer.prefer_hash_join = false")
+        .await?
+        .show()
+        .await?;
+
+    let query = "SELECT t1.* FROM t0 join t1 on t0.a = t1.a";
+    let plan = ctx.sql(query).await?.create_physical_plan().await?;
+
+    roundtrip_test(plan)
 }

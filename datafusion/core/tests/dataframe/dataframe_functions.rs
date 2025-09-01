@@ -1316,3 +1316,28 @@ async fn test_count_wildcard() -> Result<()> {
 
     Ok(())
 }
+
+/// Call count wildcard with alias from dataframe API
+#[tokio::test]
+async fn test_count_wildcard_with_alias() -> Result<()> {
+    let df = create_test_table().await?;
+    let result_df = df.aggregate(vec![], vec![count_all().alias("total_count")])?;
+
+    let schema = result_df.schema();
+    assert_eq!(schema.fields().len(), 1);
+    assert_eq!(schema.field(0).name(), "total_count");
+    assert_eq!(*schema.field(0).data_type(), DataType::Int64);
+
+    let batches = result_df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+
+    let count_array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
+    assert_eq!(count_array.value(0), 4);
+
+    Ok(())
+}
