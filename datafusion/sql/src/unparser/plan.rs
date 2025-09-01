@@ -428,6 +428,15 @@ impl Unparser<'_> {
                         unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
+                } else if let Some(window) = find_window_nodes_within_select(
+                    plan,
+                    None,
+                    select.already_projected(),
+                ) {
+                    let unprojected =
+                        unproject_window_exprs(filter.predicate.clone(), &window)?;
+                    let filter_expr = self.expr_to_sql(&unprojected)?;
+                    select.qualify(Some(filter_expr));
                 } else {
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));
