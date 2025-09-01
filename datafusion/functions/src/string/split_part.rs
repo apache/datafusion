@@ -47,7 +47,7 @@ use std::sync::Arc;
     argument(name = "delimiter", description = "String or character to split on."),
     argument(name = "pos", description = "Position of the part to return.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SplitPartFunc {
     signature: Signature,
 }

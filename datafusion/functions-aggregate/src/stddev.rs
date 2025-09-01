@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::hash::Hash;
 use std::mem::align_of_val;
 use std::sync::Arc;
 
@@ -61,6 +62,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
+#[derive(PartialEq, Eq, Hash)]
 pub struct Stddev {
     signature: Signature,
     alias: Vec<String>,
@@ -178,6 +180,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV_POP population aggregate expression
+#[derive(PartialEq, Eq, Hash)]
 pub struct StddevPop {
     signature: Signature,
 }

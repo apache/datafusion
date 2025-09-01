@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::memory_limit::DummyStreamPartition;
 use crate::physical_optimizer::test_utils::{
     aggregate_exec, bounded_window_exec, bounded_window_exec_with_partition,
     check_integrity, coalesce_batches_exec, coalesce_partitions_exec, create_test_schema,
@@ -32,11 +33,11 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, TableReference};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
-use datafusion_expr::{JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
+use datafusion_expr::{JoinType, SortExpr, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
@@ -61,7 +62,14 @@ use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown
 use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion::prelude::*;
+use arrow::array::{Int32Array, RecordBatch};
+use arrow::datatypes::{Field};
+use arrow_schema::Schema;
+use datafusion_execution::TaskContext;
+use datafusion_catalog::streaming::StreamingTable;
 
+use futures::StreamExt;
 use rstest::rstest;
 
 /// Create a sorted Csv exec
@@ -879,6 +887,7 @@ async fn test_soft_hard_requirements_multiple_soft_requirements() -> Result<()> 
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
     Ok(())
 }
+
 #[tokio::test]
 async fn test_soft_hard_requirements_multiple_sorts() -> Result<()> {
     let schema = create_test_schema()?;
@@ -980,10 +989,11 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
         bounded_window2,
         Some(OrderingRequirements::new(requirement)),
         Distribution::SinglePartition,
+        None,
     ));
 
     let expected_input = [
-        "OutputRequirementExec",
+        "OutputRequirementExec: order_by=[(non_nullable_col@1, asc)], dist_by=SinglePartition",
         "  BoundedWindowAggExec: wdw=[count: Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]",
         "    BoundedWindowAggExec: wdw=[count: Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]",
         "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
@@ -998,7 +1008,7 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
     //     "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     // ];
     let expected_optimized = [
-        "OutputRequirementExec",
+        "OutputRequirementExec: order_by=[(non_nullable_col@1, asc)], dist_by=SinglePartition",
         "  BoundedWindowAggExec: wdw=[count: Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]",
         "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
         "      BoundedWindowAggExec: wdw=[count: Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]",
@@ -3675,6 +3685,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             case.window_frame,
             input_schema.as_ref(),
             false,
+            false,
         )?;
         let window_exec = if window_expr.uses_bounded_memory() {
             Arc::new(BoundedWindowAggExec::try_new(
@@ -3840,5 +3851,126 @@ fn test_parallelize_sort_preserves_fetch() -> Result<()> {
         Some(10),
         "Fetch value was not preserved after transformation"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partial_sort_with_homogeneous_batches() -> Result<()> {
+    // Create schema for the table
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+        Field::new("c", DataType::Int32, false),
+    ]));
+
+    // Create homogeneous batches - each batch has the same values for columns a and b
+    let batch1 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 1])),
+            Arc::new(Int32Array::from(vec![1, 1, 1])),
+            Arc::new(Int32Array::from(vec![3, 2, 1])),
+        ],
+    )?;
+    let batch2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![2, 2, 2])),
+            Arc::new(Int32Array::from(vec![2, 2, 2])),
+            Arc::new(Int32Array::from(vec![4, 6, 5])),
+        ],
+    )?;
+    let batch3 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![3, 3, 3])),
+            Arc::new(Int32Array::from(vec![3, 3, 3])),
+            Arc::new(Int32Array::from(vec![9, 7, 8])),
+        ],
+    )?;
+
+    // Create session with batch size of 3 to match our homogeneous batch pattern
+    let session_config = SessionConfig::new()
+        .with_batch_size(3)
+        .with_target_partitions(1);
+    let ctx = SessionContext::new_with_config(session_config);
+
+    let sort_order = vec![
+        SortExpr::new(
+            Expr::Column(datafusion_common::Column::new(
+                Option::<TableReference>::None,
+                "a",
+            )),
+            true,
+            false,
+        ),
+        SortExpr::new(
+            Expr::Column(datafusion_common::Column::new(
+                Option::<TableReference>::None,
+                "b",
+            )),
+            true,
+            false,
+        ),
+    ];
+    let batches = Arc::new(DummyStreamPartition {
+        schema: schema.clone(),
+        batches: vec![batch1, batch2, batch3],
+    }) as _;
+    let provider = StreamingTable::try_new(schema.clone(), vec![batches])?
+        .with_sort_order(sort_order)
+        .with_infinite_table(true);
+    ctx.register_table("test_table", Arc::new(provider))?;
+
+    let sql = "SELECT * FROM test_table ORDER BY a ASC, c ASC";
+    let df = ctx.sql(sql).await?;
+
+    let physical_plan = df.create_physical_plan().await?;
+
+    // Verify that PartialSortExec is used
+    let plan_str = displayable(physical_plan.as_ref()).indent(true).to_string();
+    assert!(
+        plan_str.contains("PartialSortExec"),
+        "Expected PartialSortExec in plan:\n{plan_str}",
+    );
+
+    let task_ctx = Arc::new(TaskContext::default());
+    let mut stream = physical_plan.execute(0, task_ctx.clone())?;
+
+    let mut collected_batches = Vec::new();
+    while let Some(batch) = stream.next().await {
+        let batch = batch?;
+        if batch.num_rows() > 0 {
+            collected_batches.push(batch);
+        }
+    }
+
+    // Assert we got 3 separate batches (not concatenated into fewer)
+    assert_eq!(
+        collected_batches.len(),
+        3,
+        "Expected 3 separate batches, got {}",
+        collected_batches.len()
+    );
+
+    // Verify each batch has been sorted within itself
+    let expected_values = [vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]];
+
+    for (i, batch) in collected_batches.iter().enumerate() {
+        let c_array = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let actual = c_array.values().iter().copied().collect::<Vec<i32>>();
+        assert_eq!(actual, expected_values[i], "Batch {i} not sorted correctly",);
+    }
+
+    assert_eq!(
+        task_ctx.runtime_env().memory_pool.reserved(),
+        0,
+        "Memory should be released after execution"
+    );
+
     Ok(())
 }

@@ -20,7 +20,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -778,7 +778,7 @@ impl Accumulator for FirstSelector {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TestGroupsAccumulator {
     signature: Signature,
     result: u64,
@@ -815,21 +815,6 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(self.clone()))
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<TestGroupsAccumulator>() {
-            self.result == other.result && self.signature == other.signature
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.signature.hash(hasher);
-        self.result.hash(hasher);
-        hasher.finish()
     }
 }
 
@@ -900,6 +885,32 @@ struct MetadataBasedAggregateUdf {
     name: String,
     signature: Signature,
     metadata: HashMap<String, String>,
+}
+
+impl PartialEq for MetadataBasedAggregateUdf {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            signature,
+            metadata,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && metadata == &other.metadata
+    }
+}
+impl Eq for MetadataBasedAggregateUdf {}
+impl Hash for MetadataBasedAggregateUdf {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            name,
+            signature,
+            metadata: _, // unhashable
+        } = self;
+        std::any::type_name::<Self>().hash(state);
+        name.hash(state);
+        signature.hash(state);
+    }
 }
 
 impl MetadataBasedAggregateUdf {

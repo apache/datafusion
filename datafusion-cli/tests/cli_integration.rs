@@ -37,6 +37,7 @@ fn make_settings() -> Settings {
     settings.set_prepend_module_to_snapshot(false);
     settings.add_filter(r"Elapsed .* seconds\.", "[ELAPSED]");
     settings.add_filter(r"DataFusion CLI v.*", "[CLI_VERSION]");
+    settings.add_filter(r"(?s)backtrace:.*?\n\n\n", "");
     settings
 }
 
@@ -63,7 +64,7 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
 
     match container {
         Ok(container) => {
-            // We wait for MinIO to be healthy and preprare test files. We do it via CLI to avoid s3 dependency
+            // We wait for MinIO to be healthy and prepare test files. We do it via CLI to avoid s3 dependency
             let commands = [
                 ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
                 ExecCommand::new([
@@ -218,8 +219,8 @@ fn test_cli_top_memory_consumers<'a>(
     settings.set_snapshot_suffix(snapshot_name);
 
     settings.add_filter(
-        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B",
-        "Consumer(can spill: bool) consumed XB",
+        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B, peak .*?B",
+        "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
         r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
@@ -330,4 +331,32 @@ SELECT COUNT(*) FROM hits;
         .env("RUST_LOG", "warn")
         .env_remove("AWS_ENDPOINT")
         .pass_stdin(input));
+}
+
+/// Ensure backtrace will be printed, if executing `datafusion-cli` with a query
+/// that triggers error.
+/// Example:
+///     RUST_BACKTRACE=1 cargo run --features backtrace -- -c 'select pow(1,'foo');'
+#[rstest]
+#[case("SELECT pow(1,'foo')")]
+#[case("SELECT CAST('not_a_number' AS INTEGER);")]
+#[cfg(feature = "backtrace")]
+fn test_backtrace_output(#[case] query: &str) {
+    let mut cmd = cli();
+    // Use a command that will cause an error and trigger backtrace
+    cmd.args(["--command", query, "-q"])
+        .env("RUST_BACKTRACE", "1"); // Enable backtrace
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined_output = format!("{}{}", stdout, stderr);
+
+    // Assert that the output includes literal 'backtrace'
+    assert!(
+        combined_output.to_lowercase().contains("backtrace"),
+        "Expected output to contain 'backtrace', but got stdout: '{}' stderr: '{}'",
+        stdout,
+        stderr
+    );
 }

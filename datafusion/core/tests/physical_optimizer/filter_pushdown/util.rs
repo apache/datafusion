@@ -26,7 +26,6 @@ use datafusion_datasource::{
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
-use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
@@ -143,6 +142,10 @@ impl FileSource for TestSource {
         })
     }
 
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.predicate.clone()
+    }
+
     fn as_any(&self) -> &dyn Any {
         todo!("should not be called")
     }
@@ -224,7 +227,9 @@ impl FileSource for TestSource {
                 filters.push(Arc::clone(internal));
             }
             let new_node = Arc::new(TestSource {
-                predicate: Some(conjunction(filters.clone())),
+                predicate: datafusion_physical_expr::utils::conjunction_opt(
+                    filters.clone(),
+                ),
                 ..self.clone()
             });
             Ok(FilterPushdownPropagation::with_parent_pushdown_result(

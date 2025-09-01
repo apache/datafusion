@@ -31,7 +31,10 @@ use super::invariants::{
 };
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams};
+use crate::expr::{
+    intersect_metadata_for_union, Placeholder, Sort as SortExpr, WindowFunction,
+    WindowFunctionParams,
+};
 use crate::expr_rewriter::{
     create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
 };
@@ -1722,7 +1725,10 @@ impl LogicalPlan {
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 match self.0 {
-                    LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
+                    LogicalPlan::EmptyRelation(EmptyRelation { produce_one_row, schema: _ }) => {
+                        let rows = if *produce_one_row { 1 } else { 0 };
+                        write!(f, "EmptyRelation: rows={rows}")
+                    },
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
                         is_distinct, ..
                     }) => {
@@ -2045,7 +2051,9 @@ impl ToStringifiedPlan for LogicalPlan {
     }
 }
 
-/// Produces no rows: An empty relation with an empty schema
+/// Relationship produces 0 or 1 placeholder rows with specified output schema
+/// In most cases the output schema for `EmptyRelation` would be empty,
+/// however, it can be non-empty typically for optimizer rules
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyRelation {
     /// Whether to produce a placeholder row
@@ -2799,15 +2807,16 @@ impl Union {
 
                     let mut field =
                         Field::new(name, data_type.clone(), final_is_nullable);
-                    field.set_metadata(intersect_maps(unmerged_metadata));
+                    field.set_metadata(intersect_metadata_for_union(unmerged_metadata));
 
                     (None, Arc::new(field))
                 },
             )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
-        let union_schema_metadata =
-            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+        let union_schema_metadata = intersect_metadata_for_union(
+            inputs.iter().map(|input| input.schema().metadata()),
+        );
 
         // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
@@ -2876,14 +2885,16 @@ impl Union {
                 };
 
                 let mut field = Field::new(&name, data_type.clone(), nullable);
-                let field_metadata =
-                    intersect_maps(fields.iter().map(|field| field.metadata()));
+                let field_metadata = intersect_metadata_for_union(
+                    fields.iter().map(|field| field.metadata()),
+                );
                 field.set_metadata(field_metadata);
                 Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
-        let union_schema_metadata =
-            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+        let union_schema_metadata = intersect_metadata_for_union(
+            inputs.iter().map(|input| input.schema().metadata()),
+        );
 
         // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
@@ -2891,21 +2902,6 @@ impl Union {
 
         Ok(schema)
     }
-}
-
-fn intersect_maps<'a>(
-    inputs: impl IntoIterator<Item = &'a HashMap<String, String>>,
-) -> HashMap<String, String> {
-    let mut inputs = inputs.into_iter();
-    let mut merged: HashMap<String, String> = inputs.next().cloned().unwrap_or_default();
-    for input in inputs {
-        // The extra dereference below (`&*v`) is a workaround for https://github.com/rkyv/rkyv/issues/434.
-        // When this crate is used in a workspace that enables the `rkyv-64` feature in the `chrono` crate,
-        // this triggers a Rust compilation error:
-        // error[E0277]: can't compare `Option<&std::string::String>` with `Option<&mut std::string::String>`.
-        merged.retain(|k, v| input.get(k) == Some(&*v));
-    }
-    merged
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
@@ -3527,7 +3523,10 @@ impl Aggregate {
     ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return plan_err!(
-                "Aggregate requires at least one grouping or aggregate expression"
+                "Aggregate requires at least one grouping or aggregate expression. \
+                Aggregate without grouping expressions nor aggregate expressions is \
+                logically equivalent to, but less efficient than, VALUES producing \
+                single row. Please use VALUES instead."
             );
         }
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
@@ -3805,7 +3804,7 @@ impl Join {
         })
     }
 
-    /// Create Join with input which wrapped with projection, this method is used in physcial planning only to help
+    /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
     /// create the physical join.
     pub fn try_new_with_project_input(
         original: &LogicalPlan,

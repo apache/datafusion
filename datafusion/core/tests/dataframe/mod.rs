@@ -68,6 +68,7 @@ use datafusion_common::{
     TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::file_format::format_as_file_type;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{FieldMetadata, GroupingSet, Sort, WindowFunction};
@@ -75,8 +76,8 @@ use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
     scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
-    ScalarFunctionImplementation, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::Partitioning;
@@ -91,8 +92,8 @@ async fn physical_plan_to_string(df: &DataFrame) -> String {
         .await
         .expect("Error creating physical plan");
 
-    let formated = displayable(physical_plan.as_ref()).indent(true);
-    formated.to_string()
+    let formatted = displayable(physical_plan.as_ref()).indent(true);
+    formatted.to_string()
 }
 
 pub fn table_with_constraints() -> Arc<dyn TableProvider> {
@@ -1212,7 +1213,7 @@ async fn join_on_filter_datatype() -> Result<()> {
         JoinType::Inner,
         Some(Expr::Literal(ScalarValue::Null, None)),
     )?;
-    assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation");
+    assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation: rows=0");
 
     // JOIN ON expression must be boolean type
     let join = left.join_on(right, JoinType::Inner, Some(lit("TRUE")))?;
@@ -2743,23 +2744,20 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
-    +---------------+---------------------------------------------------------+
-    | plan_type     | plan                                                    |
-    +---------------+---------------------------------------------------------+
-    | logical_plan  | LeftSemi Join:                                          |
-    |               |   TableScan: t1 projection=[a, b]                       |
-    |               |   SubqueryAlias: __correlated_sq_1                      |
-    |               |     Projection:                                         |
-    |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] |
-    |               |         TableScan: t2 projection=[]                     |
-    | physical_plan | NestedLoopJoinExec: join_type=RightSemi                 |
-    |               |   ProjectionExec: expr=[]                               |
-    |               |     PlaceholderRowExec                                  |
-    |               |   DataSourceExec: partitions=1, partition_sizes=[1]     |
-    |               |                                                         |
-    +---------------+---------------------------------------------------------+
-    "###
+        @r"
+    +---------------+-----------------------------------------------------+
+    | plan_type     | plan                                                |
+    +---------------+-----------------------------------------------------+
+    | logical_plan  | LeftSemi Join:                                      |
+    |               |   TableScan: t1 projection=[a, b]                   |
+    |               |   SubqueryAlias: __correlated_sq_1                  |
+    |               |     EmptyRelation: rows=1                           |
+    | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
+    |               |   PlaceholderRowExec                                |
+    |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
+    |               |                                                     |
+    +---------------+-----------------------------------------------------+
+    "
     );
 
     let df_results = ctx
@@ -2782,23 +2780,20 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
-    +---------------+---------------------------------------------------------------------+
-    | plan_type     | plan                                                                |
-    +---------------+---------------------------------------------------------------------+
-    | logical_plan  | LeftSemi Join:                                                      |
-    |               |   TableScan: t1 projection=[a, b]                                   |
-    |               |   SubqueryAlias: __correlated_sq_1                                  |
-    |               |     Projection:                                                     |
-    |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] |
-    |               |         TableScan: t2 projection=[]                                 |
-    | physical_plan | NestedLoopJoinExec: join_type=RightSemi                             |
-    |               |   ProjectionExec: expr=[]                                           |
-    |               |     PlaceholderRowExec                                              |
-    |               |   DataSourceExec: partitions=1, partition_sizes=[1]                 |
-    |               |                                                                     |
-    +---------------+---------------------------------------------------------------------+
-    "###
+        @r"
+    +---------------+-----------------------------------------------------+
+    | plan_type     | plan                                                |
+    +---------------+-----------------------------------------------------+
+    | logical_plan  | LeftSemi Join:                                      |
+    |               |   TableScan: t1 projection=[a, b]                   |
+    |               |   SubqueryAlias: __correlated_sq_1                  |
+    |               |     EmptyRelation: rows=1                           |
+    | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
+    |               |   PlaceholderRowExec                                |
+    |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
+    |               |                                                     |
+    +---------------+-----------------------------------------------------+
+    "
     );
 
     Ok(())
@@ -4939,11 +4934,11 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Filter: a = $0 [a:Int32]
       Projection: Int32(1) AS a [a:Int32]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -4972,11 +4967,11 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Filter: a = Int32(3) [a:Int32]
       Projection: Int32(1) AS a [a:Int32]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "
     );
 
     // N.B., the test is basically `SELECT 1 as a WHERE a = 3;` which returns no results.
@@ -5003,10 +4998,10 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: $1 [$1:Null;N]
-      EmptyRelation []
-    "###
+      EmptyRelation: rows=1 []
+    "
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -5033,10 +5028,10 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: Int32(3) AS $1 [$1:Null;N]
-      EmptyRelation []
-    "###
+      EmptyRelation: rows=1 []
+    "
     );
 
     assert_snapshot!(
@@ -5072,11 +5067,11 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Filter: a LIKE $1 [a:Utf8]
       Projection: Utf8("foo") AS a [a:Utf8]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "#
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -5105,11 +5100,11 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Filter: a LIKE Utf8("f%") [a:Utf8]
       Projection: Utf8("foo") AS a [a:Utf8]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "#
     );
 
     assert_snapshot!(
@@ -5665,7 +5660,7 @@ async fn test_alias() -> Result<()> {
         .await?
         .select(vec![col("a"), col("test.b"), lit(1).alias("one")])?
         .alias("table_alias")?;
-    // All ouput column qualifiers are changed to "table_alias"
+    // All output column qualifiers are changed to "table_alias"
     df.schema().columns().iter().for_each(|c| {
         assert_eq!(c.relation, Some("table_alias".into()));
     });
@@ -6191,5 +6186,62 @@ async fn test_copy_schema() -> Result<()> {
 
     let result = session_ctx.sql(&query).await?;
     assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_copy_to_preserves_order() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+
+    let session_state = SessionStateBuilder::new_with_default_features().build();
+    let session_ctx = SessionContext::new_with_state(session_state);
+
+    let target_path = tmp_dir.path().join("target_ordered.csv");
+    let csv_file_format = session_ctx
+        .state()
+        .get_file_format_factory("csv")
+        .map(format_as_file_type)
+        .unwrap();
+
+    let ordered_select_plan = LogicalPlanBuilder::values(vec![
+        vec![lit(1u64)],
+        vec![lit(10u64)],
+        vec![lit(20u64)],
+        vec![lit(100u64)],
+    ])?
+    .sort(vec![SortExpr::new(col("column1"), false, true)])?
+    .build()?;
+
+    let copy_to_plan = LogicalPlanBuilder::copy_to(
+        ordered_select_plan,
+        target_path.to_str().unwrap().to_string(),
+        csv_file_format,
+        HashMap::new(),
+        vec![],
+    )?
+    .build()?;
+
+    let union_side_branch = LogicalPlanBuilder::values(vec![vec![lit(1u64)]])?.build()?;
+    let union_plan = LogicalPlanBuilder::from(copy_to_plan)
+        .union(union_side_branch)?
+        .build()?;
+
+    let frame = session_ctx.execute_logical_plan(union_plan).await?;
+    let physical_plan = frame.create_physical_plan().await?;
+
+    let physical_plan_format =
+        displayable(physical_plan.as_ref()).indent(true).to_string();
+
+    // Expect that input to the DataSinkExec is sorted correctly
+    assert_snapshot!(
+        physical_plan_format,
+        @r###"
+    UnionExec
+      DataSinkExec: sink=CsvSink(file_groups=[])
+        SortExec: expr=[column1@0 DESC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+      DataSourceExec: partitions=1, partition_sizes=[1]
+    "###
+    );
     Ok(())
 }

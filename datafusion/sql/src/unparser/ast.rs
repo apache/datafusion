@@ -19,7 +19,9 @@ use core::fmt;
 use std::ops::ControlFlow;
 
 use sqlparser::ast::helpers::attached_token::AttachedToken;
-use sqlparser::ast::{self, visit_expressions_mut, OrderByKind, SelectFlavor};
+use sqlparser::ast::{
+    self, visit_expressions_mut, LimitClause, OrderByKind, SelectFlavor,
+};
 
 #[derive(Clone)]
 pub struct QueryBuilder {
@@ -100,14 +102,17 @@ impl QueryBuilder {
                 None => return Err(Into::into(UninitializedFieldError::from("body"))),
             },
             order_by,
-            limit: self.limit.clone(),
-            limit_by: self.limit_by.clone(),
-            offset: self.offset.clone(),
+            limit_clause: Some(LimitClause::LimitOffset {
+                limit: self.limit.clone(),
+                offset: self.offset.clone(),
+                limit_by: self.limit_by.clone(),
+            }),
             fetch: self.fetch.clone(),
             locks: self.locks.clone(),
             for_clause: self.for_clause.clone(),
             settings: None,
             format_clause: None,
+            pipe_operators: vec![],
         })
     }
     fn create_empty() -> Self {
@@ -315,6 +320,7 @@ impl SelectBuilder {
                 Some(ref value) => value.clone(),
                 None => return Err(Into::into(UninitializedFieldError::from("flavor"))),
             },
+            exclude: None,
         })
     }
     fn create_empty() -> Self {

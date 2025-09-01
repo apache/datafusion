@@ -148,7 +148,7 @@ SELECT
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
 
-query error user-defined coercion failed
+query error DataFusion error: Error during planning: Substring without for/from is not valid
 select 1 group by substr('');
 
 # Error in filter should be reported
@@ -168,8 +168,9 @@ CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER);
 statement ok
 INSERT INTO tab0 VALUES(83,0,38);
 
-query error DataFusion error: Arrow error: Divide by zero error
+query I
 SELECT DISTINCT - 84 FROM tab0 AS cor0 WHERE NOT + 96 / + col1 <= NULL GROUP BY col1, col0;
+----
 
 statement ok
 create table a(timestamp int, birthday int, ts int, tokens int, amp int, staamp int);

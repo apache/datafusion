@@ -814,6 +814,8 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Float16 => true,
         DataType::Float32 => true,
         DataType::Float64 => true,
+        DataType::Decimal32(_, _) => true,
+        DataType::Decimal64(_, _) => true,
         DataType::Decimal128(_, _) => true,
         DataType::Decimal256(_, _) => true,
         DataType::Timestamp(_, _) => true,
@@ -1223,6 +1225,9 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 }
 
 /// merge inputs schema into a single schema.
+///
+/// This function merges schemas from multiple logical plan inputs using [`DFSchema::merge`].
+/// Refer to that documentation for details on precedence and metadata handling.
 pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
     if inputs.len() == 1 {
         inputs[0].schema().as_ref().clone()

@@ -67,9 +67,11 @@ pub mod async_udf;
 pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
+pub mod ptr_eq;
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
+pub mod udf_eq;
 pub mod utils;
 pub mod var_provider;
 pub mod window_frame;
