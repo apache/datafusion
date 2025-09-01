@@ -317,6 +317,7 @@ pub fn serialize_expr(
                         // TODO: support null treatment in proto
                         null_treatment: _,
                         distinct: _,
+                        filter: _,
                     },
             } = window_fun.as_ref();
             let mut buf = Vec::new();

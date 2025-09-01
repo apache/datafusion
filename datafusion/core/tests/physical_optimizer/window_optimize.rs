@@ -49,6 +49,7 @@ mod test {
             &partition,
             &[],
             Arc::new(frame),
+            None,
         );
 
         let bounded_agg_exec = BoundedWindowAggExec::try_new(

@@ -1650,6 +1650,7 @@ pub fn create_window_expr_with_name(
                         window_frame,
                         null_treatment,
                         distinct,
+                        filter,
                     },
             } = window_fun.as_ref();
             let physical_args =
@@ -1669,6 +1670,11 @@ pub fn create_window_expr_with_name(
             let window_frame = Arc::new(window_frame.clone());
             let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
+            let physical_filter = filter
+                .as_ref()
+                .map(|f| create_physical_expr(f, logical_schema, execution_props))
+                .transpose()?;
+
             windows::create_window_expr(
                 fun,
                 name,
@@ -1679,6 +1685,7 @@ pub fn create_window_expr_with_name(
                 physical_schema,
                 ignore_nulls,
                 *distinct,
+                physical_filter,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),

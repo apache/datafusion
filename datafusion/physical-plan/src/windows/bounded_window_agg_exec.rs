@@ -1378,6 +1378,7 @@ mod tests {
                 &input.schema(),
                 false,
                 false,
+                None,
             )?],
             input,
             input_order_mode,

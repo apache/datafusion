@@ -2469,6 +2469,20 @@ impl Window {
             window_func_dependencies.extend(new_deps);
         }
 
+        // Validate that FILTER clauses are only used with aggregate window functions
+        if let Some(e) = window_expr.iter().find(|e| {
+            matches!(
+                e,
+                Expr::WindowFunction(wf)
+                    if !matches!(wf.fun, WindowFunctionDefinition::AggregateUDF(_))
+                        && wf.params.filter.is_some()
+            )
+        }) {
+            return plan_err!(
+                "FILTER clause can only be used with aggregate window functions. Found in '{e}'"
+            );
+        }
+
         Self::try_new_with_schema(
             window_expr,
             input,

@@ -178,6 +178,7 @@ pub fn parse_physical_window_expr(
         &extended_schema,
         proto.ignore_nulls,
         proto.distinct,
+        None,
     )
 }
 

@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction, WindowFunctionParams,
+    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -832,23 +832,16 @@ impl ExprFuncBuilder {
                 udaf.params.null_treatment = null_treatment;
                 Expr::AggregateFunction(udaf)
             }
-            ExprFuncKind::Window(WindowFunction {
-                fun,
-                params: WindowFunctionParams { args, .. },
-            }) => {
+            ExprFuncKind::Window(mut udwf) => {
                 let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
-                Expr::from(WindowFunction {
-                    fun,
-                    params: WindowFunctionParams {
-                        args,
-                        partition_by: partition_by.unwrap_or_default(),
-                        order_by: order_by.unwrap_or_default(),
-                        window_frame: window_frame
-                            .unwrap_or_else(|| WindowFrame::new(has_order_by)),
-                        null_treatment,
-                        distinct,
-                    },
-                })
+                udwf.params.partition_by = partition_by.unwrap_or_default();
+                udwf.params.order_by = order_by.unwrap_or_default();
+                udwf.params.window_frame =
+                    window_frame.unwrap_or_else(|| WindowFrame::new(has_order_by));
+                udwf.params.filter = filter.map(Box::new);
+                udwf.params.null_treatment = null_treatment;
+                udwf.params.distinct = distinct;
+                Expr::WindowFunction(Box::new(udwf))
             }
         };
 
