@@ -381,7 +381,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// Returns true if the expression node is volatile, i.e. whether it can return
     /// different results when evaluated multiple times with the same input.
     ///
-    /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
+    /// Note: unlike [`is_volatile`], this function does not consider inputs:
     /// - `random()` returns `true`,
     /// - `a + random()` returns `false`
     ///
