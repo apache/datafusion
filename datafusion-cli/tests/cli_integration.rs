@@ -238,9 +238,11 @@ fn test_cli_top_memory_consumers<'a>(
 
     settings.set_snapshot_suffix(snapshot_name);
 
+    // Match consumer lines like `ExternalSorterMerge[0]#2(can spill: false) consumed 10.0 MB`
+    // or with an optional peak part: `... consumed 10.0 MB, peak 12.0 MB`.
     settings.add_filter(
-        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B, peak .*?B",
-        "Consumer(can spill: bool) consumed XB, peak XB",
+        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B(?:, peak .*?B)?",
+        "Consumer(can spill: bool) consumed XB",
     );
     settings.add_filter(
         r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
