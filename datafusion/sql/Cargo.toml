@@ -61,7 +61,6 @@ sqlparser = { workspace = true }
 [dev-dependencies]
 ctor = { workspace = true }
 # please do not move these dependencies to the main dependencies section
-datafusion = { workspace = true }
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true }
@@ -70,4 +69,3 @@ env_logger = { workspace = true }
 insta = { workspace = true }
 paste = "^1.0"
 rstest = { workspace = true }
-tokio = { workspace = true }

@@ -2654,7 +2654,6 @@ dependencies = [
  "arrow",
  "bigdecimal",
  "ctor",
- "datafusion",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions",
@@ -2670,7 +2669,6 @@ dependencies = [
  "regex",
  "rstest",
  "sqlparser",
- "tokio",
 ]
 
 [[package]]
