@@ -315,16 +315,7 @@ impl Eq for ForeignScalarUDF {}
 
 impl Hash for ForeignScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let Self {
-            name,
-            aliases,
-            udf,
-            signature,
-        } = self;
-        name.hash(state);
-        aliases.hash(state);
-        signature.hash(state);
-        udf.hash_value.hash(state);
+        self.udf.hash_value.hash(state);
     }
 }
 

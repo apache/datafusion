@@ -194,7 +194,7 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         field: field_fn_wrapper,
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
-        hash_value : udwf.hash_value.clone(),
+        hash_value : udwf.hash_value,
         private_data: Box::into_raw(private_data) as *mut c_void,
     }
 }
@@ -274,16 +274,7 @@ impl PartialEq for ForeignWindowUDF {
 impl Eq for ForeignWindowUDF {}
 impl Hash for ForeignWindowUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let Self {
-            name,
-            aliases,
-            udf,
-            signature,
-        } = self;
-        name.hash(state);
-        aliases.hash(state);
-        udf.hash_value.hash(state);
-        signature.hash(state);
+        self.udf.hash_value.hash(state);
     }
 }
 
