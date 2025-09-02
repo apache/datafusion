@@ -16,6 +16,8 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::catalog::MemTable;
+use datafusion::prelude::SessionContext;
 use datafusion_common::{
     assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
     TableReference,
@@ -2658,4 +2660,46 @@ fn test_struct_expr3() {
         statement,
         @r#"SELECT test.c1."metadata".product."name" FROM (SELECT {"metadata": {product: {"name": 'Product Name'}}} AS c1) AS test"#
     );
+}
+
+// Issue #17359: https://github.com/apache/datafusion/issues/17359
+#[tokio::test]
+async fn unparse_cross_join() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let j1_schema = Arc::new(Schema::new(vec![
+        Field::new("j1_id", DataType::Int32, true),
+        Field::new("j1_string", DataType::Utf8, true),
+    ]));
+    let j2_schema = Arc::new(Schema::new(vec![
+        Field::new("j2_id", DataType::Int32, true),
+        Field::new("j2_string", DataType::Utf8, true),
+    ]));
+
+    ctx.register_table("j1", Arc::new(MemTable::try_new(j1_schema, vec![vec![]])?))?;
+    ctx.register_table("j2", Arc::new(MemTable::try_new(j2_schema, vec![vec![]])?))?;
+
+    let df = ctx
+        .sql(
+            r#"
+            select j1.j1_id, j2.j2_string
+            from j1, j2
+            where j2.j2_id = 0
+            "#,
+        )
+        .await?;
+
+    let unopt_sql = plan_to_sql(df.logical_plan())?;
+    assert_snapshot!(unopt_sql, @r#"
+        SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)
+    "#);
+
+    let optimized_plan = df.into_optimized_plan()?;
+
+    let opt_sql = plan_to_sql(&optimized_plan)?;
+    assert_snapshot!(opt_sql, @r#"
+        SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)
+    "#);
+
+    Ok(())
 }
