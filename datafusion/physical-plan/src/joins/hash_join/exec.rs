@@ -837,7 +837,10 @@ impl ExecutionPlan for HashJoinExec {
             )?,
             // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
-            bounds_accumulator: None,
+            bounds_accumulator: match self.bounds_accumulator {
+                Some(_) => Some(OnceLock::new()),
+                None => None,
+            },
         }))
     }
 
