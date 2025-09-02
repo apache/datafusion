@@ -1686,8 +1686,6 @@ physical_plan
 02)--ProjectionExec: expr=[y@1 = 0 as __common_expr_1, x@0 as x, y@1 as y]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
-# due to the reason describe in https://github.com/apache/datafusion/issues/8927,
-# the following queries will fail
 query II
 select coalesce(1, y/x), coalesce(2, y/x) from t;
 ----
@@ -1697,6 +1695,8 @@ select coalesce(1, y/x), coalesce(2, y/x) from t;
 1 2
 1 2
 
+# due to the reason describe in https://github.com/apache/datafusion/issues/8927,
+# the following queries will fail
 query error
 SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
 
