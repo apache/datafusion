@@ -111,8 +111,8 @@ pub struct FFI_ScalarUDF {
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(udf: &mut Self),
 
-    /// Hash function for the UDF. Used for equality comparison.
-    pub hash: unsafe extern "C" fn(udf: &Self) -> u64,
+    /// Hash value for the UDF used for equality comparison.
+    pub hash_value: u64,
 
     /// Internal data. This is only to be accessed by the provider of the udf.
     /// A [`ForeignScalarUDF`] should never attempt to access this data.
@@ -239,14 +239,6 @@ unsafe extern "C" fn clone_fn_wrapper(udf: &FFI_ScalarUDF) -> FFI_ScalarUDF {
     Arc::clone(&udf_data.udf).into()
 }
 
-unsafe extern "C" fn hash_fn_wrapper(udf: &FFI_ScalarUDF) -> u64 {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-    let mut hasher = DefaultHasher::new();
-    udf.hash(&mut hasher);
-    hasher.finish()
-}
-
 impl Clone for FFI_ScalarUDF {
     fn clone(&self) -> Self {
         unsafe { (self.clone)(self) }
@@ -259,6 +251,9 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
         let short_circuits = udf.short_circuits();
+        let mut hasher = DefaultHasher::new();
+        udf.hash(&mut hasher);
+        let hash_value = hasher.finish();
 
         let private_data = Box::new(ScalarUDFPrivateData { udf });
 
@@ -273,7 +268,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            hash: hash_fn_wrapper,
+            hash_value,
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
@@ -313,7 +308,7 @@ impl PartialEq for ForeignScalarUDF {
         name == &other.name
             && aliases == &other.aliases
             && signature == &other.signature
-            && unsafe { (udf.hash)(udf) == (other.udf.hash)(&other.udf) }
+            && udf.hash_value == other.udf.hash_value 
     }
 }
 impl Eq for ForeignScalarUDF {}
@@ -329,8 +324,7 @@ impl Hash for ForeignScalarUDF {
         name.hash(state);
         aliases.hash(state);
         signature.hash(state);
-        let udf_hash = unsafe { (udf.hash)(udf) };
-        udf_hash.hash(state);
+        udf.hash_value.hash(state);
     }
 }
 

@@ -100,7 +100,7 @@ pub struct FFI_WindowUDF {
     pub release: unsafe extern "C" fn(udf: &mut Self),
 
     /// Hash function for the UDWF. Used for equality comparison.
-    pub hash: unsafe extern "C" fn(udwf: &Self) -> u64,
+    pub hash_value: u64,
 
     /// Internal data. This is only to be accessed by the provider of the udf.
     /// A [`ForeignWindowUDF`] should never attempt to access this data.
@@ -180,12 +180,6 @@ unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) {
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
-    // let private_data = udf.private_data as *const WindowUDFPrivateData;
-    // let udf_data = &(*private_data);
-
-    // let private_data = Box::new(WindowUDFPrivateData {
-    //     udf: Arc::clone(&udf_data.udf),
-    // });
     let private_data = Box::new(WindowUDFPrivateData {
         udf: Arc::clone(udwf.inner()),
     });
@@ -200,16 +194,9 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         field: field_fn_wrapper,
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
-        hash: hash_fn_wrapper,
+        hash_value : udwf.hash_value.clone(),
         private_data: Box::into_raw(private_data) as *mut c_void,
     }
-}
-
-unsafe extern "C" fn hash_fn_wrapper(udwf: &FFI_WindowUDF) -> u64 {
-    let inner = udwf.inner();
-    let mut hasher = DefaultHasher::new();
-    inner.hash(&mut hasher);
-    hasher.finish()
 }
 
 impl Clone for FFI_WindowUDF {
@@ -225,6 +212,10 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
         let volatility = udf.signature().volatility.into();
         let sort_options = udf.sort_options().map(|v| (&v).into()).into();
 
+        let mut hasher = DefaultHasher::new();
+        udf.hash(&mut hasher);
+        let hash_value = hasher.finish();
+
         let private_data = Box::new(WindowUDFPrivateData { udf });
 
         Self {
@@ -237,7 +228,7 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             field: field_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            hash: hash_fn_wrapper,
+            hash_value,
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
@@ -276,8 +267,8 @@ impl PartialEq for ForeignWindowUDF {
         } = self;
         name == &other.name
             && aliases == &other.aliases
-            && unsafe { (udf.hash)(udf) == (other.udf.hash)(&other.udf) }
             && signature == &other.signature
+            && udf.hash_value == other.udf.hash_value
     }
 }
 impl Eq for ForeignWindowUDF {}
@@ -291,8 +282,7 @@ impl Hash for ForeignWindowUDF {
         } = self;
         name.hash(state);
         aliases.hash(state);
-        let udf_hash = unsafe { (udf.hash)(udf) };
-        udf_hash.hash(state);
+        udf.hash_value.hash(state);
         signature.hash(state);
     }
 }

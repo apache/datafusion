@@ -142,7 +142,7 @@ pub struct FFI_AggregateUDF {
     pub release: unsafe extern "C" fn(udaf: &mut Self),
 
     /// Internal hash function.
-    pub hash: unsafe extern "C" fn(udaf: &Self) -> u64,
+    pub hash_value: u64,
 
     /// Internal data. This is only to be accessed by the provider of the udaf.
     /// A [`ForeignAggregateUDF`] should never attempt to access this data.
@@ -329,12 +329,6 @@ unsafe extern "C" fn clone_fn_wrapper(udaf: &FFI_AggregateUDF) -> FFI_AggregateU
     Arc::clone(udaf.inner()).into()
 }
 
-unsafe extern "C" fn hash_fn_wrapper(udaf: &FFI_AggregateUDF) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    udaf.inner().hash(&mut hasher);
-    hasher.finish()
-}
-
 impl Clone for FFI_AggregateUDF {
     fn clone(&self) -> Self {
         unsafe { (self.clone)(self) }
@@ -347,6 +341,10 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
         let aliases = udaf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let is_nullable = udaf.is_nullable();
         let volatility = udaf.signature().volatility.into();
+
+        let mut hasher = DefaultHasher::new();
+        udaf.hash(&mut hasher);
+        let hash_value = hasher.finish();
 
         let private_data = Box::new(AggregateUDFPrivateData { udaf });
 
@@ -366,7 +364,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            hash: hash_fn_wrapper,
+            hash_value,
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
@@ -396,17 +394,20 @@ unsafe impl Sync for ForeignAggregateUDF {}
 
 impl PartialEq for ForeignAggregateUDF {
     fn eq(&self, other: &Self) -> bool {
-        // Compare using hash values for equality
-        let self_hash = unsafe { (self.udaf.hash)(&self.udaf) };
-        let other_hash = unsafe { (other.udaf.hash)(&other.udaf) };
-        self_hash == other_hash
+        let Self {
+            signature,
+            aliases,
+            udaf,
+        } = self;
+        signature == &other.signature
+            && aliases == &other.aliases
+            && udaf.hash_value == other.udaf.hash_value
     }
 }
 impl Eq for ForeignAggregateUDF {}
 impl Hash for ForeignAggregateUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let function_hash = unsafe { (self.udaf.hash)(&self.udaf) };
-        function_hash.hash(state)
+        self.udaf.hash_value.hash(state);
     }
 }
 
