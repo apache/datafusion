@@ -308,7 +308,7 @@ impl PartialEq for ForeignScalarUDF {
         name == &other.name
             && aliases == &other.aliases
             && signature == &other.signature
-            && udf.hash_value == other.udf.hash_value 
+            && udf.hash_value == other.udf.hash_value
     }
 }
 impl Eq for ForeignScalarUDF {}

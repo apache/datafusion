@@ -194,7 +194,7 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         field: field_fn_wrapper,
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
-        hash_value : udwf.hash_value,
+        hash_value: udwf.hash_value,
         private_data: Box::into_raw(private_data) as *mut c_void,
     }
 }
