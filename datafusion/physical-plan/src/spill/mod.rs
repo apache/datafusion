@@ -308,6 +308,11 @@ impl IPCStreamWriter {
         })?;
 
         let metadata_version = MetadataVersion::V5;
+        // Depending on the schema, some array types such as StringViewArray require larger (16 byte in this case) alignment.
+        // If the actual buffer layout after IPC read does not satisfy the alignment requirement,
+        // Arrow ArrayBuilder will copy the buffer into a newly allocated, properly aligned buffer.
+        // This copying may lead to memory blowup during IPC read due to duplicated buffers.
+        // To avoid this, we compute the maximum required alignment based on the schema and configure the IPCStreamWriter accordingly.
         let alignment = get_max_alignment_for_schema(schema);
         let mut write_options =
             IpcWriteOptions::try_new(alignment, false, metadata_version)?;
