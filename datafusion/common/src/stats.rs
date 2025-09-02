@@ -391,12 +391,15 @@ impl Statistics {
     /// parameter to compute global statistics in a multi-partition setting.
     pub fn with_fetch(
         mut self,
-        schema: SchemaRef,
+        _schema: SchemaRef,
         fetch: Option<usize>,
         skip: usize,
         n_partitions: usize,
     ) -> Result<Self> {
         let fetch_val = fetch.unwrap_or(usize::MAX);
+
+        // Get the ratio of rows after / rows before on a per-partition basis
+        let num_rows_before = self.num_rows;
 
         self.num_rows = match self {
             Statistics {
@@ -431,8 +434,7 @@ impl Statistics {
                     // At this point we know that we were given a `fetch` value
                     // as the `None` case would go into the branch above. Since
                     // the input has more rows than `fetch + skip`, the number
-                    // of rows will be the `fetch`, but we won't be able to
-                    // predict the other statistics.
+                    // of rows will be the `fetch`, other statistics will have to be downgraded to inexact.
                     check_num_rows(
                         fetch_val.checked_mul(n_partitions),
                         // We know that we have an estimate for the number of rows:
@@ -445,8 +447,26 @@ impl Statistics {
                 ..
             } => check_num_rows(fetch.and_then(|v| v.checked_mul(n_partitions)), false),
         };
-        self.column_statistics = Statistics::unknown_column(&schema);
-        self.total_byte_size = Precision::Absent;
+        let ratio: f64 = match (num_rows_before, self.num_rows) {
+            (
+                Precision::Exact(nr_before) | Precision::Inexact(nr_before),
+                Precision::Exact(nr_after) | Precision::Inexact(nr_after),
+            ) => nr_after.checked_div(nr_before).unwrap_or(0) as f64,
+            _ => 0.0,
+        };
+        self.column_statistics = self
+            .column_statistics
+            .into_iter()
+            .map(ColumnStatistics::to_inexact)
+            .collect();
+        // Adjust the total_byte_size for the ratio of rows before and after, also marking it as inexact
+        self.total_byte_size = match &self.total_byte_size {
+            Precision::Exact(n) | Precision::Inexact(n) => {
+                let adjusted = (*n as f64 * ratio) as usize;
+                Precision::Inexact(adjusted)
+            }
+            Precision::Absent => Precision::Absent,
+        };
         Ok(self)
     }
 
