@@ -923,7 +923,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
         .optimize(plan, &config)
         .unwrap();
 
-    // Test for <issue>: dynamic filter linking survives `with_new_children`
+    // Test for https://github.com/apache/datafusion/pull/17371: dynamic filter linking survives `with_new_children`
     let children = plan.children().into_iter().map(|c| Arc::clone(c)).collect();
     let plan = plan.with_new_children(children).unwrap();
 
