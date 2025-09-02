@@ -19,7 +19,7 @@
 
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use std::sync::Arc;
-
+use datafusion_physical_optimizer::limit_pushdown_past_window::LimitPushPastWindows;
 use super::projection_pushdown::ProjectionPushdown;
 use super::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
@@ -92,6 +92,10 @@ impl PhysicalOptimizer {
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
             Arc::new(TopKAggregation::new()),
+            // Tries to push limits down through window functions, growing as appropriate
+            // This can possibly be combined with [LimitPushdown]
+            // It needs to come after [EnforceSorting]
+            Arc::new(LimitPushPastWindows::new()),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and

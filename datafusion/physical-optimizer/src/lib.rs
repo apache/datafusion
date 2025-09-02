@@ -23,7 +23,7 @@ pub mod limit_pushdown;
 pub mod limited_distinct_aggregation;
 mod optimizer;
 pub mod output_requirements;
-mod limit_pushdown_past_window;
+pub mod limit_pushdown_past_window;
 pub mod topk_aggregation;
 
 pub use optimizer::PhysicalOptimizerRule;
