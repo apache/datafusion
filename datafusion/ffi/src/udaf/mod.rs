@@ -141,7 +141,7 @@ pub struct FFI_AggregateUDF {
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(udaf: &mut Self),
 
-    /// Internal hash function.
+    /// Hash value for the UDAF used for equality comparison.
     pub hash_value: u64,
 
     /// Internal data. This is only to be accessed by the provider of the udaf.

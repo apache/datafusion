@@ -99,7 +99,7 @@ pub struct FFI_WindowUDF {
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(udf: &mut Self),
 
-    /// Hash function for the UDWF. Used for equality comparison.
+    /// Hash value for the UDWF used for equality comparison.
     pub hash_value: u64,
 
     /// Internal data. This is only to be accessed by the provider of the udf.
