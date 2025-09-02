@@ -18,6 +18,7 @@
 use insta::assert_snapshot;
 
 use datafusion::assert_batches_eq;
+use datafusion::catalog::MemTable;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::test_util::register_unbounded_file_with_ordering;
 use datafusion_sql::unparser::plan_to_sql;
