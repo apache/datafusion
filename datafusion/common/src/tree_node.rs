@@ -680,6 +680,11 @@ impl<T> Transformed<T> {
         Self::new(data, true, TreeNodeRecursion::Continue)
     }
 
+    /// Wrapper for transformed data with [`TreeNodeRecursion::Stop`] statement.
+    pub fn complete(data: T) -> Self {
+        Self::new(data, true, TreeNodeRecursion::Stop)
+    }
+
     /// Wrapper for unchanged data with [`TreeNodeRecursion::Continue`] statement.
     pub fn no(data: T) -> Self {
         Self::new(data, false, TreeNodeRecursion::Continue)
