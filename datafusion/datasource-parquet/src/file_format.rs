@@ -1128,14 +1128,7 @@ impl ParquetSink {
         runtime: &Arc<RuntimeEnv>,
         path: &Path,
     ) -> Result<WriterProperties> {
-        let schema = if self.parquet_options.global.allow_single_file_parallelism {
-            // If parallelizing writes, we may be also be doing hive style partitioning
-            // into multiple files which impacts the schema per file.
-            // Refer to `get_writer_schema()`
-            &get_writer_schema(&self.config)
-        } else {
-            self.config.output_schema()
-        };
+        let schema = self.config.output_schema();
 
         // TODO: avoid this clone in follow up PR, where the writer properties & schema
         // are calculated once on `ParquetSink::new`
