@@ -881,7 +881,20 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     ))
 }
 
-/// Create a dictionary array representing all the values in values
+/// Create a `DictionaryArray` from the provided values array.
+/// 
+/// Each element gets a unique key (`0..N-1`), without deduplication.
+/// Useful for wrapping arrays in dictionary form.
+/// 
+/// # Input
+/// ["alice", "bob", "alice", null, "carol"]
+/// 
+/// # Output
+/// DictionaryArray<Int32>
+/// {
+///   keys:   [0, 1, 2, 3, 4],
+///   values: ["alice", "bob", "alice", null, "carol"]
+/// }
 pub fn dict_from_values<K: ArrowDictionaryKeyType>(
     values_array: ArrayRef,
 ) -> Result<ArrayRef> {
