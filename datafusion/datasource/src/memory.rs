@@ -40,8 +40,8 @@ use datafusion_physical_plan::projection::{
     all_alias_free_columns, new_projections_for_columns, ProjectionExec,
 };
 use datafusion_physical_plan::{
-    common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr, SendableRecordBatchStream, Statistics,
+    common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
+    SendableRecordBatchStream, Statistics,
 };
 
 use async_trait::async_trait;
@@ -214,10 +214,10 @@ impl DataSource for MemorySourceConfig {
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ) -> Result<Option<Arc<dyn DataSource>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        all_alias_free_columns(projection.expr())
+        let res = all_alias_free_columns(projection.expr())
             .then(|| {
                 let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(
@@ -225,14 +225,16 @@ impl DataSource for MemorySourceConfig {
                     self.projection().as_ref().unwrap_or(&all_projections),
                 );
 
-                MemorySourceConfig::try_new_exec(
+                MemorySourceConfig::try_new(
                     self.partitions(),
                     self.original_schema(),
                     Some(new_projections),
                 )
-                .map(|e| e as _)
+                .map(|s| Arc::new(s) as Arc<dyn DataSource>)
             })
-            .transpose()
+            .transpose()?;
+
+        Ok(res)
     }
 }
 
@@ -835,6 +837,7 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::expressions::lit;
 
+    use datafusion_physical_plan::ExecutionPlan;
     use futures::StreamExt;
 
     #[tokio::test]

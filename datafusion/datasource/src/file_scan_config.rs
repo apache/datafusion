@@ -27,13 +27,9 @@ use crate::file_groups::FileGroup;
 #[allow(unused_imports)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use crate::{
-    display::FileGroupsDisplay,
-    file::FileSource,
-    file_compression_type::FileCompressionType,
-    file_stream::FileStream,
-    source::{DataSource, DataSourceExec},
-    statistics::MinMaxStatistics,
-    PartitionedFile,
+    display::FileGroupsDisplay, file::FileSource,
+    file_compression_type::FileCompressionType, file_stream::FileStream,
+    source::DataSource, statistics::MinMaxStatistics, PartitionedFile,
 };
 use arrow::datatypes::FieldRef;
 use arrow::{
@@ -61,7 +57,7 @@ use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
     projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
-    DisplayAs, DisplayFormatType, ExecutionPlan,
+    DisplayAs, DisplayFormatType,
 };
 use datafusion_physical_plan::{
     filter::collect_columns_from_predicate, filter_pushdown::FilterPushdownPropagation,
@@ -632,7 +628,7 @@ impl DataSource for FileScanConfig {
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ) -> Result<Option<Arc<dyn DataSource>>> {
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
 
         // Must be all column references, with no table partition columns (which can not be projected)
@@ -656,7 +652,8 @@ impl DataSource for FileScanConfig {
                     .clone()
                     .unwrap_or_else(|| (0..self.file_schema.fields().len()).collect()),
             );
-            DataSourceExec::from_data_source(
+
+            Arc::new(
                 FileScanConfigBuilder::from(file_scan)
                     // Assign projected statistics to source
                     .with_projection(Some(new_projections))
