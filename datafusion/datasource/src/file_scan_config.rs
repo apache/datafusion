@@ -135,6 +135,9 @@ use log::{debug, warn};
 /// // create an execution plan from the config
 /// let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
 /// ```
+/// 
+/// [`DataSourceExec`]: crate::source::DataSourceExec
+/// [`DataSourceExec::from_data_source`]: crate::source::DataSourceExec::from_data_source
 #[derive(Clone)]
 pub struct FileScanConfig {
     /// Object store URL, used to get an [`ObjectStore`] instance from
@@ -256,7 +259,6 @@ pub struct FileScanConfigBuilder {
     /// This probably would be better named `table_schema`
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
-
     limit: Option<usize>,
     projection: Option<Vec<usize>>,
     table_partition_cols: Vec<FieldRef>,
