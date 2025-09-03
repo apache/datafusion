@@ -40,7 +40,7 @@ use datafusion_physical_plan::metrics::{
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::instant::Instant;
-use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, ScalarValue};
 
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -345,7 +345,7 @@ impl RecordBatchStream for FileStream {
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
 pub type FileOpenFuture =
-    BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
+    BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, DataFusionError>>>>;
 
 /// Describes the behavior of the `FileStream` if file opening or scanning fails
 pub enum OnError {
@@ -376,7 +376,7 @@ pub trait FileOpener: Unpin + Send + Sync {
 /// is ready
 pub enum NextOpen {
     Pending(FileOpenFuture),
-    Ready(Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>),
+    Ready(Result<BoxStream<'static, Result<RecordBatch, DataFusionError>>>),
 }
 
 pub enum FileStreamState {
@@ -396,7 +396,7 @@ pub enum FileStreamState {
         /// Partitioning column values for the current batch_iter
         partition_values: Vec<ScalarValue>,
         /// The reader instance
-        reader: BoxStream<'static, Result<RecordBatch, ArrowError>>,
+        reader: BoxStream<'static, Result<RecordBatch, DataFusionError>>,
         /// A [`FileOpenFuture`] for the next file to be processed,
         /// and its corresponding partition column values, if any.
         /// This allows the next file to be opened in parallel while the
@@ -568,7 +568,8 @@ mod tests {
             } else if self.error_scanning_idx.contains(&idx) {
                 let error = futures::future::ready(Err(ArrowError::IpcError(
                     "error scanning".to_owned(),
-                )));
+                )
+                .into()));
                 let stream = futures::stream::once(error).boxed();
                 Ok(futures::future::ready(Ok(stream)).boxed())
             } else {

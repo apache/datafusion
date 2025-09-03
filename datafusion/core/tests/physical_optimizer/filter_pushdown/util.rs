@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
@@ -94,8 +93,10 @@ impl FileOpener for TestOpener {
         let stream = TestStream::new(batches);
 
         Ok((async {
-            let stream: BoxStream<'static, Result<RecordBatch, ArrowError>> =
-                Box::pin(stream);
+            let stream: BoxStream<
+                'static,
+                Result<RecordBatch, datafusion_common::DataFusionError>,
+            > = Box::pin(stream.map(|r| r.map_err(Into::into)));
             Ok(stream)
         })
         .boxed())
@@ -344,7 +345,7 @@ impl TestStream {
 }
 
 impl Stream for TestStream {
-    type Item = Result<RecordBatch, ArrowError>;
+    type Item = Result<RecordBatch, datafusion_common::DataFusionError>;
 
     fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let next_batch = self.index.value();

@@ -32,7 +32,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
-use arrow::error::ArrowError;
 use datafusion_common::encryption::FileDecryptionProperties;
 
 use datafusion_common::{exec_err, DataFusionError, Result};
@@ -412,7 +411,7 @@ impl FileOpener for ParquetOpener {
                 .build()?;
 
             let stream = stream
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))
+                .map_err(|e| DataFusionError::from(e))
                 .map(move |b| b.and_then(|b| Ok(schema_mapping.map_batch(b)?)));
 
             if let Some(file_pruner) = file_pruner {
@@ -460,12 +459,12 @@ impl<S> EarlyStoppingStream<S> {
 }
 impl<S> EarlyStoppingStream<S>
 where
-    S: Stream<Item = Result<RecordBatch, ArrowError>> + Unpin,
+    S: Stream<Item = Result<RecordBatch, DataFusionError>> + Unpin,
 {
     fn check_prune(
         &mut self,
-        input: Result<RecordBatch, ArrowError>,
-    ) -> Result<Option<RecordBatch>, ArrowError> {
+        input: Result<RecordBatch, DataFusionError>,
+    ) -> Result<Option<RecordBatch>, DataFusionError> {
         let batch = input?;
 
         // Since dynamic filters may have been updated, see if we can stop
@@ -483,9 +482,9 @@ where
 
 impl<S> Stream for EarlyStoppingStream<S>
 where
-    S: Stream<Item = Result<RecordBatch, ArrowError>> + Unpin,
+    S: Stream<Item = Result<RecordBatch, DataFusionError>> + Unpin,
 {
-    type Item = Result<RecordBatch, ArrowError>;
+    type Item = Result<RecordBatch, DataFusionError>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -658,8 +657,8 @@ mod test {
     use bytes::{BufMut, BytesMut};
     use chrono::Utc;
     use datafusion_common::{
-        assert_batches_eq, record_batch, stats::Precision, ColumnStatistics, ScalarValue,
-        Statistics,
+        assert_batches_eq, record_batch, stats::Precision, ColumnStatistics,
+        DataFusionError, ScalarValue, Statistics,
     };
     use datafusion_datasource::{
         file_meta::FileMeta,
@@ -685,12 +684,8 @@ mod test {
     async fn count_batches_and_rows(
         mut stream: std::pin::Pin<
             Box<
-                dyn Stream<
-                        Item = Result<
-                            arrow::array::RecordBatch,
-                            arrow::error::ArrowError,
-                        >,
-                    > + Send,
+                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
+                    + Send,
             >,
         >,
     ) -> (usize, usize) {
@@ -706,12 +701,8 @@ mod test {
     async fn collect_batches(
         mut stream: std::pin::Pin<
             Box<
-                dyn Stream<
-                        Item = Result<
-                            arrow::array::RecordBatch,
-                            arrow::error::ArrowError,
-                        >,
-                    > + Send,
+                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
+                    + Send,
             >,
         >,
     ) -> Vec<arrow::array::RecordBatch> {
