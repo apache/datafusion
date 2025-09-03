@@ -217,7 +217,7 @@ impl DataSource for MemorySourceConfig {
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        let res = all_alias_free_columns(projection)
+        all_alias_free_columns(projection)
             .then(|| {
                 let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(
@@ -232,9 +232,7 @@ impl DataSource for MemorySourceConfig {
                 )
                 .map(|s| Arc::new(s) as Arc<dyn DataSource>)
             })
-            .transpose()?;
-
-        Ok(res)
+            .transpose()
     }
 }
 
