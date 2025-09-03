@@ -158,7 +158,7 @@ pub struct FileScanConfig {
     /// Note that this is **not** the schema of the physical files.
     /// This is the schema that the physical file schema will be
     /// mapped onto, and the schema that the [`DataSourceExec`] will return.
-    /// 
+    ///
     /// [`DataSourceExec`]: crate::source::DataSourceExec
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
