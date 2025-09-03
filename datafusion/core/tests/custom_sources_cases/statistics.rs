@@ -265,18 +265,22 @@ async fn sql_filter() -> Result<()> {
 #[tokio::test]
 async fn sql_limit() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let col_stats = Statistics::unknown_column(&schema);
     let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines
-    // we loose all statistics except the for number of rows which becomes the limit
+    // column statistics are preserved but marked as inexact
+    let expected_col_stats = stats
+        .column_statistics
+        .iter()
+        .map(|s| s.clone().to_inexact())
+        .collect();
     assert_eq!(
         Statistics {
             num_rows: Precision::Exact(5),
-            column_statistics: col_stats,
-            total_byte_size: Precision::Absent
+            column_statistics: expected_col_stats,
+            total_byte_size: Precision::Absent // stays Absent since original is Absent
         },
         physical_plan.partition_statistics(None)?
     );

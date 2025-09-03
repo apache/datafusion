@@ -488,11 +488,15 @@ mod test {
             .map(|idx| local_limit.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        let schema = scan.schema();
-        let mut expected_statistic_partition = Statistics::new_unknown(&schema);
-        expected_statistic_partition.num_rows = Precision::Exact(1);
-        assert_eq!(statistics[0], expected_statistic_partition);
-        assert_eq!(statistics[1], expected_statistic_partition);
+
+        // Each partition may have different scan statistics, so compute expected for each
+        for idx in 0..2 {
+            let scan_stats = scan.partition_statistics(Some(idx))?;
+            let expected_statistic_partition = scan_stats
+                .with_fetch(scan.schema(), Some(1), 0, 1)
+                .expect("with_fetch should succeed");
+            assert_eq!(statistics[idx], expected_statistic_partition);
+        }
         Ok(())
     }
 

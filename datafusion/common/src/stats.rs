@@ -401,26 +401,24 @@ impl Statistics {
         // Get the ratio of rows after / rows before on a per-partition basis
         let num_rows_before = self.num_rows;
 
-        self.num_rows = match self {
-            Statistics {
-                num_rows: Precision::Exact(nr),
-                ..
+        // Check for early return case before mutating self
+        if let Precision::Exact(nr) | Precision::Inexact(nr) = self.num_rows {
+            if nr <= fetch_val && skip == 0 {
+                // If the input does not reach the `fetch` globally, and `skip`
+                // is zero (meaning the input and output are identical), return
+                // input stats as is.
+                // TODO: Can input stats still be used, but adjusted, when `skip`
+                //       is non-zero?
+                return Ok(self);
             }
-            | Statistics {
-                num_rows: Precision::Inexact(nr),
-                ..
-            } => {
+        }
+
+        self.num_rows = match self.num_rows {
+            Precision::Exact(nr) | Precision::Inexact(nr) => {
                 // Here, the inexact case gives us an upper bound on the number of rows.
                 if nr <= skip {
                     // All input data will be skipped:
                     Precision::Exact(0)
-                } else if nr <= fetch_val && skip == 0 {
-                    // If the input does not reach the `fetch` globally, and `skip`
-                    // is zero (meaning the input and output are identical), return
-                    // input stats as is.
-                    // TODO: Can input stats still be used, but adjusted, when `skip`
-                    //       is non-zero?
-                    return Ok(self);
                 } else if nr - skip <= fetch_val {
                     // After `skip` input rows are skipped, the remaining rows are
                     // less than or equal to the `fetch` values, so `num_rows` must
@@ -428,7 +426,7 @@ impl Statistics {
                     check_num_rows(
                         (nr - skip).checked_mul(n_partitions),
                         // We know that we have an estimate for the number of rows:
-                        self.num_rows.is_exact().unwrap(),
+                        matches!(num_rows_before, Precision::Exact(_)),
                     )
                 } else {
                     // At this point we know that we were given a `fetch` value
@@ -438,14 +436,13 @@ impl Statistics {
                     check_num_rows(
                         fetch_val.checked_mul(n_partitions),
                         // We know that we have an estimate for the number of rows:
-                        self.num_rows.is_exact().unwrap(),
+                        matches!(num_rows_before, Precision::Exact(_)),
                     )
                 }
             }
-            Statistics {
-                num_rows: Precision::Absent,
-                ..
-            } => check_num_rows(fetch.and_then(|v| v.checked_mul(n_partitions)), false),
+            Precision::Absent => {
+                check_num_rows(fetch.and_then(|v| v.checked_mul(n_partitions)), false)
+            }
         };
         let ratio: f64 = match (num_rows_before, self.num_rows) {
             (
@@ -1211,7 +1208,7 @@ mod tests {
         // Apply fetch of 100 rows (10% of original)
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), Some(100), 0, 1)
+            .with_fetch(Arc::clone(&schema), Some(100), 0, 1)
             .unwrap();
 
         // Check num_rows
@@ -1292,7 +1289,7 @@ mod tests {
 
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), Some(500), 0, 1)
+            .with_fetch(Arc::clone(&schema), Some(500), 0, 1)
             .unwrap();
 
         // Check num_rows is inexact
@@ -1326,7 +1323,7 @@ mod tests {
 
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), Some(50), 100, 1)
+            .with_fetch(Arc::clone(&schema), Some(50), 100, 1)
             .unwrap();
 
         assert_eq!(result.num_rows, Precision::Exact(0));
@@ -1351,7 +1348,7 @@ mod tests {
 
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), None, 0, 1)
+            .with_fetch(Arc::clone(&schema), None, 0, 1)
             .unwrap();
 
         // Stats should be unchanged when no fetch and no skip
@@ -1377,7 +1374,7 @@ mod tests {
         // Skip 200, fetch 300, so we get rows 200-500
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), Some(300), 200, 1)
+            .with_fetch(Arc::clone(&schema), Some(300), 200, 1)
             .unwrap();
 
         assert_eq!(result.num_rows, Precision::Exact(300));
@@ -1403,7 +1400,7 @@ mod tests {
         // Fetch 100 per partition, 4 partitions = 400 total
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), Some(100), 0, 4)
+            .with_fetch(Arc::clone(&schema), Some(100), 0, 4)
             .unwrap();
 
         assert_eq!(result.num_rows, Precision::Exact(400));
@@ -1434,7 +1431,7 @@ mod tests {
 
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), Some(100), 0, 1)
+            .with_fetch(Arc::clone(&schema), Some(100), 0, 1)
             .unwrap();
 
         // With absent input stats, output should be inexact estimate
@@ -1462,7 +1459,7 @@ mod tests {
         // Skip 50, fetch 100, but only 50 rows remain
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), Some(100), 50, 1)
+            .with_fetch(Arc::clone(&schema), Some(100), 50, 1)
             .unwrap();
 
         assert_eq!(result.num_rows, Precision::Exact(50));
@@ -1494,7 +1491,7 @@ mod tests {
         };
 
         let result = original_stats
-            .with_fetch(schema.clone(), Some(250), 0, 1)
+            .with_fetch(Arc::clone(&schema), Some(250), 0, 1)
             .unwrap();
 
         let result_col_stats = &result.column_statistics[0];
