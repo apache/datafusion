@@ -267,7 +267,7 @@ pub struct FileScanConfigBuilder {
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
-    output_ordering: Vec<LexOrdering>,
+    output_ordering: Vec<Option<LexOrdering>>,
     file_compression_type: Option<FileCompressionType>,
     new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
@@ -379,7 +379,7 @@ impl FileScanConfigBuilder {
     }
 
     /// Set the output ordering of the files
-    pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
+    pub fn with_output_ordering(mut self, output_ordering: Vec<Option<LexOrdering>>) -> Self {
         self.output_ordering = output_ordering;
         self
     }
@@ -777,7 +777,7 @@ impl FileScanConfig {
     }
 
     /// Project the schema, constraints, and the statistics on the given column indices
-    pub fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
+    pub fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<Option<LexOrdering>>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
             return (
                 Arc::clone(&self.file_schema),
@@ -1358,7 +1358,7 @@ fn create_output_array(
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-) -> Vec<LexOrdering> {
+) -> Vec<Option<LexOrdering>> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
         let mut new_ordering = vec![];
@@ -1379,6 +1379,8 @@ fn get_projected_output_ordering(
                 // since rest of the orderings are violated
                 break;
             }
+
+            let new_ordering = LexOrdering::new(new_ordering);
 
             // Check if any file groups are not sorted
             if base_config.file_groups.iter().any(|group| {
@@ -1410,9 +1412,11 @@ fn get_projected_output_ordering(
                 );
                 continue;
             }
+            all_orderings.push(new_ordering);
+        } else {
+            all_orderings.push(None);
         }
 
-        all_orderings.push(new_ordering);
     }
     all_orderings
 }
