@@ -639,7 +639,7 @@ impl HashJoinExec {
     /// This function is public so other downstream projects can use it to
     /// construct `HashJoinExec` with right side as the build side.
     ///
-    /// If you want to use this interface directly, please continue to the following notes.
+    /// For using this interface directly, please refer to below:
     ///
     /// Hash join execution may require specific input partitioning (for example,
     /// the left child may have a single partition while the right child has multiple).
