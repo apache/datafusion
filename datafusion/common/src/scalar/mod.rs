@@ -882,13 +882,13 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
 }
 
 /// Create a `DictionaryArray` from the provided values array.
-/// 
+///
 /// Each element gets a unique key (`0..N-1`), without deduplication.
 /// Useful for wrapping arrays in dictionary form.
-/// 
+///
 /// # Input
 /// ["alice", "bob", "alice", null, "carol"]
-/// 
+///
 /// # Output
 /// DictionaryArray<Int32>
 /// {
