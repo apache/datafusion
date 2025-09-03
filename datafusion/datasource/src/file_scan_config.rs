@@ -181,7 +181,7 @@ pub struct FileScanConfig {
     /// The partitioning columns
     pub table_partition_cols: Vec<FieldRef>,
     /// All equivalent lexicographical orderings that describe the schema.
-    pub output_ordering: Vec<LexOrdering>,
+    pub output_ordering: Vec<Option<LexOrdering>>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
     /// Are new lines in values supported for CSVOptions
@@ -1362,56 +1362,54 @@ fn get_projected_output_ordering(
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
         let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let name = col.name();
-                if let Some((idx, _)) = projected_schema.column_with_name(name) {
-                    // Compute the new sort expression (with correct index) after projection:
-                    new_ordering.push(PhysicalSortExpr::new(
-                        Arc::new(Column::new(name, idx)),
-                        *options,
-                    ));
-                    continue;
+        if let Some(ordering) = output_ordering{
+            for PhysicalSortExpr { expr, options } in ordering.iter() {
+                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                    let name = col.name();
+                    if let Some((idx, _)) = projected_schema.column_with_name(name) {
+                        // Compute the new sort expression (with correct index) after projection:
+                        new_ordering.push(PhysicalSortExpr::new(
+                            Arc::new(Column::new(name, idx)),
+                            *options,
+                        ));
+                        continue;
+                    }
                 }
-            }
-            // Cannot find expression in the projected_schema, stop iterating
-            // since rest of the orderings are violated
-            break;
-        }
-
-        let Some(new_ordering) = LexOrdering::new(new_ordering) else {
-            continue;
-        };
-
-        // Check if any file groups are not sorted
-        if base_config.file_groups.iter().any(|group| {
-            if group.len() <= 1 {
-                // File groups with <= 1 files are always sorted
-                return false;
+                // Cannot find expression in the projected_schema, stop iterating
+                // since rest of the orderings are violated
+                break;
             }
 
-            let statistics = match MinMaxStatistics::new_from_files(
-                &new_ordering,
-                projected_schema,
-                base_config.projection.as_deref(),
-                group.iter(),
-            ) {
-                Ok(statistics) => statistics,
-                Err(e) => {
-                    log::trace!("Error fetching statistics for file group: {e}");
-                    // we can't prove that it's ordered, so we have to reject it
-                    return true;
+            // Check if any file groups are not sorted
+            if base_config.file_groups.iter().any(|group| {
+                if group.len() <= 1 {
+                    // File groups with <= 1 files are always sorted
+                    return false;
                 }
-            };
 
-            !statistics.is_sorted()
-        }) {
-            debug!(
-                "Skipping specified output ordering {:?}. \
-                Some file groups couldn't be determined to be sorted: {:?}",
-                base_config.output_ordering[0], base_config.file_groups
-            );
-            continue;
+                let statistics = match MinMaxStatistics::new_from_files(
+                    &new_ordering,
+                    projected_schema,
+                    base_config.projection.as_deref(),
+                    group.iter(),
+                ) {
+                    Ok(statistics) => statistics,
+                    Err(e) => {
+                        log::trace!("Error fetching statistics for file group: {e}");
+                        // we can't prove that it's ordered, so we have to reject it
+                        return true;
+                    }
+                };
+
+                !statistics.is_sorted()
+            }) {
+                debug!(
+                    "Skipping specified output ordering {:?}. \
+                    Some file groups couldn't be determined to be sorted: {:?}",
+                    base_config.output_ordering[0], base_config.file_groups
+                );
+                continue;
+            }
         }
 
         all_orderings.push(new_ordering);
