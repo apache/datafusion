@@ -490,12 +490,12 @@ mod test {
         assert_eq!(statistics.len(), 2);
 
         // Each partition may have different scan statistics, so compute expected for each
-        for s in statistics.iter().take(2) {
+        for (idx, s) in statistics.iter().take(2).enumerate() {
             let scan_stats = scan.partition_statistics(Some(idx))?;
             let expected_statistic_partition = scan_stats
                 .with_fetch(scan.schema(), Some(1), 0, 1)
                 .expect("with_fetch should succeed");
-            assert_eq!(s, expected_statistic_partition);
+            assert_eq!(*s, expected_statistic_partition);
         }
         Ok(())
     }
