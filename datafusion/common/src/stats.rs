@@ -451,7 +451,13 @@ impl Statistics {
             (
                 Precision::Exact(nr_before) | Precision::Inexact(nr_before),
                 Precision::Exact(nr_after) | Precision::Inexact(nr_after),
-            ) => nr_after.checked_div(nr_before).unwrap_or(0) as f64,
+            ) => {
+                if nr_before == 0 {
+                    0.0
+                } else {
+                    nr_after as f64 / nr_before as f64
+                }
+            }
             _ => 0.0,
         };
         self.column_statistics = self
@@ -1218,5 +1224,342 @@ mod tests {
         );
         // Distinct count should be Absent after merge
         assert_eq!(col_stats.distinct_count, Precision::Absent);
+    }
+
+    #[test]
+    fn test_with_fetch_basic_preservation() {
+        // Test that column statistics and byte size are preserved (as inexact) when applying fetch
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Int64, false),
+        ]));
+
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(10),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(5050))),
+                    distinct_count: Precision::Exact(50),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(20),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(200))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(10))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(10100))),
+                    distinct_count: Precision::Exact(75),
+                },
+            ],
+        };
+
+        // Apply fetch of 100 rows (10% of original)
+        let result = original_stats
+            .clone()
+            .with_fetch(schema.clone(), Some(100), 0, 1)
+            .unwrap();
+
+        // Check num_rows
+        assert_eq!(result.num_rows, Precision::Exact(100));
+
+        // Check total_byte_size is scaled proportionally and marked as inexact
+        // 100/1000 = 0.1, so 8000 * 0.1 = 800
+        assert_eq!(result.total_byte_size, Precision::Inexact(800));
+
+        // Check column statistics are preserved but marked as inexact
+        assert_eq!(result.column_statistics.len(), 2);
+
+        // First column
+        assert_eq!(
+            result.column_statistics[0].null_count,
+            Precision::Inexact(10)
+        );
+        assert_eq!(
+            result.column_statistics[0].max_value,
+            Precision::Inexact(ScalarValue::Int32(Some(100)))
+        );
+        assert_eq!(
+            result.column_statistics[0].min_value,
+            Precision::Inexact(ScalarValue::Int32(Some(0)))
+        );
+        assert_eq!(
+            result.column_statistics[0].sum_value,
+            Precision::Inexact(ScalarValue::Int32(Some(5050)))
+        );
+        assert_eq!(
+            result.column_statistics[0].distinct_count,
+            Precision::Inexact(50)
+        );
+
+        // Second column
+        assert_eq!(
+            result.column_statistics[1].null_count,
+            Precision::Inexact(20)
+        );
+        assert_eq!(
+            result.column_statistics[1].max_value,
+            Precision::Inexact(ScalarValue::Int64(Some(200)))
+        );
+        assert_eq!(
+            result.column_statistics[1].min_value,
+            Precision::Inexact(ScalarValue::Int64(Some(10)))
+        );
+        assert_eq!(
+            result.column_statistics[1].sum_value,
+            Precision::Inexact(ScalarValue::Int64(Some(10100)))
+        );
+        assert_eq!(
+            result.column_statistics[1].distinct_count,
+            Precision::Inexact(75)
+        );
+    }
+
+    #[test]
+    fn test_with_fetch_inexact_input() {
+        // Test that inexact input statistics remain inexact
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let original_stats = Statistics {
+            num_rows: Precision::Inexact(1000),
+            total_byte_size: Precision::Inexact(8000),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Inexact(10),
+                max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                min_value: Precision::Inexact(ScalarValue::Int32(Some(0))),
+                sum_value: Precision::Inexact(ScalarValue::Int32(Some(5050))),
+                distinct_count: Precision::Inexact(50),
+            }],
+        };
+
+        let result = original_stats
+            .clone()
+            .with_fetch(schema.clone(), Some(500), 0, 1)
+            .unwrap();
+
+        // Check num_rows is inexact
+        assert_eq!(result.num_rows, Precision::Inexact(500));
+
+        // Check total_byte_size is scaled and inexact
+        // 500/1000 = 0.5, so 8000 * 0.5 = 4000
+        assert_eq!(result.total_byte_size, Precision::Inexact(4000));
+
+        // Column stats remain inexact
+        assert_eq!(
+            result.column_statistics[0].null_count,
+            Precision::Inexact(10)
+        );
+    }
+
+    #[test]
+    fn test_with_fetch_skip_all_rows() {
+        // Test when skip >= num_rows (all rows are skipped)
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats
+            .clone()
+            .with_fetch(schema.clone(), Some(50), 100, 1)
+            .unwrap();
+
+        assert_eq!(result.num_rows, Precision::Exact(0));
+        // When ratio is 0/100 = 0, byte size should be 0
+        assert_eq!(result.total_byte_size, Precision::Inexact(0));
+    }
+
+    #[test]
+    fn test_with_fetch_no_limit() {
+        // Test when fetch is None and skip is 0 (no limit applied)
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats
+            .clone()
+            .with_fetch(schema.clone(), None, 0, 1)
+            .unwrap();
+
+        // Stats should be unchanged when no fetch and no skip
+        assert_eq!(result.num_rows, Precision::Exact(100));
+        assert_eq!(result.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_with_fetch_with_skip() {
+        // Test with both skip and fetch
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        // Skip 200, fetch 300, so we get rows 200-500
+        let result = original_stats
+            .clone()
+            .with_fetch(schema.clone(), Some(300), 200, 1)
+            .unwrap();
+
+        assert_eq!(result.num_rows, Precision::Exact(300));
+        // 300/1000 = 0.3, so 8000 * 0.3 = 2400
+        assert_eq!(result.total_byte_size, Precision::Inexact(2400));
+    }
+
+    #[test]
+    fn test_with_fetch_multi_partition() {
+        // Test with multiple partitions
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000), // per partition
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        // Fetch 100 per partition, 4 partitions = 400 total
+        let result = original_stats
+            .clone()
+            .with_fetch(schema.clone(), Some(100), 0, 4)
+            .unwrap();
+
+        assert_eq!(result.num_rows, Precision::Exact(400));
+        // 400/1000 = 0.4, so 8000 * 0.4 = 3200
+        assert_eq!(result.total_byte_size, Precision::Inexact(3200));
+    }
+
+    #[test]
+    fn test_with_fetch_absent_stats() {
+        // Test with absent statistics
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let original_stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+            }],
+        };
+
+        let result = original_stats
+            .clone()
+            .with_fetch(schema.clone(), Some(100), 0, 1)
+            .unwrap();
+
+        // With absent input stats, output should be inexact estimate
+        assert_eq!(result.num_rows, Precision::Inexact(100));
+        assert_eq!(result.total_byte_size, Precision::Absent);
+        // Column stats should remain absent
+        assert_eq!(result.column_statistics[0].null_count, Precision::Absent);
+    }
+
+    #[test]
+    fn test_with_fetch_fetch_exceeds_rows() {
+        // Test when fetch is larger than available rows after skip
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        // Skip 50, fetch 100, but only 50 rows remain
+        let result = original_stats
+            .clone()
+            .with_fetch(schema.clone(), Some(100), 50, 1)
+            .unwrap();
+
+        assert_eq!(result.num_rows, Precision::Exact(50));
+        // 50/100 = 0.5, so 800 * 0.5 = 400
+        assert_eq!(result.total_byte_size, Precision::Inexact(400));
+    }
+
+    #[test]
+    fn test_with_fetch_preserves_all_column_stats() {
+        // Comprehensive test that all column statistic fields are preserved
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let original_col_stats = ColumnStatistics {
+            null_count: Precision::Exact(42),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(999))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(-100))),
+            sum_value: Precision::Exact(ScalarValue::Int32(Some(123456))),
+            distinct_count: Precision::Exact(789),
+        };
+
+        let original_stats = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(8000),
+            column_statistics: vec![original_col_stats.clone()],
+        };
+
+        let result = original_stats
+            .with_fetch(schema.clone(), Some(250), 0, 1)
+            .unwrap();
+
+        let result_col_stats = &result.column_statistics[0];
+
+        // All values should be preserved but marked as inexact
+        assert_eq!(result_col_stats.null_count, Precision::Inexact(42));
+        assert_eq!(
+            result_col_stats.max_value,
+            Precision::Inexact(ScalarValue::Int32(Some(999)))
+        );
+        assert_eq!(
+            result_col_stats.min_value,
+            Precision::Inexact(ScalarValue::Int32(Some(-100)))
+        );
+        assert_eq!(
+            result_col_stats.sum_value,
+            Precision::Inexact(ScalarValue::Int32(Some(123456)))
+        );
+        assert_eq!(result_col_stats.distinct_count, Precision::Inexact(789));
     }
 }
