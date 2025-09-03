@@ -158,6 +158,8 @@ pub struct FileScanConfig {
     /// Note that this is **not** the schema of the physical files.
     /// This is the schema that the physical file schema will be
     /// mapped onto, and the schema that the [`DataSourceExec`] will return.
+    /// 
+    /// [`DataSourceExec`]: crate::source::DataSourceExec
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
     ///
@@ -257,6 +259,8 @@ pub struct FileScanConfigBuilder {
     /// This is usually the same as the table schema as specified by the `TableProvider` minus any partition columns.
     ///
     /// This probably would be better named `table_schema`
+    ///
+    /// [`DataSourceExec`]: crate::source::DataSourceExec
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
