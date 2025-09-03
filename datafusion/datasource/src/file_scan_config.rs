@@ -53,10 +53,11 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::projection::ProjectionExpr;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
-    projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
+    projection::{all_alias_free_columns, new_projections_for_columns},
     DisplayAs, DisplayFormatType,
 };
 use datafusion_physical_plan::{
@@ -633,12 +634,12 @@ impl DataSource for FileScanConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &ProjectionExec,
+        projection: &[ProjectionExpr],
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
 
         // Must be all column references, with no table partition columns (which can not be projected)
-        let partitioned_columns_in_proj = projection.expr().iter().any(|(expr, _)| {
+        let partitioned_columns_in_proj = projection.iter().any(|(expr, _)| {
             expr.as_any()
                 .downcast_ref::<Column>()
                 .map(|expr| expr.index() >= self.file_schema.fields().len())
@@ -646,7 +647,7 @@ impl DataSource for FileScanConfig {
         });
 
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
-        let no_aliases = all_alias_free_columns(projection.expr());
+        let no_aliases = all_alias_free_columns(projection);
 
         Ok((no_aliases && !partitioned_columns_in_proj).then(|| {
             let file_scan = self.clone();

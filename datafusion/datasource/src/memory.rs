@@ -37,7 +37,7 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
 };
 use datafusion_physical_plan::{
     common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
@@ -213,11 +213,11 @@ impl DataSource for MemorySourceConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &ProjectionExec,
+        projection: &[ProjectionExpr],
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        let res = all_alias_free_columns(projection.expr())
+        let res = all_alias_free_columns(projection)
             .then(|| {
                 let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(

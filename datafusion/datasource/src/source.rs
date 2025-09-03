@@ -27,7 +27,7 @@ use datafusion_physical_plan::execution_plan::{
 };
 use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -160,7 +160,7 @@ pub trait DataSource: Send + Sync + Debug {
     }
     fn try_swapping_with_projection(
         &self,
-        _projection: &ProjectionExec,
+        _projection: &[ProjectionExpr],
     ) -> Result<Option<Arc<dyn DataSource>>>;
     /// Try to push down filters into this DataSource.
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
@@ -317,7 +317,10 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        match self.data_source.try_swapping_with_projection(projection)? {
+        match self
+            .data_source
+            .try_swapping_with_projection(projection.expr())?
+        {
             Some(new_data_source) => {
                 Ok(Some(Arc::new(DataSourceExec::new(new_data_source))))
             }
