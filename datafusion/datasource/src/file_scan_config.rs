@@ -135,7 +135,7 @@ use log::{debug, warn};
 /// // create an execution plan from the config
 /// let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
 /// ```
-/// 
+///
 /// [`DataSourceExec`]: crate::source::DataSourceExec
 /// [`DataSourceExec::from_data_source`]: crate::source::DataSourceExec::from_data_source
 #[derive(Clone)]
