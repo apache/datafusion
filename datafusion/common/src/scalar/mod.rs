@@ -890,7 +890,7 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
 /// ["alice", "bob", "alice", null, "carol"]
 ///
 /// # Output
-/// DictionaryArray<Int32>
+/// `DictionaryArray<Int32>`
 /// {
 ///   keys:   [0, 1, 2, 3, 4],
 ///   values: ["alice", "bob", "alice", null, "carol"]
