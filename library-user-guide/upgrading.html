@@ -625,6 +625,16 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#projectionexpr-changed-from-type-alias-to-struct">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ProjectionExpr
+      </span>
+     </code>
+     changed from type alias to struct
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -1306,6 +1316,32 @@ returns a <code class="docutils literal notranslate"><span class="pre">ColumnarV
 </pre></div>
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/16896">#16896</a> for more details.</p>
+</section>
+<section id="projectionexpr-changed-from-type-alias-to-struct">
+<h3><code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span></code> changed from type alias to struct<a class="headerlink" href="#projectionexpr-changed-from-type-alias-to-struct" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span></code> has been changed from a type alias to a struct with named fields to improve code clarity and maintainability.</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="p">,</span><span class="n">ignore</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="nc">ProjectionExpr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="nb">String</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="p">,</span><span class="n">ignore</span>
+<span class="cp">#[derive(Debug, Clone)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">ProjectionExpr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">alias</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>To upgrade your code:</p>
+<ul class="simple">
+<li><p>Replace tuple construction <code class="docutils literal notranslate"><span class="pre">(expr,</span> <span class="pre">alias)</span></code> with <code class="docutils literal notranslate"><span class="pre">ProjectionExpr::new(expr,</span> <span class="pre">alias)</span></code> or <code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span> <span class="pre">{</span> <span class="pre">expr,</span> <span class="pre">alias</span> <span class="pre">}</span></code></p></li>
+<li><p>Replace tuple field access <code class="docutils literal notranslate"><span class="pre">.0</span></code> and <code class="docutils literal notranslate"><span class="pre">.1</span></code> with <code class="docutils literal notranslate"><span class="pre">.expr</span></code> and <code class="docutils literal notranslate"><span class="pre">.alias</span></code></p></li>
+<li><p>Update pattern matching from <code class="docutils literal notranslate"><span class="pre">(expr,</span> <span class="pre">alias)</span></code> to <code class="docutils literal notranslate"><span class="pre">ProjectionExpr</span> <span class="pre">{</span> <span class="pre">expr,</span> <span class="pre">alias</span> <span class="pre">}</span></code></p></li>
+</ul>
+<p>This mainly impacts use of <code class="docutils literal notranslate"><span class="pre">ProjectionExec</span></code>.</p>
+<p>This change was done in <a class="reference external" href="https://github.com/apache/datafusion/pull/17398">#17398</a></p>
 </section>
 <section id="sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions">
 <h3><code class="docutils literal notranslate"><span class="pre">SessionState</span></code>, <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>, and <code class="docutils literal notranslate"><span class="pre">OptimizerConfig</span></code> returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;ConfigOptions&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&amp;ConfigOptions</span></code><a class="headerlink" href="#sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions" title="Link to this heading">¶</a></h3>
