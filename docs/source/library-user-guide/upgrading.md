@@ -231,13 +231,13 @@ The `FileOpenFuture` type alias has been updated to use `DataFusionError` instea
 
 **Before:**
 
-```rust
+```rust,ignore
 pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
 ```
 
 **After:**
 
-```rust
+```rust,ignore
 pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, DataFusionError>>>>;
 ```
 
