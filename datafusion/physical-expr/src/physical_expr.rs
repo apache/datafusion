@@ -28,8 +28,8 @@ use datafusion_common::{DFSchema, HashMap};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, SortExpr};
 
+use datafusion_expr::expr::Sort;
 use itertools::izip;
-
 // Exports:
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -161,6 +161,29 @@ pub fn create_ordering(
         all_sort_orders.extend(LexOrdering::new(sort_exprs));
     }
     Ok(all_sort_orders)
+}
+
+/// Creates a vector of [LexOrdering] from a vector of logical expression
+pub fn create_lex_orderings(
+    sort_order: &[Vec<SortExpr>],
+    schema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<Vec<LexOrdering>> {
+    let mut all_sort_orders = vec![];
+
+    for exprs in sort_order.iter() {
+        all_sort_orders.extend(create_lex_ordering(exprs, schema, execution_props)?);
+    }
+    Ok(all_sort_orders)
+}
+
+pub fn create_lex_ordering(
+    exprs: &[Sort],
+    schema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<Option<LexOrdering>> {
+    let sort_exprs = create_physical_sort_exprs(exprs, schema, execution_props)?;
+    Ok(LexOrdering::new(sort_exprs))
 }
 
 /// Create a physical sort expression from a logical expression
