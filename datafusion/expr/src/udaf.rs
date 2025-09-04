@@ -779,6 +779,7 @@ impl PartialOrd for dyn AggregateUDFImpl {
     }
 }
 
+/// Encapsulates default implementation of [`AggregateUDFImpl::schema_name`].
 pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &AggregateFunctionParams,
@@ -832,6 +833,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
     Ok(schema_name)
 }
 
+/// Encapsulates default implementation of [`AggregateUDFImpl::human_display`].
 pub fn udaf_default_human_display<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &AggregateFunctionParams,
@@ -871,6 +873,7 @@ pub fn udaf_default_human_display<F: AggregateUDFImpl + ?Sized>(
     Ok(schema_name)
 }
 
+/// Encapsulates default implementation of [`AggregateUDFImpl::window_function_schema_name`].
 pub fn udaf_default_window_function_schema_name<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &WindowFunctionParams,
@@ -924,6 +927,7 @@ pub fn udaf_default_window_function_schema_name<F: AggregateUDFImpl + ?Sized>(
     Ok(schema_name)
 }
 
+/// Encapsulates default implementation of [`AggregateUDFImpl::display_name`].
 pub fn udaf_default_display_name<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &AggregateFunctionParams,
@@ -965,6 +969,7 @@ pub fn udaf_default_display_name<F: AggregateUDFImpl + ?Sized>(
     Ok(display_name)
 }
 
+/// Encapsulates default implementation of [`AggregateUDFImpl::window_function_display_name`].
 pub fn udaf_default_window_function_display_name<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &WindowFunctionParams,
@@ -1018,6 +1023,7 @@ pub fn udaf_default_window_function_display_name<F: AggregateUDFImpl + ?Sized>(
     Ok(display_name)
 }
 
+/// Encapsulates default implementation of [`AggregateUDFImpl::return_field`].
 pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     arg_fields: &[FieldRef],
