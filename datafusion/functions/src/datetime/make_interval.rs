@@ -69,8 +69,8 @@ impl ScalarUDFImpl for MakeIntervalFunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let lenght = arg_types.len();
-        match lenght {
+        let length = arg_types.len();
+        match length {
             0 => {
                 exec_err!(
                     "make_interval expects between 1 and 7, got {}",
