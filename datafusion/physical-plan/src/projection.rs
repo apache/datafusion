@@ -587,7 +587,7 @@ fn is_projection_removable(projection: &ProjectionExec) -> bool {
         let Some(col) = proj_expr.expr.as_any().downcast_ref::<Column>() else {
             return false;
         };
-        col.name() == &proj_expr.alias && col.index() == idx
+        col.name() == proj_expr.alias && col.index() == idx
     }) && exprs.len() == projection.input().schema().fields().len()
 }
 
@@ -599,7 +599,7 @@ pub fn all_alias_free_columns(exprs: &[ProjectionExpr]) -> bool {
             .expr
             .as_any()
             .downcast_ref::<Column>()
-            .map(|column| column.name() == &proj_expr.alias)
+            .map(|column| column.name() == proj_expr.alias)
             .unwrap_or(false)
     })
 }

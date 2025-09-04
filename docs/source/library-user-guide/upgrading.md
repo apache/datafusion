@@ -90,13 +90,13 @@ See [#16896](https://github.com/apache/datafusion/issues/16896) for more details
 
 **Before:**
 
-```rust
+```rust,ignore
 pub type ProjectionExpr = (Arc<dyn PhysicalExpr>, String);
 ```
 
 **After:**
 
-```rust
+```rust,ignore
 #[derive(Debug, Clone)]
 pub struct ProjectionExpr {
     pub expr: Arc<dyn PhysicalExpr>,
