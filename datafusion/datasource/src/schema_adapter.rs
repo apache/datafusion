@@ -396,8 +396,7 @@ impl SchemaMapper for SchemaMapping {
     /// conversions.
     /// The produced RecordBatch has a schema that contains only the projected columns.
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
-        let batch_rows = batch.num_rows();
-        let batch_cols = batch.columns().to_vec();
+        let (_old_schema, batch_cols, batch_rows) = batch.into_parts();
 
         let cols = self
             .projected_table_schema
@@ -421,7 +420,7 @@ impl SchemaMapper for SchemaMapping {
             .collect::<datafusion_common::Result<Vec<_>, _>>()?;
 
         // Necessary to handle empty batches
-        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+        let options = RecordBatchOptions::new().with_row_count(Some(batch_rows));
 
         let schema = Arc::clone(&self.projected_table_schema);
         let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
