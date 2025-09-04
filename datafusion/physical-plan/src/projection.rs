@@ -61,7 +61,7 @@ use log::trace;
 #[derive(Debug, Clone)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
-    pub(crate) expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    pub(crate) expr: Vec<ProjectionExpr>,
     /// The schema once the projection has been applied to the input
     schema: SchemaRef,
     /// The input plan
@@ -75,7 +75,7 @@ pub struct ProjectionExec {
 impl ProjectionExec {
     /// Create a projection on an input
     pub fn try_new(
-        expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        expr: Vec<ProjectionExpr>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
         let input_schema = input.schema();
@@ -115,7 +115,7 @@ impl ProjectionExec {
     }
 
     /// The projection expressions stored as tuples of (expression, output column name)
-    pub fn expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
+    pub fn expr(&self) -> &[ProjectionExpr] {
         &self.expr
     }
 
@@ -146,6 +146,8 @@ impl ProjectionExec {
         ))
     }
 }
+
+pub type ProjectionExpr = (Arc<dyn PhysicalExpr>, String);
 
 impl DisplayAs for ProjectionExec {
     fn fmt_as(
@@ -566,7 +568,7 @@ fn is_projection_removable(projection: &ProjectionExec) -> bool {
 
 /// Given the expression set of a projection, checks if the projection causes
 /// any renaming or constructs a non-`Column` physical expression.
-pub fn all_alias_free_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
+pub fn all_alias_free_columns(exprs: &[ProjectionExpr]) -> bool {
     exprs.iter().all(|(expr, alias)| {
         expr.as_any()
             .downcast_ref::<Column>()
@@ -579,11 +581,10 @@ pub fn all_alias_free_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool
 /// projection operator's expressions. To use this function safely, one must
 /// ensure that all expressions are `Column` expressions without aliases.
 pub fn new_projections_for_columns(
-    projection: &ProjectionExec,
+    projection: &[ProjectionExpr],
     source: &[usize],
 ) -> Vec<usize> {
     projection
-        .expr()
         .iter()
         .filter_map(|(expr, _)| {
             expr.as_any()
@@ -604,7 +605,7 @@ pub fn make_with_child(
 }
 
 /// Returns `true` if all the expressions in the argument are `Column`s.
-pub fn all_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
+pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
     exprs.iter().all(|(expr, _)| expr.as_any().is::<Column>())
 }
 
@@ -627,7 +628,7 @@ pub fn all_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
 ///    `a@0`, but `b@2` results in `None` since the projection does not include `b`.
 pub fn update_expr(
     expr: &Arc<dyn PhysicalExpr>,
-    projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+    projected_exprs: &[ProjectionExpr],
     sync_with_child: bool,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     #[derive(Debug, PartialEq)]
@@ -692,7 +693,7 @@ pub fn update_expr(
 /// expressions using the [`update_expr`] function.
 pub fn update_ordering(
     ordering: LexOrdering,
-    projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+    projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexOrdering>> {
     let mut updated_exprs = vec![];
     for mut sort_expr in ordering.into_iter() {
@@ -710,7 +711,7 @@ pub fn update_ordering(
 /// expressions using the [`update_expr`] function.
 pub fn update_ordering_requirement(
     reqs: LexRequirement,
-    projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+    projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexRequirement>> {
     let mut updated_exprs = vec![];
     for mut sort_expr in reqs.into_iter() {
@@ -727,7 +728,7 @@ pub fn update_ordering_requirement(
 /// Downcasts all the expressions in `exprs` to `Column`s. If any of the given
 /// expressions is not a `Column`, returns `None`.
 pub fn physical_to_column_exprs(
-    exprs: &[(Arc<dyn PhysicalExpr>, String)],
+    exprs: &[ProjectionExpr],
 ) -> Option<Vec<(Column, String)>> {
     exprs
         .iter()
@@ -952,7 +953,7 @@ fn try_unifying_projections(
 }
 
 /// Collect all column indices from the given projection expressions.
-fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usize> {
+fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
     // Collect indices and remove duplicates.
     let mut indices = exprs
         .iter()
@@ -1314,7 +1315,7 @@ mod tests {
         // of output schema columns < input schema columns and hence if we use the last few columns
         // from the input schema in the expressions here, bounds_check would fail on them if output
         // schema is supplied to the partitions_statistics method.
-        let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
+        let exprs: Vec<ProjectionExpr> = vec![
             (
                 Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>,
                 "c_renamed".to_string(),
