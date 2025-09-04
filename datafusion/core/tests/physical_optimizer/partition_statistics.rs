@@ -47,7 +47,7 @@ mod test {
     use datafusion_physical_plan::joins::CrossJoinExec;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-    use datafusion_physical_plan::projection::ProjectionExec;
+    use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
@@ -236,8 +236,10 @@ mod test {
     async fn test_statistics_by_partition_of_projection() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         // Add projection execution plan
-        let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-            vec![(Arc::new(Column::new("id", 0)), "id".to_string())];
+        let exprs = vec![ProjectionExpr {
+            expr: Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            alias: "id".to_string(),
+        }];
         let projection: Arc<dyn ExecutionPlan> =
             Arc::new(ProjectionExec::try_new(exprs, scan)?);
         let statistics = (0..projection.output_partitioning().partition_count())

@@ -82,7 +82,7 @@ use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::memory::LazyMemoryExec;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -582,7 +582,11 @@ impl protobuf::PhysicalPlanNode {
                 ))
             })
             .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>()?;
-        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+        let proj_exprs: Vec<ProjectionExpr> = exprs
+            .into_iter()
+            .map(|(expr, alias)| ProjectionExpr { expr, alias })
+            .collect();
+        Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
     fn try_into_filter_physical_plan(
@@ -1983,9 +1987,13 @@ impl protobuf::PhysicalPlanNode {
         let expr = exec
             .expr()
             .iter()
-            .map(|expr| serialize_physical_expr(&expr.0, extension_codec))
+            .map(|proj_expr| serialize_physical_expr(&proj_expr.expr, extension_codec))
             .collect::<Result<Vec<_>>>()?;
-        let expr_name = exec.expr().iter().map(|expr| expr.1.clone()).collect();
+        let expr_name = exec
+            .expr()
+            .iter()
+            .map(|proj_expr| proj_expr.alias.clone())
+            .collect();
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
                 protobuf::ProjectionExecNode {

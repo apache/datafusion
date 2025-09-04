@@ -638,6 +638,21 @@ impl HashJoinExec {
     ///
     /// This function is public so other downstream projects can use it to
     /// construct `HashJoinExec` with right side as the build side.
+    ///
+    /// For using this interface directly, please refer to below:
+    ///
+    /// Hash join execution may require specific input partitioning (for example,
+    /// the left child may have a single partition while the right child has multiple).
+    ///
+    /// Calling this function on join nodes whose children have already been repartitioned
+    /// (e.g., after a `RepartitionExec` has been inserted) may break the partitioning
+    /// requirements of the hash join. Therefore, ensure you call this function
+    /// before inserting any repartitioning operators on the join's children.
+    ///
+    /// In DataFusion's default SQL interface, this function is used by the `JoinSelection`
+    /// physical optimizer rule to determine a good join order, which is
+    /// executed before the `EnforceDistribution` rule (the rule that may
+    /// insert `RepartitionExec` operators).
     pub fn swap_inputs(
         &self,
         partition_mode: PartitionMode,
