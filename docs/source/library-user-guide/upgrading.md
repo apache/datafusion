@@ -265,6 +265,26 @@ Reimplementation for any custom `DataSource` should be relatively straightforwar
 
 [#17395]: https://github.com/apache/datafusion/pull/17395/
 
+### `FileOpenFuture` now uses `DataFusionError` instead of `ArrowError`
+
+The `FileOpenFuture` type alias has been updated to use `DataFusionError` instead of `ArrowError` for its error type. This change affects the `FileOpener` trait and any implementations that work with file streaming operations.
+
+**Before:**
+
+```rust,ignore
+pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
+```
+
+**After:**
+
+```rust,ignore
+pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch>>>>;
+```
+
+If you have custom implementations of `FileOpener` or work directly with `FileOpenFuture`, you'll need to update your error handling to use `DataFusionError` instead of `ArrowError`. The `FileStreamState` enum's `Open` variant has also been updated accordingly. See [#17397] for more details.
+
+[#17397]: https://github.com/apache/datafusion/pull/17397
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
