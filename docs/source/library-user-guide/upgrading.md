@@ -107,6 +107,12 @@ To upgrade your code:
 - Replace tuple field access `.0` and `.1` with `.expr` and `.alias`
 - Update pattern matching from `(expr, alias)` to `ProjectionExpr { expr, alias }`
 
+This mainly impacts use of `ProjectionExec`.
+
+This change was done in [#17398]
+
+[#17398]: https://github.com/apache/datafusion/pull/17398
+
 ### `SessionState`, `SessionConfig`, and `OptimizerConfig` returns `&Arc<ConfigOptions>` instead of `&ConfigOptions`
 
 To provide broader access to `ConfigOptions` and reduce required clones, some
