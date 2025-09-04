@@ -338,7 +338,7 @@ impl TestStream {
 }
 
 impl Stream for TestStream {
-    type Item = Result<RecordBatch, datafusion_common::DataFusionError>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let next_batch = self.index.value();
