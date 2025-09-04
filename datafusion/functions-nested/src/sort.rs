@@ -74,7 +74,7 @@ make_udf_expr_and_func!(
         description = "Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`)."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArraySort {
     signature: Signature,
     aliases: Vec<String>,

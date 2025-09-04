@@ -41,7 +41,7 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
-use datafusion_physical_expr::schema_rewriter::DefaultPhysicalExprAdapterFactory;
+use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::PushedDown;
@@ -521,7 +521,7 @@ impl FileSource for ParquetSource {
             }
             (None, Some(schema_adapter_factory)) => {
                 // If a custom schema adapter factory is provided but no expr adapter factory is provided use the custom SchemaAdapter for both projections and predicate pushdown.
-                // This maximizes compatiblity with existing code that uses the SchemaAdapter API and did not explicitly opt into the PhysicalExprAdapterFactory API.
+                // This maximizes compatibility with existing code that uses the SchemaAdapter API and did not explicitly opt into the PhysicalExprAdapterFactory API.
                 (None, Arc::clone(schema_adapter_factory) as _)
             }
             (None, None) => {
@@ -585,6 +585,10 @@ impl FileSource for ParquetSource {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.predicate.clone()
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
@@ -668,7 +672,7 @@ impl FileSource for ParquetSource {
                             .map(|item| format!("{item}"))
                             .collect_vec();
                         guarantees.sort();
-                        writeln!(
+                        write!(
                             f,
                             ", pruning_predicate={}, required_guarantees=[{}]",
                             pruning_predicate.predicate_expr(),

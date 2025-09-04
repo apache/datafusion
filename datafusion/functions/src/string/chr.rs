@@ -31,7 +31,7 @@ use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
-/// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
+/// Returns the character with the given code.
 /// chr(65) = 'A'
 pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = as_int64_array(&args[0])?;
@@ -47,22 +47,14 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     for integer in integer_array {
         match integer {
             Some(integer) => {
-                if integer == 0 {
-                    return exec_err!("null character not permitted.");
-                } else if integer < 0 {
-                    return exec_err!("negative input not permitted.");
-                } else {
-                    match core::char::from_u32(integer as u32) {
-                        Some(c) => {
-                            builder.append_value(c.encode_utf8(&mut buf));
-                        }
-                        None => {
-                            return exec_err!(
-                                "requested character too large for encoding."
-                            );
-                        }
+                if let Ok(u) = u32::try_from(integer) {
+                    if let Some(c) = core::char::from_u32(u) {
+                        builder.append_value(c.encode_utf8(&mut buf));
+                        continue;
                     }
                 }
+
+                return exec_err!("invalid Unicode scalar value: {integer}");
             }
             None => {
                 builder.append_null();
@@ -77,7 +69,7 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns the character with the specified ASCII or Unicode code value.",
+    description = "Returns a string containing the character with the specified Unicode scalar value.",
     syntax_example = "chr(expression)",
     sql_example = r#"```sql
 > select chr(128640);
@@ -90,7 +82,7 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     standard_argument(name = "expression", prefix = "String"),
     related_udf(name = "ascii")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ChrFunc {
     signature: Signature,
 }
@@ -144,6 +136,7 @@ mod tests {
     #[test]
     fn test_chr_normal() {
         let input = Arc::new(Int64Array::from(vec![
+            Some(0),        // null
             Some(65),       // A
             Some(66),       // B
             Some(67),       // C
@@ -159,6 +152,7 @@ mod tests {
         let result = chr(&[input]).unwrap();
         let string_array = result.as_any().downcast_ref::<StringArray>().unwrap();
         let expected = [
+            "\u{0000}",
             "A",
             "B",
             "C",
@@ -172,7 +166,7 @@ mod tests {
             "\u{10ffff}",
         ];
 
-        assert_eq!(string_array.len(), 11);
+        assert_eq!(string_array.len(), expected.len());
         for (i, e) in expected.iter().enumerate() {
             assert_eq!(string_array.value(i), *e);
         }
@@ -180,22 +174,13 @@ mod tests {
 
     #[test]
     fn test_chr_error() {
-        // chr(0) returns an error
-        let input = Arc::new(Int64Array::from(vec![0]));
-        let result = chr(&[input]);
-        assert!(result.is_err());
-        assert_contains!(
-            result.err().unwrap().to_string(),
-            "null character not permitted"
-        );
-
         // invalid Unicode code points (too large)
         let input = Arc::new(Int64Array::from(vec![i64::MAX]));
         let result = chr(&[input]);
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
-            "requested character too large for encoding"
+            "invalid Unicode scalar value: 9223372036854775807"
         );
 
         // invalid Unicode code points (too large) case 2
@@ -204,7 +189,7 @@ mod tests {
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
-            "requested character too large for encoding"
+            "invalid Unicode scalar value: 1114112"
         );
 
         // invalid Unicode code points (surrogate code point)
@@ -214,7 +199,7 @@ mod tests {
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
-            "requested character too large for encoding"
+            "invalid Unicode scalar value: 55297"
         );
 
         // negative input
@@ -223,7 +208,7 @@ mod tests {
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
-            "negative input not permitted"
+            "invalid Unicode scalar value: -9223372036854775806"
         );
 
         // negative input case 2
@@ -232,16 +217,16 @@ mod tests {
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
-            "negative input not permitted"
+            "invalid Unicode scalar value: -1"
         );
 
         // one error with valid values after
-        let input = Arc::new(Int64Array::from(vec![65, 0, 66])); // A, NULL_CHAR, B
+        let input = Arc::new(Int64Array::from(vec![65, -1, 66])); // A, -1, B
         let result = chr(&[input]);
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
-            "null character not permitted"
+            "invalid Unicode scalar value: -1"
         );
     }
 

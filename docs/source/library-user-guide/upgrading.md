@@ -24,13 +24,21 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
-### `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
+### `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
 
-To address error-proneness of `AggregateUDFImpl::equals` and `WindowUDFImpl::equals` methods and
-to make it easy to implement function equality correctly, the `equals` and `hash_value` methods have
-been removed from `AggregateUDFImpl` and `WindowUDFImpl` traits. They are replaced the requirement to
-implement the `PartialEq`, `Eq`, and `Hash` traits on any type implementing `AggregateUDFImpl`
-or `WindowUDFImpl`. Please see [issue #16677] for more details.
+To address error-proneness of `ScalarUDFImpl::equals`, `AggregateUDFImpl::equals`and
+`WindowUDFImpl::equals` methods and to make it easy to implement function equality correctly,
+the `equals` and `hash_value` methods have been removed from `ScalarUDFImpl`, `AggregateUDFImpl`
+and `WindowUDFImpl` traits. They are replaced the requirement to implement the `PartialEq`, `Eq`,
+and `Hash` traits on any type implementing `ScalarUDFImpl`, `AggregateUDFImpl` or `WindowUDFImpl`.
+Please see [issue #16677] for more details.
+
+Most of the scalar functions are stateless and have a `signature` field. These can be migrated
+using regular expressions
+
+- search for `\#\[derive\(Debug\)\](\n *(pub )?struct \w+ \{\n *signature\: Signature\,\n *\})`,
+- replace with `#[derive(Debug, PartialEq, Eq, Hash)]$1`,
+- review all the changes and make sure only function structs were changed.
 
 [issue #16677]: https://github.com/apache/datafusion/issues/16677
 
@@ -146,6 +154,24 @@ impl AsyncScalarUDFImpl for AskLLM {
 # */
 ```
 
+### Schema Rewriter Module Moved to New Crate
+
+The `schema_rewriter` module and its associated symbols have been moved from `datafusion_physical_expr` to a new crate `datafusion_physical_expr_adapter`. This affects the following symbols:
+
+- `DefaultPhysicalExprAdapter`
+- `DefaultPhysicalExprAdapterFactory`
+- `PhysicalExprAdapter`
+- `PhysicalExprAdapterFactory`
+
+To upgrade, change your imports to:
+
+```rust
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory,
+    PhysicalExprAdapter, PhysicalExprAdapterFactory
+};
+```
+
 ### Upgrade to arrow `56.0.0` and parquet `56.0.0`
 
 This version of DataFusion upgrades the underlying Apache Arrow implementation
@@ -154,13 +180,50 @@ for more details.
 
 ### Added `ExecutionPlan::reset_state`
 
-In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the precense of a query such as `ORDER BY ... LIMIT ...`)
+In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the presence of a query such as `ORDER BY ... LIMIT ...`)
 produced incorrect results in recursive queries, a new method `reset_state` has been added to the `ExecutionPlan` trait.
 
 Any `ExecutionPlan` that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
 See [#17028] for more details and an example implementation for `SortExec`.
 
 [#17028]: https://github.com/apache/datafusion/pull/17028
+
+### Nested Loop Join input sort order cannot be preserved
+
+The Nested Loop Join operator has been rewritten from scratch to improve performance and memory efficiency. From the micro-benchmarks: this change introduces up to 5X speed-up and uses only 1% memory in extreme cases compared to the previous implementation.
+
+However, the new implementation cannot preserve input sort order like the old version could. This is a fundamental design trade-off that prioritizes performance and memory efficiency over sort order preservation.
+
+See [#16996] for details.
+
+[#16996]: https://github.com/apache/datafusion/pull/16996
+
+### Add `as_any()` method to `LazyBatchGenerator`
+
+To help with protobuf serialization, the `as_any()` method has been added to the `LazyBatchGenerator` trait. This means you will need to add `as_any()` to your implementation of `LazyBatchGenerator`:
+
+```rust
+# /* comment to avoid running
+
+impl LazyBatchGenerator for MyBatchGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    ...
+}
+
+# */
+```
+
+See [#17200](https://github.com/apache/datafusion/pull/17200) for details.
+
+### Refactored `DataSource::try_swapping_with_projection`
+
+We refactored `DataSource::try_swapping_with_projection` to simplify the method and minimize leakage across the ExecutionPlan <-> DataSource abstraction layer.
+Reimplementation for any custom `DataSource` should be relatively straightforward, see [#17395] for more details.
+
+[#17395]: https://github.com/apache/datafusion/pull/17395/
 
 ## DataFusion `49.0.0`
 
@@ -558,7 +621,7 @@ to access the metadata associated with the columnar values during invocation.
 To upgrade user defined aggregate functions, there is now a function
 `return_field` that will allow you to specify both metadata and nullability of
 your function. You are not required to implement this if you do not need to
-handle metatdata.
+handle metadata.
 
 The largest change to aggregate functions happens in the accumulator arguments.
 Both the `AccumulatorArgs` and `StateFieldsArgs` now contain `FieldRef` rather
@@ -920,8 +983,8 @@ Elapsed 0.005 seconds.
 DataFusion 46 has changed the way scalar array function signatures are
 declared. Previously, functions needed to select from a list of predefined
 signatures within the `ArrayFunctionSignature` enum. Now the signatures
-can be defined via a `Vec` of psuedo-types, which each correspond to a
-single argument. Those psuedo-types are the variants of the
+can be defined via a `Vec` of pseudo-types, which each correspond to a
+single argument. Those pseudo-types are the variants of the
 `ArrayFunctionArgument` enum and are as follows:
 
 - `Array`: An argument of type List/LargeList/FixedSizeList. All Array

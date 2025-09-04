@@ -112,11 +112,7 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         &self.empty_schema
     }
 
-    fn check_invariants(
-        &self,
-        _check: InvariantLevel,
-        _plan: &LogicalPlan,
-    ) -> Result<()> {
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
         Ok(())
     }
 
@@ -426,7 +422,7 @@ async fn simple_scalar_function_substr() -> Result<()> {
     roundtrip("SELECT SUBSTR(f, 1, 3) FROM data").await
 }
 
-// Test that DataFusion functions gets correctly mapped to Substrait names (when the names are diferent)
+// Test that DataFusion functions gets correctly mapped to Substrait names (when the names are different)
 // Follows the same structure as existing roundtrip tests, but more explicitly tests for name mappings
 async fn test_substrait_to_df_name_mapping(
     substrait_name: &str,

@@ -81,7 +81,7 @@ make_udf_expr_and_func!(
         description = "Index at which to start searching (1-indexed)."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayPosition {
     signature: Signature,
     aliases: Vec<String>,
@@ -245,7 +245,7 @@ make_udf_expr_and_func!(
         description = "Element to search for position in the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayPositions {
     signature: Signature,
     aliases: Vec<String>,
