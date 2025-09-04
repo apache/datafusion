@@ -411,8 +411,8 @@ impl FileOpener for ParquetOpener {
                 .build()?;
 
             let stream = stream
-                .map_err(|e| DataFusionError::from(e))
-                .map(move |b| b.and_then(|b| Ok(schema_mapping.map_batch(b)?)));
+                .map_err(DataFusionError::from)
+                .map(move |b| b.and_then(|b| schema_mapping.map_batch(b)));
 
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
