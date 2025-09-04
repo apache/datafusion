@@ -112,7 +112,7 @@ impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
-        let file_location = file_meta.location();
+        let file_location = file_meta.location().clone();
         let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
@@ -152,16 +152,18 @@ impl FileOpener for ParquetOpener {
         let mut predicate_file_schema = Arc::clone(&self.logical_file_schema);
 
         let mut enable_page_index = self.enable_page_index;
-        let file_decryption_properties =
-            self.get_file_decryption_properties(file_location)?;
-
-        // For now, page index does not work with encrypted files. See:
-        // https://github.com/apache/arrow-rs/issues/7629
-        if file_decryption_properties.is_some() {
-            enable_page_index = false;
-        }
+        let encryption_context = self.get_encryption_context();
 
         Ok(Box::pin(async move {
+            let file_decryption_properties = encryption_context
+                .get_file_decryption_properties(&file_location)
+                .await?;
+            // For now, page index does not work with encrypted files. See:
+            // https://github.com/apache/arrow-rs/issues/7629
+            if file_decryption_properties.is_some() {
+                enable_page_index = false;
+            }
+
             // Prune this file using the file level statistics and partition values.
             // Since dynamic filters may have been updated since planning it is possible that we are able
             // to prune files now that we couldn't prune at planning time.
@@ -508,9 +510,30 @@ where
     }
 }
 
+#[derive(Default)]
+struct EncryptionContext {
+    #[cfg(feature = "parquet_encryption")]
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+    #[cfg(feature = "parquet_encryption")]
+    encryption_factory: Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
+}
+
 #[cfg(feature = "parquet_encryption")]
-impl ParquetOpener {
-    fn get_file_decryption_properties(
+impl EncryptionContext {
+    fn new(
+        file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+        encryption_factory: Option<(
+            Arc<dyn EncryptionFactory>,
+            EncryptionFactoryOptions,
+        )>,
+    ) -> Self {
+        Self {
+            file_decryption_properties,
+            encryption_factory,
+        }
+    }
+
+    async fn get_file_decryption_properties(
         &self,
         file_location: &object_store::path::Path,
     ) -> Result<Option<Arc<FileDecryptionProperties>>> {
@@ -520,7 +543,8 @@ impl ParquetOpener {
             }
             None => match &self.encryption_factory {
                 Some((encryption_factory, encryption_config)) => Ok(encryption_factory
-                    .get_file_decryption_properties(encryption_config, file_location)?
+                    .get_file_decryption_properties(encryption_config, file_location)
+                    .await?
                     .map(Arc::new)),
                 None => Ok(None),
             },
@@ -529,12 +553,27 @@ impl ParquetOpener {
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
-impl ParquetOpener {
-    fn get_file_decryption_properties(
+impl EncryptionContext {
+    async fn get_file_decryption_properties(
         &self,
         _file_location: &object_store::path::Path,
     ) -> Result<Option<Arc<FileDecryptionProperties>>> {
-        Ok(self.file_decryption_properties.clone())
+        Ok(None)
+    }
+}
+
+impl ParquetOpener {
+    #[cfg(feature = "parquet_encryption")]
+    fn get_encryption_context(&self) -> EncryptionContext {
+        EncryptionContext::new(
+            self.file_decryption_properties.clone(),
+            self.encryption_factory.clone(),
+        )
+    }
+
+    #[cfg(not(feature = "parquet_encryption"))]
+    fn get_encryption_context(&self) -> EncryptionContext {
+        EncryptionContext::default()
     }
 }
 
