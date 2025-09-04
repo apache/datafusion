@@ -27,7 +27,55 @@ use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Construct an INTERVAL (MonthDayNano) from component parts. Missing arguments default to 0; if any provided argument is NULL on a row, the result is NULL.",
+    syntax_example = "make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]])",
+    sql_example = r#"```sql
+-- Inline example without creating a table
+> SELECT
+      y, m, w, d, h, mi, s,
+      make_interval(y, m, w, d, h, mi, s) AS interval
+    FROM VALUES
+      (1,   1,   1,   1,   1,   1,   1.0)
+    AS v(y, m, w, d, h, mi, s);
++---+---+---+---+---+----+-----+--------------------------------------------------------------------------+
+| y | m | w | d | h | mi | s   | interval                                                                 |
++---+---+---+---+---+----+-----+--------------------------------------------------------------------------+
+| 1 | 1 | 1 | 1 | 1 | 1  | 1.0 | IntervalMonthDayNano { months: 13, days: 8, nanoseconds: 3661000000000 } |
++---+---+---+---+---+----+-----+--------------------------------------------------------------------------+
+```"#,
+    argument(
+        name = "years",
+        description = "Years to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "months",
+        description = "Months to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "weeks",
+        description = "Weeks to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "days",
+        description = "Days to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "hours",
+        description = "Hours to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "mins",
+        description = "Minutes to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "secs",
+        description = "Seconds to use when making the interval (may be fractional). Optional; defaults to 0. Must be finite (not NaN/±Inf). Can be a constant, column or function, and any combination of arithmetic operators."
+    )
+)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeIntervalFunc {
     signature: Signature,
