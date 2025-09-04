@@ -24,6 +24,14 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### `MSRV` updated to 1.86.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.86.0`].
+See [#17230] for details.
+
+[`1.86.0`]: https://releases.rs/docs/1.86.0/
+[#17230]: https://github.com/apache/datafusion/pull/17230
+
 ### `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
 
 To address error-proneness of `ScalarUDFImpl::equals`, `AggregateUDFImpl::equals`and
