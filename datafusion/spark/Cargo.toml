@@ -49,6 +49,7 @@ log = { workspace = true }
 sha1 = "0.10"
 url = { workspace = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+percent-encoding = "2.3.2"
 
 [dev-dependencies]
 criterion = { workspace = true }
