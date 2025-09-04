@@ -1528,10 +1528,12 @@ fn timeunit_coercion(lhs_unit: &TimeUnit, rhs_unit: &TimeUnit) -> TimeUnit {
     }
 }
 
-/// Coercion rules from NULL type. Since NULL can be casted to any other type in arrow,
-/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
+/// Coercion rules from NULL type. Since NULL can be cast to any other type in arrow,
+/// either lhs or rhs is NULL, if NULL can be cast to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
+        // Handle NULL % NULL case - return a sensible numeric type
+        (DataType::Null, DataType::Null) => Some(DataType::Int64),
         (DataType::Null, other_type) | (other_type, DataType::Null) => {
             if can_cast_types(&DataType::Null, other_type) {
                 Some(other_type.clone())
