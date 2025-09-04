@@ -392,17 +392,20 @@ impl FileOpener for CsvOpener {
                         )?
                     };
 
-                    Ok(futures::stream::iter(config.open(decoder)?).boxed())
+                    Ok(futures::stream::iter(config.open(decoder)?)
+                        .map(|r| r.map_err(Into::into))
+                        .boxed())
                 }
                 GetResultPayload::Stream(s) => {
                     let decoder = config.builder().build_decoder();
                     let s = s.map_err(DataFusionError::from);
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    Ok(deserialize_stream(
+                    let stream = deserialize_stream(
                         input,
                         DecoderDeserializer::new(CsvDecoder::new(decoder)),
-                    ))
+                    );
+                    Ok(stream.map_err(Into::into).boxed())
                 }
             }
         }))
