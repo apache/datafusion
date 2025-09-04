@@ -25,7 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, SortExpr};
 
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -171,6 +171,41 @@ pub trait TableProvider: Debug + Sync + Send {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
+    /// Create an [`ExecutionPlan`] for scanning the table using structured arguments.
+    ///
+    /// This method uses [`ScanArgs`] to pass scan parameters in a structured way
+    /// and returns a [`ScanResult`] containing the execution plan. This approach
+    /// allows for extensible parameter passing and result handling.
+    ///
+    /// Table providers can override this method to take advantage of additional
+    /// parameters like `preferred_ordering` that may not be available through
+    /// other scan methods.
+    ///
+    /// # Arguments
+    /// * `state` - The session state containing configuration and context
+    /// * `args` - Structured scan arguments including projection, filters, limit, and ordering preferences
+    ///
+    /// # Returns
+    /// A [`ScanResult`] containing the [`ExecutionPlan`] for scanning the table
+    ///
+    /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
+    async fn scan_with_args(
+        &self,
+        state: &dyn Session,
+        args: ScanArgs,
+    ) -> Result<ScanResult> {
+        let ScanArgs {
+            filters,
+            projection,
+            limit,
+        } = args;
+        let filters = filters.unwrap_or_default();
+        let plan = self
+            .scan(state, projection.as_ref(), &filters, limit)
+            .await?;
+        Ok(ScanResult::new(plan))
+    }
+
     /// Specify if DataFusion should provide filter expressions to the
     /// TableProvider to apply *during* the scan.
     ///
@@ -296,6 +331,119 @@ pub trait TableProvider: Debug + Sync + Send {
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Insert into not implemented for this table")
+    }
+}
+
+/// Arguments for scanning a table with [`TableProvider::scan_with_args`].
+///
+/// `ScanArgs` provides a structured way to pass scan parameters to table providers,
+/// replacing the multiple individual parameters used by [`TableProvider::scan`].
+/// This struct uses the builder pattern for convenient construction.
+///
+/// # Examples
+///
+/// ```
+/// # use datafusion_catalog::ScanArgs;
+/// # use datafusion_expr::Expr;
+/// let args = ScanArgs::default()
+///     .with_projection(Some(vec![0, 2, 4]))
+///     .with_limit(Some(1000));
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ScanArgs {
+    filters: Option<Vec<Expr>>,
+    projection: Option<Vec<usize>>,
+    limit: Option<usize>,
+}
+
+impl ScanArgs {
+    /// Set the column projection for the scan.
+    ///
+    /// The projection is a list of column indices from [`TableProvider::schema`]
+    /// that should be included in the scan results. If `None`, all columns are included.
+    ///
+    /// # Arguments
+    /// * `projection` - Optional list of column indices to project
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    /// Get the column projection for the scan.
+    ///
+    /// Returns a cloned copy of the projection column indices, or `None` if
+    /// no projection was specified (meaning all columns should be included).
+    pub fn projection(&self) -> Option<Vec<usize>> {
+        self.projection.clone()
+    }
+
+    /// Set the filter expressions for the scan.
+    ///
+    /// Filters are boolean expressions that should be evaluated during the scan
+    /// to reduce the number of rows returned. All expressions are combined with AND logic.
+    /// Whether filters are actually pushed down depends on [`TableProvider::supports_filters_pushdown`].
+    ///
+    /// # Arguments
+    /// * `filters` - Optional list of filter expressions
+    pub fn with_filters(mut self, filters: Option<Vec<Expr>>) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    /// Get the filter expressions for the scan.
+    ///
+    /// Returns a reference to the filter expressions, or `None` if no filters were specified.
+    pub fn filters(&self) -> Option<&[Expr]> {
+        self.filters.as_deref()
+    }
+
+    /// Set the maximum number of rows to return from the scan.
+    ///
+    /// If specified, the scan should return at most this many rows. This is typically
+    /// used to optimize queries with `LIMIT` clauses.
+    ///
+    /// # Arguments
+    /// * `limit` - Optional maximum number of rows to return
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    /// Get the maximum number of rows to return from the scan.
+    ///
+    /// Returns the row limit, or `None` if no limit was specified.
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+}
+
+/// Result of a table scan operation from [`TableProvider::scan_with_args`].
+///
+/// `ScanResult` encapsulates the [`ExecutionPlan`] produced by a table scan,
+/// providing a typed return value instead of returning the plan directly.
+/// This allows for future extensibility of scan results without breaking
+/// the API.
+#[derive(Debug, Clone)]
+pub struct ScanResult {
+    /// The ExecutionPlan to run.
+    plan: Arc<dyn ExecutionPlan>,
+}
+
+impl ScanResult {
+    /// Create a new `ScanResult` with the given execution plan.
+    ///
+    /// # Arguments
+    /// * `plan` - The execution plan that will perform the table scan
+    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+        Self { plan }
+    }
+
+    /// Get the execution plan for this scan result.
+    ///
+    /// Returns a cloned reference to the [`ExecutionPlan`] that will perform
+    /// the actual table scanning and data retrieval.
+    pub fn plan(&self) -> Arc<dyn ExecutionPlan> {
+        Arc::clone(&self.plan)
     }
 }
 
