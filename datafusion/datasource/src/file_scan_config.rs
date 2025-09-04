@@ -642,8 +642,10 @@ impl DataSource for FileScanConfig {
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
 
         // Must be all column references, with no table partition columns (which can not be projected)
-        let partitioned_columns_in_proj = projection.iter().any(|(expr, _)| {
-            expr.as_any()
+        let partitioned_columns_in_proj = projection.iter().any(|proj_expr| {
+            proj_expr
+                .expr
+                .as_any()
                 .downcast_ref::<Column>()
                 .map(|expr| expr.index() >= self.file_schema.fields().len())
                 .unwrap_or(false)
