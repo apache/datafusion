@@ -204,6 +204,13 @@ impl LazyBatchGenerator for MyBatchGenerator {
 
 See [#17200](https://github.com/apache/datafusion/pull/17200) for details.
 
+### Refactored `DataSource::try_swapping_with_projection`
+
+We refactored `DataSource::try_swapping_with_projection` to simplify the method and minimize leakage across the ExecutionPlan <-> DataSource abstraction layer.
+Reimplementation for any custom `DataSource` should be relatively straightforward, see [#17395] for more details.
+
+[#17395]: https://github.com/apache/datafusion/pull/17395/
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1

@@ -709,6 +709,16 @@
      </code>
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#refactored-datasource-try-swapping-with-projection">
+     Refactored
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       DataSource::try_swapping_with_projection
+      </span>
+     </code>
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1383,6 +1393,11 @@ See <a class="reference external" href="https://github.com/apache/datafusion/pul
 </pre></div>
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/17200">#17200</a> for details.</p>
+</section>
+<section id="refactored-datasource-try-swapping-with-projection">
+<h3>Refactored <code class="docutils literal notranslate"><span class="pre">DataSource::try_swapping_with_projection</span></code><a class="headerlink" href="#refactored-datasource-try-swapping-with-projection" title="Link to this heading">¶</a></h3>
+<p>We refactored <code class="docutils literal notranslate"><span class="pre">DataSource::try_swapping_with_projection</span></code> to simplify the method and minimize leakage across the ExecutionPlan &lt;-&gt; DataSource abstraction layer.
+Reimplementation for any custom <code class="docutils literal notranslate"><span class="pre">DataSource</span></code> should be relatively straightforward, see <a class="reference external" href="https://github.com/apache/datafusion/pull/17395/">#17395</a> for more details.</p>
 </section>
 </section>
 <section id="datafusion-49-0-0">
