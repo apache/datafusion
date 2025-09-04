@@ -29,6 +29,25 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 Aggregate functions operate on a set of values to compute a single result.
 
+## Filter clause
+
+Aggregate functions support the SQL `FILTER (WHERE ...)` clause to restrict which input rows contribute to the aggregate result.
+
+```sql
+function([exprs]) FILTER (WHERE condition)
+```
+
+Example:
+
+```sql
+SELECT
+  sum(salary) FILTER (WHERE salary > 0) AS sum_positive_salaries,
+  count(*)    FILTER (WHERE active)     AS active_count
+FROM employees;
+```
+
+Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/`MAX` return `NULL`.
+
 ## General Functions
 
 - [array_agg](#array_agg)
