@@ -34,7 +34,7 @@ use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
@@ -52,18 +52,9 @@ fn projection_exec(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     Ok(Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr {
-                expr: col("c1", schema.as_ref()).unwrap(),
-                alias: "c1".to_string(),
-            },
-            ProjectionExpr {
-                expr: col("c2", schema.as_ref()).unwrap(),
-                alias: "c2".to_string(),
-            },
-            ProjectionExpr {
-                expr: col("c3", schema.as_ref()).unwrap(),
-                alias: "c3".to_string(),
-            },
+            (col("c1", schema.as_ref()).unwrap(), "c1".to_string()),
+            (col("c2", schema.as_ref()).unwrap(), "c2".to_string()),
+            (col("c3", schema.as_ref()).unwrap(), "c3".to_string()),
         ],
         input,
     )?))
