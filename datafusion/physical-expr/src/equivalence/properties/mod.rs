@@ -255,10 +255,11 @@ impl EquivalenceProperties {
     pub fn constants(&self) -> Vec<ConstExpr> {
         self.eq_group
             .iter()
-            .filter_map(|c| {
-                c.constant.as_ref().and_then(|across| {
-                    c.canonical_expr()
-                        .map(|expr| ConstExpr::new(Arc::clone(expr), across.clone()))
+            .flat_map(|c| {
+                c.iter().filter_map(|expr| {
+                    c.constant
+                        .as_ref()
+                        .map(|across| ConstExpr::new(Arc::clone(expr), across.clone()))
                 })
             })
             .collect()
