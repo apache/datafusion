@@ -89,11 +89,13 @@ See [#16896](https://github.com/apache/datafusion/issues/16896) for more details
 `ProjectionExpr` has been changed from a type alias to a struct with named fields to improve code clarity and maintainability.
 
 **Before:**
+
 ```rust
 pub type ProjectionExpr = (Arc<dyn PhysicalExpr>, String);
 ```
 
 **After:**
+
 ```rust
 #[derive(Debug, Clone)]
 pub struct ProjectionExpr {
@@ -103,6 +105,7 @@ pub struct ProjectionExpr {
 ```
 
 To upgrade your code:
+
 - Replace tuple construction `(expr, alias)` with `ProjectionExpr::new(expr, alias)` or `ProjectionExpr { expr, alias }`
 - Replace tuple field access `.0` and `.1` with `.expr` and `.alias`
 - Update pattern matching from `(expr, alias)` to `ProjectionExpr { expr, alias }`
