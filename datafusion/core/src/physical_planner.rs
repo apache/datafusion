@@ -100,7 +100,7 @@ use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
-use log::{debug, trace};
+use log::debug;
 use tokio::sync::Mutex;
 
 /// Physical query planner that converts a `LogicalPlan` to an
@@ -2048,7 +2048,7 @@ impl DefaultPhysicalPlanner {
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent(false)
         );
-        trace!(
+        debug!(
             "Detailed input physical plan:\n{}",
             displayable(plan.as_ref()).indent(true)
         );
@@ -2070,7 +2070,7 @@ impl DefaultPhysicalPlanner {
             OptimizationInvariantChecker::new(optimizer)
                 .check(&new_plan, before_schema)?;
 
-            trace!(
+            debug!(
                 "Optimized physical plan by {}:\n{}\n",
                 optimizer.name(),
                 displayable(new_plan.as_ref()).indent(false)
@@ -2086,7 +2086,7 @@ impl DefaultPhysicalPlanner {
             "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent(false)
         );
-        trace!("Detailed optimized physical plan:\n{new_plan:?}");
+        debug!("Detailed optimized physical plan:\n{new_plan:?}");
         Ok(new_plan)
     }
 
@@ -2355,7 +2355,7 @@ impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         // Checks for the more permissive `InvariantLevel::Always`.
-        // Plans are not guarenteed to be executable after each physical optimizer run.
+        // Plans are not guaranteed to be executable after each physical optimizer run.
         node.check_invariants(InvariantLevel::Always).map_err(|e|
             e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
         )?;

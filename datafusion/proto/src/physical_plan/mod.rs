@@ -3376,7 +3376,7 @@ pub struct ComposedPhysicalExtensionCodec {
 }
 
 impl ComposedPhysicalExtensionCodec {
-    // Position in this codesc list is important as it will be used for decoding.
+    // Position in this codecs list is important as it will be used for decoding.
     // If new codec is added it should go to last position.
     pub fn new(codecs: Vec<Arc<dyn PhysicalExtensionCodec>>) -> Self {
         Self { codecs }
