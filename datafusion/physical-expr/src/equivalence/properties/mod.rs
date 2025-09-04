@@ -215,6 +215,9 @@ impl EquivalenceProperties {
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) -> Self {
         let eq_group = EquivalenceGroup::default();
+        // let orderings = orderings.into_iter().map(|maybe_exprs| {
+        //     maybe_exprs.into_iter().flatten()
+        // });
         let oeq_class = OrderingEquivalenceClass::new(orderings);
         // Here, we can avoid performing a full normalization, and get by with
         // only removing constants because the equivalence group is empty.

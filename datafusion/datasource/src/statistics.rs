@@ -67,7 +67,7 @@ impl MinMaxStatistics {
     }
 
     pub fn new_from_files<'a>(
-        projected_sort_order: &Option<LexOrdering>, // Sort order with respect to projected schema
+        projected_sort_order: &LexOrdering, // Sort order with respect to projected schema
         projected_schema: &SchemaRef,       // Projected schema
         projection: Option<&[usize]>, // Indices of projection in full table schema (None = all columns)
         files: impl IntoIterator<Item = &'a PartitionedFile>,

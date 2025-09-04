@@ -1062,7 +1062,7 @@ impl fmt::Display for ProjectSchemaDisplay<'_> {
     }
 }
 
-pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::Result {
+pub fn display_orderings(f: &mut Formatter, orderings: &Vec<LexOrdering>) -> fmt::Result {
     if !orderings.is_empty() {
         let start = if orderings.len() == 1 {
             ", output_ordering="
