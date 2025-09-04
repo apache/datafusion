@@ -26,7 +26,7 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
-use datafusion_common::Statistics;
+use datafusion_common::{exec_datafusion_err, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::PartitionedFile;
@@ -183,9 +183,7 @@ impl FileOpener for ArrowOpener {
                         footer_buf[..footer_len].try_into().unwrap(),
                     )
                     .map_err(|err| {
-                        datafusion_common::DataFusionError::Execution(format!(
-                            "Unable to get root as footer: {err:?}"
-                        ))
+                        exec_datafusion_err!("Unable to get root as footer: {err:?}")
                     })?;
                     // build decoder according to footer & projection
                     let schema =

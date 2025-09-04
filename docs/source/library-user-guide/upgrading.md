@@ -238,7 +238,7 @@ pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<Re
 **After:**
 
 ```rust,ignore
-pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, DataFusionError>>>>;
+pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch>>>>;
 ```
 
 If you have custom implementations of `FileOpener` or work directly with `FileOpenFuture`, you'll need to update your error handling to use `DataFusionError` instead of `ArrowError`. The `FileStreamState` enum's `Open` variant has also been updated accordingly. See [#17397] for more details.

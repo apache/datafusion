@@ -459,12 +459,9 @@ impl<S> EarlyStoppingStream<S> {
 }
 impl<S> EarlyStoppingStream<S>
 where
-    S: Stream<Item = Result<RecordBatch, DataFusionError>> + Unpin,
+    S: Stream<Item = Result<RecordBatch>> + Unpin,
 {
-    fn check_prune(
-        &mut self,
-        input: Result<RecordBatch, DataFusionError>,
-    ) -> Result<Option<RecordBatch>, DataFusionError> {
+    fn check_prune(&mut self, input: Result<RecordBatch>) -> Result<Option<RecordBatch>> {
         let batch = input?;
 
         // Since dynamic filters may have been updated, see if we can stop
@@ -482,9 +479,9 @@ where
 
 impl<S> Stream for EarlyStoppingStream<S>
 where
-    S: Stream<Item = Result<RecordBatch, DataFusionError>> + Unpin,
+    S: Stream<Item = Result<RecordBatch>> + Unpin,
 {
-    type Item = Result<RecordBatch, DataFusionError>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
