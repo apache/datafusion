@@ -29,6 +29,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
+use datafusion_functions_nested::array_filter::array_filter_udf;
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_window::rank::rank_udwf;
@@ -61,7 +62,7 @@ use datafusion_sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
     UserDefinedLogicalNodeUnparser,
 };
-use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
+use sqlparser::dialect::{DatabricksDialect, Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
 #[test]
@@ -1340,6 +1341,7 @@ where
             .with_window_function(rank_udwf())
             .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
             .with_scalar_function(make_array_udf())
+            .with_scalar_function(array_filter_udf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(UnicodeFunctionPlanner))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
@@ -2657,5 +2659,17 @@ fn test_struct_expr3() {
     assert_snapshot!(
         statement,
         @r#"SELECT test.c1."metadata".product."name" FROM (SELECT {"metadata": {product: {"name": 'Product Name'}}} AS c1) AS test"#
+    );
+}
+
+#[test]
+fn test_lambda_expr() {
+    let statement = generate_round_trip_statement(
+        DatabricksDialect {},
+        r#"SELECT array_filter(ARRAY[1, 2, 3], x -> x > 1) AS filtered"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT array_filter([1, 2, 3], x -> (x > 1)) AS filtered"
     );
 }

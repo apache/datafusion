@@ -638,6 +638,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::WindowFunction { .. }
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
+            | Expr::Lambda(_)
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
