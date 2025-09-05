@@ -586,7 +586,8 @@ mod tests {
 
     use arrow::array::{
         builder::{BooleanBuilder, UInt64Builder},
-        BooleanArray, Date32Array, Date64Array, Int32Array, RecordBatch, UInt64Array,
+        BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
+        Int32Array, RecordBatch, UInt64Array,
     };
     use arrow::compute::{concat_batches, filter_record_batch, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -677,6 +678,56 @@ mod tests {
                 Arc::new(Date64Array::from(a.1.clone())),
                 Arc::new(Date64Array::from(b.1.clone())),
                 Arc::new(Date64Array::from(c.1.clone())),
+            ],
+        )
+        .unwrap();
+
+        let schema = batch.schema();
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    }
+
+    fn build_binary_table(
+        a: (&str, &Vec<&[u8]>),
+        b: (&str, &Vec<i32>),
+        c: (&str, &Vec<i32>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::Binary, false),
+            Field::new(b.0, DataType::Int32, false),
+            Field::new(c.0, DataType::Int32, false),
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(BinaryArray::from(a.1.clone())),
+                Arc::new(Int32Array::from(b.1.clone())),
+                Arc::new(Int32Array::from(c.1.clone())),
+            ],
+        )
+        .unwrap();
+
+        let schema = batch.schema();
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    }
+
+    fn build_fixed_size_binary_table(
+        a: (&str, &Vec<&[u8]>),
+        b: (&str, &Vec<i32>),
+        c: (&str, &Vec<i32>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::FixedSizeBinary(3), false),
+            Field::new(b.0, DataType::Int32, false),
+            Field::new(c.0, DataType::Int32, false),
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(FixedSizeBinaryArray::from(a.1.clone())),
+                Arc::new(Int32Array::from(b.1.clone())),
+                Arc::new(Int32Array::from(c.1.clone())),
             ],
         )
         .unwrap();
@@ -1919,6 +1970,100 @@ mod tests {
             | 1970-01-01T00:00:00.002 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
             | 1970-01-01T00:00:00.003 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.009 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
             +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+            "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_binary() -> Result<()> {
+        let left = build_binary_table(
+            (
+                "a1",
+                &vec![
+                    &[0xc0, 0xff, 0xee],
+                    &[0xde, 0xca, 0xde],
+                    &[0xfa, 0xca, 0xde],
+                ],
+            ),
+            ("b1", &vec![5, 10, 15]), // this has a repetition
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_binary_table(
+            (
+                "a1",
+                &vec![
+                    &[0xc0, 0xff, 0xee],
+                    &[0xde, 0xca, 0xde],
+                    &[0xfa, 0xca, 0xde],
+                ],
+            ),
+            ("b2", &vec![105, 110, 115]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+        )];
+
+        let (_, batches) = join_collect(left, right, on, Inner).await?;
+
+        // The output order is important as SMJ preserves sortedness
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +--------+----+----+--------+-----+----+
+            | a1     | b1 | c1 | a1     | b2  | c2 |
+            +--------+----+----+--------+-----+----+
+            | c0ffee | 5  | 7  | c0ffee | 105 | 70 |
+            | decade | 10 | 8  | decade | 110 | 80 |
+            | facade | 15 | 9  | facade | 115 | 90 |
+            +--------+----+----+--------+-----+----+
+            "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_fixed_size_binary() -> Result<()> {
+        let left = build_fixed_size_binary_table(
+            (
+                "a1",
+                &vec![
+                    &[0xc0, 0xff, 0xee],
+                    &[0xde, 0xca, 0xde],
+                    &[0xfa, 0xca, 0xde],
+                ],
+            ),
+            ("b1", &vec![5, 10, 15]), // this has a repetition
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_fixed_size_binary_table(
+            (
+                "a1",
+                &vec![
+                    &[0xc0, 0xff, 0xee],
+                    &[0xde, 0xca, 0xde],
+                    &[0xfa, 0xca, 0xde],
+                ],
+            ),
+            ("b2", &vec![105, 110, 115]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+        )];
+
+        let (_, batches) = join_collect(left, right, on, Inner).await?;
+
+        // The output order is important as SMJ preserves sortedness
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +--------+----+----+--------+-----+----+
+            | a1     | b1 | c1 | a1     | b2  | c2 |
+            +--------+----+----+--------+-----+----+
+            | c0ffee | 5  | 7  | c0ffee | 105 | 70 |
+            | decade | 10 | 8  | decade | 110 | 80 |
+            | facade | 15 | 9  | facade | 115 | 90 |
+            +--------+----+----+--------+-----+----+
             "#);
         Ok(())
     }
