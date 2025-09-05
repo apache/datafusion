@@ -1229,7 +1229,7 @@ impl CollectLeftAccumulator {
 
         let data_type = expr
             .data_type(schema)
-            // Min/Max can operate on dictionary data but expect to be initialized with the underlaying value type
+            // Min/Max can operate on dictionary data but expect to be initialized with the underlying value type
             .map(|dt| dictionary_value_type(&dt))?;
         Ok(Self {
             expr,
