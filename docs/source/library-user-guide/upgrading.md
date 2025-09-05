@@ -285,6 +285,21 @@ If you have custom implementations of `FileOpener` or work directly with `FileOp
 
 [#17397]: https://github.com/apache/datafusion/pull/17397
 
+
+### Added `PhysicalExpr::is_volatile_node`
+
+We added a method to `PhysicalExpr` to mark a `PhysicalExpr` as volatile:
+
+```rust,ignore
+impl PhysicalExpr for MyRandomExpr {
+  fn is_volatile_node(&self) -> bool {
+    true
+  }
+}
+```
+
+We've shipped this with a default value of `false` to minimize breakage but we highly recommend that implementers of `PhysicalExpr` opt into a behavior, even if it is returning `false`.
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
