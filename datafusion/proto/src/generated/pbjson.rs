@@ -20966,6 +20966,9 @@ impl serde::Serialize for SortNode {
         if self.fetch != 0 {
             len += 1;
         }
+        if self.preserve_partitioning {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.SortNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -20977,6 +20980,9 @@ impl serde::Serialize for SortNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
+        }
+        if self.preserve_partitioning {
+            struct_ser.serialize_field("preservePartitioning", &self.preserve_partitioning)?;
         }
         struct_ser.end()
     }
@@ -20991,6 +20997,8 @@ impl<'de> serde::Deserialize<'de> for SortNode {
             "input",
             "expr",
             "fetch",
+            "preserve_partitioning",
+            "preservePartitioning",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -20998,6 +21006,7 @@ impl<'de> serde::Deserialize<'de> for SortNode {
             Input,
             Expr,
             Fetch,
+            PreservePartitioning,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -21022,6 +21031,7 @@ impl<'de> serde::Deserialize<'de> for SortNode {
                             "input" => Ok(GeneratedField::Input),
                             "expr" => Ok(GeneratedField::Expr),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "preservePartitioning" | "preserve_partitioning" => Ok(GeneratedField::PreservePartitioning),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -21044,6 +21054,7 @@ impl<'de> serde::Deserialize<'de> for SortNode {
                 let mut input__ = None;
                 let mut expr__ = None;
                 let mut fetch__ = None;
+                let mut preserve_partitioning__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -21066,12 +21077,19 @@ impl<'de> serde::Deserialize<'de> for SortNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::PreservePartitioning => {
+                            if preserve_partitioning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preservePartitioning"));
+                            }
+                            preserve_partitioning__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SortNode {
                     input: input__,
                     expr: expr__.unwrap_or_default(),
                     fetch: fetch__.unwrap_or_default(),
+                    preserve_partitioning: preserve_partitioning__.unwrap_or_default(),
                 })
             }
         }
