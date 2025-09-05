@@ -640,28 +640,28 @@ mod tests {
 
         let url = ListingTableUrl::parse("/t").unwrap();
         assert_eq!(
+            list_all_files("/", &store, "parquet").await,
             vec!["a.parquet"],
-            list_all_files("/", &store, "parquet").await
         );
 
         // test with and without trailing slash
         assert_eq!(
+            list_all_files("/t/", &store, "parquet").await,
             vec!["t/b.parquet"],
-            list_all_files("/t/", &store, "parquet").await
         );
         assert_eq!(
+            list_all_files("/t", &store, "parquet").await,
             vec!["t/b.parquet"],
-            list_all_files("/t", &store, "parquet").await
         );
 
         // test with and without trailing slash
         assert_eq!(
+            list_all_files("/t", &store, "csv").await,
             vec!["t/c.csv", "t/d.csv"],
-            list_all_files("/t", &store, "csv").await
         );
         assert_eq!(
+            list_all_files("/t/", &store, "csv").await,
             vec!["t/c.csv", "t/d.csv"],
-            list_all_files("/t/", &store, "csv").await
         );
     }
 
