@@ -640,7 +640,6 @@ mod tests {
         create_file(&store, "/t/c.csv").await;
         create_file(&store, "/t/d.csv").await;
 
-        let url = ListingTableUrl::parse("/t").unwrap();
         assert_eq!(
             list_all_files("/", &store, "parquet").await,
             vec!["a.parquet"],
@@ -665,6 +664,16 @@ mod tests {
             list_all_files("/t/", &store, "csv").await,
             vec!["t/c.csv", "t/d.csv"],
         );
+
+        // Test a non existing prefix
+        assert_eq!(
+            list_all_files("/NonExisting", &store, "csv").await,
+            vec![] as Vec<String>
+        );
+        assert_eq!(
+            list_all_files("/NonExisting/", &store, "csv").await,
+            vec![] as Vec<String>
+        );
     }
 
     /// Creates a file with "hello world" content at the specified path
@@ -676,22 +685,35 @@ mod tests {
     }
 
     /// Runs "list_all_files" and returns their paths
+    ///
+    /// Panic's on error
     async fn list_all_files(
         url: &str,
         store: &dyn ObjectStore,
         file_extension: &str,
     ) -> Vec<String> {
+        try_list_all_files(url, store, file_extension)
+            .await
+            .unwrap()
+    }
+
+    /// Runs "list_all_files" and returns their paths
+    async fn try_list_all_files(
+        url: &str,
+        store: &dyn ObjectStore,
+        file_extension: &str,
+    ) -> Result<Vec<String>> {
         let session = MockSession::new();
-        let url = ListingTableUrl::parse(url).unwrap();
-        url.list_all_files(&session, store, file_extension)
-            .await
-            .unwrap()
+        let url = ListingTableUrl::parse(url)?;
+        let files = url
+            .list_all_files(&session, store, file_extension)
+            .await?
             .try_collect::<Vec<_>>()
-            .await
-            .unwrap()
+            .await?
             .into_iter()
             .map(|meta| meta.location.as_ref().to_string())
-            .collect()
+            .collect();
+        Ok(files)
     }
 
     struct MockSession {
@@ -720,15 +742,15 @@ mod tests {
 
         async fn create_physical_plan(
             &self,
-            logical_plan: &LogicalPlan,
+            _logical_plan: &LogicalPlan,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
 
         fn create_physical_expr(
             &self,
-            expr: Expr,
-            df_schema: &DFSchema,
+            _expr: Expr,
+            _df_schema: &DFSchema,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }
