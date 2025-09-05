@@ -1297,7 +1297,7 @@ impl BuildSideState {
                     on_left
                         .iter()
                         .map(|expr| {
-                            CollectLeftAccumulator::try_new(Arc::clone(&expr), schema)
+                            CollectLeftAccumulator::try_new(Arc::clone(expr), schema)
                         })
                         .collect::<Result<Vec<_>>>()
                 })
