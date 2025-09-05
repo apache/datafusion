@@ -246,6 +246,7 @@ impl BufferedBatch {
     }
 }
 
+// TODO: Spill join arrays (https://github.com/apache/datafusion/pull/17429)
 // Used to represent whether the buffered data is currently in memory or written to disk
 #[derive(Debug)]
 pub(super) enum BufferedBatchState {
@@ -859,7 +860,7 @@ impl SortMergeJoinStream {
                 self.reservation
                     .try_shrink(buffered_batch.size_estimation)?;
             }
-            _ => return internal_err!("Batch has empty body."),
+            _ => {},
         }
         Ok(())
     }
