@@ -128,7 +128,7 @@ datafusion-ffi = { path = "datafusion/ffi", version = "49.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "49.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "49.0.0" }
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "49.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "49.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "49.0.0", default-features = false }
 datafusion-functions-table = { path = "datafusion/functions-table", version = "49.0.0" }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "49.0.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "49.0.0" }
