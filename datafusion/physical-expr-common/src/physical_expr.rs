@@ -583,16 +583,18 @@ pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// This method recursively checks if any sub-expression is volatile, for example
 /// `1 + RANDOM()` will return `true`.
 pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let mut is_volatile = expr.is_volatile_node();
+    if expr.is_volatile_node() {
+        return true;
+    }
+    let mut is_volatile = false;
     expr.apply(|e| {
-        is_volatile = is_volatile || e.is_volatile_node();
-        if is_volatile {
-            // Stop recursion as soon as we find a volatile node
+        if e.is_volatile_node() {
+            is_volatile = true;
             Ok(TreeNodeRecursion::Stop)
         } else {
             Ok(TreeNodeRecursion::Continue)
         }
     })
-    .expect("infalible closure should not fail");
+    .expect("infallible closure should not fail");
     is_volatile
 }
