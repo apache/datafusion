@@ -860,7 +860,7 @@ impl SortMergeJoinStream {
                 self.reservation
                     .try_shrink(buffered_batch.size_estimation)?;
             }
-            _ => {},
+            _ => {}
         }
         Ok(())
     }
