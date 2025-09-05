@@ -25,7 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
-use datafusion_expr::{Expr, SortExpr};
+use datafusion_expr::Expr;
 
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
