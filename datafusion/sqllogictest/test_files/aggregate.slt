@@ -7444,4 +7444,3 @@ NULL NULL
 
 statement ok
 drop table distinct_avg;
-
