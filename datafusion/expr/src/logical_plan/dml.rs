@@ -81,6 +81,7 @@ impl PartialOrd for CopyTo {
             },
             cmp => cmp,
         }
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -217,6 +218,7 @@ impl PartialOrd for DmlStatement {
             },
             cmp => cmp,
         }
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
