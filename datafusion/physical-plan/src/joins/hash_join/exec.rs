@@ -1287,23 +1287,19 @@ impl BuildSideState {
         schema: &SchemaRef,
         should_compute_bounds: bool,
     ) -> Result<Self> {
-        let bounds_accumulators = if should_compute_bounds {
-            Some(
-                on_left
-                    .iter()
-                    .map(|expr| CollectLeftAccumulator::try_new(expr.clone(), schema))
-                    .collect::<Result<Vec<_>>>()?,
-            )
-        } else {
-            None
-        };
-
         Ok(Self {
             batches: Vec::new(),
             num_rows: 0,
             metrics,
             reservation,
-            bounds_accumulators,
+            bounds_accumulators: should_compute_bounds
+                .then(|| {
+                    on_left
+                        .iter()
+                        .map(|expr| CollectLeftAccumulator::try_new(Arc::clone(&expr), schema))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?,
         })
     }
 }
