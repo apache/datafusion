@@ -88,7 +88,7 @@ tonic = "0.13.1"
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
 url = { workspace = true }
-uuid = "1.17"
+uuid = "1.18"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.30.1", features = ["fs"] }
