@@ -555,6 +555,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#filter-clause-for-aggregate-window-functions">
+   Filter clause for aggregate window functions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#aggregate-functions">
    Aggregate functions
   </a>
@@ -934,6 +939,15 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </div>
 <p>where <strong>offset</strong> is an non-negative integer.</p>
 <p>RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).</p>
+</section>
+<section id="filter-clause-for-aggregate-window-functions">
+<h2>Filter clause for aggregate window functions<a class="headerlink" href="#filter-clause-for-aggregate-window-functions" title="Link to this heading">¶</a></h2>
+<p>Aggregate window functions support the SQL <code class="docutils literal notranslate"><span class="pre">FILTER</span> <span class="pre">(WHERE</span> <span class="pre">...)</span></code> clause to include only rows that satisfy the predicate from the window frame in the aggregation.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">sum</span><span class="p">(</span><span class="n">salary</span><span class="p">)</span><span class="w"> </span><span class="n">FILTER</span><span class="w"> </span><span class="p">(</span><span class="k">WHERE</span><span class="w"> </span><span class="n">salary</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">  </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">depname</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">salary</span><span class="w"> </span><span class="k">ROWS</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="n">UNBOUNDED</span><span class="w"> </span><span class="n">PRECEDING</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">CURRENT</span><span class="w"> </span><span class="k">ROW</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>If no rows in the frame satisfy the filter for a given output row, <code class="docutils literal notranslate"><span class="pre">COUNT</span></code> yields <code class="docutils literal notranslate"><span class="pre">0</span></code> while <code class="docutils literal notranslate"><span class="pre">SUM</span></code>/<code class="docutils literal notranslate"><span class="pre">AVG</span></code>/<code class="docutils literal notranslate"><span class="pre">MIN</span></code>/<code class="docutils literal notranslate"><span class="pre">MAX</span></code> yield <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.</p>
 </section>
 <section id="aggregate-functions">
 <h2>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h2>
