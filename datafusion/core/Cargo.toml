@@ -260,3 +260,7 @@ name = "spm"
 [[bench]]
 harness = false
 name = "partial_sort_benchmark"
+
+[[bench]]
+harness = false
+name = "partial_sort_detailed_benchmark"

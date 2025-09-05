@@ -258,10 +258,10 @@ impl PhysicalOptimizerRule for EnforceSorting {
     }
 }
 
-/// Only interested with [`SortExec`]s and their unbounded children.
-/// If the plan is not a [`SortExec`] or its child is not unbounded, returns the original plan.
-/// Otherwise, by checking the requirement satisfaction searches for a replacement chance.
-/// If there's one replaces the [`SortExec`] plan with a [`PartialSortExec`]
+/// Attempts to replace [`SortExec`] with [`PartialSortExec`] when the input data
+/// already has a partial sort order that matches a prefix of the required sort expressions.
+/// If the plan is not a [`SortExec`] or no compatible prefix is found, returns the original plan.
+/// Otherwise replaces the [`SortExec`] with a [`PartialSortExec`] that only sorts within groups
 fn replace_with_partial_sort(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
