@@ -377,6 +377,22 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         // static expressions will always return 0.
         0
     }
+
+    /// Returns true if the expression node is volatile, i.e. whether it can return
+    /// different results when evaluated multiple times with the same input.
+    ///
+    /// Note: unlike [`is_volatile`], this function does not consider inputs:
+    /// - `random()` returns `true`,
+    /// - `a + random()` returns `false` (because the operation `+` itself is not volatile.)
+    ///
+    /// The default to this function was set to `false` when it was created
+    /// to avoid imposing API churn on implementers, but this is not a safe default in general.
+    /// It is highly recommended that volatile expressions implement this method and return `true`.
+    /// This default may be removed in the future if it causes problems or we decide to
+    /// eat the cost of the breaking change and require all implementers to make a choice.
+    fn is_volatile_node(&self) -> bool {
+        false
+    }
 }
 
 #[deprecated(
@@ -559,4 +575,29 @@ pub fn snapshot_generation(expr: &Arc<dyn PhysicalExpr>) -> u64 {
 pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     // If the generation is non-zero, then this `PhysicalExpr` is dynamic.
     snapshot_generation(expr) != 0
+}
+
+/// Returns true if the expression is volatile, i.e. whether it can return different
+/// results when evaluated multiple times with the same input.
+///
+/// For example the function call `RANDOM()` is volatile as each call will
+/// return a different value.
+///
+/// This method recursively checks if any sub-expression is volatile, for example
+/// `1 + RANDOM()` will return `true`.
+pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    if expr.is_volatile_node() {
+        return true;
+    }
+    let mut is_volatile = false;
+    expr.apply(|e| {
+        if e.is_volatile_node() {
+            is_volatile = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("infallible closure should not fail");
+    is_volatile
 }

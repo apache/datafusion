@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::sink::DataSink;
@@ -37,11 +38,11 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
 };
 use datafusion_physical_plan::{
-    common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr, SendableRecordBatchStream, Statistics,
+    common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
+    SendableRecordBatchStream, Statistics,
 };
 
 use async_trait::async_trait;
@@ -213,11 +214,11 @@ impl DataSource for MemorySourceConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        projection: &[ProjectionExpr],
+    ) -> Result<Option<Arc<dyn DataSource>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        all_alias_free_columns(projection.expr())
+        all_alias_free_columns(projection)
             .then(|| {
                 let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(
@@ -225,12 +226,12 @@ impl DataSource for MemorySourceConfig {
                     self.projection().as_ref().unwrap_or(&all_projections),
                 );
 
-                MemorySourceConfig::try_new_exec(
+                MemorySourceConfig::try_new(
                     self.partitions(),
                     self.original_schema(),
                     Some(new_projections),
                 )
-                .map(|e| e as _)
+                .map(|s| Arc::new(s) as Arc<dyn DataSource>)
             })
             .transpose()
     }
@@ -498,7 +499,7 @@ impl MemorySourceConfig {
             // by count of rows.
             let mut max_heap = BinaryHeap::with_capacity(target_partitions);
             for rep in to_repartition {
-                max_heap.push(rep);
+                max_heap.push(CompareByRowCount(rep));
             }
 
             // Split the largest partitions into smaller partitions. Maintaining the output
@@ -514,10 +515,10 @@ impl MemorySourceConfig {
                     };
 
                     // Split the partition. The new partitions will be ordered with idx and idx+1.
-                    let mut new_partitions = to_split.split();
+                    let mut new_partitions = to_split.into_inner().split();
                     if new_partitions.len() > 1 {
                         for new_partition in new_partitions {
-                            max_heap.push(new_partition);
+                            max_heap.push(CompareByRowCount(new_partition));
                         }
                         // Successful repartition. Break inner loop, and return to outer `cnt_to_repartition` loop.
                         break;
@@ -526,7 +527,10 @@ impl MemorySourceConfig {
                     }
                 }
             }
-            let mut partitions = max_heap.drain().collect_vec();
+            let mut partitions = max_heap
+                .drain()
+                .map(CompareByRowCount::into_inner)
+                .collect_vec();
             partitions.extend(cannot_split_further);
 
             // Finally, sort all partitions by the output ordering.
@@ -648,26 +652,6 @@ impl RePartition {
     }
 }
 
-impl PartialOrd for RePartition {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for RePartition {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.row_count.cmp(&other.row_count)
-    }
-}
-
-impl PartialEq for RePartition {
-    fn eq(&self, other: &Self) -> bool {
-        self.row_count.eq(&other.row_count)
-    }
-}
-
-impl Eq for RePartition {}
-
 impl fmt::Display for RePartition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -677,6 +661,36 @@ impl fmt::Display for RePartition {
             self.batches.len(),
             self.idx
         )
+    }
+}
+
+struct CompareByRowCount(RePartition);
+impl CompareByRowCount {
+    fn into_inner(self) -> RePartition {
+        self.0
+    }
+}
+impl Ord for CompareByRowCount {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.row_count.cmp(&other.0.row_count)
+    }
+}
+impl PartialOrd for CompareByRowCount {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for CompareByRowCount {
+    fn eq(&self, other: &Self) -> bool {
+        // PartialEq must be consistent with PartialOrd
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for CompareByRowCount {}
+impl Deref for CompareByRowCount {
+    type Target = RePartition;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -835,6 +849,7 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::expressions::lit;
 
+    use datafusion_physical_plan::ExecutionPlan;
     use futures::StreamExt;
 
     #[tokio::test]
