@@ -250,6 +250,8 @@ impl ListingTableUrl {
                 Ok(meta) => futures::stream::once(async { Ok(meta) })
                     .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
                     .boxed(),
+                // If the head command fails, it is likely that object doesn't exist.
+                // Retry as though it were a prefix (aka a collection)
                 Err(_) => list_with_cache(ctx, store, &self.prefix).await?,
             }
         };
