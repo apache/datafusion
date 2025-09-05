@@ -19,8 +19,10 @@
 
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
+use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
@@ -178,6 +180,7 @@ pub fn parse_physical_window_expr(
         &extended_schema,
         proto.ignore_nulls,
         proto.distinct,
+        None,
     )
 }
 
@@ -554,6 +557,18 @@ pub fn parse_protobuf_file_scan_config(
         .with_batch_size(proto.batch_size.map(|s| s as usize))
         .build();
     Ok(config)
+}
+
+pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
+    if buf.is_empty() {
+        return Ok(vec![]);
+    }
+    let reader = StreamReader::try_new(buf, None)?;
+    let mut batches = Vec::new();
+    for batch in reader {
+        batches.push(batch?);
+    }
+    Ok(batches)
 }
 
 impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
