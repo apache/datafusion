@@ -43,12 +43,12 @@ use datafusion_common::{
     tree_node::{TransformedResult, TreeNode},
     Column, DataFusionError, Result, ScalarValue, TableReference,
 };
-use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
     expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
+use datafusion_expr::{expr::OUTER_REFERENCE_COLUMN_PREFIX, wildcard};
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::{sync::Arc, vec};
 
@@ -433,10 +433,27 @@ impl Unparser<'_> {
                     None,
                     select.already_projected(),
                 ) {
-                    let unprojected =
-                        unproject_window_exprs(filter.predicate.clone(), &window)?;
-                    let filter_expr = self.expr_to_sql(&unprojected)?;
-                    select.qualify(Some(filter_expr));
+                    if self.dialect.supports_qualify() {
+                        let unprojected =
+                            unproject_window_exprs(filter.predicate.clone(), &window)?;
+                        let filter_expr = self.expr_to_sql(&unprojected)?;
+                        select.qualify(Some(filter_expr));
+                    } else {
+                        let input = LogicalPlanBuilder::from(Arc::clone(&filter.input))
+                            .project(vec![wildcard()])?
+                            .build()?;
+
+                        self.derive_with_dialect_alias(
+                            "derived_qualify",
+                            &input,
+                            relation,
+                            false,
+                            vec![],
+                        )?;
+                        let filter_expr = self.expr_to_sql(&filter.predicate)?;
+                        select.selection(Some(filter_expr));
+                        return Ok(());
+                    }
                 } else {
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));
