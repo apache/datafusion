@@ -353,7 +353,7 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 /// 1. It is non-degenerate, meaning it contains at least one element.
 /// 2. It is duplicate-free, meaning it does not contain multiple entries for
 ///    the same column.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct LexOrdering {
     /// Vector of sort expressions representing the lexicographical ordering.
     exprs: Vec<PhysicalSortExpr>,
@@ -428,13 +428,26 @@ impl LexOrdering {
     }
 }
 
+impl PartialEq for LexOrdering {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            exprs,
+            set: _, // derived from `exprs`
+        } = self;
+        // PartialEq must be consistent with PartialOrd
+        exprs == &other.exprs
+    }
+}
+impl Eq for LexOrdering {}
 impl PartialOrd for LexOrdering {
     /// There is a partial ordering among `LexOrdering` objects. For example, the
     /// ordering `[a ASC]` is coarser (less) than ordering `[a ASC, b ASC]`.
     /// If two orderings do not share a prefix, they are incomparable.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.iter()
-            .zip(other.iter())
+        // PartialEq must be consistent with PartialOrd
+        self.exprs
+            .iter()
+            .zip(other.exprs.iter())
             .all(|(lhs, rhs)| lhs == rhs)
             .then(|| self.len().cmp(&other.len()))
     }
