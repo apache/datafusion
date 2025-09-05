@@ -30,7 +30,7 @@ use arrow::{
 };
 use arrow_schema::{ArrowError, Schema, SchemaRef, SortOptions};
 use datafusion_common::{
-    exec_err, internal_err, plan_err, utils::compare_rows, JoinSide, Result, ScalarValue,
+    exec_err, internal_err, utils::compare_rows, JoinSide, Result, ScalarValue,
 };
 use datafusion_common::{not_impl_err, NullEquality};
 use datafusion_execution::{
@@ -101,6 +101,24 @@ pub const DEFAULT_INCREMENTAL_BATCH_VALUE: usize = 8192;
 /// have it already sorted either ascending or descending based on the operator as this allows us to emit all
 /// the rows from a given point to the end as matches. Sorting the streamed side allows us to start the pointer
 /// from the previous row's match on the buffered side.
+/// 
+/// For `Lt` (`<`) + `LtEq` (`<=`) operations both inputs are to be sorted in descending order and sorted in 
+/// ascending order for `Gt` (`>`) + `GtEq` (`>=`) than (`>`) operations. `SortExec` is used to enforce sorting 
+/// on the buffered side and streamed side is sorted in memory.
+/// 
+/// The pseudocode for the algorithm looks like this:
+/// 
+/// ```text
+/// for stream_row in stream_batch:
+///     for buffer_row in buffer_batch:
+///         if compare(stream_row, probe_row):
+///             output stream_row X buffer_batch[buffer_row:]
+///         else:
+///             continue
+/// ```
+/// 
+/// The algorithm uses the streamed side to drive the loop. This is due to every row on the stream side iterating 
+/// the buffered side to find every first match.
 ///
 /// Here is an example:
 ///
@@ -155,8 +173,25 @@ pub const DEFAULT_INCREMENTAL_BATCH_VALUE: usize = 8192;
 /// Existence joins are made magnitudes of times faster with a `PiecewiseMergeJoin` as we only need to find
 /// the min/max value of the streamed side to be able to emit all matches on the buffered side. By putting
 /// the side we need to mark onto the sorted buffer side, we can emit all these matches at once.
+/// 
+/// For less than operations (`<`) both inputs are to be sorted in descending order and vice versa for greater 
+/// than (`>`) operations. `SortExec` is used to enforce sorting on the buffered side and streamed side does not
+/// need to be sorted due to only needing to find the min/max.
 ///
 /// For Left Semi, Anti, and Mark joins we swap the inputs so that the marked side is on the buffered side.
+/// 
+/// The pseudocode for the algorithm looks like this:
+/// 
+/// ```text
+/// // Using the example of a less than `<` operation
+/// let max = max_batch(streamed_batch)
+/// 
+/// for buffer_row in buffer_batch:
+///     if buffer_row < max:
+///         output buffer_batch[buffer_row:]
+/// ```
+/// 
+/// Only need to find the min/max value and iterate through the buffered side once.
 ///
 /// Here is an example:
 /// We perform a `JoinType::LeftSemi` with these two batches and the operator being `Operator::Lt`(<). Because
@@ -168,7 +203,7 @@ pub const DEFAULT_INCREMENTAL_BATCH_VALUE: usize = 8192;
 /// ```text
 /// SQL statement:
 /// SELECT *
-/// FROM (VALUES (100), (200), (500)) AS streamed(a)
+/// FROM (VALUES (500), (200), (300)) AS streamed(a)
 /// LEFT SEMI JOIN (VALUES (100), (200), (200), (300), (400)) AS buffered(b)
 ///   ON streamed.a < buffered.b;
 ///
@@ -190,32 +225,26 @@ pub const DEFAULT_INCREMENTAL_BATCH_VALUE: usize = 8192;
 /// For both types of joins, the buffered side must be sorted ascending for `Operator::Lt` (<) or
 /// `Operator::LtEq` (<=) and descending for `Operator::Gt` (>) or `Operator::GtEq` (>=).
 ///
-/// ## Assumptions / Notation
-/// - \[R\], \[S\]: number of pages (blocks) of `R` and `S`
-/// - |R|, |S|: number of tuples in `R` and `S`
-/// - `B`: number of buffer pages
-///
-/// # Performance (cost)
-/// Piecewise Merge Join is used over Nested Loop Join due to its superior performance. Here is a breakdown
-/// of the calculations:
+/// # Performance Explanation (cost)
+/// Piecewise Merge Join is used over Nested Loop Join due to its superior performance. Here is the breakdown:
 ///
 /// ## Piecewise Merge Join (PWMJ)
-/// Intuition: Keep the buffered side (`R`) sorted and in memory (or scan it in sorted order),
-/// sort the streamed side (`S`), then merge in order while advancing a pivot on `R`.
+/// # Classic Join:
+/// Requires sorting the probe side and, for each probe row, scanning the buffered side until the first match 
+/// is found.
+///     Complexity: `O(sort(S) + |S| * scan(R))`.
 ///
-/// Average I/O cost:
-///   `cost(PWMJ) = sort(R) + sort(S) + (\[R\] + \[S\])`
+/// # Mark Join:
+/// Sorts the probe side, then computes the min/max range of the probe keys and scans the buffered side only 
+/// within that range.  
+///   Complexity: `O(|S| + scan(R[range]))`.
 ///
-///   - If `R` (buffered) already sorted on the join key:     `cost(PWMJ) = sort(S) + \[R\] + \[S\]`
-///   - If `S` already sorted and `R` not:                    `cost(PWMJ) = sort(R) + \[R\] + \[S\]`
-///   - If both already sorted:                               `cost(PWMJ) = \[R\] + \[S\]`
+/// ## Nested Loop Join 
+/// Compares every row from `S` with every row from `R`.  
+///   Complexity: `O(|S| * |R|)`.
 ///
 /// ## Nested Loop Join
-///   `cost(NLJ) ≈ \[R\] + |R|·\[S\]`
-///
-/// Takeaway:
-///   - When at least one side needs sorting, PWMJ ≈ `sort(R) + sort(S) + \[R\] + \[S\]` on average,
-///     typically beating NLJ’s `|R|·\[S\]` (or its buffered variant) for nontrivial `|R|`, `\[S\]`.
+///   Always going to be probe (O(N) * O(N)).
 ///
 /// # Further Reference Material
 /// DuckDB blog on Range Joins: [Range Joins in DuckDB](https://duckdb.org/2022/05/27/iejoin.html)
@@ -237,9 +266,10 @@ pub struct PiecewiseMergeJoinExec {
     buffered_fut: OnceAsync<BufferedSideData>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// The left SortExpr
+    /// The left sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
     left_sort_exprs: LexOrdering,
-    /// The right SortExpr
+    /// The right sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
+    /// Unsorted for mark joins
     right_sort_exprs: LexOrdering,
     /// Sort options of join columns used in sorting the stream and buffered execution plans
     sort_options: SortOptions,
@@ -282,7 +312,7 @@ impl PiecewiseMergeJoinExec {
                 }
             }
             _ => {
-                return plan_err!(
+                return internal_err!(
                     "Cannot contain non-range operator in PiecewiseMergeJoinExec"
                 )
             }
@@ -295,12 +325,12 @@ impl PiecewiseMergeJoinExec {
             vec![PhysicalSortExpr::new(Arc::clone(&on.1), sort_options)];
 
         let Some(left_sort_exprs) = LexOrdering::new(left_sort_exprs) else {
-            return plan_err!(
+            return internal_err!(
                 "PiecewiseMergeJoinExec requires valid sort expressions for its left side"
             );
         };
         let Some(right_sort_exprs) = LexOrdering::new(right_sort_exprs) else {
-            return plan_err!(
+            return internal_err!(
                 "PiecewiseMergeJoinExec requires valid sort expressions for its right side"
             );
         };
@@ -400,14 +430,15 @@ impl PiecewiseMergeJoinExec {
         ))
     }
 
+    // TODO: Add input order
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         match join_type {
             // The existence side is expected to come in sorted
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-                vec![false, true]
+                vec![false, false]
             }
             JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
-                vec![true, false]
+                vec![false, false]
             }
             // Left, Right, Full, Inner Join is not guaranteed to maintain
             // input order as the streamed side will be sorted during
