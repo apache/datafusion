@@ -266,6 +266,7 @@ pub fn bounded_window_exec_with_partition(
         schema.as_ref(),
         false,
         false,
+        None,
     )
     .unwrap();
 

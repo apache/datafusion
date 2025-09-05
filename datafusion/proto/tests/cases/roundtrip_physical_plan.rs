@@ -391,6 +391,7 @@ fn roundtrip_window() -> Result<()> {
         &[],
         &[],
         Arc::new(WindowFrame::new(None)),
+        None,
     ));
 
     let window_frame = WindowFrame::new_bounds(
@@ -411,6 +412,7 @@ fn roundtrip_window() -> Result<()> {
         &[],
         &[],
         Arc::new(window_frame),
+        None,
     ));
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
@@ -439,6 +441,7 @@ fn roundtrip_window_distinct() -> Result<()> {
         &[col("b", &schema)?],            // partition by b
         &[],                              // no order by
         Arc::new(WindowFrame::new(None)), // unbounded frame
+        None,
     ));
 
     // Create a distinct sum window expression with bounded frame (becomes SlidingAggregateWindowExpr)
@@ -462,6 +465,7 @@ fn roundtrip_window_distinct() -> Result<()> {
         &[],                     // no partition by
         &[],                     // no order by
         Arc::new(bounded_frame), // bounded frame
+        None,
     ));
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
@@ -493,6 +497,7 @@ fn test_distinct_window_serialization_end_to_end() -> Result<()> {
         &[col("b", &schema)?],
         &[],
         Arc::new(WindowFrame::new(None)),
+        None,
     ));
 
     // Test 2: DISTINCT SUM (without ignore nulls)
@@ -515,6 +520,7 @@ fn test_distinct_window_serialization_end_to_end() -> Result<()> {
         &[],
         &[],
         Arc::new(bounded_frame),
+        None,
     ));
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
@@ -1258,6 +1264,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
             &[col("author", &schema)?],
             &[],
             Arc::new(WindowFrame::new(None)),
+            None,
         ))],
         filter,
         true,
@@ -1367,6 +1374,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
             &[col("author", &schema)?],
             &[],
             Arc::new(WindowFrame::new(None)),
+            None,
         ))],
         filter,
         true,
