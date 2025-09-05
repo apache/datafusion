@@ -383,7 +383,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// Note: unlike [`is_volatile`], this function does not consider inputs:
     /// - `random()` returns `true`,
-    /// - `a + random()` returns `false` (becuase the operation `+` itself is not volatile.)
+    /// - `a + random()` returns `false` (because the operation `+` itself is not volatile.)
     ///
     /// By default, expressions are not volatile to avoid imposing API churn on implementers.
     /// It is highly recommended that volatile expressions implement this method and return `true`.
