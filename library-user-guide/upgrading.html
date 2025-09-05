@@ -760,6 +760,16 @@
      </code>
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#added-physicalexpr-is-volatile-node">
+     Added
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PhysicalExpr::is_volatile_node
+      </span>
+     </code>
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1485,6 +1495,20 @@ Reimplementation for any custom <code class="docutils literal notranslate"><span
 </pre></div>
 </div>
 <p>If you have custom implementations of <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> or work directly with <code class="docutils literal notranslate"><span class="pre">FileOpenFuture</span></code>, you’ll need to update your error handling to use <code class="docutils literal notranslate"><span class="pre">DataFusionError</span></code> instead of <code class="docutils literal notranslate"><span class="pre">ArrowError</span></code>. The <code class="docutils literal notranslate"><span class="pre">FileStreamState</span></code> enum’s <code class="docutils literal notranslate"><span class="pre">Open</span></code> variant has also been updated accordingly. See <a class="reference external" href="https://github.com/apache/datafusion/pull/17397">#17397</a> for more details.</p>
+</section>
+<section id="added-physicalexpr-is-volatile-node">
+<h3>Added <code class="docutils literal notranslate"><span class="pre">PhysicalExpr::is_volatile_node</span></code><a class="headerlink" href="#added-physicalexpr-is-volatile-node" title="Link to this heading">¶</a></h3>
+<p>We added a method to <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code> to mark a <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code> as volatile:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="p">,</span><span class="n">ignore</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyRandomExpr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">fn</span><span class="w"> </span><span class="nf">is_volatile_node</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kc">true</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>We’ve shipped this with a default value of <code class="docutils literal notranslate"><span class="pre">false</span></code> to minimize breakage but we highly recommend that implementers of <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code> opt into a behavior, even if it is returning <code class="docutils literal notranslate"><span class="pre">false</span></code>.</p>
+<p>You can see more discussion and example implementations in <a class="reference external" href="https://github.com/apache/datafusion/pull/17351">#17351</a>.</p>
 </section>
 </section>
 <section id="datafusion-49-0-0">
