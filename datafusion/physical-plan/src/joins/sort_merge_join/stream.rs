@@ -855,12 +855,9 @@ impl SortMergeJoinStream {
 
     fn free_reservation(&mut self, buffered_batch: BufferedBatch) -> Result<()> {
         // Shrink memory usage for in-memory batches only
-        match buffered_batch.batch {
-            BufferedBatchState::InMemory(_) => {
-                self.reservation
-                    .try_shrink(buffered_batch.size_estimation)?;
-            }
-            _ => {}
+        if let BufferedBatchState::InMemory(_) = buffered_batch.batch {
+            self.reservation
+                .try_shrink(buffered_batch.size_estimation)?;
         }
         Ok(())
     }
