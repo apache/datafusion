@@ -1224,9 +1224,53 @@ struct BuildSideState {
     num_rows: usize,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
-    min_accumulators: Vec<MinAccumulator>,
-    max_accumulators: Vec<MaxAccumulator>,
+    min_accumulators: Option<Vec<MinAccumulator>>,
+    max_accumulators: Option<Vec<MaxAccumulator>>,
     on_left: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+impl BuildSideState {
+    /// Create a new BuildSideState with optional accumulators for bounds computation
+    fn try_new(
+        metrics: BuildProbeJoinMetrics,
+        reservation: MemoryReservation,
+        on_left: Vec<Arc<dyn PhysicalExpr>>,
+        schema: &SchemaRef,
+        should_compute_bounds: bool,
+    ) -> Result<Self> {
+        let (min_accumulators, max_accumulators) = if should_compute_bounds {
+            let data_types = on_left
+                .iter()
+                .map(|expr| expr.data_type(schema).map(|dt| dictionary_value_type(&dt)))
+                .collect::<Result<Vec<_>>>()?;
+            (
+                Some(
+                    data_types
+                        .iter()
+                        .map(MinAccumulator::try_new)
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                Some(
+                    data_types
+                        .iter()
+                        .map(MaxAccumulator::try_new)
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+            )
+        } else {
+            (None, None)
+        };
+
+        Ok(Self {
+            batches: Vec::new(),
+            num_rows: 0,
+            metrics,
+            reservation,
+            min_accumulators,
+            max_accumulators,
+            on_left,
+        })
+    }
 }
 
 fn dictionary_value_type(data_type: &DataType) -> DataType {
@@ -1249,49 +1293,30 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
-    let (min_accumulators, max_accumulators) = if should_compute_bounds {
-        let data_types = on_left
-            .iter()
-            .map(|expr| expr.data_type(&schema).map(|dt| dictionary_value_type(&dt)))
-            .collect::<Result<Vec<_>>>()?;
-        (
-            data_types
-                .iter()
-                .map(MinAccumulator::try_new)
-                .collect::<Result<Vec<_>>>()?,
-            data_types
-                .iter()
-                .map(MaxAccumulator::try_new)
-                .collect::<Result<Vec<_>>>()?,
-        )
-    } else {
-        (Vec::new(), Vec::new())
-    };
-
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
     // 2. stores the batches in a vector.
-    let initial = BuildSideState {
-        batches: Vec::new(),
-        num_rows: 0,
+    let initial = BuildSideState::try_new(
         metrics,
         reservation,
-        min_accumulators,
-        max_accumulators,
-        on_left: on_left.clone(),
-    };
+        on_left.clone(),
+        &schema,
+        should_compute_bounds,
+    )?;
 
     let state = left_stream
         .try_fold(initial, |mut state, batch| async move {
             // Update accumulators if computing bounds
-            for (min_accumulator, max_accumulator, on_expr) in izip!(
-                &mut state.min_accumulators,
-                &mut state.max_accumulators,
-                &state.on_left
-            ) {
-                let array = on_expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-                min_accumulator.update_batch(std::slice::from_ref(&array))?;
-                max_accumulator.update_batch(std::slice::from_ref(&array))?;
+            if let (Some(ref mut min_accumulators), Some(ref mut max_accumulators)) =
+                (&mut state.min_accumulators, &mut state.max_accumulators)
+            {
+                for (min_accumulator, max_accumulator, on_expr) in
+                    izip!(min_accumulators, max_accumulators, &state.on_left)
+                {
+                    let array = on_expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+                    min_accumulator.update_batch(std::slice::from_ref(&array))?;
+                    max_accumulator.update_batch(std::slice::from_ref(&array))?;
+                }
             }
 
             // Decide if we spill or not
@@ -1387,20 +1412,21 @@ async fn collect_left_input(
         .collect::<Result<Vec<_>>>()?;
 
     // Compute bounds for dynamic filter if enabled
-    let bounds = if should_compute_bounds && num_rows > 0 {
-        let bounds = min_accumulators
-            .into_iter()
-            .zip(max_accumulators.into_iter())
-            .map(|(mut min_accumulator, mut max_accumulator)| {
-                Ok(ColumnBounds::new(
-                    min_accumulator.evaluate()?,
-                    max_accumulator.evaluate()?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Some(bounds)
-    } else {
-        None
+    let bounds = match (min_accumulators, max_accumulators) {
+        (Some(min_accumulators), Some(max_accumulators)) if num_rows > 0 => {
+            let bounds = min_accumulators
+                .into_iter()
+                .zip(max_accumulators.into_iter())
+                .map(|(mut min_accumulator, mut max_accumulator)| {
+                    Ok(ColumnBounds::new(
+                        min_accumulator.evaluate()?,
+                        max_accumulator.evaluate()?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Some(bounds)
+        }
+        _ => None,
     };
 
     let data = JoinLeftData::new(
