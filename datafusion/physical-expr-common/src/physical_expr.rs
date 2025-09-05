@@ -385,11 +385,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// - `random()` returns `true`,
     /// - `a + random()` returns `false` (because the operation `+` itself is not volatile.)
     ///
-    /// By default, expressions are not volatile to avoid imposing API churn on implementers.
+    /// The default to this function was set to `false` when it was created
+    /// to avoid imposing API churn on implementers, but this is not a safe default in general.
     /// It is highly recommended that volatile expressions implement this method and return `true`.
-    /// The assumption that expressions are not volatile by default is **not** a safe default
-    /// since there is absolutely no way for us to know if an expression is volatile or not
-    /// unless the implementer tells us.
     /// This default may be removed in the future if it causes problems or we decide to
     /// eat the cost of the breaking change and require all implementers to make a choice.
     fn is_volatile_node(&self) -> bool {
