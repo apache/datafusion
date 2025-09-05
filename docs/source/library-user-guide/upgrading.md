@@ -303,6 +303,24 @@ See [#17407] for details.
 [#17407]: https://github.com/apache/datafusion/pull/17407
 [#17374]: https://github.com/apache/datafusion/issues/17374
 
+### Added `PhysicalExpr::is_volatile_node`
+
+We added a method to `PhysicalExpr` to mark a `PhysicalExpr` as volatile:
+
+```rust,ignore
+impl PhysicalExpr for MyRandomExpr {
+  fn is_volatile_node(&self) -> bool {
+    true
+  }
+}
+```
+
+We've shipped this with a default value of `false` to minimize breakage but we highly recommend that implementers of `PhysicalExpr` opt into a behavior, even if it is returning `false`.
+
+You can see more discussion and example implementations in [#17351].
+
+[#17351]: https://github.com/apache/datafusion/pull/17351
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
