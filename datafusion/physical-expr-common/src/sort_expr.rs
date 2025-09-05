@@ -367,8 +367,21 @@ impl LexOrdering {
     /// Creates a new [`LexOrdering`] from the given vector of sort expressions.
     /// If the vector is empty, returns `None`.
     pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
-        let (non_empty, ordering) = Self::construct(exprs);
-        non_empty.then_some(ordering)
+        let exprs = exprs.into_iter();
+        let (items_min, items_max) = exprs.size_hint();
+        let mut candidate = Self {
+            // not valid yet; valid publicly-returned instance must be non-empty
+            exprs: Vec::with_capacity(items_max.unwrap_or(items_min)),
+            set: HashSet::new(),
+        };
+        for expr in exprs {
+            candidate.push(expr);
+        }
+        if candidate.exprs.is_empty() {
+            None
+        } else {
+            Some(candidate)
+        }
     }
 
     /// Appends an element to the back of the `LexOrdering`.
@@ -414,18 +427,6 @@ impl LexOrdering {
         self.exprs.truncate(len);
         true
     }
-
-    /// Constructs a new `LexOrdering` from the given sort requirements w/o
-    /// enforcing non-degeneracy. This function is used internally and is not
-    /// meant (or safe) for external use.
-    fn construct(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> (bool, Self) {
-        let mut set = HashSet::new();
-        let exprs = exprs
-            .into_iter()
-            .filter_map(|s| set.insert(Arc::clone(&s.expr)).then_some(s))
-            .collect();
-        (!set.is_empty(), Self { exprs, set })
-    }
 }
 
 impl PartialEq for LexOrdering {
@@ -458,9 +459,8 @@ impl<const N: usize> From<[PhysicalSortExpr; N]> for LexOrdering {
         // TODO: Replace this assertion with a condition on the generic parameter
         //       when Rust supports it.
         assert!(N > 0);
-        let (non_empty, ordering) = Self::construct(value);
-        debug_assert!(non_empty);
-        ordering
+        Self::new(value)
+            .expect("A LexOrdering from non-empty array must be non-degenerate")
     }
 }
 
@@ -617,10 +617,9 @@ impl From<LexOrdering> for LexRequirement {
 
 impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
-        // Can construct directly as `value` is non-degenerate:
-        let (non_empty, ordering) = Self::construct(value.into_iter().map(Into::into));
-        debug_assert!(non_empty);
-        ordering
+        // Can construct directly as `value` is non-degenerate
+        Self::new(value.into_iter().map(Into::into))
+            .expect("A LexOrdering from LexRequirement must be non-degenerate")
     }
 }
 
