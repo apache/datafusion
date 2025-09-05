@@ -23,7 +23,7 @@ use datafusion_expr::{
     expr_rewriter::NamePreserver,
     planner::{ExprPlanner, PlannerResult, RawWindowExpr},
     utils::COUNT_STAR_EXPANSION,
-    Expr, ExprFunctionExt,
+    Expr,
 };
 
 #[derive(Debug)]
@@ -40,6 +40,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             partition_by,
             order_by,
             window_frame,
+            filter,
             null_treatment,
             distinct,
         } = raw_expr;
@@ -51,6 +52,7 @@ impl ExprPlanner for WindowFunctionPlanner {
                 partition_by,
                 order_by,
                 window_frame,
+                filter,
                 null_treatment,
                 distinct,
             },
@@ -71,6 +73,7 @@ impl ExprPlanner for WindowFunctionPlanner {
                     window_frame,
                     null_treatment,
                     distinct,
+                    filter,
                 },
         } = *window_fun;
         let raw_expr = RawWindowExpr {
@@ -79,6 +82,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             partition_by,
             order_by,
             window_frame,
+            filter,
             null_treatment,
             distinct,
         };
@@ -96,24 +100,23 @@ impl ExprPlanner for WindowFunctionPlanner {
                 partition_by,
                 order_by,
                 window_frame,
+                filter,
                 null_treatment,
                 distinct,
             } = raw_expr;
 
-            let mut new_expr_before_build = Expr::from(WindowFunction::new(
-                func_def,
-                vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
-            ))
-            .partition_by(partition_by)
-            .order_by(order_by)
-            .window_frame(window_frame)
-            .null_treatment(null_treatment);
-
-            if distinct {
-                new_expr_before_build = new_expr_before_build.distinct();
-            }
-
-            let new_expr = new_expr_before_build.build()?;
+            let new_expr = Expr::from(WindowFunction {
+                fun: func_def,
+                params: WindowFunctionParams {
+                    args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    filter,
+                    null_treatment,
+                    distinct,
+                },
+            });
             let new_expr = saved_name.restore(new_expr);
 
             return Ok(PlannerResult::Planned(new_expr));
