@@ -348,6 +348,12 @@ impl NestedLoopJoinExec {
 
     /// Returns a new `ExecutionPlan` that runs NestedLoopsJoins with the left
     /// and right inputs swapped.
+    ///
+    /// # Notes:
+    ///
+    /// This function should be called BEFORE inserting any repartitioning
+    /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
+    /// for more details.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
