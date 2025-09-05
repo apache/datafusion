@@ -59,6 +59,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
+use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
@@ -1189,7 +1190,6 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
-#[expect(clippy::too_many_arguments)]
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
 ///
 /// This function is responsible for:
@@ -1218,7 +1218,6 @@ impl ExecutionPlan for HashJoinExec {
 /// # Returns
 /// `JoinLeftData` containing the hash map, consolidated batch, join key values,
 /// visited indices bitmap, and computed bounds (if requested).
-
 /// State for collecting the build-side data during hash join
 struct BuildSideState {
     batches: Vec<RecordBatch>,
@@ -1230,6 +1229,14 @@ struct BuildSideState {
     on_left: Vec<Arc<dyn PhysicalExpr>>,
 }
 
+fn dictionary_value_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::Dictionary(_, value_type) => dictionary_value_type(value_type.as_ref()),
+        _ => data_type.clone(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,
@@ -1245,16 +1252,16 @@ async fn collect_left_input(
     let (min_accumulators, max_accumulators) = if should_compute_bounds {
         let data_types = on_left
             .iter()
-            .map(|expr| expr.data_type(&schema))
+            .map(|expr| expr.data_type(&schema).map(|dt| dictionary_value_type(&dt)))
             .collect::<Result<Vec<_>>>()?;
         (
             data_types
                 .iter()
-                .map(|data_type| MinAccumulator::try_new(data_type))
+                .map(MinAccumulator::try_new)
                 .collect::<Result<Vec<_>>>()?,
             data_types
                 .iter()
-                .map(|data_type| MaxAccumulator::try_new(data_type))
+                .map(MaxAccumulator::try_new)
                 .collect::<Result<Vec<_>>>()?,
         )
     } else {
@@ -1283,8 +1290,8 @@ async fn collect_left_input(
                 &state.on_left
             ) {
                 let array = on_expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-                min_accumulator.update_batch(&[array.clone()])?;
-                max_accumulator.update_batch(&[array])?;
+                min_accumulator.update_batch(std::slice::from_ref(&array))?;
+                max_accumulator.update_batch(std::slice::from_ref(&array))?;
             }
 
             // Decide if we spill or not
