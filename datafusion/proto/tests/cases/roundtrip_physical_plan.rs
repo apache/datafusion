@@ -2217,6 +2217,16 @@ async fn roundtrip_logical_plan_sort_merge_join() -> Result<()> {
 
     let query = "SELECT t1.* FROM t0 join t1 on t0.a = t1.a";
     let plan = ctx.sql(query).await?.create_physical_plan().await?;
+    roundtrip_test(plan)
+}
 
+#[tokio::test]
+async fn roundtrip_memory_source() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .sql("select * from values ('Tom', 18)")
+        .await?
+        .create_physical_plan()
+        .await?;
     roundtrip_test(plan)
 }
