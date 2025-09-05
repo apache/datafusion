@@ -183,7 +183,7 @@ pub struct FileScanConfig {
     /// The partitioning columns
     pub table_partition_cols: Vec<FieldRef>,
     /// All equivalent lexicographical orderings that describe the schema.
-    pub output_ordering: Vec<LexOrdering>,
+    pub output_ordering: Vec<Option<LexOrdering>>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
     /// Are new lines in values supported for CSVOptions
@@ -270,7 +270,7 @@ pub struct FileScanConfigBuilder {
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
-    output_ordering: Vec<LexOrdering>,
+    output_ordering: Vec<Option<LexOrdering>>,
     file_compression_type: Option<FileCompressionType>,
     new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
@@ -383,7 +383,7 @@ impl FileScanConfigBuilder {
 
     /// Set the output ordering of the files
     pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
-        self.output_ordering = output_ordering;
+        self.output_ordering = output_ordering.into_iter().map(Some).collect();
         self
     }
 
@@ -528,7 +528,12 @@ impl DataSource for FileScanConfig {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let schema = self.projected_schema();
-                let orderings = get_projected_output_ordering(self, &schema);
+                // Remove None from projected output ordering
+                let orderings: Vec<LexOrdering> =
+                    get_projected_output_ordering(self, &schema)
+                        .into_iter()
+                        .flatten()
+                        .collect();
 
                 write!(f, "file_groups=")?;
                 FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -785,11 +790,13 @@ impl FileScanConfig {
     /// Project the schema, constraints, and the statistics on the given column indices
     pub fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
+            let output_ordering: Vec<LexOrdering> =
+                self.output_ordering.clone().into_iter().flatten().collect();
             return (
                 Arc::clone(&self.file_schema),
                 self.constraints.clone(),
                 self.file_source.statistics().unwrap().clone(),
-                self.output_ordering.clone(),
+                output_ordering,
             );
         }
 
@@ -797,7 +804,10 @@ impl FileScanConfig {
         let constraints = self.projected_constraints();
         let stats = self.projected_stats();
 
-        let output_ordering = get_projected_output_ordering(self, &schema);
+        let output_ordering = get_projected_output_ordering(self, &schema)
+            .into_iter()
+            .flatten()
+            .collect();
 
         (schema, constraints, stats, output_ordering)
     }
@@ -1044,7 +1054,9 @@ impl DisplayAs for FileScanConfig {
             write!(f, ", limit={limit}")?;
         }
 
-        display_orderings(f, &orderings)?;
+        let flattened_orderings: Vec<LexOrdering> =
+            orderings.iter().flatten().cloned().collect();
+        display_orderings(f, &flattened_orderings)?;
 
         if !self.constraints.is_empty() {
             write!(f, ", {}", self.constraints)?;
@@ -1364,63 +1376,73 @@ fn create_output_array(
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-) -> Vec<LexOrdering> {
+) -> Vec<Option<LexOrdering>> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
         let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let name = col.name();
-                if let Some((idx, _)) = projected_schema.column_with_name(name) {
-                    // Compute the new sort expression (with correct index) after projection:
-                    new_ordering.push(PhysicalSortExpr::new(
-                        Arc::new(Column::new(name, idx)),
-                        *options,
-                    ));
-                    continue;
+        if let Some(ordering) = output_ordering {
+            for PhysicalSortExpr { expr, options } in ordering.iter() {
+                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                    let name = col.name();
+                    if let Some((idx, _)) = projected_schema.column_with_name(name) {
+                        // Compute the new sort expression (with correct index) after projection:
+                        new_ordering.push(PhysicalSortExpr::new(
+                            Arc::new(Column::new(name, idx)),
+                            *options,
+                        ));
+                        continue;
+                    }
                 }
+                // Cannot find expression in the projected_schema, stop iterating
+                // since rest of the orderings are violated
+                break;
             }
-            // Cannot find expression in the projected_schema, stop iterating
-            // since rest of the orderings are violated
-            break;
-        }
+            let new_ordering = LexOrdering::new(new_ordering);
 
-        let Some(new_ordering) = LexOrdering::new(new_ordering) else {
-            continue;
-        };
-
-        // Check if any file groups are not sorted
-        if base_config.file_groups.iter().any(|group| {
-            if group.len() <= 1 {
-                // File groups with <= 1 files are always sorted
-                return false;
-            }
-
-            let statistics = match MinMaxStatistics::new_from_files(
-                &new_ordering,
-                projected_schema,
-                base_config.projection.as_deref(),
-                group.iter(),
-            ) {
-                Ok(statistics) => statistics,
-                Err(e) => {
-                    log::trace!("Error fetching statistics for file group: {e}");
-                    // we can't prove that it's ordered, so we have to reject it
-                    return true;
+            // Check if any file groups are not sorted
+            if base_config.file_groups.iter().any(|group| {
+                if group.len() <= 1 {
+                    // File groups with <= 1 files are always sorted
+                    return false;
                 }
-            };
 
-            !statistics.is_sorted()
-        }) {
-            debug!(
-                "Skipping specified output ordering {:?}. \
-                Some file groups couldn't be determined to be sorted: {:?}",
-                base_config.output_ordering[0], base_config.file_groups
-            );
-            continue;
+                let Some(ref ordering) = new_ordering else {
+                    // If new_ordering is None, we don't have any
+                    // statistics to collect. We can skip this
+                    // part
+                    return false;
+                };
+
+                let statistics = match MinMaxStatistics::new_from_files(
+                    ordering,
+                    projected_schema,
+                    base_config.projection.as_deref(),
+                    group.iter(),
+                ) {
+                    Ok(statistics) => statistics,
+                    Err(e) => {
+                        log::trace!("Error fetching statistics for file group: {e}");
+                        // we can't prove that it's ordered, so we have to reject it
+                        return true;
+                    }
+                };
+
+                !statistics.is_sorted()
+            }) {
+                debug!(
+                    "Skipping specified output ordering {:?}. \
+                    Some file groups couldn't be determined to be sorted: {:?}",
+                    base_config.output_ordering[0], base_config.file_groups
+                );
+                continue;
+            }
+
+            all_orderings.push(new_ordering);
+        } else {
+            // Append None for Unordered plans
+            // Preserves accuracy
+            all_orderings.push(None);
         }
-
-        all_orderings.push(new_ordering);
     }
     all_orderings
 }

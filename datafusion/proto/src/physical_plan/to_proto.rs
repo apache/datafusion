@@ -508,8 +508,11 @@ pub fn serialize_file_scan_config(
 
     let mut output_orderings = vec![];
     for order in &conf.output_ordering {
-        let ordering = serialize_physical_sort_exprs(order.to_vec(), codec)?;
-        output_orderings.push(ordering)
+        // Only add explicit orderings to Proto
+        if let Some(ord) = order {
+            let ordering = serialize_physical_sort_exprs(ord.to_vec(), codec)?;
+            output_orderings.push(ordering)
+        }
     }
 
     // Fields must be added to the schema so that they can persist in the protobuf,
