@@ -124,17 +124,18 @@ impl<'a> BinaryTypeCoercer<'a> {
 
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
+        if is_both_null(self.lhs, self.rhs) {
+            return Ok(signature_for_nulls(self.op));
+        }
+
         if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
-            use Operator::*;
             // Special handling for arithmetic + null coercion:
             // For arithmetic operators on non-temporal types, we must handle the result type here using Arrow's numeric kernel.
             // This is because Arrow expects concrete numeric types, and this ensures the correct result type (e.g., for NULL + Int32, result is Int32).
             // For all other cases (including temporal arithmetic and non-arithmetic operators),
             // we can delegate to signature_inner(&coerced, &coerced), which handles the necessary logic for those operators.
             // In those cases, signature_inner is designed to work with the coerced type, even if it originated from a NULL.
-            if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
-                && !coerced.is_temporal()
-            {
+            if is_arithmetic(self.op) && !coerced.is_temporal() {
                 let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for arithmetic operation {coerced} {} {coerced}: {e}",
@@ -314,6 +315,33 @@ impl<'a> BinaryTypeCoercer<'a> {
     pub fn get_input_types(&'a self) -> Result<(DataType, DataType)> {
         self.signature().map(|sig| (sig.lhs, sig.rhs))
     }
+}
+
+#[inline]
+fn is_both_null(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(lhs, DataType::Null) && matches!(rhs, DataType::Null)
+}
+
+fn signature_for_nulls(op: &Operator) -> Signature {
+    if is_arithmetic(op) {
+        return Signature::uniform(DataType::Int64);
+    }
+    if is_logic(op) {
+        return Signature::uniform(DataType::Boolean);
+    }
+    Signature::uniform(DataType::Null)
+}
+
+#[inline]
+fn is_arithmetic(op: &Operator) -> bool {
+    use Operator::*;
+    matches!(op, Plus | Minus | Multiply | Divide | Modulo)
+}
+
+#[inline]
+fn is_logic(op: &Operator) -> bool {
+    use Operator::*;
+    matches!(op, And | Or)
 }
 
 // TODO Move the rest inside of BinaryTypeCoercer
@@ -1532,8 +1560,6 @@ fn timeunit_coercion(lhs_unit: &TimeUnit, rhs_unit: &TimeUnit) -> TimeUnit {
 /// either lhs or rhs is NULL, if NULL can be cast to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
-        // Handle NULL % NULL case - return a sensible numeric type
-        (DataType::Null, DataType::Null) => Some(DataType::Int64),
         (DataType::Null, other_type) | (other_type, DataType::Null) => {
             if can_cast_types(&DataType::Null, other_type) {
                 Some(other_type.clone())
