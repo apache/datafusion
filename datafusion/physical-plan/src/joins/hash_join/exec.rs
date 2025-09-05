@@ -78,7 +78,6 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
-use itertools::izip;
 use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
@@ -1190,6 +1189,125 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
+/// Accumulator for collecting min/max bounds from build-side data during hash join.
+///
+/// This struct encapsulates the logic for progressively computing column bounds
+/// (minimum and maximum values) for a specific join key expression as batches
+/// are processed during the build phase of a hash join.
+///
+/// The bounds are used for dynamic filter pushdown optimization, where filters
+/// based on the actual data ranges can be pushed down to the probe side to
+/// eliminate unnecessary data early.
+struct CollectLeftAccumulator {
+    /// The physical expression to evaluate for each batch
+    expr: Arc<dyn PhysicalExpr>,
+    /// Accumulator for tracking the minimum value across all batches
+    min: MinAccumulator,
+    /// Accumulator for tracking the maximum value across all batches
+    max: MaxAccumulator,
+}
+
+impl CollectLeftAccumulator {
+    /// Creates a new accumulator for tracking bounds of a join key expression.
+    ///
+    /// # Arguments
+    /// * `expr` - The physical expression to track bounds for
+    /// * `schema` - The schema of the input data
+    ///
+    /// # Returns
+    /// A new `CollectLeftAccumulator` instance configured for the expression's data type
+    fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Result<Self> {
+        /// Recursively unwraps dictionary types to get the underlying value type.
+        fn dictionary_value_type(data_type: &DataType) -> DataType {
+            match data_type {
+                DataType::Dictionary(_, value_type) => {
+                    dictionary_value_type(value_type.as_ref())
+                }
+                _ => data_type.clone(),
+            }
+        }
+
+        let data_type = expr
+            .data_type(schema)
+            // Min/Max can operate on dictionary data but expect to be initialized with the underlaying value type
+            .map(|dt| dictionary_value_type(&dt))?;
+        Ok(Self {
+            expr,
+            min: MinAccumulator::try_new(&data_type)?,
+            max: MaxAccumulator::try_new(&data_type)?,
+        })
+    }
+
+    /// Updates the accumulators with values from a new batch.
+    ///
+    /// Evaluates the expression on the batch and updates both min and max
+    /// accumulators with the resulting values.
+    ///
+    /// # Arguments
+    /// * `batch` - The record batch to process
+    ///
+    /// # Returns
+    /// Ok(()) if the update succeeds, or an error if expression evaluation fails
+    fn update_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
+        self.min.update_batch(std::slice::from_ref(&array))?;
+        self.max.update_batch(std::slice::from_ref(&array))?;
+        Ok(())
+    }
+
+    /// Finalizes the accumulation and returns the computed bounds.
+    ///
+    /// Consumes self to extract the final min and max values from the accumulators.
+    ///
+    /// # Returns
+    /// The `ColumnBounds` containing the minimum and maximum values observed
+    fn evaluate(mut self) -> Result<ColumnBounds> {
+        Ok(ColumnBounds::new(
+            self.min.evaluate()?,
+            self.max.evaluate()?,
+        ))
+    }
+}
+
+/// State for collecting the build-side data during hash join
+struct BuildSideState {
+    batches: Vec<RecordBatch>,
+    num_rows: usize,
+    metrics: BuildProbeJoinMetrics,
+    reservation: MemoryReservation,
+    bounds_accumulators: Option<Vec<CollectLeftAccumulator>>,
+}
+
+impl BuildSideState {
+    /// Create a new BuildSideState with optional accumulators for bounds computation
+    fn try_new(
+        metrics: BuildProbeJoinMetrics,
+        reservation: MemoryReservation,
+        on_left: Vec<Arc<dyn PhysicalExpr>>,
+        schema: &SchemaRef,
+        should_compute_bounds: bool,
+    ) -> Result<Self> {
+        let bounds_accumulators = if should_compute_bounds {
+            Some(
+                on_left
+                    .iter()
+                    .map(|expr| CollectLeftAccumulator::try_new(expr.clone(), schema))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+
+        Ok(Self {
+            batches: Vec::new(),
+            num_rows: 0,
+            metrics,
+            reservation,
+            bounds_accumulators,
+        })
+    }
+}
+
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
 ///
 /// This function is responsible for:
@@ -1218,68 +1336,6 @@ impl ExecutionPlan for HashJoinExec {
 /// # Returns
 /// `JoinLeftData` containing the hash map, consolidated batch, join key values,
 /// visited indices bitmap, and computed bounds (if requested).
-/// State for collecting the build-side data during hash join
-struct BuildSideState {
-    batches: Vec<RecordBatch>,
-    num_rows: usize,
-    metrics: BuildProbeJoinMetrics,
-    reservation: MemoryReservation,
-    min_accumulators: Option<Vec<MinAccumulator>>,
-    max_accumulators: Option<Vec<MaxAccumulator>>,
-    on_left: Vec<Arc<dyn PhysicalExpr>>,
-}
-
-impl BuildSideState {
-    /// Create a new BuildSideState with optional accumulators for bounds computation
-    fn try_new(
-        metrics: BuildProbeJoinMetrics,
-        reservation: MemoryReservation,
-        on_left: Vec<Arc<dyn PhysicalExpr>>,
-        schema: &SchemaRef,
-        should_compute_bounds: bool,
-    ) -> Result<Self> {
-        let (min_accumulators, max_accumulators) = if should_compute_bounds {
-            let data_types = on_left
-                .iter()
-                .map(|expr| expr.data_type(schema).map(|dt| dictionary_value_type(&dt)))
-                .collect::<Result<Vec<_>>>()?;
-            (
-                Some(
-                    data_types
-                        .iter()
-                        .map(MinAccumulator::try_new)
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Some(
-                    data_types
-                        .iter()
-                        .map(MaxAccumulator::try_new)
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-            )
-        } else {
-            (None, None)
-        };
-
-        Ok(Self {
-            batches: Vec::new(),
-            num_rows: 0,
-            metrics,
-            reservation,
-            min_accumulators,
-            max_accumulators,
-            on_left,
-        })
-    }
-}
-
-fn dictionary_value_type(data_type: &DataType) -> DataType {
-    match data_type {
-        DataType::Dictionary(_, value_type) => dictionary_value_type(value_type.as_ref()),
-        _ => data_type.clone(),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
@@ -1307,15 +1363,9 @@ async fn collect_left_input(
     let state = left_stream
         .try_fold(initial, |mut state, batch| async move {
             // Update accumulators if computing bounds
-            if let (Some(ref mut min_accumulators), Some(ref mut max_accumulators)) =
-                (&mut state.min_accumulators, &mut state.max_accumulators)
-            {
-                for (min_accumulator, max_accumulator, on_expr) in
-                    izip!(min_accumulators, max_accumulators, &state.on_left)
-                {
-                    let array = on_expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-                    min_accumulator.update_batch(std::slice::from_ref(&array))?;
-                    max_accumulator.update_batch(std::slice::from_ref(&array))?;
+            if let Some(ref mut accumulators) = state.bounds_accumulators {
+                for accumulator in accumulators {
+                    accumulator.update_batch(&batch)?;
                 }
             }
 
@@ -1341,9 +1391,7 @@ async fn collect_left_input(
         num_rows,
         metrics,
         mut reservation,
-        min_accumulators,
-        max_accumulators,
-        on_left: _,
+        bounds_accumulators,
     } = state;
 
     // Estimation of memory size, required for hashtable, prior to allocation.
@@ -1412,17 +1460,11 @@ async fn collect_left_input(
         .collect::<Result<Vec<_>>>()?;
 
     // Compute bounds for dynamic filter if enabled
-    let bounds = match (min_accumulators, max_accumulators) {
-        (Some(min_accumulators), Some(max_accumulators)) if num_rows > 0 => {
-            let bounds = min_accumulators
+    let bounds = match bounds_accumulators {
+        Some(accumulators) if num_rows > 0 => {
+            let bounds = accumulators
                 .into_iter()
-                .zip(max_accumulators.into_iter())
-                .map(|(mut min_accumulator, mut max_accumulator)| {
-                    Ok(ColumnBounds::new(
-                        min_accumulator.evaluate()?,
-                        max_accumulator.evaluate()?,
-                    ))
-                })
+                .map(CollectLeftAccumulator::evaluate)
                 .collect::<Result<Vec<_>>>()?;
             Some(bounds)
         }
