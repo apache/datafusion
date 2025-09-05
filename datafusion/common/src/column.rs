@@ -18,7 +18,6 @@
 //! Column
 
 use crate::error::{_schema_err, add_possible_columns_to_diag};
-#[cfg(feature = "sql")]
 use crate::utils::parse_identifiers_normalized;
 use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
@@ -88,7 +87,6 @@ impl Column {
     ///
     /// For example, `foo.bar` would be represented as a two element vector
     /// `["foo", "bar"]`
-    #[cfg(feature = "sql")]
     fn from_idents(mut idents: Vec<String>) -> Option<Self> {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
@@ -129,7 +127,6 @@ impl Column {
     /// Treats the name as a SQL identifier. For example
     /// `foo.BAR` would be parsed to a reference to relation `foo`, column name `bar` (lower case)
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
-    #[cfg(feature = "sql")]
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
         Self::from_idents(parse_identifiers_normalized(&flat_name, false)).unwrap_or_else(
@@ -140,14 +137,7 @@ impl Column {
             },
         )
     }
-    #[cfg(not(feature = "sql"))]
-    pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
-        Self {
-            relation: None,
-            name: flat_name.into(),
-            spans: Spans::new(),
-        }
-    }
+
     /// Deserialize a fully qualified name string into a column preserving column text case
     #[cfg(feature = "sql")]
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
@@ -160,10 +150,12 @@ impl Column {
             },
         )
     }
+
     #[cfg(not(feature = "sql"))]
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
         Self::from_qualified_name(flat_name)
     }
+
     /// return the column's name.
     ///
     /// Note: This ignores the relation and returns the column name only.

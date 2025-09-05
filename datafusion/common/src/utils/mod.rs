@@ -302,6 +302,59 @@ pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<St
         .collect::<Vec<_>>()
 }
 
+#[cfg(not(feature = "sql"))]
+pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<String>> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in s.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '.' if !in_quotes => {
+                result.push(current.clone());
+                current.clear();
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+
+    // Push the last part if it's not empty
+    if !current.is_empty() {
+        result.push(current);
+    }
+
+    Ok(result)
+}
+
+#[cfg(not(feature = "sql"))]
+pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
+    parse_identifiers(s)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| {
+            let is_double_quoted = if id.len() > 2 {
+                let mut chars = id.chars();
+                chars.next() == Some('"') && chars.last() == Some('"')
+            } else {
+                false
+            };
+            if is_double_quoted {
+                id[1..id.len() - 1].to_string().replace("\"\"", "\"")
+            } else if ignore_case {
+                id
+            } else {
+                id.to_ascii_lowercase()
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
 /// This function "takes" the elements at `indices` from the slice `items`.
 pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
     items: &[T],
