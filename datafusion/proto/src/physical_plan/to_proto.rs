@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
+use arrow::ipc::writer::StreamWriter;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::FileSink;
@@ -560,6 +562,20 @@ pub fn serialize_maybe_filter(
             expr: Some(serialize_physical_expr(&expr, codec)?),
         }),
     }
+}
+
+pub fn serialize_record_batches(batches: &[RecordBatch]) -> Result<Vec<u8>> {
+    if batches.is_empty() {
+        return Ok(vec![]);
+    }
+    let schema = batches[0].schema();
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, &schema)?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.finish()?;
+    Ok(buf)
 }
 
 impl TryFrom<&JsonSink> for protobuf::JsonSink {

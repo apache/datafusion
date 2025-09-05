@@ -80,7 +80,7 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
@@ -211,7 +211,10 @@ fn roundtrip_date_time_interval() -> Result<()> {
     let date_time_interval_expr =
         binary(date_expr, Operator::Plus, literal_expr, &schema)?;
     let plan = Arc::new(ProjectionExec::try_new(
-        vec![(date_time_interval_expr, "result".to_string())],
+        vec![ProjectionExpr {
+            expr: date_time_interval_expr,
+            alias: "result".to_string(),
+        }],
         input,
     )?);
     roundtrip_test(plan)
@@ -1100,8 +1103,13 @@ fn roundtrip_scalar_udf() -> Result<()> {
         Arc::new(ConfigOptions::default()),
     );
 
-    let project =
-        ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
+    let project = ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: Arc::new(expr),
+            alias: "a".to_string(),
+        }],
+        input,
+    )?;
 
     let ctx = SessionContext::new();
 
@@ -1401,7 +1409,10 @@ fn roundtrip_like() -> Result<()> {
         &schema,
     )?;
     let plan = Arc::new(ProjectionExec::try_new(
-        vec![(like_expr, "result".to_string())],
+        vec![ProjectionExpr {
+            expr: like_expr,
+            alias: "result".to_string(),
+        }],
         input,
     )?);
     roundtrip_test(plan)
@@ -2206,6 +2217,16 @@ async fn roundtrip_logical_plan_sort_merge_join() -> Result<()> {
 
     let query = "SELECT t1.* FROM t0 join t1 on t0.a = t1.a";
     let plan = ctx.sql(query).await?.create_physical_plan().await?;
+    roundtrip_test(plan)
+}
 
+#[tokio::test]
+async fn roundtrip_memory_source() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .sql("select * from values ('Tom', 18)")
+        .await?
+        .create_physical_plan()
+        .await?;
     roundtrip_test(plan)
 }

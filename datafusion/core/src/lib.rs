@@ -808,6 +808,11 @@ pub mod physical_expr {
     pub use datafusion_physical_expr::*;
 }
 
+/// re-export of [`datafusion_physical_expr_adapter`] crate
+pub mod physical_expr_adapter {
+    pub use datafusion_physical_expr_adapter::*;
+}
+
 /// re-export of [`datafusion_physical_plan`] crate
 pub mod physical_plan {
     pub use datafusion_physical_plan::*;
