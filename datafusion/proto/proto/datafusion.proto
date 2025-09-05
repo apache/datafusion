@@ -98,6 +98,7 @@ message ListingTableScanNode {
     datafusion_common.ParquetFormat parquet = 11;
     datafusion_common.AvroFormat avro = 12;
     datafusion_common.NdJsonFormat json = 15;
+    datafusion_common.ArrowFormat arrow = 16;
   }
   repeated SortExprNodeCollection file_sort_order = 13;
 }
@@ -727,6 +728,9 @@ message PhysicalPlanNode {
     UnnestExecNode unnest = 30;
     JsonScanExecNode json_scan = 31;
     CooperativeExecNode cooperative = 32;
+    GenerateSeriesNode generate_series = 33;
+    SortMergeJoinExecNode sort_merge_join = 34;
+    MemoryScanExecNode memory_scan = 35;
   }
 }
 
@@ -859,6 +863,7 @@ message PhysicalScalarUdfNode {
   optional bytes fun_definition = 3;
   datafusion_common.ArrowType return_type = 4;
   bool nullable = 5;
+  string return_field_name = 6;
 }
 
 message PhysicalAggregateExprNode {
@@ -870,6 +875,7 @@ message PhysicalAggregateExprNode {
   bool distinct = 3;
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
+  string human_display = 8;
 }
 
 message PhysicalWindowExprNode {
@@ -884,6 +890,8 @@ message PhysicalWindowExprNode {
   WindowFrame window_frame = 7;
   string name = 8;
   optional bytes fun_definition = 9;
+  bool ignore_nulls = 11;
+  bool distinct = 12;
 }
 
 message PhysicalIsNull {
@@ -1032,6 +1040,15 @@ message JsonScanExecNode {
 
 message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
+}
+
+message MemoryScanExecNode {
+  repeated bytes partitions = 1;
+  datafusion_common.Schema schema = 2;
+  repeated uint32 projection = 3;
+  repeated PhysicalSortExprNodeCollection sort_information = 4;
+  bool show_sizes = 5;
+  optional uint32 fetch = 6;
 }
 
 message CooperativeExecNode {
@@ -1290,4 +1307,60 @@ message RecursiveQueryNode {
 message CteWorkTableScanNode {
     string name = 1;
     datafusion_common.Schema schema = 2;
+}
+
+enum GenerateSeriesName {
+  GS_GENERATE_SERIES = 0;
+  GS_RANGE = 1;
+}
+
+message GenerateSeriesArgsContainsNull {
+    GenerateSeriesName name = 1;
+}
+
+message GenerateSeriesArgsInt64 {
+    int64 start = 1;
+    int64 end = 2;
+    int64 step = 3;
+    bool include_end = 4;
+    GenerateSeriesName name = 5;
+}
+
+message GenerateSeriesArgsTimestamp {
+    int64 start = 1;
+    int64 end = 2;
+    datafusion_common.IntervalMonthDayNanoValue step = 3;
+    optional string tz = 4;
+    bool include_end = 5;
+    GenerateSeriesName name = 6;
+}
+
+message GenerateSeriesArgsDate {
+    int64 start = 1;
+    int64 end = 2;
+    datafusion_common.IntervalMonthDayNanoValue step = 3;
+    bool include_end = 4;
+    GenerateSeriesName name = 5;
+}
+
+message GenerateSeriesNode {
+    datafusion_common.Schema schema = 1;
+    uint32 target_batch_size = 2;
+
+    oneof args {
+        GenerateSeriesArgsContainsNull contains_null = 3;
+        GenerateSeriesArgsInt64 int64_args = 4;
+        GenerateSeriesArgsTimestamp timestamp_args = 5;
+        GenerateSeriesArgsDate date_args = 6;
+    }
+}
+
+message SortMergeJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  datafusion_common.JoinType join_type = 4;
+  JoinFilter filter = 5;
+  repeated SortExprNode sort_options = 6;
+  datafusion_common.NullEquality null_equality = 7;
 }

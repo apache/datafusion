@@ -96,7 +96,7 @@ FROM (
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToLocalTimeFunc {
     signature: Signature,
 }
@@ -372,7 +372,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
     ) -> Result<ColumnarValue> {
         let [time_value] = take_function_args(self.name(), args.args)?;
 
-        self.to_local_time(&[time_value.clone()])
+        self.to_local_time(std::slice::from_ref(&time_value))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -411,6 +411,7 @@ mod tests {
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::NaiveDateTime;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
@@ -545,6 +546,7 @@ mod tests {
                 arg_fields: vec![arg_field],
                 number_rows: 1,
                 return_field: Field::new("f", expected.data_type(), true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
         match res {
@@ -615,6 +617,7 @@ mod tests {
                     true,
                 )
                 .into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

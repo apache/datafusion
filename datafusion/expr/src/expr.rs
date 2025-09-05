@@ -449,7 +449,7 @@ pub struct FieldMetadata {
     /// The inner metadata of a literal expression, which is a map of string
     /// keys to string values.
     ///
-    /// Note this is not a `HashMap because `HashMap` does not provide
+    /// Note this is not a `HashMap` because `HashMap` does not provide
     /// implementations for traits like `Debug` and `Hash`.
     inner: Arc<BTreeMap<String, String>>,
 }
@@ -469,7 +469,50 @@ impl FieldMetadata {
     }
 
     /// Merges two optional `FieldMetadata` instances, overwriting any existing
-    /// keys in `m` with keys from `n` if present
+    /// keys in `m` with keys from `n` if present.
+    ///
+    /// This function is commonly used in alias operations, particularly for literals
+    /// with metadata. When creating an alias expression, the metadata from the original
+    /// expression (such as a literal) is combined with any metadata specified on the alias.
+    ///
+    /// # Arguments
+    ///
+    /// * `m` - The first metadata (typically from the original expression like a literal)
+    /// * `n` - The second metadata (typically from the alias definition)
+    ///
+    /// # Merge Strategy
+    ///
+    /// - If both metadata instances exist, they are merged with `n` taking precedence
+    /// - Keys from `n` will overwrite keys from `m` if they have the same name
+    /// - If only one metadata instance exists, it is returned unchanged
+    /// - If neither exists, `None` is returned
+    ///
+    /// # Example usage
+    /// ```rust
+    /// use datafusion_expr::expr::FieldMetadata;
+    /// use std::collections::BTreeMap;
+    ///
+    /// // Create metadata for a literal expression
+    /// let literal_metadata = Some(FieldMetadata::from(BTreeMap::from([
+    ///     ("source".to_string(), "constant".to_string()),
+    ///     ("type".to_string(), "int".to_string()),
+    /// ])));
+    ///
+    /// // Create metadata for an alias
+    /// let alias_metadata = Some(FieldMetadata::from(BTreeMap::from([
+    ///     ("description".to_string(), "answer".to_string()),
+    ///     ("source".to_string(), "user".to_string()), // This will override literal's "source"
+    /// ])));
+    ///
+    /// // Merge the metadata
+    /// let merged = FieldMetadata::merge_options(
+    ///     literal_metadata.as_ref(),
+    ///     alias_metadata.as_ref(),
+    /// );
+    ///
+    /// // Result contains: {"source": "user", "type": "int", "description": "answer"}
+    /// assert!(merged.is_some());
+    /// ```
     pub fn merge_options(
         m: Option<&FieldMetadata>,
         n: Option<&FieldMetadata>,
@@ -597,6 +640,65 @@ impl From<&HashMap<String, String>> for FieldMetadata {
             .collect();
         Self::new(inner)
     }
+}
+
+/// The metadata used in [`Field::metadata`].
+///
+/// This represents the metadata associated with an Arrow [`Field`]. The metadata consists of key-value pairs.
+///
+/// # Common Use Cases
+///
+/// Field metadata is commonly used to store:
+/// - Default values for columns when data is missing
+/// - Column descriptions or documentation
+/// - Data lineage information
+/// - Custom application-specific annotations
+/// - Encoding hints or display formatting preferences
+///
+/// # Example: Storing Default Values
+///
+/// A practical example of using field metadata is storing default values for columns
+/// that may be missing in the physical data but present in the logical schema.
+/// See the [default_column_values.rs] example implementation.
+///
+/// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs
+pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
+
+/// Intersects multiple metadata instances for UNION operations.
+///
+/// This function implements the intersection strategy used by UNION operations,
+/// where only metadata keys that exist in ALL inputs with identical values
+/// are preserved in the result.
+///
+/// # Union Metadata Behavior
+///
+/// Union operations require consistent metadata across all branches:
+/// - Only metadata keys present in ALL union branches are kept
+/// - For each kept key, the value must be identical across all branches
+/// - If a key has different values across branches, it is excluded from the result
+/// - If any input has no metadata, the result will be empty
+///
+/// # Arguments
+///
+/// * `metadatas` - An iterator of `SchemaFieldMetadata` instances to intersect
+///
+/// # Returns
+///
+/// A new `SchemaFieldMetadata` containing only the intersected metadata
+pub fn intersect_metadata_for_union<'a>(
+    metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
+) -> SchemaFieldMetadata {
+    let mut metadatas = metadatas.into_iter();
+    let Some(mut intersected) = metadatas.next().cloned() else {
+        return Default::default();
+    };
+
+    for metadata in metadatas {
+        // Only keep keys that exist in both with the same value
+        intersected.retain(|k, v| metadata.get(k) == Some(v));
+    }
+
+    intersected
 }
 
 /// UNNEST expression.
@@ -1039,7 +1141,6 @@ impl WindowFunctionDefinition {
     pub fn return_field(
         &self,
         input_expr_fields: &[FieldRef],
-        _input_expr_nullable: &[bool],
         display_name: &str,
     ) -> Result<FieldRef> {
         match self {
@@ -1129,8 +1230,12 @@ pub struct WindowFunctionParams {
     pub order_by: Vec<Sort>,
     /// Window frame
     pub window_frame: WindowFrame,
+    /// Optional filter expression (FILTER (WHERE ...))
+    pub filter: Option<Box<Expr>>,
     /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
+    /// Distinct flag
+    pub distinct: bool,
 }
 
 impl WindowFunction {
@@ -1144,7 +1249,9 @@ impl WindowFunction {
                 partition_by: Vec::default(),
                 order_by: Vec::default(),
                 window_frame: WindowFrame::new(None),
+                filter: None,
                 null_treatment: None,
+                distinct: false,
             },
         }
     }
@@ -1424,12 +1531,6 @@ impl Expr {
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
-    }
-
-    /// Returns a full and complete string representation of this expression.
-    #[deprecated(since = "42.0.0", note = "use format! instead")]
-    pub fn canonical_name(&self) -> String {
-        format!("{self}")
     }
 
     /// Return String representation of the variant represented by `self`
@@ -2290,7 +2391,9 @@ impl NormalizeEq for Expr {
                             window_frame: self_window_frame,
                             partition_by: self_partition_by,
                             order_by: self_order_by,
+                            filter: self_filter,
                             null_treatment: self_null_treatment,
+                            distinct: self_distinct,
                         },
                 } = left.as_ref();
                 let WindowFunction {
@@ -2301,12 +2404,19 @@ impl NormalizeEq for Expr {
                             window_frame: other_window_frame,
                             partition_by: other_partition_by,
                             order_by: other_order_by,
+                            filter: other_filter,
                             null_treatment: other_null_treatment,
+                            distinct: other_distinct,
                         },
                 } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
                     && self_window_frame == other_window_frame
+                    && match (self_filter, other_filter) {
+                        (Some(a), Some(b)) => a.normalize_eq(b),
+                        (None, None) => true,
+                        _ => false,
+                    }
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
                     && self_args
@@ -2325,6 +2435,7 @@ impl NormalizeEq for Expr {
                                 && a.nulls_first == b.nulls_first
                                 && a.expr.normalize_eq(&b.expr)
                         })
+                    && self_distinct == other_distinct
             }
             (
                 Expr::Exists(Exists {
@@ -2557,12 +2668,16 @@ impl HashNode for Expr {
                             partition_by: _,
                             order_by: _,
                             window_frame,
+                            filter,
                             null_treatment,
+                            distinct,
                         },
                 } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
+                filter.hash(state);
                 null_treatment.hash(state);
+                distinct.hash(state);
             }
             Expr::InList(InList {
                 expr: _expr,
@@ -2864,18 +2979,35 @@ impl Display for SchemaDisplay<'_> {
                             partition_by,
                             order_by,
                             window_frame,
+                            filter,
                             null_treatment,
+                            distinct,
                         } = params;
 
+                        // Write function name and open parenthesis
+                        write!(f, "{fun}(")?;
+
+                        // If DISTINCT, emit the keyword
+                        if *distinct {
+                            write!(f, "DISTINCT ")?;
+                        }
+
+                        // Write the comma‑separated argument list
                         write!(
                             f,
-                            "{}({})",
-                            fun,
+                            "{}",
                             schema_name_from_exprs_comma_separated_without_space(args)?
                         )?;
 
+                        // **Close the argument parenthesis**
+                        write!(f, ")")?;
+
                         if let Some(null_treatment) = null_treatment {
                             write!(f, " {null_treatment}")?;
+                        }
+
+                        if let Some(filter) = filter {
+                            write!(f, " FILTER (WHERE {filter})")?;
                         }
 
                         if !partition_by.is_empty() {
@@ -3233,10 +3365,6 @@ impl Display for Expr {
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
-            // TODO: use udf's display_name, need to fix the separator issue, <https://github.com/apache/datafusion/issues/10364>
-            // Expr::ScalarFunction(ScalarFunction { func, args }) => {
-            //     write!(f, "{}", func.display_name(args).unwrap())
-            // }
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction { fun, params } = window_fun.as_ref();
                 match fun {
@@ -3259,13 +3387,19 @@ impl Display for Expr {
                             partition_by,
                             order_by,
                             window_frame,
+                            filter,
                             null_treatment,
+                            distinct,
                         } = params;
 
-                        fmt_function(f, &fun.to_string(), false, args, true)?;
+                        fmt_function(f, &fun.to_string(), *distinct, args, true)?;
 
                         if let Some(nt) = null_treatment {
                             write!(f, "{nt}")?;
+                        }
+
+                        if let Some(fe) = filter {
+                            write!(f, " FILTER (WHERE {fe})")?;
                         }
 
                         if !partition_by.is_empty() {
@@ -3535,27 +3669,23 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn format_case_when() -> Result<()> {
         let expr = case(col("a"))
             .when(lit(1), lit(true))
             .when(lit(0), lit(false))
             .otherwise(lit(ScalarValue::Null))?;
         let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
-        assert_eq!(expected, expr.canonical_name());
         assert_eq!(expected, format!("{expr}"));
         Ok(())
     }
 
     #[test]
-    #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
-        assert_eq!(expected_canonical, expr.canonical_name());
         assert_eq!(expected_canonical, format!("{expr}"));
         // Note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
@@ -3637,7 +3767,7 @@ mod test {
     #[test]
     fn test_is_volatile_scalar_func() {
         // UDF
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq, Hash)]
         struct TestScalarUDF {
             signature: Signature,
         }

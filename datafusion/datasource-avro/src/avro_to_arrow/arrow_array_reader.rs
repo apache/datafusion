@@ -19,6 +19,7 @@
 
 use apache_avro::schema::RecordSchema;
 use apache_avro::{
+    error::Details as AvroErrorDetails,
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
     Error as AvroError, Reader as AvroReader,
@@ -929,11 +930,11 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
     match v {
         Value::String(s) => Ok(Some(s.clone())),
         Value::Bytes(bytes) => String::from_utf8(bytes.to_vec())
-            .map_err(AvroError::ConvertToUtf8)
+            .map_err(|e| AvroError::new(AvroErrorDetails::ConvertToUtf8(e)))
             .map(Some),
         Value::Enum(_, s) => Ok(Some(s.clone())),
         Value::Null => Ok(None),
-        other => Err(AvroError::GetString(other.into())),
+        other => Err(AvroError::new(AvroErrorDetails::GetString(other.clone()))),
     }
     .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))
 }
@@ -1046,7 +1047,7 @@ mod test {
     use std::fs::File;
     use std::sync::Arc;
 
-    fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
+    fn build_reader(name: &'_ str, batch_size: usize) -> Reader<'_, File> {
         let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
         let builder = ReaderBuilder::new()

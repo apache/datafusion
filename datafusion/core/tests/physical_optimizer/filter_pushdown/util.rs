@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
@@ -26,7 +25,6 @@ use datafusion_datasource::{
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
-use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
@@ -40,7 +38,7 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
-use futures::stream::BoxStream;
+use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
 use std::{
@@ -94,12 +92,7 @@ impl FileOpener for TestOpener {
 
         let stream = TestStream::new(batches);
 
-        Ok((async {
-            let stream: BoxStream<'static, Result<RecordBatch, ArrowError>> =
-                Box::pin(stream);
-            Ok(stream)
-        })
-        .boxed())
+        Ok((async { Ok(stream.boxed()) }).boxed())
     }
 }
 
@@ -141,6 +134,10 @@ impl FileSource for TestSource {
             schema: self.schema.clone(),
             projection: self.projection.clone(),
         })
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.predicate.clone()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -224,7 +221,9 @@ impl FileSource for TestSource {
                 filters.push(Arc::clone(internal));
             }
             let new_node = Arc::new(TestSource {
-                predicate: Some(conjunction(filters.clone())),
+                predicate: datafusion_physical_expr::utils::conjunction_opt(
+                    filters.clone(),
+                ),
                 ..self.clone()
             });
             Ok(FilterPushdownPropagation::with_parent_pushdown_result(
@@ -339,7 +338,7 @@ impl TestStream {
 }
 
 impl Stream for TestStream {
-    type Item = Result<RecordBatch, ArrowError>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let next_batch = self.index.value();

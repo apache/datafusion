@@ -681,7 +681,7 @@ select col2, col4 from t1 full outer join t2 on col1 = col3
 query TT
 explain select * from t1 join t2 on false;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
 # Make batch size smaller than table row number. to introduce parallelism to the plan.

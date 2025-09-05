@@ -22,7 +22,7 @@ version = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
-readme = { workspace = true }
+readme = "README.md"
 license = { workspace = true }
 edition = { workspace = true }
 
@@ -37,6 +37,8 @@ name = "datafusion_spark"
 
 [dependencies]
 arrow = { workspace = true }
+chrono = { workspace = true }
+crc32fast = "1.4"
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -44,6 +46,9 @@ datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-macros = { workspace = true }
 log = { workspace = true }
+sha1 = "0.10"
+url = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

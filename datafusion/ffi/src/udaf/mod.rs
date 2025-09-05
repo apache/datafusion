@@ -39,7 +39,7 @@ use datafusion::{
 };
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
 use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
@@ -125,7 +125,7 @@ pub struct FFI_AggregateUDF {
     pub order_sensitivity:
         unsafe extern "C" fn(udaf: &FFI_AggregateUDF) -> FFI_AggregateOrderSensitivity,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`AggregateUDF`]
@@ -384,6 +384,19 @@ pub struct ForeignAggregateUDF {
 unsafe impl Send for ForeignAggregateUDF {}
 unsafe impl Sync for ForeignAggregateUDF {}
 
+impl PartialEq for ForeignAggregateUDF {
+    fn eq(&self, other: &Self) -> bool {
+        // FFI_AggregateUDF cannot be compared, so identity equality is the best we can do.
+        std::ptr::eq(self, other)
+    }
+}
+impl Eq for ForeignAggregateUDF {}
+impl Hash for ForeignAggregateUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self, state)
+    }
+}
+
 impl TryFrom<&FFI_AggregateUDF> for ForeignAggregateUDF {
     type Error = DataFusionError;
 
@@ -553,34 +566,6 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
     }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            aliases,
-            udaf,
-        } = self;
-        signature == &other.signature
-            && aliases == &other.aliases
-            && std::ptr::eq(udaf, &other.udaf)
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            aliases,
-            udaf,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        std::ptr::hash(udaf, &mut hasher);
-        hasher.finish()
-    }
 }
 
 #[repr(C)]
@@ -589,6 +574,7 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
 pub enum FFI_AggregateOrderSensitivity {
     Insensitive,
     HardRequirement,
+    SoftRequirement,
     Beneficial,
 }
 
@@ -597,6 +583,7 @@ impl From<FFI_AggregateOrderSensitivity> for AggregateOrderSensitivity {
         match value {
             FFI_AggregateOrderSensitivity::Insensitive => Self::Insensitive,
             FFI_AggregateOrderSensitivity::HardRequirement => Self::HardRequirement,
+            FFI_AggregateOrderSensitivity::SoftRequirement => Self::SoftRequirement,
             FFI_AggregateOrderSensitivity::Beneficial => Self::Beneficial,
         }
     }
@@ -607,6 +594,7 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
         match value {
             AggregateOrderSensitivity::Insensitive => Self::Insensitive,
             AggregateOrderSensitivity::HardRequirement => Self::HardRequirement,
+            AggregateOrderSensitivity::SoftRequirement => Self::SoftRequirement,
             AggregateOrderSensitivity::Beneficial => Self::Beneficial,
         }
     }
@@ -717,6 +705,7 @@ mod tests {
         let foreign_udaf = create_test_foreign_udaf(Sum::new())?;
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        // Note: sum distinct is only support Int64 until now
         let acc_args = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
@@ -724,7 +713,7 @@ mod tests {
             order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,
             name: "round_trip",
-            is_distinct: true,
+            is_distinct: false,
             exprs: &[col("a", &schema)?],
         };
 
@@ -748,6 +737,7 @@ mod tests {
     fn test_round_trip_all_order_sensitivities() {
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Insensitive);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::HardRequirement);
+        test_round_trip_order_sensitivity(AggregateOrderSensitivity::SoftRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Beneficial);
     }
 }

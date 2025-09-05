@@ -810,7 +810,7 @@ impl InformationSchemaColumnsBuilder {
     ) {
         use DataType::*;
 
-        // Note: append_value is actually infallable.
+        // Note: append_value is actually infallible.
         self.catalog_names.append_value(catalog_name);
         self.schema_names.append_value(schema_name);
         self.table_names.append_value(table_name);

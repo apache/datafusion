@@ -123,7 +123,10 @@ pub struct ListingTableScanNode {
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
-    #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12, 15")]
+    #[prost(
+        oneof = "listing_table_scan_node::FileFormatType",
+        tags = "10, 11, 12, 15, 16"
+    )]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,
     >,
@@ -140,6 +143,8 @@ pub mod listing_table_scan_node {
         Avro(super::super::datafusion_common::AvroFormat),
         #[prost(message, tag = "15")]
         Json(super::super::datafusion_common::NdJsonFormat),
+        #[prost(message, tag = "16")]
+        Arrow(super::super::datafusion_common::ArrowFormat),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1048,7 +1053,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1120,6 +1125,12 @@ pub mod physical_plan_node {
         JsonScan(super::JsonScanExecNode),
         #[prost(message, tag = "32")]
         Cooperative(::prost::alloc::boxed::Box<super::CooperativeExecNode>),
+        #[prost(message, tag = "33")]
+        GenerateSeries(super::GenerateSeriesNode),
+        #[prost(message, tag = "34")]
+        SortMergeJoin(::prost::alloc::boxed::Box<super::SortMergeJoinExecNode>),
+        #[prost(message, tag = "35")]
+        MemoryScan(super::MemoryScanExecNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1305,6 +1316,8 @@ pub struct PhysicalScalarUdfNode {
     pub return_type: ::core::option::Option<super::datafusion_common::ArrowType>,
     #[prost(bool, tag = "5")]
     pub nullable: bool,
+    #[prost(string, tag = "6")]
+    pub return_field_name: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalAggregateExprNode {
@@ -1318,6 +1331,8 @@ pub struct PhysicalAggregateExprNode {
     pub ignore_nulls: bool,
     #[prost(bytes = "vec", optional, tag = "7")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(string, tag = "8")]
+    pub human_display: ::prost::alloc::string::String,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,
@@ -1345,6 +1360,10 @@ pub struct PhysicalWindowExprNode {
     pub name: ::prost::alloc::string::String,
     #[prost(bytes = "vec", optional, tag = "9")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bool, tag = "11")]
+    pub ignore_nulls: bool,
+    #[prost(bool, tag = "12")]
+    pub distinct: bool,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "3, 10")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
@@ -1572,6 +1591,21 @@ pub struct JsonScanExecNode {
 pub struct AvroScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryScanExecNode {
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    pub partitions: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint32, repeated, tag = "3")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, repeated, tag = "4")]
+    pub sort_information: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
+    #[prost(bool, tag = "5")]
+    pub show_sizes: bool,
+    #[prost(uint32, optional, tag = "6")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CooperativeExecNode {
@@ -1941,6 +1975,96 @@ pub struct CteWorkTableScanNode {
     #[prost(message, optional, tag = "2")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct GenerateSeriesArgsContainsNull {
+    #[prost(enumeration = "GenerateSeriesName", tag = "1")]
+    pub name: i32,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct GenerateSeriesArgsInt64 {
+    #[prost(int64, tag = "1")]
+    pub start: i64,
+    #[prost(int64, tag = "2")]
+    pub end: i64,
+    #[prost(int64, tag = "3")]
+    pub step: i64,
+    #[prost(bool, tag = "4")]
+    pub include_end: bool,
+    #[prost(enumeration = "GenerateSeriesName", tag = "5")]
+    pub name: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GenerateSeriesArgsTimestamp {
+    #[prost(int64, tag = "1")]
+    pub start: i64,
+    #[prost(int64, tag = "2")]
+    pub end: i64,
+    #[prost(message, optional, tag = "3")]
+    pub step: ::core::option::Option<
+        super::datafusion_common::IntervalMonthDayNanoValue,
+    >,
+    #[prost(string, optional, tag = "4")]
+    pub tz: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, tag = "5")]
+    pub include_end: bool,
+    #[prost(enumeration = "GenerateSeriesName", tag = "6")]
+    pub name: i32,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct GenerateSeriesArgsDate {
+    #[prost(int64, tag = "1")]
+    pub start: i64,
+    #[prost(int64, tag = "2")]
+    pub end: i64,
+    #[prost(message, optional, tag = "3")]
+    pub step: ::core::option::Option<
+        super::datafusion_common::IntervalMonthDayNanoValue,
+    >,
+    #[prost(bool, tag = "4")]
+    pub include_end: bool,
+    #[prost(enumeration = "GenerateSeriesName", tag = "5")]
+    pub name: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GenerateSeriesNode {
+    #[prost(message, optional, tag = "1")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint32, tag = "2")]
+    pub target_batch_size: u32,
+    #[prost(oneof = "generate_series_node::Args", tags = "3, 4, 5, 6")]
+    pub args: ::core::option::Option<generate_series_node::Args>,
+}
+/// Nested message and enum types in `GenerateSeriesNode`.
+pub mod generate_series_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Args {
+        #[prost(message, tag = "3")]
+        ContainsNull(super::GenerateSeriesArgsContainsNull),
+        #[prost(message, tag = "4")]
+        Int64Args(super::GenerateSeriesArgsInt64),
+        #[prost(message, tag = "5")]
+        TimestampArgs(super::GenerateSeriesArgsTimestamp),
+        #[prost(message, tag = "6")]
+        DateArgs(super::GenerateSeriesArgsDate),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SortMergeJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "4")]
+    pub join_type: i32,
+    #[prost(message, optional, tag = "5")]
+    pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(message, repeated, tag = "6")]
+    pub sort_options: ::prost::alloc::vec::Vec<SortExprNode>,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum WindowFrameUnits {
@@ -2140,6 +2264,32 @@ impl AggregateMode {
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
             "SINGLE" => Some(Self::Single),
             "SINGLE_PARTITIONED" => Some(Self::SinglePartitioned),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GenerateSeriesName {
+    GsGenerateSeries = 0,
+    GsRange = 1,
+}
+impl GenerateSeriesName {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::GsGenerateSeries => "GS_GENERATE_SERIES",
+            Self::GsRange => "GS_RANGE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GS_GENERATE_SERIES" => Some(Self::GsGenerateSeries),
+            "GS_RANGE" => Some(Self::GsRange),
             _ => None,
         }
     }

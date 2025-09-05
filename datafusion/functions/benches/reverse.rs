@@ -20,12 +20,15 @@ mod helper;
 
 use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
+use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     // All benches are single batch run with 8192 rows
     let reverse = datafusion_functions::unicode::reverse();
+    let config_options = Arc::new(ConfigOptions::default());
 
     const N_ROWS: usize = 8192;
     const NULL_DENSITY: f32 = 0.1;
@@ -53,6 +56,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ).into()],
                         number_rows: N_ROWS,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -74,6 +78,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ],
                         number_rows: N_ROWS,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -100,6 +105,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ).into()],
                         number_rows: N_ROWS,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -123,6 +129,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ).into()],
                         number_rows: N_ROWS,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },

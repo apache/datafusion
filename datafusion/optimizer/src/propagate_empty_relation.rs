@@ -294,7 +294,7 @@ mod tests {
             .project(vec![binary_expr(lit(1), Operator::Plus, lit(1))])?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @"EmptyRelation")
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     #[test]
@@ -316,7 +316,7 @@ mod tests {
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
-        let expected = "EmptyRelation";
+        let expected = "EmptyRelation: rows=0";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -379,7 +379,7 @@ mod tests {
             .union(four)?
             .build()?;
 
-        let expected = "EmptyRelation";
+        let expected = "EmptyRelation: rows=0";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -434,7 +434,7 @@ mod tests {
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
-        let expected = "EmptyRelation";
+        let expected = "EmptyRelation: rows=0";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -474,7 +474,7 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "EmptyRelation";
+        let expected = "EmptyRelation: rows=0";
         assert_together_optimized_plan(plan, expected, eq)
     }
 

@@ -57,12 +57,12 @@ impl MinMaxStatistics {
 
     /// Min value at index
     #[allow(unused)]
-    pub fn min(&self, idx: usize) -> Row {
+    pub fn min(&'_ self, idx: usize) -> Row<'_> {
         self.min_by_sort_order.row(idx)
     }
 
     /// Max value at index
-    pub fn max(&self, idx: usize) -> Row {
+    pub fn max(&'_ self, idx: usize) -> Row<'_> {
         self.max_by_sort_order.row(idx)
     }
 

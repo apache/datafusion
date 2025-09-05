@@ -43,4 +43,4 @@ log = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1.46", features = ["rt", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time"] }

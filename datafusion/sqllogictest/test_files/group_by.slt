@@ -2506,12 +2506,16 @@ TUR [100.0, 75.0] 175
 # test_ordering_sensitive_aggregation3
 # When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
 # test below should raise Plan Error.
-statement error DataFusion error: This feature is not implemented: Conflicting ordering requirements in aggregate functions is not supported
+query ??? rowsort
 SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2,
     ARRAY_AGG(s.amount ORDER BY s.sn ASC) AS amounts3
   FROM sales_global AS s
   GROUP BY s.country
+----
+[100.0, 75.0] [75.0, 100.0] [75.0, 100.0]
+[200.0, 50.0] [50.0, 200.0] [50.0, 200.0]
+[80.0, 30.0] [30.0, 80.0] [30.0, 80.0]
 
 # test_ordering_sensitive_aggregation4
 # If aggregators can work with bounded memory (Sorted or PartiallySorted mode), we should append requirement to
