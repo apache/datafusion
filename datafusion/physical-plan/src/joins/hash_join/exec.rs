@@ -1296,7 +1296,9 @@ impl BuildSideState {
                 .then(|| {
                     on_left
                         .iter()
-                        .map(|expr| CollectLeftAccumulator::try_new(Arc::clone(&expr), schema))
+                        .map(|expr| {
+                            CollectLeftAccumulator::try_new(Arc::clone(&expr), schema)
+                        })
                         .collect::<Result<Vec<_>>>()
                 })
                 .transpose()?,
