@@ -293,7 +293,7 @@ aggregate function. This is to support metadata handling with these aggregate fu
 This change should be transparent to most users. If you have written unit tests to call
 `return_type` directly, you may need to change them to calling `return_field` instead.
 
-This update is a breaking change to the FFI API. The currrent best practice when using the
+This update is a breaking change to the FFI API. The current best practice when using the
 FFI crate is to ensure that all libraries that are interacting are using the same
 underlying Rust version. Issue [#17374] has been opened to discuss stabilization of
 this interface so that these libraries can be used across different DataFusion versions.
