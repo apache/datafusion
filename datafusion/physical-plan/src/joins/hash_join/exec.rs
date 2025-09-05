@@ -54,7 +54,7 @@ use crate::{
     PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
+use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -63,11 +63,11 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality, Result,
-    ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
+use datafusion_expr::Accumulator;
+use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
@@ -77,6 +77,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
+use itertools::izip;
 use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
@@ -1188,28 +1189,6 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
-/// Compute min/max bounds for each column in the given arrays
-fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<ColumnBounds>> {
-    arrays
-        .iter()
-        .map(|array| {
-            if array.is_empty() {
-                // Return NULL values for empty arrays
-                return Ok(ColumnBounds::new(
-                    ScalarValue::try_from(array.data_type())?,
-                    ScalarValue::try_from(array.data_type())?,
-                ));
-            }
-
-            // Use Arrow kernels for efficient min/max computation
-            let min_val = min_batch(array)?;
-            let max_val = max_batch(array)?;
-
-            Ok(ColumnBounds::new(min_val, max_val))
-        })
-        .collect()
-}
-
 #[expect(clippy::too_many_arguments)]
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
 ///
@@ -1239,6 +1218,18 @@ fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<ColumnBounds>> {
 /// # Returns
 /// `JoinLeftData` containing the hash map, consolidated batch, join key values,
 /// visited indices bitmap, and computed bounds (if requested).
+
+/// State for collecting the build-side data during hash join
+struct BuildSideState {
+    batches: Vec<RecordBatch>,
+    num_rows: usize,
+    metrics: BuildProbeJoinMetrics,
+    reservation: MemoryReservation,
+    min_accumulators: Vec<MinAccumulator>,
+    max_accumulators: Vec<MaxAccumulator>,
+    on_left: Vec<Arc<dyn PhysicalExpr>>,
+}
+
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,
@@ -1251,26 +1242,77 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
+    let (min_accumulators, max_accumulators) = if should_compute_bounds {
+        let data_types = on_left
+            .iter()
+            .map(|expr| expr.data_type(&schema))
+            .collect::<Result<Vec<_>>>()?;
+        (
+            data_types
+                .iter()
+                .map(|data_type| MinAccumulator::try_new(data_type))
+                .collect::<Result<Vec<_>>>()?,
+            data_types
+                .iter()
+                .map(|data_type| MaxAccumulator::try_new(data_type))
+                .collect::<Result<Vec<_>>>()?,
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
     // 2. stores the batches in a vector.
-    let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, mut reservation) = left_stream
-        .try_fold(initial, |mut acc, batch| async {
+    let initial = BuildSideState {
+        batches: Vec::new(),
+        num_rows: 0,
+        metrics,
+        reservation,
+        min_accumulators,
+        max_accumulators,
+        on_left: on_left.clone(),
+    };
+
+    let state = left_stream
+        .try_fold(initial, |mut state, batch| async move {
+            // Update accumulators if computing bounds
+            for (min_accumulator, max_accumulator, on_expr) in izip!(
+                &mut state.min_accumulators,
+                &mut state.max_accumulators,
+                &state.on_left
+            ) {
+                let array = on_expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+                min_accumulator.update_batch(&[array.clone()])?;
+                max_accumulator.update_batch(&[array])?;
+            }
+
+            // Decide if we spill or not
             let batch_size = get_record_batch_memory_size(&batch);
             // Reserve memory for incoming batch
-            acc.3.try_grow(batch_size)?;
+            state.reservation.try_grow(batch_size)?;
             // Update metrics
-            acc.2.build_mem_used.add(batch_size);
-            acc.2.build_input_batches.add(1);
-            acc.2.build_input_rows.add(batch.num_rows());
+            state.metrics.build_mem_used.add(batch_size);
+            state.metrics.build_input_batches.add(1);
+            state.metrics.build_input_rows.add(batch.num_rows());
             // Update row count
-            acc.1 += batch.num_rows();
+            state.num_rows += batch.num_rows();
             // Push batch to output
-            acc.0.push(batch);
-            Ok(acc)
+            state.batches.push(batch);
+            Ok(state)
         })
         .await?;
+
+    // Extract fields from state
+    let BuildSideState {
+        batches,
+        num_rows,
+        metrics,
+        mut reservation,
+        min_accumulators,
+        max_accumulators,
+        on_left: _,
+    } = state;
 
     // Estimation of memory size, required for hashtable, prior to allocation.
     // Final result can be verified using `RawTable.allocation_info()`
@@ -1339,7 +1381,17 @@ async fn collect_left_input(
 
     // Compute bounds for dynamic filter if enabled
     let bounds = if should_compute_bounds && num_rows > 0 {
-        Some(compute_bounds(&left_values)?)
+        let bounds = min_accumulators
+            .into_iter()
+            .zip(max_accumulators.into_iter())
+            .map(|(mut min_accumulator, mut max_accumulator)| {
+                Ok(ColumnBounds::new(
+                    min_accumulator.evaluate()?,
+                    max_accumulator.evaluate()?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Some(bounds)
     } else {
         None
     };
