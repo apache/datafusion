@@ -978,16 +978,13 @@ impl PartialEq for dyn AggregateUDFImpl {
     }
 }
 
-// TODO (https://github.com/apache/datafusion/issues/17064) PartialOrd is not consistent with PartialEq for `dyn AggregateUDFImpl` and it should be
-// Manual implementation of `PartialOrd`
-// There might be some wackiness with it, but this is based on the impl of eq for AggregateUDFImpl
-// https://users.rust-lang.org/t/how-to-compare-two-trait-objects-for-equality/88063/5
 impl PartialOrd for dyn AggregateUDFImpl {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name().partial_cmp(other.name()) {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
             cmp => cmp,
         }
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 

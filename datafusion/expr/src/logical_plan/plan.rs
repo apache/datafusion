@@ -2060,7 +2060,9 @@ pub struct EmptyRelation {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for EmptyRelation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.produce_one_row.partial_cmp(&other.produce_one_row)
+        self.produce_one_row
+            .partial_cmp(&other.produce_one_row)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2114,7 +2116,9 @@ pub struct Values {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Values {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.values.partial_cmp(&other.values)
+        self.values
+            .partial_cmp(&other.values)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2139,6 +2143,7 @@ impl PartialOrd for Projection {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2249,6 +2254,7 @@ impl PartialOrd for SubqueryAlias {
             Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
             cmp => cmp,
         }
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2592,7 +2598,9 @@ impl PartialOrd for TableScan {
             filters: &other.filters,
             fetch: &other.fetch,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2915,7 +2923,9 @@ impl Union {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Union {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.inputs.partial_cmp(&other.inputs)
+        self.inputs
+            .partial_cmp(&other.inputs)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3196,7 +3206,9 @@ impl PartialOrd for Explain {
             stringified_plans: &other.stringified_plans,
             logical_optimization_succeeded: &other.logical_optimization_succeeded,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3219,6 +3231,7 @@ impl PartialOrd for Analyze {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3446,7 +3459,9 @@ impl PartialOrd for DistinctOn {
             sort_expr: &other.sort_expr,
             input: &other.input,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3633,6 +3648,7 @@ impl PartialOrd for Aggregate {
             }
             cmp => cmp,
         }
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3905,7 +3921,9 @@ impl PartialOrd for Join {
             join_constraint: &other.join_constraint,
             null_equality: &other.null_equality,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -4070,7 +4088,9 @@ impl PartialOrd for Unnest {
             dependency_indices: &other.dependency_indices,
             options: &other.options,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 

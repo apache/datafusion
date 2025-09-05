@@ -312,7 +312,9 @@ mod test {
     // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoopPlan {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            self.input.partial_cmp(&other.input)
+            self.input
+                .partial_cmp(&other.input)
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -365,7 +367,9 @@ mod test {
     // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoLimitNoopPlan {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            self.input.partial_cmp(&other.input)
+            self.input
+                .partial_cmp(&other.input)
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 

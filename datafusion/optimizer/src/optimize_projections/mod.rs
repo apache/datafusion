@@ -902,6 +902,7 @@ mod tests {
                 Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
                 cmp => cmp,
             }
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -989,6 +990,7 @@ mod tests {
                 }
                 cmp => cmp,
             }
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
