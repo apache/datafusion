@@ -285,7 +285,6 @@ If you have custom implementations of `FileOpener` or work directly with `FileOp
 
 [#17397]: https://github.com/apache/datafusion/pull/17397
 
-
 ### Added `PhysicalExpr::is_volatile_node`
 
 We added a method to `PhysicalExpr` to mark a `PhysicalExpr` as volatile:
