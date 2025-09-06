@@ -25,7 +25,7 @@ use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::{DataType, IntervalMonthDayNano};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -141,6 +141,10 @@ impl ScalarUDFImpl for MakeIntervalFunc {
                 })
                 .collect()),
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -266,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn nulls_propagate_per_row() -> Result<()> {
+    fn nulls_propagate_per_row() {
         let year = Arc::new(Int32Array::from(vec![
             None,
             Some(2),
@@ -333,17 +337,16 @@ mod tests {
 
         let out = run_make_interval_month_day_nano(vec![
             year, month, week, day, hour, min, sec,
-        ])?;
+        ]).unwrap();
         let out = out
             .as_any()
             .downcast_ref::<IntervalMonthDayNanoArray>()
             .ok_or_else(|| {
                 DataFusionError::Internal("expected IntervalMonthDayNano".into())
-            })?;
+            }).unwrap();
 
         for i in 0..out.len() {
             assert!(out.is_null(i), "row {i} should be NULL");
         }
-        Ok(())
     }
 }
