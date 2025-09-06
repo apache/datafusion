@@ -28,18 +28,21 @@ use std::sync::Arc;
 use crate::{Session, TableProvider, TableProviderFactory};
 use arrow::array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
+use datafusion_common::{
+    config_err, plan_err, Constraints, DFSchema, DataFusionError, Result,
+};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
-use datafusion_physical_expr::create_ordering;
+use datafusion_physical_expr::create_lex_orderings;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use async_trait::async_trait;
+use datafusion_physical_expr::equivalence::project_orderings;
 use futures::StreamExt;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
@@ -321,24 +324,26 @@ impl TableProvider for StreamTable {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let projected_schema = match projection {
-            Some(p) => {
-                let projected = self.0.source.schema().project(p)?;
-                create_ordering(&projected, &self.0.order)?
-            }
-            None => create_ordering(self.0.source.schema(), &self.0.order)?,
+        let schema = self.0.source.schema();
+        let df_schema = DFSchema::try_from(Arc::clone(schema))?;
+        let mut sort_information =
+            create_lex_orderings(&self.0.order, &df_schema, state.execution_props())?;
+
+        // If there is a projection on the source, we also need to project orderings
+        if let Some(projection) = projection {
+            sort_information = project_orderings(sort_information, schema, projection)?;
         };
 
         Ok(Arc::new(StreamingTableExec::try_new(
             Arc::clone(self.0.source.schema()),
             vec![Arc::new(StreamRead(Arc::clone(&self.0))) as _],
             projection,
-            projected_schema,
+            sort_information,
             true,
             limit,
         )?))
@@ -351,7 +356,9 @@ impl TableProvider for StreamTable {
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = self.0.source.schema();
-        let orders = create_ordering(schema, &self.0.order)?;
+        let df_schema = DFSchema::try_from(Arc::clone(schema))?;
+        let orders =
+            create_lex_orderings(&self.0.order, &df_schema, _state.execution_props())?;
         // It is sufficient to pass only one of the equivalent orderings:
         let ordering = orders.into_iter().next().map(Into::into);
 

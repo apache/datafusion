@@ -19,12 +19,14 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expressions::Column;
-use crate::PhysicalExpr;
+use crate::{EquivalenceProperties, PhysicalExpr};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 
+use crate::equivalence::OrderingEquivalenceClass;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use indexmap::IndexMap;
 
 /// Stores target expressions, along with their indices, that associate with a
@@ -154,6 +156,22 @@ impl FromIterator<(Arc<dyn PhysicalExpr>, ProjectionTargets)> for ProjectionMapp
             map: IndexMap::from_iter(iter),
         }
     }
+}
+
+pub fn project_orderings(
+    orderings: Vec<LexOrdering>,
+    schema: &SchemaRef,
+    projection: &[usize],
+) -> Result<Vec<LexOrdering>, DataFusionError> {
+    let mut eq_props =
+        EquivalenceProperties::new_with_orderings(Arc::clone(schema), orderings);
+
+    let projection_mapping = ProjectionMapping::from_indices(projection, schema)?;
+    let projected_schema = Arc::new(schema.project(projection)?);
+    eq_props = eq_props.project(&projection_mapping, projected_schema);
+
+    let oeq_class: OrderingEquivalenceClass = eq_props.into();
+    Ok(oeq_class.into())
 }
 
 #[cfg(test)]
