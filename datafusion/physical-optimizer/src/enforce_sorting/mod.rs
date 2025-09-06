@@ -258,10 +258,10 @@ impl PhysicalOptimizerRule for EnforceSorting {
     }
 }
 
-/// Only interested with [`SortExec`]s and their unbounded children.
-/// If the plan is not a [`SortExec`] or its child is not unbounded, returns the original plan.
-/// Otherwise, by checking the requirement satisfaction searches for a replacement chance.
-/// If there's one replaces the [`SortExec`] plan with a [`PartialSortExec`]
+/// Attempts to replace [`SortExec`] with [`PartialSortExec`] when the input data
+/// already has a partial sort order that matches a prefix of the required sort expressions.
+/// If the plan is not a [`SortExec`] or no compatible prefix is found, returns the original plan.
+/// Otherwise replaces the [`SortExec`] with a [`PartialSortExec`] that only sorts within groups
 fn replace_with_partial_sort(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -272,9 +272,6 @@ fn replace_with_partial_sort(
 
     // It's safe to get first child of the SortExec
     let child = Arc::clone(sort_plan.children()[0]);
-    if !child.boundedness().is_unbounded() {
-        return Ok(plan);
-    }
 
     // Here we're trying to find the common prefix for sorted columns that is required for the
     // sort and already satisfied by the given ordering
