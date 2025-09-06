@@ -145,7 +145,7 @@ pub(super) fn rewrite_qualify(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 // for Postgres, name of column for 'rank() over (...)' is 'rank'
                 // but in Datafusion, it is 'rank() over (...)'
                 // without projection, it's still an invalid sql in Postgres
-                
+
                 let project_exprs = filter
                     .input
                     .schema()
