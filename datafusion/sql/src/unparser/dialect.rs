@@ -204,6 +204,13 @@ pub trait Dialect: Send + Sync {
     fn col_alias_overrides(&self, _alias: &str) -> Result<Option<String>> {
         Ok(None)
     }
+
+    /// Allows the dialect to support the QUALIFY clause
+    ///
+    /// Some dialects, like Postgres, do not support the QUALIFY clause
+    fn supports_qualify(&self) -> bool {
+        true
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -267,6 +274,14 @@ impl Dialect for DefaultDialect {
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        true
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('"')
     }
