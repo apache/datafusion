@@ -151,13 +151,6 @@ pub(crate) fn find_window_nodes_within_select<'a>(
                 find_window_nodes_within_select(input, prev_windows, true)
             }
         }
-        LogicalPlan::Filter(_) => {
-            if already_projected {
-                prev_windows
-            } else {
-                find_window_nodes_within_select(input, prev_windows, true)
-            }
-        }
         LogicalPlan::TableScan(_) => prev_windows,
         _ => find_window_nodes_within_select(input, prev_windows, already_projected),
     }
