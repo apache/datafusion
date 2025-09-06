@@ -519,30 +519,42 @@ mod tests {
         };
         MakeIntervalFunc::new().invoke_with_args(args)
     }
-    #[test]
-    fn zero_args_returns_zero_seconds() {
-        let number_rows = 2;
-        let res: ColumnarValue =
-            invoke_make_interval_with_args(vec![], number_rows).unwrap();
 
-        match res {
-            ColumnarValue::Array(arr) => {
-                let arr: &IntervalMonthDayNanoArray = arr
-                    .as_any()
-                    .downcast_ref::<IntervalMonthDayNanoArray>()
-                    .expect("IntervalMonthDayNanoArray");
-                assert_eq!(arr.len(), number_rows);
-                for i in 0..number_rows {
-                    let iv = arr.value(i);
-                    assert_eq!(iv.months, 0);
-                    assert_eq!(iv.days, 0);
-                    assert_eq!(iv.nanoseconds, 0);
-                }
-            }
-            other => panic!(
-                "expected Array(IntervalMonthDayNano[0...]), got {:?}",
-                other
-            ),
+    #[test]
+    fn zero_args_returns_zero_seconds() -> Result<()> {
+        let number_rows = 2;
+        let res: ColumnarValue = invoke_make_interval_with_args(vec![], number_rows)?;
+
+        let ColumnarValue::Array(arr) = res else {
+            return Err(DataFusionError::Internal(
+                "expected ColumnarValue::Array(IntervalMonthDayNano)".into(),
+            ));
+        };
+
+        let arr: &IntervalMonthDayNanoArray = arr
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .ok_or_else(|| {
+                DataFusionError::Internal("expected IntervalMonthDayNanoArray".into())
+            })?;
+
+        if arr.len() != number_rows {
+            return Err(DataFusionError::Internal(format!(
+                "expected array length {number_rows}, got {}",
+                arr.len()
+            )));
         }
+
+        for i in 0..number_rows {
+            let iv: IntervalMonthDayNano = arr.value(i);
+            if iv.months != 0 || iv.days != 0 || iv.nanoseconds != 0 {
+                return Err(DataFusionError::Internal(format!(
+                    "row {i}: expected 0 months, 0 days, 0 ns; got months={}, days={}, ns={}",
+                    iv.months, iv.days, iv.nanoseconds
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
