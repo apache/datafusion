@@ -124,8 +124,8 @@ impl<'a> BinaryTypeCoercer<'a> {
 
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
-        if is_both_null(self.lhs, self.rhs) {
-            return Ok(signature_for_nulls(self.op));
+        if is_both_null(self.lhs, self.rhs) && is_arithmetic(self.op) {
+            return Ok(Signature::uniform(DataType::Int64));
         }
 
         if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
@@ -322,26 +322,10 @@ fn is_both_null(lhs: &DataType, rhs: &DataType) -> bool {
     matches!(lhs, DataType::Null) && matches!(rhs, DataType::Null)
 }
 
-fn signature_for_nulls(op: &Operator) -> Signature {
-    if is_arithmetic(op) {
-        return Signature::uniform(DataType::Int64);
-    }
-    if is_logic(op) {
-        return Signature::uniform(DataType::Boolean);
-    }
-    Signature::uniform(DataType::Null)
-}
-
 #[inline]
 fn is_arithmetic(op: &Operator) -> bool {
     use Operator::*;
     matches!(op, Plus | Minus | Multiply | Divide | Modulo)
-}
-
-#[inline]
-fn is_logic(op: &Operator) -> bool {
-    use Operator::*;
-    matches!(op, And | Or)
 }
 
 // TODO Move the rest inside of BinaryTypeCoercer
