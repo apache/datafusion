@@ -1,0 +1,394 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# tests for EXPLAIN with display schema enabled
+statement ok
+set datafusion.explain.show_schema = true;
+
+# Test setup - create test table
+statement ok
+CREATE TABLE stock_price (
+    company VARCHAR,
+    price_date DATE,
+    price INTEGER
+);
+
+# Test LAG window function in DEFINE clause
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > LAG(price)
+)
+----
+logical_plan
+01)Projection: last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS current_price
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------WindowAggr: windowExpr=[[lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as current_price], schema=[current_price:Int32;N]
+02)--AggregateExec: mode=FinalPartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----SortExec: expr=[__mr_match_number@0 ASC NULLS LAST], preserve_partitioning=[true], schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+04)------CoalesceBatchesExec: target_batch_size=8192, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+05)--------RepartitionExec: partitioning=Hash([__mr_match_number@0], 4), input_partitions=4, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+06)----------AggregateExec: mode=Partial, gby=[__mr_match_number@1 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@1 > lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------BoundedWindowAggExec: wdw=[lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[price_date:Date32;N, price:Int32;N, lag(stock_price.price) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+11)--------------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test LEAD window function in MEASURES clause
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES LEAD(price) AS next_price
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS next_price
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----Projection: __mr_match_number, __mr_match_sequence_number, lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+06)----------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as next_price], schema=[next_price:Int32;N]
+02)--AggregateExec: mode=SinglePartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----ProjectionExec: expr=[__mr_match_number@1 as __mr_match_number, __mr_match_sequence_number@2 as __mr_match_sequence_number, lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------BoundedWindowAggExec: wdw=[lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+05)--------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST, __mr_match_sequence_number@2 ASC NULLS LAST], preserve_partitioning=[true], schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+06)----------CoalesceBatchesExec: target_batch_size=8192, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+07)------------RepartitionExec: partitioning=Hash([__mr_match_number@1], 4), input_partitions=4, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+10)------------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, price@1 > 100 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test FIRST_VALUE window function in MEASURES
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES FIRST_VALUE(price) AS first_price
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+----
+logical_plan
+01)Projection: first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS first_price
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(50) AS stock_price.price > Int64(50)] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as first_price], schema=[first_price:Int32;N]
+02)--AggregateExec: mode=FinalPartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----SortExec: expr=[__mr_match_number@0 ASC NULLS LAST], preserve_partitioning=[true], schema=[__mr_match_number:UInt64;N, first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][first_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+04)------CoalesceBatchesExec: target_batch_size=8192, schema=[__mr_match_number:UInt64;N, first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][first_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+05)--------RepartitionExec: partitioning=Hash([__mr_match_number@0], 4), input_partitions=4, schema=[__mr_match_number:UInt64;N, first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][first_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+06)----------AggregateExec: mode=Partial, gby=[__mr_match_number@1 as __mr_match_number], aggr=[first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][first_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, price@1 > 50 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test LAST_VALUE window function in MEASURES
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES LAST_VALUE(price) AS last_price
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+----
+logical_plan
+01)Projection: last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS last_price
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(50) AS stock_price.price > Int64(50)] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as last_price], schema=[last_price:Int32;N]
+02)--AggregateExec: mode=FinalPartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----SortExec: expr=[__mr_match_number@0 ASC NULLS LAST], preserve_partitioning=[true], schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+04)------CoalesceBatchesExec: target_batch_size=8192, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+05)--------RepartitionExec: partitioning=Hash([__mr_match_number@0], 4), input_partitions=4, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+06)----------AggregateExec: mode=Partial, gby=[__mr_match_number@1 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, price@1 > 50 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test window function with offset
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS p
+    PATTERN (A)
+    DEFINE A AS price > LAG(price, 2)
+)
+----
+logical_plan
+01)Projection: last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS p
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > lag(stock_price.price,Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------WindowAggr: windowExpr=[[lag(stock_price.price, Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as p], schema=[p:Int32;N]
+02)--AggregateExec: mode=FinalPartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----SortExec: expr=[__mr_match_number@0 ASC NULLS LAST], preserve_partitioning=[true], schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+04)------CoalesceBatchesExec: target_batch_size=8192, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+05)--------RepartitionExec: partitioning=Hash([__mr_match_number@0], 4), input_partitions=4, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+06)----------AggregateExec: mode=Partial, gby=[__mr_match_number@1 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, lag(stock_price.price,Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as lag(stock_price.price,Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@1 > lag(stock_price.price,Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, lag(stock_price.price,Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------BoundedWindowAggExec: wdw=[lag(stock_price.price,Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price,Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[price_date:Date32;N, price:Int32;N, lag(stock_price.price,Int64(2)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+11)--------------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test window function with default value
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS p
+    PATTERN (A)
+    DEFINE A AS price > LAG(price, 1, 0)
+)
+----
+logical_plan
+01)Projection: last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS p
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > lag(stock_price.price,Int64(1),Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------WindowAggr: windowExpr=[[lag(stock_price.price, Int64(1), Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as p], schema=[p:Int32;N]
+02)--AggregateExec: mode=FinalPartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----SortExec: expr=[__mr_match_number@0 ASC NULLS LAST], preserve_partitioning=[true], schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+04)------CoalesceBatchesExec: target_batch_size=8192, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+05)--------RepartitionExec: partitioning=Hash([__mr_match_number@0], 4), input_partitions=4, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+06)----------AggregateExec: mode=Partial, gby=[__mr_match_number@1 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, lag(stock_price.price,Int64(1),Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as lag(stock_price.price,Int64(1),Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@1 > lag(stock_price.price,Int64(1),Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, lag(stock_price.price,Int64(1),Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------BoundedWindowAggExec: wdw=[lag(stock_price.price,Int64(1),Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price,Int64(1),Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[price_date:Date32;N, price:Int32;N, lag(stock_price.price,Int64(1),Int64(0)) ORDER BY [stock_price.price_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+11)--------------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test multiple window functions
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES
+        LAG(price) AS prev_price,
+        LEAD(price) AS next_price,
+        FIRST_VALUE(price) AS first_price,
+        LAST_VALUE(price) AS last_price
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+----
+logical_plan
+01)Projection: last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS prev_price, last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS next_price, first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS first_price, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS last_price
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----WindowAggr: windowExpr=[[lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(50) AS stock_price.price > Int64(50)] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+05)--------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as prev_price, last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@2 as next_price, first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@3 as first_price, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@4 as last_price], schema=[prev_price:Int32;N, next_price:Int32;N, first_price:Int32;N, last_price:Int32;N]
+02)--AggregateExec: mode=SinglePartitioned, gby=[__mr_match_number@1 as __mr_match_number], aggr=[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N, last_value(lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N, first_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----BoundedWindowAggExec: wdw=[lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, lead(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST, __mr_match_sequence_number@2 ASC NULLS LAST], preserve_partitioning=[true], schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+05)--------CoalesceBatchesExec: target_batch_size=8192, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+06)----------RepartitionExec: partitioning=Hash([__mr_match_number@1], 4), input_partitions=4, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, price@1 > 50 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test window function implicit frame
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES LAG(price) AS prev_price
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS prev_price
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----Projection: __mr_match_number, __mr_match_sequence_number, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+06)----------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as prev_price], schema=[prev_price:Int32;N]
+02)--AggregateExec: mode=SinglePartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----ProjectionExec: expr=[__mr_match_number@1 as __mr_match_number, __mr_match_sequence_number@2 as __mr_match_sequence_number, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------BoundedWindowAggExec: wdw=[lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+05)--------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST, __mr_match_sequence_number@2 ASC NULLS LAST], preserve_partitioning=[true], schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+06)----------CoalesceBatchesExec: target_batch_size=8192, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+07)------------RepartitionExec: partitioning=Hash([__mr_match_number@1], 4), input_partitions=4, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+10)------------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, price@1 > 100 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test window function no explicit OVER clause
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES LAG(price) AS prev_price
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS prev_price
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----Projection: __mr_match_number, __mr_match_sequence_number, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+06)----------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as prev_price], schema=[prev_price:Int32;N]
+02)--AggregateExec: mode=SinglePartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----ProjectionExec: expr=[__mr_match_number@1 as __mr_match_number, __mr_match_sequence_number@2 as __mr_match_sequence_number, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------BoundedWindowAggExec: wdw=[lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lag(stock_price.price) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+05)--------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST, __mr_match_sequence_number@2 ASC NULLS LAST], preserve_partitioning=[true], schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+06)----------CoalesceBatchesExec: target_batch_size=8192, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+07)------------RepartitionExec: partitioning=Hash([__mr_match_number@1], 4), input_partitions=4, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+10)------------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, price@1 > 100 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test rank window functions
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES
+        ROW_NUMBER() AS row_num,
+        RANK() AS rank_val,
+        DENSE_RANK() AS dense_rank_val
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+----
+logical_plan
+01)Projection: last_value(row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS row_num, last_value(rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS rank_val, last_value(dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS dense_rank_val
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(50) AS stock_price.price > Int64(50)] output={metadata=[__mr_match_number,__mr_match_sequence_number]}
+05)--------TableScan: stock_price projection=[price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as row_num, last_value(rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@2 as rank_val, last_value(dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@3 as dense_rank_val], schema=[row_num:UInt64;N, rank_val:UInt64;N, dense_rank_val:UInt64;N]
+02)--AggregateExec: mode=SinglePartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:UInt64;N, last_value(rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:UInt64;N, last_value(dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:UInt64;N]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, row_number() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:UInt64, rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:UInt64, dense_rank() PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:UInt64]
+04)------SortExec: expr=[__mr_match_number@0 ASC NULLS LAST, __mr_match_sequence_number@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+05)--------CoalesceBatchesExec: target_batch_size=8192, schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+06)----------RepartitionExec: partitioning=Hash([__mr_match_number@0], 4), input_partitions=4, schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A+] output={metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------SortExec: expr=[price_date@0 ASC NULLS LAST], preserve_partitioning=[false], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------ProjectionExec: expr=[price_date@0 as price_date, price@1 as price, price@1 > 50 as __mr_symbol_a], schema=[price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price_date:Date32;N, price:Int32;N]
+
+# Test running/final unsupported
+query error DataFusion error: SQL error: ParserError\("Expected: PATTERN, found: \( at Line: 4, Column: 25"\)
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES RUNNING AVG(price) AS running_avg
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+
+# Test window function column references
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES LAG(company) AS prev_company
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: last_value(lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS prev_company
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----Projection: __mr_match_number, __mr_match_sequence_number, lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------MatchRecognize: order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.company], metadata=[__mr_match_number,__mr_match_sequence_number]}
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[last_value(lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as prev_company], schema=[prev_company:Utf8View;N]
+02)--AggregateExec: mode=SinglePartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Utf8View;N]
+03)----ProjectionExec: expr=[__mr_match_number@1 as __mr_match_number, __mr_match_sequence_number@2 as __mr_match_sequence_number, lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], schema=[__mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Utf8View;N]
+04)------BoundedWindowAggExec: wdw=[lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, lag(stock_price.company) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Utf8View;N]
+05)--------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST, __mr_match_sequence_number@2 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+06)----------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+07)------------RepartitionExec: partitioning=Hash([__mr_match_number@1], 4), input_partitions=4, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[company], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+10)------------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test window function invalid column
+query error DataFusion error: Schema error: No field named invalid_column\. Valid fields are stock_price\.company, stock_price\.price_date, stock_price\.price, __mr_classifier, __mr_match_number, __mr_match_sequence_number, __mr_classifier_a\.
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES LAG(invalid_column) AS bad_lag
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)

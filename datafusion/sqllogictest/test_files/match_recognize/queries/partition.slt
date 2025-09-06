@@ -1,0 +1,135 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+###############################################
+# Partitioning & Ordering tests for MATCH_RECOGNIZE
+###############################################
+
+# A small inline data-set containing two logical partitions (company A/B)
+# in chronological order.  Pattern detects single "UP" events where the
+# price increased over the previous row *inside the same partition*.
+
+# Import common test data
+include ../init_data.slt.part
+
+# Test 1: Verify PARTITION BY and ORDER BY semantics (no window fns / measures)
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price_date >= DATE '2024-01-09'
+)
+WHERE company IN ('AAPL','DDOG')
+ORDER BY company, price_date;
+----
+AAPL 2024-01-09 195
+AAPL 2024-01-10 192
+AAPL 2024-01-11 197
+AAPL 2024-01-12 199
+DDOG 2024-01-09 141
+DDOG 2024-01-10 139
+DDOG 2024-01-11 143
+DDOG 2024-01-12 147
+
+# Test 2: Two consecutive low-price rows within each partition
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    ALL ROWS PER MATCH
+    PATTERN (A A)
+    DEFINE A AS price < 130
+)
+WHERE company = 'DDOG'
+ORDER BY company, price_date;
+----
+DDOG 2024-01-01 125
+DDOG 2024-01-02 128
+
+# Test 3: Detect single high-price rows (>= 390) per partition, ordered by descending price_date
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date DESC
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price >= 390
+)
+WHERE company = 'MSFT';
+----
+MSFT 2024-01-12 396
+MSFT 2024-01-11 393
+MSFT 2024-01-09 391
+
+# Test 4: Start-anchor (^) ensures match begins at first row of each partition, ordered by descending price_date
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date DESC
+    ALL ROWS PER MATCH
+    PATTERN (^ A A)
+    DEFINE A AS price < 250
+)
+ORDER BY company, price_date;
+----
+AAPL 2024-01-11 197
+AAPL 2024-01-12 199
+AMZN 2024-01-11 162
+AMZN 2024-01-12 164
+DDOG 2024-01-11 143
+DDOG 2024-01-12 147
+GOOGL 2024-01-11 152
+GOOGL 2024-01-12 154
+
+# Test 5: End-anchor ($) requires match to finish at partition end
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    ALL ROWS PER MATCH
+    PATTERN (A A $)
+    DEFINE A AS price > 140
+)
+ORDER BY company, price_date;
+----
+AAPL 2024-01-11 197
+AAPL 2024-01-12 199
+AMZN 2024-01-11 162
+AMZN 2024-01-12 164
+CRM 2024-01-11 263
+CRM 2024-01-12 266
+DDOG 2024-01-11 143
+DDOG 2024-01-12 147
+GOOGL 2024-01-11 152
+GOOGL 2024-01-12 154
+META 2024-01-11 353
+META 2024-01-12 356
+MSFT 2024-01-11 393
+MSFT 2024-01-12 396
+NFLX 2024-01-11 503
+NFLX 2024-01-12 506
+NVDA 2024-01-11 518
+NVDA 2024-01-12 525
+TSLA 2024-01-11 266
+TSLA 2024-01-12 269

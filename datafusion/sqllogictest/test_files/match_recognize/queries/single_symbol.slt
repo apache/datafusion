@@ -1,0 +1,259 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ../init_data.slt.part
+
+# Test 1: Basic single symbol pattern with simple condition
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price < 130
+)
+----
+DDOG 2024-01-01 125
+DDOG 2024-01-02 128
+DDOG 2024-01-04 129
+
+# Test 2: Single symbol with exact value match
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price = 147
+)
+----
+DDOG 2024-01-12 147
+GOOGL 2024-01-05 147
+
+# Test 3: Single symbol with range condition
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price BETWEEN 250 AND 300
+)
+----
+TSLA 2024-01-02 251
+TSLA 2024-01-03 255
+TSLA 2024-01-04 252
+TSLA 2024-01-05 258
+TSLA 2024-01-08 261
+TSLA 2024-01-09 264
+TSLA 2024-01-10 262
+TSLA 2024-01-11 266
+TSLA 2024-01-12 269
+CRM 2024-01-03 252
+CRM 2024-01-05 255
+CRM 2024-01-08 258
+CRM 2024-01-09 261
+CRM 2024-01-10 259
+CRM 2024-01-11 263
+CRM 2024-01-12 266
+
+# Test 4: Single symbol with company filter
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS company = 'DDOG'
+)
+----
+DDOG 2024-01-01 125
+DDOG 2024-01-02 128
+DDOG 2024-01-03 132
+DDOG 2024-01-04 129
+DDOG 2024-01-05 135
+DDOG 2024-01-08 138
+DDOG 2024-01-09 141
+DDOG 2024-01-10 139
+DDOG 2024-01-11 143
+DDOG 2024-01-12 147
+
+# Test 5: Single symbol with date filter
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price_date = '2024-01-01'
+)
+----
+DDOG 2024-01-01 125
+AAPL 2024-01-01 185
+MSFT 2024-01-01 375
+GOOGL 2024-01-01 140
+AMZN 2024-01-01 150
+TSLA 2024-01-01 248
+NVDA 2024-01-01 485
+META 2024-01-01 335
+NFLX 2024-01-01 485
+CRM 2024-01-01 245
+
+# Test 6: Single symbol with complex condition
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100 AND company = 'DDOG'
+)
+----
+DDOG 2024-01-01 125
+DDOG 2024-01-02 128
+DDOG 2024-01-03 132
+DDOG 2024-01-04 129
+DDOG 2024-01-05 135
+DDOG 2024-01-08 138
+DDOG 2024-01-09 141
+DDOG 2024-01-10 139
+DDOG 2024-01-11 143
+DDOG 2024-01-12 147
+
+# Test 7: Single symbol with OR condition
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS company = 'DDOG' OR company = 'AAPL'
+)
+----
+DDOG 2024-01-01 125
+DDOG 2024-01-02 128
+DDOG 2024-01-03 132
+DDOG 2024-01-04 129
+DDOG 2024-01-05 135
+DDOG 2024-01-08 138
+DDOG 2024-01-09 141
+DDOG 2024-01-10 139
+DDOG 2024-01-11 143
+DDOG 2024-01-12 147
+AAPL 2024-01-01 185
+AAPL 2024-01-02 187
+AAPL 2024-01-03 189
+AAPL 2024-01-04 186
+AAPL 2024-01-05 191
+AAPL 2024-01-08 193
+AAPL 2024-01-09 195
+AAPL 2024-01-10 192
+AAPL 2024-01-11 197
+AAPL 2024-01-12 199
+
+# Test 8: Single symbol with no matches
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 1000
+)
+----
+
+# Test 9: Single symbol with NULL condition
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price IS NULL
+)
+----
+
+# Test 10: Single symbol with multiple companies and price range
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 200 AND price < 400 AND (company = 'MSFT' OR company = 'GOOGL')
+)
+----
+MSFT 2024-01-01 375
+MSFT 2024-01-02 378
+MSFT 2024-01-03 382
+MSFT 2024-01-04 379
+MSFT 2024-01-05 385
+MSFT 2024-01-08 388
+MSFT 2024-01-09 391
+MSFT 2024-01-10 389
+MSFT 2024-01-11 393
+MSFT 2024-01-12 396
+
+# Test 11: Single symbol with date range
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price_date >= '2024-01-07' AND price_date <= '2024-01-10'
+)
+----
+DDOG 2024-01-08 138
+DDOG 2024-01-09 141
+DDOG 2024-01-10 139
+AAPL 2024-01-08 193
+AAPL 2024-01-09 195
+AAPL 2024-01-10 192
+MSFT 2024-01-08 388
+MSFT 2024-01-09 391
+MSFT 2024-01-10 389
+GOOGL 2024-01-08 149
+GOOGL 2024-01-09 151
+GOOGL 2024-01-10 148
+AMZN 2024-01-08 159
+AMZN 2024-01-09 161
+AMZN 2024-01-10 158
+TSLA 2024-01-08 261
+TSLA 2024-01-09 264
+TSLA 2024-01-10 262
+NVDA 2024-01-08 508
+NVDA 2024-01-09 515
+NVDA 2024-01-10 512
+META 2024-01-08 348
+META 2024-01-09 351
+META 2024-01-10 349
+NFLX 2024-01-08 498
+NFLX 2024-01-09 501
+NFLX 2024-01-10 499
+CRM 2024-01-08 258
+CRM 2024-01-09 261
+CRM 2024-01-10 259
+
+# Test 12: Single symbol with price comparison
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price >= 500
+)
+----
+NVDA 2024-01-05 502
+NVDA 2024-01-08 508
+NVDA 2024-01-09 515
+NVDA 2024-01-10 512
+NVDA 2024-01-11 518
+NVDA 2024-01-12 525
+NFLX 2024-01-09 501
+NFLX 2024-01-11 503
+NFLX 2024-01-12 506

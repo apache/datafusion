@@ -1,0 +1,542 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# tests for EXPLAIN with display schema enabled
+statement ok
+set datafusion.explain.show_schema = true;
+
+# Test setup - create test table
+statement ok
+CREATE TABLE stock_price (
+    company VARCHAR,
+    price_date DATE,
+    price INTEGER
+);
+
+# =====================================================================
+# ONE ROW PER MATCH variants (no shadow rewrite expected)
+# =====================================================================
+
+# ONE ROW: basic exclusion inside pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    MEASURES price AS current_price
+    ONE ROW PER MATCH
+    PATTERN (A ({- B -}))
+    DEFINE
+        A AS price < 130,
+        B AS price > 130
+)
+----
+logical_plan
+01)Projection: last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS current_price
+02)--Aggregate: groupBy=[[__mr_match_number]], aggr=[[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A ({- B -})] symbols=[A,B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < Int32(130) AS stock_price.price < Int64(130), B: stock_price.price > Int32(130) AS stock_price.price > Int64(130)] output={passthrough_columns=[stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------TableScan: stock_price projection=[price]
+physical_plan
+01)ProjectionExec: expr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@1 as current_price], schema=[current_price:Int32;N]
+02)--AggregateExec: mode=FinalPartitioned, gby=[__mr_match_number@0 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N]
+03)----SortExec: expr=[__mr_match_number@0 ASC NULLS LAST], preserve_partitioning=[true], schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+04)------CoalesceBatchesExec: target_batch_size=8192, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+05)--------RepartitionExec: partitioning=Hash([__mr_match_number@0], 4), input_partitions=4, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+06)----------AggregateExec: mode=Partial, gby=[__mr_match_number@1 as __mr_match_number], aggr=[last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted, schema=[__mr_match_number:UInt64;N, last_value(stock_price.price) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@2:UInt64;N, is_set:Boolean;N]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A ({- B -})] output={passthrough_columns=[price], metadata=[__mr_match_number,__mr_match_sequence_number]}, schema=[price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N]
+09)----------------ProjectionExec: expr=[price@0 as price, price@0 < 130 as __mr_symbol_a, price@0 > 130 as __mr_symbol_b], schema=[price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_b:Boolean;N]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[price:Int32;N]
+
+# =====================================================================
+# ALL ROWS PER MATCH variants (shadow rewrite expected)
+# =====================================================================
+
+# ALL ROWS: basic exclusion inside pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A ({- B -}))
+    DEFINE
+        A AS price < 130,
+        B AS price > 130
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (B)] symbols=[A,B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < Int32(130) AS stock_price.price < Int64(130), B: stock_price.price > Int32(130) AS stock_price.price > Int64(130)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+04)------MatchRecognizePatternExec: pattern=[A (B)] output={passthrough_columns=[company,price_date,price], classifier_flags=[B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 130 as __mr_symbol_a, price@2 > 130 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_b:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# ALL ROWS: excluded-only pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (({- B -})+)
+    DEFINE
+        B AS price > 140
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[(B)+] symbols=[B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[B: stock_price.price > Int32(140) AS stock_price.price > Int64(140)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+04)------MatchRecognizePatternExec: pattern=[(B)+] output={passthrough_columns=[company,price_date,price], classifier_flags=[B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 140 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# ALL ROWS: exclusion within a larger pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A ({- B -}+) A)
+    DEFINE
+        B AS price > 140
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (B+) A] symbols=[A,B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: Boolean(true), B: stock_price.price > Int32(140) AS stock_price.price > Int64(140)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+04)------MatchRecognizePatternExec: pattern=[A (B+) A] output={passthrough_columns=[company,price_date,price], classifier_flags=[B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, true as __mr_symbol_a, price@2 > 140 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean, __mr_symbol_b:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# ALL ROWS: same symbol both included and excluded (A {- A -} A)
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A ({- A -}) A)
+    DEFINE
+        A AS LAG(price) < 135
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_a_excl
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (A_excl) A] symbols=[A,A_excl] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING < Int32(135) AS lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING < Int64(135), A_excl: lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING < Int32(135) AS lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING < Int64(135)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[A_excl]}
+04)------WindowAggr: windowExpr=[[lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_a_excl@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_a_excl:Boolean]
+04)------MatchRecognizePatternExec: pattern=[A (A_excl) A] output={passthrough_columns=[company,price_date,price], classifier_flags=[A_excl]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_a_excl:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 < 135 as __mr_symbol_a, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 < 135 as __mr_symbol_a_excl], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_a_excl:Boolean;N]
+06)----------BoundedWindowAggExec: wdw=[lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+07)------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# =====================================================================
+# ALL ROWS PER MATCH with MEASURES
+# =====================================================================
+
+# ALL ROWS + MEASURES on basic exclusion inside pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    MEASURES
+        MATCH_NUMBER() AS mn,
+        MATCH_SEQUENCE_NUMBER() AS ms,
+        CLASSIFIER() AS cls,
+        COUNT(*) AS count,
+        COUNT(A.*) AS count_a,
+        COUNT(B.*) AS count_b
+    ALL ROWS PER MATCH
+    PATTERN (A ({- B -}))
+    DEFINE
+        A AS price < 130,
+        B AS price > 130
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_match_number AS mn, __mr_match_sequence_number AS ms, __mr_classifier AS cls, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count_a, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count_b
+02)--Filter: NOT __mr_classifier_b
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_classifier, __mr_match_number, __mr_match_sequence_number, __mr_classifier_b, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+04)------WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (B)] symbols=[A,B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < Int32(130) AS stock_price.price < Int64(130), B: stock_price.price > Int32(130) AS stock_price.price > Int64(130)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], metadata=[__mr_classifier,__mr_match_number,__mr_match_sequence_number], classifier_flags=[A,B]}
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_match_number@4 as mn, __mr_match_sequence_number@5 as ms, __mr_classifier@3 as cls, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as count, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as count_a, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8 as count_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, mn:UInt64;N, ms:UInt64;N, cls:Utf8;N, count:Int64, count_a:Int64, count_b:Int64]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+03)----FilterExec: NOT __mr_classifier_b@6, projection=[company@0, price_date@1, price@2, __mr_classifier@3, __mr_match_number@4, __mr_match_sequence_number@5, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@9], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+04)------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_classifier@3 as __mr_classifier, __mr_match_number@4 as __mr_match_number, __mr_match_sequence_number@5 as __mr_match_sequence_number, __mr_classifier_b@7 as __mr_classifier_b, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8 as count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@9 as count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@10 as count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+05)--------BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+06)----------SortExec: expr=[__mr_match_number@4 ASC NULLS LAST, __mr_match_sequence_number@5 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean]
+07)------------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean]
+08)--------------RepartitionExec: partitioning=Hash([__mr_match_number@4], 4), input_partitions=4, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean]
+10)------------------MatchRecognizePatternExec: pattern=[A (B)] output={passthrough_columns=[company,price_date,price], metadata=[__mr_classifier,__mr_match_number,__mr_match_sequence_number], classifier_flags=[A,B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean]
+11)--------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 130 as __mr_symbol_a, price@2 > 130 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_b:Boolean;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# ALL ROWS + MEASURES on excluded-only pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    MEASURES
+        MATCH_NUMBER() AS mn,
+        MATCH_SEQUENCE_NUMBER() AS ms,
+        CLASSIFIER() AS cls,
+        COUNT(*) AS count,
+        COUNT(B.*) AS count_b
+    ALL ROWS PER MATCH
+    PATTERN (({- B -})+)
+    DEFINE
+        B AS price > 140
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_match_number AS mn, __mr_match_sequence_number AS ms, __mr_classifier AS cls, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count_b
+02)--Filter: NOT __mr_classifier_b
+03)----WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------MatchRecognize: after_skip=[PAST LAST ROW] pattern=[(B)+] symbols=[B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[B: stock_price.price > Int32(140) AS stock_price.price > Int64(140)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], metadata=[__mr_classifier,__mr_match_number,__mr_match_sequence_number], classifier_flags=[B]}
+05)--------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_match_number@4 as mn, __mr_match_sequence_number@5 as ms, __mr_classifier@3 as cls, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as count, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as count_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, mn:UInt64;N, ms:UInt64;N, cls:Utf8;N, count:Int64, count_b:Int64]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+03)----FilterExec: NOT __mr_classifier_b@6, projection=[company@0, price_date@1, price@2, __mr_classifier@3, __mr_match_number@4, __mr_match_sequence_number@5, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+04)------BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+05)--------SortExec: expr=[__mr_match_number@4 ASC NULLS LAST, __mr_match_sequence_number@5 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean]
+06)----------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean]
+07)------------RepartitionExec: partitioning=Hash([__mr_match_number@4], 4), input_partitions=4, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean]
+09)----------------MatchRecognizePatternExec: pattern=[(B)+] output={passthrough_columns=[company,price_date,price], metadata=[__mr_classifier,__mr_match_number,__mr_match_sequence_number], classifier_flags=[B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean]
+10)------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 140 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# ALL ROWS + MEASURES on exclusion within larger pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    MEASURES
+        MATCH_NUMBER() AS mn,
+        MATCH_SEQUENCE_NUMBER() AS ms,
+        CLASSIFIER() AS cls,
+        COUNT(*) AS count,
+        COUNT(A.*) AS count_a ,
+        COUNT(B.*) AS count_b
+    ALL ROWS PER MATCH
+    PATTERN (A ({- B -}+) A B)
+    DEFINE
+        B AS price > 140
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_match_number AS mn, __mr_match_sequence_number AS ms, CASE WHEN __common_expr_1 = Utf8("B_excl") THEN Utf8("B") ELSE __common_expr_1 END AS cls, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count_a, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count_b
+02)--Projection: CASE WHEN __mr_classifier = Utf8("B_excl") THEN Utf8("B") ELSE __mr_classifier END AS __common_expr_1, stock_price.company, stock_price.price_date, stock_price.price, __mr_match_number, __mr_match_sequence_number, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+03)----Filter: NOT __mr_classifier_b_excl
+04)------Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_classifier, __mr_match_number, __mr_match_sequence_number, __mr_classifier_b_excl, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+05)--------WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+06)----------MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (B_excl+) A B] symbols=[A,B,B_excl] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: Boolean(true), B: stock_price.price > Int32(140) AS stock_price.price > Int64(140), B_excl: stock_price.price > Int32(140) AS stock_price.price > Int64(140)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], metadata=[__mr_classifier,__mr_match_number,__mr_match_sequence_number], classifier_flags=[A,B,B_excl]}
+07)------------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@1 as company, price_date@2 as price_date, price@3 as price, __mr_match_number@4 as mn, __mr_match_sequence_number@5 as ms, CASE WHEN __common_expr_1@0 = B_excl THEN B ELSE __common_expr_1@0 END as cls, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as count, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as count_a, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8 as count_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, mn:UInt64;N, ms:UInt64;N, cls:Utf8;N, count:Int64, count_a:Int64, count_b:Int64]
+02)--ProjectionExec: expr=[CASE WHEN __mr_classifier@3 = B_excl THEN B ELSE __mr_classifier@3 END as __common_expr_1, company@0 as company, price_date@1 as price_date, price@2 as price, __mr_match_number@4 as __mr_match_number, __mr_match_sequence_number@5 as __mr_match_sequence_number, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8 as count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], schema=[__common_expr_1:Utf8;N, company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+03)----CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+04)------FilterExec: NOT __mr_classifier_b_excl@6, projection=[company@0, price_date@1, price@2, __mr_classifier@3, __mr_match_number@4, __mr_match_sequence_number@5, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@9], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_classifier@3 as __mr_classifier, __mr_match_number@4 as __mr_match_number, __mr_match_sequence_number@5 as __mr_match_sequence_number, __mr_classifier_b_excl@8 as __mr_classifier_b_excl, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@9 as count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@10 as count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@11 as count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b_excl:Boolean, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+06)----------BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean, __mr_classifier_b_excl:Boolean, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_b OR __mr_classifier_b_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+07)------------SortExec: expr=[__mr_match_number@4 ASC NULLS LAST, __mr_match_sequence_number@5 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean, __mr_classifier_b_excl:Boolean]
+08)--------------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean, __mr_classifier_b_excl:Boolean]
+09)----------------RepartitionExec: partitioning=Hash([__mr_match_number@4], 4), input_partitions=4, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean, __mr_classifier_b_excl:Boolean]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean, __mr_classifier_b_excl:Boolean]
+11)--------------------MatchRecognizePatternExec: pattern=[A (B_excl+) A B] output={passthrough_columns=[company,price_date,price], metadata=[__mr_classifier,__mr_match_number,__mr_match_sequence_number], classifier_flags=[A,B,B_excl]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_b:Boolean, __mr_classifier_b_excl:Boolean]
+12)----------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, true as __mr_symbol_a, price@2 > 140 as __mr_symbol_b, price@2 > 140 as __mr_symbol_b_excl], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean, __mr_symbol_b:Boolean;N, __mr_symbol_b_excl:Boolean;N]
+13)------------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# ALL ROWS + MEASURES where same symbol included/excluded (A {- A -} A)
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    MEASURES
+        MATCH_NUMBER() AS mn,
+        MATCH_SEQUENCE_NUMBER() AS ms,
+        CLASSIFIER() AS cls,
+        COUNT(*) AS count,
+        COUNT(A.*) AS count_a
+    ALL ROWS PER MATCH
+    PATTERN (A ({- A -}) A)
+    DEFINE
+        A AS price < 135
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_match_number AS mn, __mr_match_sequence_number AS ms, CASE WHEN __common_expr_1 = Utf8("A_excl") THEN Utf8("A") ELSE __common_expr_1 END AS cls, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count_a
+02)--Projection: CASE WHEN __mr_classifier = Utf8("A_excl") THEN Utf8("A") ELSE __mr_classifier END AS __common_expr_1, stock_price.company, stock_price.price_date, stock_price.price, __mr_match_number, __mr_match_sequence_number, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+03)----Filter: NOT __mr_classifier_a_excl
+04)------Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_classifier, __mr_match_number, __mr_match_sequence_number, __mr_classifier_a_excl, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+05)--------WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+06)----------MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (A_excl) A] symbols=[A,A_excl] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < Int32(135) AS stock_price.price < Int64(135), A_excl: stock_price.price < Int32(135) AS stock_price.price < Int64(135)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], metadata=[__mr_classifier,__mr_match_number,__mr_match_sequence_number], classifier_flags=[A,A_excl]}
+07)------------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@1 as company, price_date@2 as price_date, price@3 as price, __mr_match_number@4 as mn, __mr_match_sequence_number@5 as ms, CASE WHEN __common_expr_1@0 = A_excl THEN A ELSE __common_expr_1@0 END as cls, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as count, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as count_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, mn:UInt64;N, ms:UInt64;N, cls:Utf8;N, count:Int64, count_a:Int64]
+02)--ProjectionExec: expr=[CASE WHEN __mr_classifier@3 = A_excl THEN A ELSE __mr_classifier@3 END as __common_expr_1, company@0 as company, price_date@1 as price_date, price@2 as price, __mr_match_number@4 as __mr_match_number, __mr_match_sequence_number@5 as __mr_match_sequence_number, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], schema=[__common_expr_1:Utf8;N, company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+03)----CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+04)------FilterExec: NOT __mr_classifier_a_excl@6, projection=[company@0, price_date@1, price@2, __mr_classifier@3, __mr_match_number@4, __mr_match_sequence_number@5, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_classifier@3 as __mr_classifier, __mr_match_number@4 as __mr_match_number, __mr_match_sequence_number@5 as __mr_match_sequence_number, __mr_classifier_a_excl@7 as __mr_classifier_a_excl, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8 as count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@9 as count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a_excl:Boolean, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+06)----------BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_a_excl:Boolean, count(Int64(1)) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64, count(Int64(1)) FILTER (WHERE __mr_classifier_a OR __mr_classifier_a_excl) PARTITION BY [__mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64]
+07)------------SortExec: expr=[__mr_match_number@4 ASC NULLS LAST, __mr_match_sequence_number@5 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_a_excl:Boolean]
+08)--------------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_a_excl:Boolean]
+09)----------------RepartitionExec: partitioning=Hash([__mr_match_number@4], 4), input_partitions=4, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_a_excl:Boolean]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_a_excl:Boolean]
+11)--------------------MatchRecognizePatternExec: pattern=[A (A_excl) A] output={passthrough_columns=[company,price_date,price], metadata=[__mr_classifier,__mr_match_number,__mr_match_sequence_number], classifier_flags=[A,A_excl]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_a:Boolean, __mr_classifier_a_excl:Boolean]
+12)----------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 135 as __mr_symbol_a, price@2 < 135 as __mr_symbol_a_excl], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_a_excl:Boolean;N]
+13)------------------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# =====================================================================
+# ALL ROWS PER MATCH WITH UNMATCHED ROWS
+# =====================================================================
+
+# WITH UNMATCHED: basic exclusion inside pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH WITH UNMATCHED ROWS
+    PATTERN (A ({- B -}))
+    DEFINE
+        A AS price < 130,
+        B AS price > 130
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (B)] symbols=[A,B] rows_per_match=[ALL ROWS PER MATCH WITH UNMATCHED ROWS] defines=[A: stock_price.price < Int32(130) AS stock_price.price < Int64(130), B: stock_price.price > Int32(130) AS stock_price.price > Int64(130)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+04)------MatchRecognizePatternExec: pattern=[A (B)] output={passthrough_columns=[company,price_date,price], classifier_flags=[B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 130 as __mr_symbol_a, price@2 > 130 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_b:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# WITH UNMATCHED: excluded-only pattern
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH WITH UNMATCHED ROWS
+    PATTERN (({- B -})+)
+    DEFINE
+        B AS price > 140
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[(B)+] symbols=[B] rows_per_match=[ALL ROWS PER MATCH WITH UNMATCHED ROWS] defines=[B: stock_price.price > Int32(140) AS stock_price.price > Int64(140)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+04)------MatchRecognizePatternExec: pattern=[(B)+] output={passthrough_columns=[company,price_date,price], classifier_flags=[B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 140 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# WITH UNMATCHED: same symbol included and excluded
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH WITH UNMATCHED ROWS
+    PATTERN (A ({- A -}) A)
+    DEFINE
+        A AS price < 135
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_a_excl
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (A_excl) A] symbols=[A,A_excl] rows_per_match=[ALL ROWS PER MATCH WITH UNMATCHED ROWS] defines=[A: stock_price.price < Int32(135) AS stock_price.price < Int64(135), A_excl: stock_price.price < Int32(135) AS stock_price.price < Int64(135)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[A_excl]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_a_excl@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_a_excl:Boolean]
+04)------MatchRecognizePatternExec: pattern=[A (A_excl) A] output={passthrough_columns=[company,price_date,price], classifier_flags=[A_excl]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_a_excl:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 135 as __mr_symbol_a, price@2 < 135 as __mr_symbol_a_excl], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_a_excl:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# =====================================================================
+# Conflict cases: included symbols named with _excl
+# =====================================================================
+
+# Included symbol already contains _excl
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (B ({- B -}) B_excl)
+    DEFINE
+        B_excl AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b_excl2
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[B (B_excl2) B_excl] symbols=[B,B_excl,B_excl2] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[B: Boolean(true), B_excl: stock_price.price > Int32(100) AS stock_price.price > Int64(100), B_excl2: Boolean(true)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B_excl2]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b_excl2@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b_excl2:Boolean]
+04)------MatchRecognizePatternExec: pattern=[B (B_excl2) B_excl] output={passthrough_columns=[company,price_date,price], classifier_flags=[B_excl2]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b_excl2:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, true as __mr_symbol_b, price@2 > 100 as __mr_symbol_b_excl, true as __mr_symbol_b_excl2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean, __mr_symbol_b_excl:Boolean;N, __mr_symbol_b_excl2:Boolean]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Excluded-only with included name containing _excl (no included occurrence)
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (({- B_excl -})+)
+    DEFINE
+        B_excl AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b_excl
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[(B_excl)+] symbols=[B_excl] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[B_excl: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B_excl]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b_excl@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b_excl:Boolean]
+04)------MatchRecognizePatternExec: pattern=[(B_excl)+] output={passthrough_columns=[company,price_date,price], classifier_flags=[B_excl]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b_excl:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_b_excl], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b_excl:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Another conflict: included symbol already contains _excl2 and _excl
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A A_excl A_excl2 ({- A -}) ({- A_excl -}) A_excl)
+    DEFINE
+        A AS price < 130,
+        A_excl AS price < 140,
+        A_excl2 AS price < 150
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_a_excl3 AND NOT __mr_classifier_a_excl_excl
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A A_excl A_excl2 (A_excl3) (A_excl_excl) A_excl] symbols=[A,A_excl,A_excl2,A_excl3,A_excl_excl] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < Int32(130) AS stock_price.price < Int64(130), A_excl: stock_price.price < Int32(140) AS stock_price.price < Int64(140), A_excl2: stock_price.price < Int32(150) AS stock_price.price < Int64(150), A_excl3: stock_price.price < Int32(130) AS stock_price.price < Int64(130), A_excl_excl: stock_price.price < Int32(140) AS stock_price.price < Int64(140)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[A_excl3,A_excl_excl]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_a_excl3@3 AND NOT __mr_classifier_a_excl_excl@4, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_a_excl3:Boolean, __mr_classifier_a_excl_excl:Boolean]
+04)------MatchRecognizePatternExec: pattern=[A A_excl A_excl2 (A_excl3) (A_excl_excl) A_excl] output={passthrough_columns=[company,price_date,price], classifier_flags=[A_excl3,A_excl_excl]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_a_excl3:Boolean, __mr_classifier_a_excl_excl:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 130 as __mr_symbol_a, price@2 < 140 as __mr_symbol_a_excl, price@2 < 150 as __mr_symbol_a_excl2, price@2 < 130 as __mr_symbol_a_excl3, price@2 < 140 as __mr_symbol_a_excl_excl], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_a_excl:Boolean;N, __mr_symbol_a_excl2:Boolean;N, __mr_symbol_a_excl3:Boolean;N, __mr_symbol_a_excl_excl:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# =====================================================================
+# Additional exclusion coverage
+# =====================================================================
+
+# Multiple excluded occurrences of the same base symbol
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A ({- B -}+) ({- B -}*) B)
+    DEFINE
+        A AS price < 130,
+        B AS price > 130
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b_excl
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A (B_excl+) (B_excl*) B] symbols=[A,B,B_excl] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < Int32(130) AS stock_price.price < Int64(130), B: stock_price.price > Int32(130) AS stock_price.price > Int64(130), B_excl: stock_price.price > Int32(130) AS stock_price.price > Int64(130)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B_excl]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b_excl@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b_excl:Boolean]
+04)------MatchRecognizePatternExec: pattern=[A (B_excl+) (B_excl*) B] output={passthrough_columns=[company,price_date,price], classifier_flags=[B_excl]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b_excl:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 130 as __mr_symbol_a, price@2 > 130 as __mr_symbol_b, price@2 > 130 as __mr_symbol_b_excl], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_b:Boolean;N, __mr_symbol_b_excl:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Nested group with exclusion repeated
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN ((A ({- B -}))+)
+    DEFINE
+        A AS price < 130,
+        B AS price > 130
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[(A (B))+] symbols=[A,B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < Int32(130) AS stock_price.price < Int64(130), B: stock_price.price > Int32(130) AS stock_price.price > Int64(130)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+04)------MatchRecognizePatternExec: pattern=[(A (B))+] output={passthrough_columns=[company,price_date,price], classifier_flags=[B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 130 as __mr_symbol_a, price@2 > 130 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_b:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Alternation including an excluded branch
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (({- B -}) | A)
+    DEFINE
+        A AS price < 130,
+        B AS price > 130
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: NOT __mr_classifier_b
+03)----MatchRecognize: after_skip=[PAST LAST ROW] pattern=[(B)|A] symbols=[A,B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < Int32(130) AS stock_price.price < Int64(130), B: stock_price.price > Int32(130) AS stock_price.price > Int64(130)] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price], classifier_flags=[B]}
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: NOT __mr_classifier_b@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+04)------MatchRecognizePatternExec: pattern=[(B)|A] output={passthrough_columns=[company,price_date,price], classifier_flags=[B]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier_b:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 < 130 as __mr_symbol_a, price@2 > 130 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_b:Boolean;N]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]

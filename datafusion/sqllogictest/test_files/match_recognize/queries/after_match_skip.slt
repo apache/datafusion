@@ -1,0 +1,152 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ----------------------------------------------------------------------
+# MATCH_RECOGNIZE – AFTER MATCH SKIP variants
+# Pattern: (A+ B)  where  A := price > 100,  B := price < 100
+# Dataset crafted so first-A, last-A and next-row all differ.
+# ----------------------------------------------------------------------
+
+statement ok
+CREATE TABLE skip_test(company VARCHAR, price_date DATE, price INT);
+
+statement ok
+INSERT INTO skip_test VALUES
+ ('X','2024-01-01',110), -- A1
+ ('X','2024-01-02',120), -- A2
+ ('X','2024-01-03',130), -- A3
+ ('X','2024-01-04', 90), -- B1
+ ('X','2024-01-05',140), -- A4
+ ('X','2024-01-06',150), -- A5
+ ('X','2024-01-07', 95); -- B2
+
+# ----------------------------------------------------------------------
+# 1. AFTER MATCH SKIP PAST LAST ROW   -> expect two matches (01-04) (05-07)
+# ----------------------------------------------------------------------
+query DII
+SELECT price_date, price, match_no
+FROM skip_test
+MATCH_RECOGNIZE (
+    MEASURES MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH
+    AFTER MATCH SKIP PAST LAST ROW
+    PATTERN (A+ B)
+    DEFINE
+        A AS price > 100,
+        B AS price < 100
+)
+ORDER BY match_no, price_date;
+----
+2024-01-01 110 1
+2024-01-02 120 1
+2024-01-03 130 1
+2024-01-04 90 1
+2024-01-05 140 2
+2024-01-06 150 2
+2024-01-07 95 2
+
+# ----------------------------------------------------------------------
+# 2. AFTER MATCH SKIP TO NEXT ROW     -> three matches (01-04) (02-04) (05-07)
+# ----------------------------------------------------------------------
+query DII
+SELECT price_date, price, match_no
+FROM skip_test
+MATCH_RECOGNIZE (
+    MEASURES MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH
+    AFTER MATCH SKIP TO NEXT ROW
+    PATTERN (A+ B)
+    DEFINE
+        A AS price > 100,
+        B AS price < 100
+)
+ORDER BY match_no, price_date;
+----
+2024-01-01 110 1
+2024-01-02 120 1
+2024-01-03 130 1
+2024-01-04 90 1
+2024-01-02 120 2
+2024-01-03 130 2
+2024-01-04 90 2
+2024-01-03 130 3
+2024-01-04 90 3
+2024-01-05 140 4
+2024-01-06 150 4
+2024-01-07 95 4
+2024-01-06 150 5
+2024-01-07 95 5
+
+# ----------------------------------------------------------------------
+# 3. AFTER MATCH SKIP TO FIRST A      -> three matches (01-04) (01-04) (05-07)
+# ----------------------------------------------------------------------
+query DII
+SELECT price_date, price, match_no
+FROM skip_test
+MATCH_RECOGNIZE (
+    MEASURES MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH
+    AFTER MATCH SKIP TO FIRST A
+    PATTERN (A+ B)
+    DEFINE
+        A AS price > 100,
+        B AS price < 100
+)
+ORDER BY match_no, price_date;
+----
+2024-01-01 110 1
+2024-01-02 120 1
+2024-01-03 130 1
+2024-01-04 90 1
+2024-01-02 120 2
+2024-01-03 130 2
+2024-01-04 90 2
+2024-01-03 130 3
+2024-01-04 90 3
+2024-01-05 140 4
+2024-01-06 150 4
+2024-01-07 95 4
+2024-01-06 150 5
+2024-01-07 95 5
+
+# ----------------------------------------------------------------------
+# 4. AFTER MATCH SKIP TO LAST A       -> four matches (01-04) (03-04) (05-07) (06-07)
+# ----------------------------------------------------------------------
+query DII
+SELECT price_date, price, match_no
+FROM skip_test
+MATCH_RECOGNIZE (
+    MEASURES MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH
+    AFTER MATCH SKIP TO LAST A
+    PATTERN (A+ B)
+    DEFINE
+        A AS price > 100,
+        B AS price < 100
+)
+ORDER BY match_no, price_date;
+----
+2024-01-01 110 1
+2024-01-02 120 1
+2024-01-03 130 1
+2024-01-04 90 1
+2024-01-03 130 2
+2024-01-04 90 2
+2024-01-05 140 3
+2024-01-06 150 3
+2024-01-07 95 3
+2024-01-06 150 4
+2024-01-07 95 4
