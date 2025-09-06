@@ -1,0 +1,173 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ../init_data.slt.part
+
+# =====================================================================
+# Exclusion Pattern Tests
+# =====================================================================
+
+# Test 1: Basic exclusion pattern A {- B -}
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    ALL ROWS PER MATCH
+    PATTERN (A ({- B -}))
+    DEFINE
+        A AS price < 130,
+        B AS price > 130
+)
+----
+DDOG 2024-01-02 128
+DDOG 2024-01-04 129
+
+# Test 2: Pattern with only an excluded symbol {- B -} should emit no rows
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    ALL ROWS PER MATCH
+    PATTERN ({- B -}+)
+    DEFINE
+        B AS price > 140
+)
+----
+
+# Test 3: Excluded symbols {- B -} should still be part of the MEASURES expression
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(B.price) AS first_price,
+        LAST(B.price) AS last_price,
+        COUNT(*) AS count
+    ONE ROW PER MATCH
+    PATTERN ({- B -}+)
+    DEFINE
+        B AS price > 140
+)
+ORDER BY company
+----
+logical_plan
+01)Sort: stock_price.company ASC NULLS LAST
+02)--Projection: stock_price.company, first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS first_price, last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS last_price, count(Int64(1)) AS count
+03)----Aggregate: groupBy=[[stock_price.company, __mr_match_number]], aggr=[[first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], count(Int64(1))]]
+04)------MatchRecognize: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] after_skip=PAST_LAST_ROW pattern=[{- B -}+] symbols=[B] rows_per_match=ALL_ROWS defines=[B: stock_price.price > Int32(140) AS stock_price.price > Int64(140)] output={passthrough_columns=[stock_price.company,stock_price.price], metadata=[__mr_match_number,__mr_match_sequence_number], classifier_flags=[B]}
+05)--------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)SortPreservingMergeExec: [company@0 ASC NULLS LAST], schema=[company:Utf8View;N, first_price:Int32;N, last_price:Int32;N, count:Int64]
+02)--SortExec: expr=[company@0 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, first_price:Int32;N, last_price:Int32;N, count:Int64]
+03)----ProjectionExec: expr=[company@0 as company, first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@2 as first_price, last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@3 as last_price, count(Int64(1))@4 as count], schema=[company:Utf8View;N, first_price:Int32;N, last_price:Int32;N, count:Int64]
+04)------AggregateExec: mode=FinalPartitioned, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], count(Int64(1))], ordering_mode=PartiallySorted([1]), schema=[company:Utf8View;N, __mr_match_number:UInt64;N, first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N, last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]:Int32;N, count(Int64(1)):Int64]
+05)--------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][first_value]:Int32;N, __mr_match_sequence_number@3:UInt64;N, is_set:Boolean;N, last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@3:UInt64;N, is_set:Boolean;N, count(Int64(1))[count]:Int64]
+06)----------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][first_value]:Int32;N, __mr_match_sequence_number@3:UInt64;N, is_set:Boolean;N, last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@3:UInt64;N, is_set:Boolean;N, count(Int64(1))[count]:Int64]
+07)------------RepartitionExec: partitioning=Hash([company@0, __mr_match_number@1], 4), input_partitions=4, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][first_value]:Int32;N, __mr_match_sequence_number@3:UInt64;N, is_set:Boolean;N, last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@3:UInt64;N, is_set:Boolean;N, count(Int64(1))[count]:Int64]
+08)--------------AggregateExec: mode=Partial, gby=[company@0 as company, __mr_match_number@2 as __mr_match_number], aggr=[first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], count(Int64(1))], ordering_mode=Sorted, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, first_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][first_value]:Int32;N, __mr_match_sequence_number@3:UInt64;N, is_set:Boolean;N, last_value(stock_price.price) FILTER (WHERE __mr_classifier_b) ORDER BY [__mr_match_sequence_number ASC NULLS LAST][last_value]:Int32;N, __mr_match_sequence_number@3:UInt64;N, is_set:Boolean;N, count(Int64(1))[count]:Int64]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean]
+10)------------------MatchRecognizePatternExec: pattern=[{- B -}+] output={passthrough_columns=[company,__mr_match_number], metadata=[__mr_match_number,__mr_match_sequence_number], classifier_flags=[B]}, schema=[company:Utf8View;N, price:Int32;N, __mr_match_number:UInt64;N, __mr_match_sequence_number:UInt64;N, __mr_classifier_b:Boolean]
+11)--------------------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+12)----------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 140 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+13)------------------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+
+query TIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(B.price) AS first_price,
+        LAST(B.price) AS last_price,
+        COUNT(*) AS count
+    ONE ROW PER MATCH
+    PATTERN (ANY ({- B -}+) ANY)
+    DEFINE
+        B AS price > 140
+)
+ORDER BY company
+----
+AAPL 187 197 10
+AMZN 152 162 10
+CRM 248 263 10
+DDOG 141 141 3
+GOOGL 142 152 10
+META 338 353 10
+MSFT 378 393 10
+NFLX 488 503 10
+NVDA 492 518 10
+TSLA 251 266 10
+
+
+query TDIIIIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(B.price) AS first_price,
+        LAST(B.price) AS last_price,
+        COUNT(*) AS count,
+        MATCH_NUMBER() AS match_number,
+        MATCH_SEQUENCE_NUMBER() AS match_sequence_number
+    ALL ROWS PER MATCH
+    PATTERN (ANY ({- B -}+) ANY)
+    DEFINE
+        B AS price > 140
+)
+ORDER BY company
+----
+AAPL 2024-01-01 185 NULL NULL 1 1 1
+AAPL 2024-01-12 199 187 197 10 1 10
+AMZN 2024-01-01 150 NULL NULL 1 1 1
+AMZN 2024-01-12 164 152 162 10 1 10
+CRM 2024-01-01 245 NULL NULL 1 1 1
+CRM 2024-01-12 266 248 263 10 1 10
+DDOG 2024-01-08 138 NULL NULL 1 1 1
+DDOG 2024-01-10 139 141 141 3 1 3
+GOOGL 2024-01-01 140 NULL NULL 1 1 1
+GOOGL 2024-01-12 154 142 152 10 1 10
+META 2024-01-01 335 NULL NULL 1 1 1
+META 2024-01-12 356 338 353 10 1 10
+MSFT 2024-01-01 375 NULL NULL 1 1 1
+MSFT 2024-01-12 396 378 393 10 1 10
+NFLX 2024-01-01 485 NULL NULL 1 1 1
+NFLX 2024-01-12 506 488 503 10 1 10
+NVDA 2024-01-01 485 NULL NULL 1 1 1
+NVDA 2024-01-12 525 492 518 10 1 10
+TSLA 2024-01-01 248 NULL NULL 1 1 1
+TSLA 2024-01-12 269 251 266 10 1 10
+
+# Test 4: Pattern A {- A -} A (emit first A, exclude second consecutive A, emit third A)
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    ALL ROWS PER MATCH
+    PATTERN (A ({- A -}) A)
+    DEFINE
+        A AS price < 135
+)
+----
+DDOG 2024-01-01 125
+DDOG 2024-01-03 132
