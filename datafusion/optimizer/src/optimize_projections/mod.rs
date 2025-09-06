@@ -242,6 +242,7 @@ fn optimize_projections(
                 filters,
                 fetch,
                 projected_schema: _,
+                preferred_ordering,
             } = table_scan;
 
             // Get indices referred to in the original (schema with all fields)
@@ -257,6 +258,7 @@ fn optimize_projections(
                 filters,
                 fetch,
             )
+            .map(|s| s.with_preferred_ordering(preferred_ordering))
             .map(LogicalPlan::TableScan)
             .map(Transformed::yes);
         }

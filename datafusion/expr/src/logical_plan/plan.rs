@@ -2552,6 +2552,8 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Optional preferred ordering for the scan
+    pub preferred_ordering: Option<Vec<SortExpr>>,
 }
 
 impl Debug for TableScan {
@@ -2563,6 +2565,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
+            .field("preferred_ordering", &self.preferred_ordering)
             .finish_non_exhaustive()
     }
 }
@@ -2574,6 +2577,7 @@ impl PartialEq for TableScan {
             && self.projected_schema == other.projected_schema
             && self.filters == other.filters
             && self.fetch == other.fetch
+            && self.preferred_ordering == other.preferred_ordering
     }
 }
 
@@ -2593,18 +2597,22 @@ impl PartialOrd for TableScan {
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
+            /// Optional preferred ordering for the scan
+            pub preferred_ordering: &'a Option<Vec<SortExpr>>,
         }
         let comparable_self = ComparableTableScan {
             table_name: &self.table_name,
             projection: &self.projection,
             filters: &self.filters,
             fetch: &self.fetch,
+            preferred_ordering: &self.preferred_ordering,
         };
         let comparable_other = ComparableTableScan {
             table_name: &other.table_name,
             projection: &other.projection,
             filters: &other.filters,
             fetch: &other.fetch,
+            preferred_ordering: &other.preferred_ordering,
         };
         comparable_self.partial_cmp(&comparable_other)
     }
@@ -2617,6 +2625,7 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+        self.preferred_ordering.hash(state);
     }
 }
 
@@ -2670,7 +2679,67 @@ impl TableScan {
             projected_schema,
             filters,
             fetch,
+            preferred_ordering: None,
         })
+    }
+
+    /// Sets the preferred ordering for this table scan using the builder pattern.
+    ///
+    /// The preferred ordering serves as a hint to table providers about the desired
+    /// sort order for the data. Table providers can use this information to optimize
+    /// data access patterns, choose appropriate indexes, or leverage existing sort
+    /// orders in the underlying storage.
+    ///
+    /// # Parameters
+    ///
+    /// * `preferred_ordering` - An optional vector of sort expressions representing
+    ///   the desired ordering. `None` indicates no specific ordering preference.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` to enable method chaining in the builder pattern.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use datafusion_expr::{col, SortExpr};
+    /// # use datafusion_expr::logical_plan::{TableScan, builder::table_source};
+    /// # use std::sync::Arc;
+    /// # use datafusion_common::{TableReference, DFSchema};
+    /// # use arrow::datatypes::{Schema, Field, DataType};
+    ///
+    /// // Create a table scan with preferred ordering by column 'a' ascending
+    /// # let table_name = TableReference::bare("test");
+    /// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    /// # let source = table_source(&schema);
+    /// # let projection = None;
+    /// # let projected_schema = Arc::new(datafusion_common::DFSchema::empty());
+    /// # let filters = vec![];
+    /// # let fetch = None;
+    /// let table_scan = TableScan {
+    ///     table_name,
+    ///     source,
+    ///     projection,
+    ///     projected_schema,
+    ///     filters,
+    ///     fetch,
+    ///     preferred_ordering: None,
+    /// }.with_preferred_ordering(Some(vec![
+    ///     SortExpr::new(col("a"), true, false) // ASC NULLS LAST
+    /// ]));
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// This is purely an optimization hint. The table provider may choose to ignore
+    /// the preferred ordering if it cannot be efficiently satisfied, and the query
+    /// execution engine should not rely on the data being returned in this order.
+    pub fn with_preferred_ordering(
+        mut self,
+        preferred_ordering: Option<Vec<SortExpr>>,
+    ) -> Self {
+        self.preferred_ordering = preferred_ordering;
+        self
     }
 }
 
@@ -4896,6 +4965,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
+            preferred_ordering: None,
         }));
         let col = schema.field_names()[0].clone();
 
@@ -4926,6 +4996,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
+            preferred_ordering: None,
         }));
         let col = schema.field_names()[0].clone();
 
