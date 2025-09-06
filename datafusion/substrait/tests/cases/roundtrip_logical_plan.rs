@@ -92,6 +92,7 @@ impl PartialOrd for MockUserDefinedLogicalPlan {
             Some(Ordering::Equal) => self.inputs.partial_cmp(&other.inputs),
             cmp => cmp,
         }
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 

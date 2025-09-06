@@ -748,7 +748,9 @@ impl PartialOrd for Alias {
         let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
-        self.name.partial_cmp(&other.name)
+        self.name
+            .partial_cmp(&other.name)
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
