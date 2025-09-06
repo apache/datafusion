@@ -552,6 +552,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
             partition_by,
             order_by,
             window_frame,
+            filter,
             null_treatment,
             distinct,
         } = params;
@@ -575,6 +576,10 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
 
         if let Some(null_treatment) = null_treatment {
             schema_name.write_fmt(format_args!(" {null_treatment}"))?;
+        }
+
+        if let Some(filter) = filter {
+            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
         }
 
         if !partition_by.is_empty() {
@@ -657,6 +662,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
             partition_by,
             order_by,
             window_frame,
+            filter,
             null_treatment,
             distinct,
         } = params;
@@ -679,6 +685,10 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
 
         if let Some(null_treatment) = null_treatment {
             display_name.write_fmt(format_args!(" {null_treatment}"))?;
+        }
+
+        if let Some(fe) = filter {
+            display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
         }
 
         if !partition_by.is_empty() {

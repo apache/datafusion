@@ -307,6 +307,7 @@ pub struct RawWindowExpr {
     pub partition_by: Vec<Expr>,
     pub order_by: Vec<SortExpr>,
     pub window_frame: WindowFrame,
+    pub filter: Option<Box<Expr>>,
     pub null_treatment: Option<NullTreatment>,
     pub distinct: bool,
 }

@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 
 use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::projection::ProjectionExec;
+use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
@@ -1589,20 +1589,27 @@ pub fn reorder_output_after_swap(
 fn swap_reverting_projection(
     left_schema: &Schema,
     right_schema: &Schema,
-) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    let right_cols = right_schema.fields().iter().enumerate().map(|(i, f)| {
-        (
-            Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
-            f.name().to_owned(),
-        )
-    });
+) -> Vec<ProjectionExpr> {
+    let right_cols =
+        right_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| ProjectionExpr {
+                expr: Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
+                alias: f.name().to_owned(),
+            });
     let right_len = right_cols.len();
-    let left_cols = left_schema.fields().iter().enumerate().map(|(i, f)| {
-        (
-            Arc::new(Column::new(f.name(), right_len + i)) as Arc<dyn PhysicalExpr>,
-            f.name().to_owned(),
-        )
-    });
+    let left_cols =
+        left_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| ProjectionExpr {
+                expr: Arc::new(Column::new(f.name(), right_len + i))
+                    as Arc<dyn PhysicalExpr>,
+                alias: f.name().to_owned(),
+            });
 
     left_cols.chain(right_cols).collect()
 }
@@ -2676,17 +2683,17 @@ mod tests {
 
         assert_eq!(proj.len(), 3);
 
-        let (col, name) = &proj[0];
-        assert_eq!(name, "a");
-        assert_col_expr(col, "a", 1);
+        let proj_expr = &proj[0];
+        assert_eq!(proj_expr.alias, "a");
+        assert_col_expr(&proj_expr.expr, "a", 1);
 
-        let (col, name) = &proj[1];
-        assert_eq!(name, "b");
-        assert_col_expr(col, "b", 2);
+        let proj_expr = &proj[1];
+        assert_eq!(proj_expr.alias, "b");
+        assert_col_expr(&proj_expr.expr, "b", 2);
 
-        let (col, name) = &proj[2];
-        assert_eq!(name, "c");
-        assert_col_expr(col, "c", 0);
+        let proj_expr = &proj[2];
+        assert_eq!(proj_expr.alias, "c");
+        assert_col_expr(&proj_expr.expr, "c", 0);
     }
 
     fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {

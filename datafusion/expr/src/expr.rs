@@ -1230,6 +1230,8 @@ pub struct WindowFunctionParams {
     pub order_by: Vec<Sort>,
     /// Window frame
     pub window_frame: WindowFrame,
+    /// Optional filter expression (FILTER (WHERE ...))
+    pub filter: Option<Box<Expr>>,
     /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
     /// Distinct flag
@@ -1247,6 +1249,7 @@ impl WindowFunction {
                 partition_by: Vec::default(),
                 order_by: Vec::default(),
                 window_frame: WindowFrame::new(None),
+                filter: None,
                 null_treatment: None,
                 distinct: false,
             },
@@ -2388,6 +2391,7 @@ impl NormalizeEq for Expr {
                             window_frame: self_window_frame,
                             partition_by: self_partition_by,
                             order_by: self_order_by,
+                            filter: self_filter,
                             null_treatment: self_null_treatment,
                             distinct: self_distinct,
                         },
@@ -2400,6 +2404,7 @@ impl NormalizeEq for Expr {
                             window_frame: other_window_frame,
                             partition_by: other_partition_by,
                             order_by: other_order_by,
+                            filter: other_filter,
                             null_treatment: other_null_treatment,
                             distinct: other_distinct,
                         },
@@ -2407,6 +2412,11 @@ impl NormalizeEq for Expr {
 
                 self_fun.name() == other_fun.name()
                     && self_window_frame == other_window_frame
+                    && match (self_filter, other_filter) {
+                        (Some(a), Some(b)) => a.normalize_eq(b),
+                        (None, None) => true,
+                        _ => false,
+                    }
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
                     && self_args
@@ -2658,12 +2668,14 @@ impl HashNode for Expr {
                             partition_by: _,
                             order_by: _,
                             window_frame,
+                            filter,
                             null_treatment,
                             distinct,
                         },
                 } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
+                filter.hash(state);
                 null_treatment.hash(state);
                 distinct.hash(state);
             }
@@ -2967,6 +2979,7 @@ impl Display for SchemaDisplay<'_> {
                             partition_by,
                             order_by,
                             window_frame,
+                            filter,
                             null_treatment,
                             distinct,
                         } = params;
@@ -2991,6 +3004,10 @@ impl Display for SchemaDisplay<'_> {
 
                         if let Some(null_treatment) = null_treatment {
                             write!(f, " {null_treatment}")?;
+                        }
+
+                        if let Some(filter) = filter {
+                            write!(f, " FILTER (WHERE {filter})")?;
                         }
 
                         if !partition_by.is_empty() {
@@ -3370,6 +3387,7 @@ impl Display for Expr {
                             partition_by,
                             order_by,
                             window_frame,
+                            filter,
                             null_treatment,
                             distinct,
                         } = params;
@@ -3378,6 +3396,10 @@ impl Display for Expr {
 
                         if let Some(nt) = null_treatment {
                             write!(f, "{nt}")?;
+                        }
+
+                        if let Some(fe) = filter {
+                            write!(f, " FILTER (WHERE {fe})")?;
                         }
 
                         if !partition_by.is_empty() {
