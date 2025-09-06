@@ -730,6 +730,7 @@ message PhysicalPlanNode {
     CooperativeExecNode cooperative = 32;
     GenerateSeriesNode generate_series = 33;
     SortMergeJoinExecNode sort_merge_join = 34;
+    MemoryScanExecNode memory_scan = 35;
   }
 }
 
@@ -1039,6 +1040,15 @@ message JsonScanExecNode {
 
 message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
+}
+
+message MemoryScanExecNode {
+  repeated bytes partitions = 1;
+  datafusion_common.Schema schema = 2;
+  repeated uint32 projection = 3;
+  repeated PhysicalSortExprNodeCollection sort_information = 4;
+  bool show_sizes = 5;
+  optional uint32 fetch = 6;
 }
 
 message CooperativeExecNode {

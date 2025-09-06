@@ -476,6 +476,33 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
+    for partitioning_columns in [4, 7, 8] {
+        c.bench_function(
+            &format!(
+                "physical_window_function_partition_by_{partitioning_columns}_on_values"
+            ),
+            |b| {
+                let source = format!(
+                    "SELECT 1 AS n{}",
+                    (0..partitioning_columns)
+                        .map(|i| format!(", {i} AS c{i}"))
+                        .collect::<String>()
+                );
+                let window = format!(
+                    "SUM(n) OVER (PARTITION BY {}) AS sum_n",
+                    (0..partitioning_columns)
+                        .map(|i| format!("c{i}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let query = format!("SELECT {window} FROM ({source})");
+                b.iter(|| {
+                    physical_plan(&ctx, &rt, &query);
+                });
+            },
+        );
+    }
+
     // Benchmark for Physical Planning Joins
     c.bench_function("physical_join_consider_sort", |b| {
         b.iter(|| {
