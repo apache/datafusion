@@ -24,7 +24,7 @@ use log::debug;
 use parking_lot::Mutex;
 use std::{
     num::NonZeroUsize,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 /// A [`MemoryPool`] that enforces no limit
@@ -268,7 +268,11 @@ fn insufficient_capacity_err(
 struct TrackedConsumer {
     name: String,
     can_spill: bool,
+    /// Currently reserved bytes for this consumer
     reserved: AtomicUsize,
+    /// Total bytes ever allocated by this consumer
+    cumulative: AtomicUsize,
+    /// Peak reserved bytes for this consumer
     peak: AtomicUsize,
 }
 
@@ -278,16 +282,13 @@ impl TrackedConsumer {
         self.reserved.load(Ordering::Relaxed)
     }
 
-    /// Return the peak value
-    fn peak(&self) -> usize {
-        self.peak.load(Ordering::Relaxed)
-    }
-
     /// Grows the tracked consumer's reserved size,
     /// should be called after the pool has successfully performed the grow().
     fn grow(&self, additional: usize) {
-        self.reserved.fetch_add(additional, Ordering::Relaxed);
-        self.peak.fetch_max(self.reserved(), Ordering::Relaxed);
+        let new_reserved =
+            self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
+        self.cumulative.fetch_add(additional, Ordering::Relaxed);
+        self.peak.fetch_max(new_reserved, Ordering::Relaxed);
     }
 
     /// Reduce the tracked consumer's reserved size,
@@ -295,6 +296,32 @@ impl TrackedConsumer {
     fn shrink(&self, shrink: usize) {
         self.reserved.fetch_sub(shrink, Ordering::Relaxed);
     }
+}
+
+/// Snapshot of tracked memory metrics for a [`MemoryConsumer`]
+#[derive(Debug, Clone)]
+pub struct ConsumerMemoryMetrics {
+    pub id: usize,
+    pub name: String,
+    pub can_spill: bool,
+    pub reserved: usize,
+    pub cumulative: usize,
+    pub peak: usize,
+}
+
+/// Trait for memory pools that support tracking memory consumers
+pub trait TrackedPool: Send + Sync {
+    /// Enable tracking and reset any existing metrics
+    fn enable_tracking(&self);
+
+    /// Disable tracking of consumers
+    fn disable_tracking(&self);
+
+    /// Return true if tracking is enabled
+    fn tracking_enabled(&self) -> bool;
+
+    /// Returns a snapshot of the metrics for all tracked consumers
+    fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics>;
 }
 
 /// A [`MemoryPool`] that tracks the consumers that have
@@ -329,6 +356,8 @@ pub struct TrackConsumersPool<I> {
     top: NonZeroUsize,
     /// Maps consumer_id --> TrackedConsumer
     tracked_consumers: Mutex<HashMap<usize, TrackedConsumer>>,
+    /// Whether tracking is enabled
+    tracking_enabled: AtomicBool,
 }
 
 impl<I: MemoryPool> TrackConsumersPool<I> {
@@ -371,7 +400,35 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
             inner,
             top,
             tracked_consumers: Default::default(),
+            tracking_enabled: AtomicBool::new(true),
         }
+    }
+
+    /// Enable tracking and reset any existing metrics
+    pub fn enable_tracking(&self) {
+        self.tracking_enabled.store(true, Ordering::Relaxed);
+        self.tracked_consumers.lock().clear();
+    }
+
+    /// Disable tracking of consumers
+    pub fn disable_tracking(&self) {
+        self.tracking_enabled.store(false, Ordering::Relaxed);
+    }
+
+    /// Returns a snapshot of the metrics for all tracked consumers
+    pub fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics> {
+        self.tracked_consumers
+            .lock()
+            .iter()
+            .map(|(id, consumer)| ConsumerMemoryMetrics {
+                id: *id,
+                name: consumer.name.clone(),
+                can_spill: consumer.can_spill,
+                reserved: consumer.reserved.load(Ordering::Relaxed),
+                cumulative: consumer.cumulative.load(Ordering::Relaxed),
+                peak: consumer.peak.load(Ordering::Relaxed),
+            })
+            .collect()
     }
 
     /// Returns a formatted string with the top memory consumers.
@@ -386,7 +443,6 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
                         *consumer_id,
                         tracked_consumer.name.to_owned(),
                         tracked_consumer.can_spill,
-                        tracked_consumer.peak(),
                     ),
                     tracked_consumer.reserved(),
                 )
@@ -396,16 +452,38 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
 
         consumers[0..std::cmp::min(top, consumers.len())]
             .iter()
-            .map(|((id, name, can_spill, peak), size)| {
+            .map(|((id, name, can_spill), size)| {
                 format!(
-                    "  {name}#{id}(can spill: {can_spill}) consumed {}, peak {}",
-                    human_readable_size(*size),
-                    human_readable_size(*peak),
+                    "  {name}#{id}(can spill: {can_spill}) consumed {}",
+                    human_readable_size(*size)
                 )
             })
             .collect::<Vec<_>>()
             .join(",\n")
             + "."
+    }
+
+    /// Return true if tracking is currently enabled
+    pub fn tracking_enabled(&self) -> bool {
+        self.tracking_enabled.load(Ordering::Relaxed)
+    }
+}
+
+impl<I: MemoryPool> TrackedPool for TrackConsumersPool<I> {
+    fn enable_tracking(&self) {
+        TrackConsumersPool::enable_tracking(self);
+    }
+
+    fn disable_tracking(&self) {
+        TrackConsumersPool::disable_tracking(self);
+    }
+
+    fn tracking_enabled(&self) -> bool {
+        TrackConsumersPool::tracking_enabled(self)
+    }
+
+    fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics> {
+        TrackConsumersPool::consumer_metrics(self)
     }
 }
 
@@ -413,46 +491,61 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     fn register(&self, consumer: &MemoryConsumer) {
         self.inner.register(consumer);
 
-        let mut guard = self.tracked_consumers.lock();
-        let existing = guard.insert(
-            consumer.id(),
-            TrackedConsumer {
-                name: consumer.name().to_string(),
-                can_spill: consumer.can_spill(),
-                reserved: Default::default(),
-                peak: Default::default(),
-            },
-        );
+        if self.tracking_enabled.load(Ordering::Relaxed) {
+            let mut guard = self.tracked_consumers.lock();
+            let existing = guard.insert(
+                consumer.id(),
+                TrackedConsumer {
+                    name: consumer.name().to_string(),
+                    can_spill: consumer.can_spill(),
+                    reserved: Default::default(),
+                    cumulative: Default::default(),
+                    peak: Default::default(),
+                },
+            );
 
-        debug_assert!(
-            existing.is_none(),
-            "Registered was called twice on the same consumer"
-        );
+            debug_assert!(
+                existing.is_none(),
+                "Registered was called twice on the same consumer",
+            );
+        }
     }
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         self.inner.unregister(consumer);
-        self.tracked_consumers.lock().remove(&consumer.id());
+        if self.tracking_enabled.load(Ordering::Relaxed) {
+            let guard = self.tracked_consumers.lock();
+            if let Some(tracked) = guard.get(&consumer.id()) {
+                let reserved = tracked.reserved();
+                if reserved > 0 {
+                    tracked.shrink(reserved);
+                }
+            }
+        }
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.inner.grow(reservation, additional);
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.grow(additional);
-            });
+        if self.tracking_enabled.load(Ordering::Relaxed) {
+            self.tracked_consumers
+                .lock()
+                .entry(reservation.consumer().id())
+                .and_modify(|tracked_consumer| {
+                    tracked_consumer.grow(additional);
+                });
+        }
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.inner.shrink(reservation, shrink);
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.shrink(shrink);
-            });
+        if self.tracking_enabled.load(Ordering::Relaxed) {
+            self.tracked_consumers
+                .lock()
+                .entry(reservation.consumer().id())
+                .and_modify(|tracked_consumer| {
+                    tracked_consumer.shrink(shrink);
+                });
+        }
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
@@ -471,12 +564,14 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 _ => e,
             })?;
 
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.grow(additional);
-            });
+        if self.tracking_enabled.load(Ordering::Relaxed) {
+            self.tracked_consumers
+                .lock()
+                .entry(reservation.consumer().id())
+                .and_modify(|tracked_consumer| {
+                    tracked_consumer.grow(additional);
+                });
+        }
         Ok(())
     }
 
@@ -488,7 +583,6 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
         self.inner.memory_limit()
     }
 }
-
 fn provide_top_memory_consumers_to_error_msg(
     error_msg: String,
     top_consumers: String,
@@ -591,8 +685,7 @@ mod tests {
 
         // set r1=50, using grow and shrink
         let mut r1 = MemoryConsumer::new("r1").register(&pool);
-        r1.grow(50);
-        r1.grow(20);
+        r1.grow(70);
         r1.shrink(20);
 
         // set r2=15 using try_grow
@@ -620,9 +713,9 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          r1#[ID](can spill: false) consumed 50.0 B, peak 70.0 B,
-          r3#[ID](can spill: false) consumed 20.0 B, peak 25.0 B,
-          r2#[ID](can spill: false) consumed 15.0 B, peak 15.0 B.
+          r1#[ID](can spill: false) consumed 50.0 B,
+          r3#[ID](can spill: false) consumed 20.0 B,
+          r2#[ID](can spill: false) consumed 15.0 B.
         Error: Failed to allocate additional 150.0 B for r5 with 0.0 B already allocated for this reservation - 5.0 B remain available for the total pool
         ");
     }
@@ -645,7 +738,7 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
+          foo#[ID](can spill: false) consumed 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 100.0 B remain available for the total pool
         ");
 
@@ -662,8 +755,8 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
-          foo#[ID](can spill: false) consumed 0.0 B, peak 0.0 B.
+          foo#[ID](can spill: false) consumed 10.0 B,
+          foo#[ID](can spill: false) consumed 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 90.0 B remain available for the total pool
         ");
 
@@ -675,8 +768,8 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
-          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+          foo#[ID](can spill: false) consumed 20.0 B,
+          foo#[ID](can spill: false) consumed 10.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 20.0 B already allocated for this reservation - 70.0 B remain available for the total pool
         ");
 
@@ -690,9 +783,9 @@ mod tests {
         let error = res.unwrap_err().strip_backtrace();
         assert_snapshot!(error, @r"
         Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-          foo#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
-          foo#[ID](can spill: false) consumed 10.0 B, peak 10.0 B,
-          foo#[ID](can spill: true) consumed 0.0 B, peak 0.0 B.
+          foo#[ID](can spill: false) consumed 20.0 B,
+          foo#[ID](can spill: false) consumed 10.0 B,
+          foo#[ID](can spill: true) consumed 0.0 B.
         Error: Failed to allocate additional 150.0 B for foo with 0.0 B already allocated for this reservation - 70.0 B remain available for the total pool
         ");
     }
@@ -714,20 +807,21 @@ mod tests {
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
                 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B,
-                  r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+                  r1#[ID](can spill: false) consumed 20.0 B,
+                  r0#[ID](can spill: false) consumed 10.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 70.0 B remain available for the total pool
                 "));
 
             // Test: unregister one
-            // only the remaining one should be listed
+            // the unregistered consumer remains with 0 usage
             drop(r1);
             let res = r0.try_grow(150);
             assert!(res.is_err());
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
                 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+                  r0#[ID](can spill: false) consumed 10.0 B,
+                  r1#[ID](can spill: false) consumed 0.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));
 
@@ -738,7 +832,8 @@ mod tests {
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
                 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+                  r0#[ID](can spill: false) consumed 10.0 B,
+                  r1#[ID](can spill: false) consumed 0.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));
 
@@ -749,7 +844,8 @@ mod tests {
             let error = res.unwrap_err().strip_backtrace();
             allow_duplicates!(assert_snapshot!(error, @r"
                 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                  r0#[ID](can spill: false) consumed 10.0 B, peak 10.0 B.
+                  r0#[ID](can spill: false) consumed 10.0 B,
+                  r1#[ID](can spill: false) consumed 0.0 B.
                 Error: Failed to allocate additional 150.0 B for r0 with 10.0 B already allocated for this reservation - 90.0 B remain available for the total pool
                 "));
         }
@@ -796,8 +892,8 @@ mod tests {
         // Test: can get runtime metrics, even without an error thrown
         let res = downcasted.report_top(2);
         assert_snapshot!(res, @r"
-        r3#[ID](can spill: false) consumed 45.0 B, peak 45.0 B,
-        r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B.
+        r3#[ID](can spill: false) consumed 45.0 B,
+        r1#[ID](can spill: false) consumed 20.0 B.
         ");
     }
 }
