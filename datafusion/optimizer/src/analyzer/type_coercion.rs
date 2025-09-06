@@ -50,9 +50,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_u
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, Limit, LogicalPlan,
-    Operator, Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    AggregateUDF, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection,
+    ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 /// Performs type coercion by determining the schema
@@ -548,6 +547,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                             partition_by,
                             order_by,
                             window_frame,
+                            filter,
                             null_treatment,
                             distinct,
                         },
@@ -566,26 +566,19 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     _ => args,
                 };
 
-                if distinct {
-                    Ok(Transformed::yes(
-                        Expr::from(WindowFunction::new(fun, args))
-                            .partition_by(partition_by)
-                            .order_by(order_by)
-                            .window_frame(window_frame)
-                            .null_treatment(null_treatment)
-                            .distinct()
-                            .build()?,
-                    ))
-                } else {
-                    Ok(Transformed::yes(
-                        Expr::from(WindowFunction::new(fun, args))
-                            .partition_by(partition_by)
-                            .order_by(order_by)
-                            .window_frame(window_frame)
-                            .null_treatment(null_treatment)
-                            .build()?,
-                    ))
-                }
+                let new_expr = Expr::from(WindowFunction {
+                    fun,
+                    params: expr::WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        filter,
+                        null_treatment,
+                        distinct,
+                    },
+                });
+                Ok(Transformed::yes(new_expr))
             }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
