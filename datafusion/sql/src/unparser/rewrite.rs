@@ -132,8 +132,8 @@ pub(super) fn rewrite_qualify(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     .input
                     .schema()
                     .iter()
-                    .filter(|(q, _)| matches!(q, Some(_)))
-                    .flat_map(|(q, _)| q.clone())
+                    .filter(|(q, _)| q.is_some())
+                    .flat_map(|(q, _)| q)
                     .collect::<Vec<_>>();
 
                 let qualifier = if qualifiers.is_empty() {
