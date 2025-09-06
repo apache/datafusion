@@ -1,0 +1,202 @@
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# tests for EXPLAIN with display schema enabled
+statement ok
+set datafusion.explain.show_schema = true;
+
+# Test setup - create test table
+statement ok
+CREATE TABLE stock_price (
+    company VARCHAR,
+    price_date DATE,
+    price INTEGER
+);
+
+# Test LAG window function
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > LAG(price)
+)
+----
+logical_plan
+01)MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price]}
+02)--WindowAggr: windowExpr=[[lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[company,price_date,price]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@2 > lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+03)----BoundedWindowAggExec: wdw=[lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test LEAD window function
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS LEAD(price) > price
+)
+----
+logical_plan
+01)MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > stock_price.price] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price]}
+02)--WindowAggr: windowExpr=[[lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[company,price_date,price]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@2 < lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+03)----BoundedWindowAggExec: wdw=[lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test FIRST_VALUE window function
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > FIRST_VALUE(price)
+)
+----
+logical_plan
+01)MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price]}
+02)--WindowAggr: windowExpr=[[first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[company,price_date,price]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@2 > first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+03)----WindowAggExec: wdw=[first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test LAST_VALUE window function
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price < LAST_VALUE(price)
+)
+----
+logical_plan
+01)MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price < last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price]}
+02)--WindowAggr: windowExpr=[[last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[company,price_date,price]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@2 < last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+03)----WindowAggExec: wdw=[last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test window function with offset
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > LAG(price, 2)
+)
+----
+logical_plan
+01)MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > lag(stock_price.price,Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price]}
+02)--WindowAggr: windowExpr=[[lag(stock_price.price, Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[company,price_date,price]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, lag(stock_price.price,Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lag(stock_price.price,Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@2 > lag(stock_price.price,Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price,Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+03)----BoundedWindowAggExec: wdw=[lag(stock_price.price,Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price,Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price,Int64(2)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test window function with default value
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > LAG(price, 1, 0)
+)
+----
+logical_plan
+01)MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > lag(stock_price.price,Int64(1),Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price]}
+02)--WindowAggr: windowExpr=[[lag(stock_price.price, Int64(1), Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[company,price_date,price]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, lag(stock_price.price,Int64(1),Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lag(stock_price.price,Int64(1),Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@2 > lag(stock_price.price,Int64(1),Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price,Int64(1),Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N]
+03)----BoundedWindowAggExec: wdw=[lag(stock_price.price,Int64(1),Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(stock_price.price,Int64(1),Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price,Int64(1),Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test multiple window functions
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A B C D)
+    DEFINE A AS LAG(price) < price,
+           B AS LEAD(price) > price,
+           C AS FIRST_VALUE(price) < price,
+           D AS LAST_VALUE(price) > price
+)
+----
+logical_plan
+01)MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A B C D] symbols=[A,B,C,D] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING < stock_price.price, B: stock_price.price < lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > stock_price.price, C: stock_price.price > first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING < stock_price.price, D: stock_price.price < last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > stock_price.price] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price]}
+02)--WindowAggr: windowExpr=[[lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)MatchRecognizePatternExec: pattern=[A B C D] output={passthrough_columns=[company,price_date,price]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@4 as lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, price@2 > lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as __mr_symbol_a, price@2 < lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@4 as __mr_symbol_b, price@2 > first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as __mr_symbol_c, price@2 < last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as __mr_symbol_d], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, __mr_symbol_a:Boolean;N, __mr_symbol_b:Boolean;N, __mr_symbol_c:Boolean;N, __mr_symbol_d:Boolean;N]
+03)----WindowAggExec: wdw=[lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }, lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }, first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }, last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, lag(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, lead(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, first_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N, last_value(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int32;N]
+04)------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test nullary ROW_NUMBER window function
+query error DataFusion error: Error during planning: MATCH_RECOGNIZE requires an explicit window frame in the DEFINE clause for function 'row_number'
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > ROW_NUMBER()
+)
+
+# Test nullary RANK window function
+query error DataFusion error: Error during planning: MATCH_RECOGNIZE requires an explicit window frame in the DEFINE clause for function 'rank'
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > RANK()
+)
+
+# Test aggregate window functions
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > SUM(price) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+)
+----
+logical_plan
+01)MatchRecognize: after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: CAST(stock_price.price AS Int64) > sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW] output={passthrough_columns=[stock_price.company,stock_price.price_date,stock_price.price]}
+02)--WindowAggr: windowExpr=[[sum(CAST(stock_price.price AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[company,price_date,price]}, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, CAST(price@2 AS Int64) > sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64;N, __mr_symbol_a:Boolean;N]
+03)----BoundedWindowAggExec: wdw=[sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64;N]
+04)------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
