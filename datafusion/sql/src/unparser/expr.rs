@@ -201,6 +201,7 @@ impl Unparser<'_> {
                             partition_by,
                             order_by,
                             window_frame,
+                            filter,
                             distinct,
                             ..
                         },
@@ -265,7 +266,10 @@ impl Unparser<'_> {
                         args,
                         clauses: vec![],
                     }),
-                    filter: None,
+                    filter: filter
+                        .as_ref()
+                        .map(|f| self.expr_to_sql_inner(f).map(Box::new))
+                        .transpose()?,
                     null_treatment: None,
                     over,
                     within_group: vec![],
@@ -2065,6 +2069,7 @@ mod tests {
                         window_frame: WindowFrame::new(None),
                         null_treatment: None,
                         distinct: false,
+                        filter: None,
                     },
                 }),
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
@@ -2091,9 +2096,10 @@ mod tests {
                         ),
                         null_treatment: None,
                         distinct: false,
+                        filter: Some(Box::new(col("a").gt(lit(100)))),
                     },
                 }),
-                r#"count(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+                r#"count(*) FILTER (WHERE (a > 100)) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
             (col("a").is_not_null(), r#"a IS NOT NULL"#),
             (col("a").is_null(), r#"a IS NULL"#),
