@@ -24,29 +24,28 @@ use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow::{
-    array::{new_null_array, ArrayRef, BooleanArray},
+    array::{new_null_array, ArrayRef, BooleanArray, StringArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
 // pub use for backwards compatibility
 pub use datafusion_common::pruning::PruningStatistics;
-use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
-use datafusion_physical_plan::metrics::Count;
-use log::{debug, trace};
-
-use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
+    cast_column,
+    error::{DataFusionError, Result},
+    format::DEFAULT_CAST_OPTIONS,
     internal_err, plan_datafusion_err, plan_err,
-    tree_node::{Transformed, TreeNode},
-    ScalarValue,
+    tree_node::{Transformed, TransformedResult, TreeNode},
+    Column, DFSchema, ScalarValue,
 };
-use datafusion_common::{Column, DFSchema};
 use datafusion_expr_common::operator::Operator;
+use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
+use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
+use log::{debug, trace};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
 /// possibly evaluate to `true` given information about a column provided by
@@ -929,7 +928,17 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array = arrow::compute::cast(&array, data_type)?;
+        let array = if matches!(array.data_type(), DataType::Binary)
+            && matches!(stat_field.data_type(), DataType::Utf8)
+        {
+            let array = array.as_binary::<i32>();
+            let array = StringArray::from_iter(array.iter().map(|maybe_bytes| {
+                maybe_bytes.and_then(|b| String::from_utf8(b.to_vec()).ok())
+            }));
+            Arc::new(array) as ArrayRef
+        } else {
+            cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
+        };
 
         arrays.push(array);
     }
@@ -1863,7 +1872,7 @@ pub(crate) enum StatisticsType {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::ops::{Not, Rem};
 
     use super::*;
@@ -1873,7 +1882,9 @@ mod tests {
 
     use arrow::array::Decimal128Array;
     use arrow::{
-        array::{BinaryArray, Int32Array, Int64Array, StringArray, UInt64Array},
+        array::{
+            BinaryArray, Int32Array, Int64Array, StringArray, StructArray, UInt64Array,
+        },
         datatypes::TimeUnit,
     };
     use datafusion_expr::expr::InList;
@@ -2497,6 +2508,230 @@ mod tests {
     }
 
     #[test]
+    fn test_build_statistics_struct_casting() {
+        // Request a struct column where statistics provide a struct with a different
+        // inner type
+        let field = Field::new(
+            "s_struct_min",
+            DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into()),
+            true,
+        );
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("s", 0),
+            StatisticsType::Min,
+            field.clone(),
+        )]);
+
+        // statistics return struct with Int64 child that should be cast to Int32
+        let stats_array: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int64, true)),
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )]));
+
+        struct TestStats {
+            min: ArrayRef,
+        }
+
+        impl PruningStatistics for TestStats {
+            fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+                if column.name() == "s" {
+                    Some(self.min.clone())
+                } else {
+                    None
+                }
+            }
+
+            fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn num_containers(&self) -> usize {
+                1
+            }
+
+            fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn contained(
+                &self,
+                _column: &Column,
+                _values: &HashSet<ScalarValue>,
+            ) -> Option<BooleanArray> {
+                None
+            }
+        }
+
+        let statistics = TestStats { min: stats_array };
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+
+        let struct_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let child = struct_array
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(child.value(0), 1);
+        assert_eq!(batch.schema().field(0), &field);
+    }
+
+    #[test]
+    fn test_build_statistics_struct_incompatible_type() {
+        // Request a struct column where statistics provide an incompatible field type
+        let field = Field::new(
+            "s_struct_min",
+            DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into()),
+            true,
+        );
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("s", 0),
+            StatisticsType::Min,
+            field,
+        )]);
+
+        // statistics return struct with nested struct child that cannot be cast to Int32
+        let inner_field = Arc::new(Field::new("b", DataType::Int32, true));
+        let inner_struct: ArrayRef = Arc::new(StructArray::from(vec![(
+            inner_field.clone(),
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+        )]));
+        let stats_array: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new(
+                "a",
+                DataType::Struct(vec![inner_field].into()),
+                true,
+            )),
+            inner_struct,
+        )]));
+
+        struct TestStats {
+            min: ArrayRef,
+        }
+
+        impl PruningStatistics for TestStats {
+            fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+                if column.name() == "s" {
+                    Some(self.min.clone())
+                } else {
+                    None
+                }
+            }
+
+            fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn num_containers(&self) -> usize {
+                1
+            }
+
+            fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn contained(
+                &self,
+                _column: &Column,
+                _values: &HashSet<ScalarValue>,
+            ) -> Option<BooleanArray> {
+                None
+            }
+        }
+
+        let statistics = TestStats { min: stats_array };
+        let err =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot cast struct field"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_build_statistics_struct_incompatible_nullability() {
+        // Request a non-nullable child field but statistics provide a nullable field
+        let field = Field::new(
+            "s_struct_min",
+            DataType::Struct(vec![Field::new("a", DataType::Int32, false)].into()),
+            true,
+        );
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("s", 0),
+            StatisticsType::Min,
+            field,
+        )]);
+
+        // statistics return struct with nullable child
+        let stats_array: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+        )]));
+
+        struct TestStats {
+            min: ArrayRef,
+        }
+
+        impl PruningStatistics for TestStats {
+            fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+                if column.name() == "s" {
+                    Some(self.min.clone())
+                } else {
+                    None
+                }
+            }
+
+            fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn num_containers(&self) -> usize {
+                1
+            }
+
+            fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+                None
+            }
+
+            fn contained(
+                &self,
+                _column: &Column,
+                _values: &HashSet<ScalarValue>,
+            ) -> Option<BooleanArray> {
+                None
+            }
+        }
+
+        let statistics = TestStats { min: stats_array };
+        let err =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot cast nullable struct field"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
     fn test_build_statistics_no_required_stats() {
         let required_columns = RequiredColumns::new();
 
@@ -2535,6 +2770,37 @@ mod tests {
         +--------+
         | s1_min |
         +--------+
+        |        |
+        +--------+
+        ");
+    }
+
+    #[test]
+    fn test_build_statistics_invalid_utf8_input() {
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("s1", 1),
+            StatisticsType::Min,
+            Field::new("s1_min", DataType::Utf8, true),
+        )]);
+
+        let statistics = OneContainerStats {
+            min_values: Some(Arc::new(BinaryArray::from(vec![
+                Some(b"ok".as_ref()),
+                Some([0xffu8, 0xfeu8].as_ref()),
+                None,
+            ]))),
+            max_values: None,
+            num_containers: 3,
+        };
+
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------+
+        | s1_min |
+        +--------+
+        | ok     |
+        |        |
         |        |
         +--------+
         ");
