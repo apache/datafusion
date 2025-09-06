@@ -38,6 +38,7 @@ use datafusion_expr::{
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::utils::resolve_aliases_to_exprs;
 
 mod binary_op;
 mod function;
@@ -167,6 +168,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         // The location of the original SQL expression in the source code
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
+        // Rewrite aliases in the expression with ones we've gathered in the current context
+        //
+        // This allows us to reference aliases from downstream plan nodes! For example:
+        //
+        // For example, this is how we can support WHERE clauses that reference aliases:
+        //
+        // SELECT firstname || ' ' || lastname AS name FROM users WHERE name > 1;
+        //
+        // Because selection occurs prior to projection, we need to rewrite the alias
+        // to use the original expression that references valid columns from upstream
+        // plan nodes. So, it gets rewritten to something like:
+        //
+        // SELECT firstname || ' ' || lastname AS name FROM users WHERE firstname || ' ' || lastname > 1;
+        expr = resolve_aliases_to_exprs(expr, planner_context.expr_aliases())?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
         let (expr, _) = expr.infer_placeholder_types(schema)?;
