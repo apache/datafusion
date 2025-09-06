@@ -75,7 +75,37 @@ AS v(y, m, w, d, h, mi, s);
 ----
 0 0 0 0 0 0 -Infinity NULL
 
-query error DataFusion error: Execution error: months overflow
+query ?
 SELECT make_interval(2147483647, 1, 0, 0, 0, 0, 0.0);
+----
+NULL
 
-# null <- SELECT make_interval(2147483647, 1, 0, 0, 0, 0, 0.0);
+query ?
+SELECT make_interval(0, 0, 2147483647, 1, 0, 0, 0.0);
+----
+NULL
+
+query ?
+SELECT make_interval(0, 0, 0, 0, 2147483647, 1, 0.0);
+----
+NULL
+
+# seconds is now blank line
+
+query ?
+SELECT make_interval(0, 0, 0, 0, 0, 0, 0.0);
+----
+
+
+query ?
+SELECT make_interval();
+----
+
+
+#>>> spark.sql("SELECT make_interval() AS interval FROM VALUES (1), (2) AS t(x)").show()
+# +---------+
+# | interval|
+# +---------+
+# |0 seconds|
+# |0 seconds|
+# +---------+
