@@ -63,6 +63,7 @@ use datafusion_physical_plan::{
 use datafusion_physical_plan::{
     filter::collect_columns_from_predicate, filter_pushdown::FilterPushdownPropagation,
 };
+use object_store::ObjectStore;
 
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
@@ -190,6 +191,8 @@ pub struct FileScanConfig {
     pub new_lines_in_values: bool,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
     pub file_source: Arc<dyn FileSource>,
+    /// Optional virtual object store for routing paths to underlying stores
+    pub virtual_store: Option<Arc<dyn ObjectStore>>,
     /// Batch size while creating new batches
     /// Defaults to [`datafusion_common::config::ExecutionOptions`] batch_size.
     pub batch_size: Option<usize>,
@@ -264,6 +267,8 @@ pub struct FileScanConfigBuilder {
     /// [`DataSourceExec`]: crate::source::DataSourceExec
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
+    virtual_store: Option<Arc<dyn ObjectStore>>,
+
     limit: Option<usize>,
     projection: Option<Vec<usize>>,
     table_partition_cols: Vec<FieldRef>,
@@ -293,6 +298,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_schema,
             file_source,
+            virtual_store: None,
             file_groups: vec![],
             statistics: None,
             output_ordering: vec![],
@@ -320,6 +326,12 @@ impl FileScanConfigBuilder {
     /// after the builder has been created.
     pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
         self.file_source = file_source;
+        self
+    }
+
+    /// Set the virtual object store mapping
+    pub fn with_virtual_store(mut self, store: Arc<dyn ObjectStore>) -> Self {
+        self.virtual_store = Some(store);
         self
     }
 
@@ -435,6 +447,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_schema,
             file_source,
+            virtual_store,
             limit,
             projection,
             table_partition_cols,
@@ -463,6 +476,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_schema,
             file_source,
+            virtual_store,
             limit,
             projection,
             table_partition_cols,
@@ -483,6 +497,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             object_store_url: config.object_store_url,
             file_schema: config.file_schema,
             file_source: Arc::<dyn FileSource>::clone(&config.file_source),
+            virtual_store: config.virtual_store,
             file_groups: config.file_groups,
             statistics: config.file_source.statistics().ok(),
             output_ordering: config.output_ordering,
@@ -504,7 +519,20 @@ impl DataSource for FileScanConfig {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let object_store = context.runtime_env().object_store(&self.object_store_url)?;
+        let object_store: Arc<dyn ObjectStore> = if let Some(store) = &self.virtual_store
+        {
+            Arc::clone(store)
+        } else {
+            context
+                .runtime_env()
+                .object_store(&self.object_store_url)
+                .map_err(|e| {
+                    e.context(format!(
+                        "get object store for URL {}",
+                        self.object_store_url
+                    ))
+                })?
+        };
         let batch_size = self
             .batch_size
             .unwrap_or_else(|| context.session_config().batch_size());
