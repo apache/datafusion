@@ -63,8 +63,15 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let file_extension = get_extension(cmd.location.as_str());
         let mut table_path = ListingTableUrl::parse(&cmd.location)?;
+        let file_extension = match table_path.is_collection() {
+            // Setting the extension to be empty instead of allowing the default extension seems
+            // odd, but was done to ensure existing behavior isn't modified. It seems like this
+            // could be refactored to either use the default extension or set the fully expected
+            // extension when compression is included (e.g. ".csv.gz")
+            true => "",
+            false => &get_extension(cmd.location.as_str()),
+        };
         let mut options = ListingOptions::new(file_format)
             .with_session_config_options(session_state.config())
             .with_file_extension(file_extension);
@@ -125,6 +132,7 @@ impl TableProviderFactory for ListingTableFactory {
         };
 
         options = options.with_table_partition_cols(table_partition_cols);
+
         options
             .validate_partitions(session_state, &table_path)
             .await?;

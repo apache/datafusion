@@ -921,4 +921,63 @@ mod tests {
                 .collect::<Vec<_>>(),
         ))
     }
+
+    #[test]
+    fn test_constants_share_values() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("const_1", DataType::Utf8, false),
+            Field::new("const_2", DataType::Utf8, false),
+        ]));
+
+        let col_const_1 = col("const_1", &schema)?;
+        let col_const_2 = col("const_2", &schema)?;
+
+        let literal_foo = ScalarValue::Utf8(Some("foo".to_owned()));
+        let literal_bar = ScalarValue::Utf8(Some("bar".to_owned()));
+
+        let const_expr_1_foo = ConstExpr::new(
+            Arc::clone(&col_const_1),
+            AcrossPartitions::Uniform(Some(literal_foo.clone())),
+        );
+        let const_expr_2_foo = ConstExpr::new(
+            Arc::clone(&col_const_2),
+            AcrossPartitions::Uniform(Some(literal_foo.clone())),
+        );
+        let const_expr_2_bar = ConstExpr::new(
+            Arc::clone(&col_const_2),
+            AcrossPartitions::Uniform(Some(literal_bar.clone())),
+        );
+
+        let mut input1 = EquivalenceProperties::new(Arc::clone(&schema));
+        let mut input2 = EquivalenceProperties::new(Arc::clone(&schema));
+
+        // | Input | Const_1 | Const_2 |
+        // | ----- | ------- | ------- |
+        // |     1 | foo     | foo     |
+        // |     2 | foo     | bar     |
+        input1.add_constants(vec![const_expr_1_foo.clone(), const_expr_2_foo.clone()])?;
+        input2.add_constants(vec![const_expr_1_foo.clone(), const_expr_2_bar.clone()])?;
+
+        // Calculate union properties
+        let union_props = calculate_union(vec![input1, input2], schema)?;
+
+        // This should result in:
+        //   const_1 = Uniform("foo")
+        //   const_2 = Heterogeneous
+        assert_eq!(union_props.constants().len(), 2);
+        let union_const_1 = &union_props.constants()[0];
+        assert!(union_const_1.expr.eq(&col_const_1));
+        assert_eq!(
+            union_const_1.across_partitions,
+            AcrossPartitions::Uniform(Some(literal_foo)),
+        );
+        let union_const_2 = &union_props.constants()[1];
+        assert!(union_const_2.expr.eq(&col_const_2));
+        assert_eq!(
+            union_const_2.across_partitions,
+            AcrossPartitions::Heterogeneous,
+        );
+
+        Ok(())
+    }
 }

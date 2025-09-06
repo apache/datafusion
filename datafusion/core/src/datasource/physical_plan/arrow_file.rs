@@ -26,7 +26,7 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
-use datafusion_common::Statistics;
+use datafusion_common::{exec_datafusion_err, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::PartitionedFile;
@@ -140,7 +140,9 @@ impl FileOpener for ArrowOpener {
                             let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                                 file, projection,
                             )?;
-                            Ok(futures::stream::iter(arrow_reader).boxed())
+                            Ok(futures::stream::iter(arrow_reader)
+                                .map(|r| r.map_err(Into::into))
+                                .boxed())
                         }
                         GetResultPayload::Stream(_) => {
                             let bytes = r.bytes().await?;
@@ -148,7 +150,9 @@ impl FileOpener for ArrowOpener {
                             let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                                 cursor, projection,
                             )?;
-                            Ok(futures::stream::iter(arrow_reader).boxed())
+                            Ok(futures::stream::iter(arrow_reader)
+                                .map(|r| r.map_err(Into::into))
+                                .boxed())
                         }
                     }
                 }
@@ -179,9 +183,7 @@ impl FileOpener for ArrowOpener {
                         footer_buf[..footer_len].try_into().unwrap(),
                     )
                     .map_err(|err| {
-                        arrow::error::ArrowError::ParseError(format!(
-                            "Unable to get root as footer: {err:?}"
-                        ))
+                        exec_datafusion_err!("Unable to get root as footer: {err:?}")
                     })?;
                     // build decoder according to footer & projection
                     let schema =
@@ -248,6 +250,7 @@ impl FileOpener for ArrowOpener {
                                     .transpose()
                             }),
                     )
+                    .map(|r| r.map_err(Into::into))
                     .boxed())
                 }
             }

@@ -22,11 +22,9 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions};
+use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions, WindowFunction};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
-use datafusion_expr::{
-    expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
-};
+use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
@@ -94,7 +92,7 @@ struct FunctionArgs {
     /// WITHIN GROUP clause, if any
     within_group: Vec<OrderByExpr>,
     /// Was the function called without parenthesis, i.e. could this also be a column reference?
-    function_without_paranthesis: bool,
+    function_without_parentheses: bool,
 }
 
 impl FunctionArgs {
@@ -120,7 +118,7 @@ impl FunctionArgs {
                 null_treatment,
                 distinct: false,
                 within_group,
-                function_without_paranthesis: matches!(args, FunctionArguments::None),
+                function_without_parentheses: matches!(args, FunctionArguments::None),
             });
         };
 
@@ -202,7 +200,7 @@ impl FunctionArgs {
             null_treatment,
             distinct,
             within_group,
-            function_without_paranthesis: false,
+            function_without_parentheses: false,
         })
     }
 }
@@ -224,7 +222,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             null_treatment,
             distinct,
             within_group,
-            function_without_paranthesis,
+            function_without_parentheses,
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
@@ -345,12 +343,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             if let Ok(fun) = self.find_window_func(&name) {
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
+
+                // Plan FILTER clause if present
+                let filter = filter
+                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .transpose()?
+                    .map(Box::new);
+
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
                     args,
                     partition_by,
                     order_by,
                     window_frame,
+                    filter,
                     null_treatment,
                     distinct: function_args.distinct,
                 };
@@ -368,26 +374,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     partition_by,
                     order_by,
                     window_frame,
+                    filter,
                     null_treatment,
                     distinct,
                 } = window_expr;
 
-                if distinct {
-                    return Expr::from(expr::WindowFunction::new(func_def, args))
-                        .partition_by(partition_by)
-                        .order_by(order_by)
-                        .window_frame(window_frame)
-                        .null_treatment(null_treatment)
-                        .distinct()
-                        .build();
-                }
+                let expr = Expr::from(WindowFunction {
+                    fun: func_def,
+                    params: expr::WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        filter,
+                        null_treatment,
+                        distinct,
+                    },
+                });
 
-                return Expr::from(expr::WindowFunction::new(func_def, args))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .null_treatment(null_treatment)
-                    .build();
+                return Ok(expr);
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
@@ -477,7 +482,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         // workaround for https://github.com/apache/datafusion-sqlparser-rs/issues/1909
-        if function_without_paranthesis {
+        if function_without_parentheses {
             let maybe_ids = object_name
                 .0
                 .iter()

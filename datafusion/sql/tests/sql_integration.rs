@@ -738,8 +738,8 @@ fn plan_update() {
 }
 
 #[rstest]
-#[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
-#[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
+#[case::missing_assignment_target("UPDATE person SET doesnotexist = true")]
+#[case::missing_assignment_expression("UPDATE person SET age = doesnotexist + 42")]
 #[case::missing_selection_expression(
     "UPDATE person SET age = 42 WHERE doesnotexist = true"
 )]
@@ -4561,6 +4561,30 @@ fn test_no_functions_registered() {
     assert_contains!(
         err.unwrap_err().to_string(),
         "Internal error: No functions registered with this context."
+    );
+}
+
+#[test]
+fn test_no_substring_registered() {
+    // substring requires an expression planner
+    let sql = "SELECT SUBSTRING(foo, bar, baz) FROM person";
+    let err = logical_plan(sql).expect_err("query should have failed");
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+    );
+}
+
+#[test]
+fn test_no_substring_registered_alt_syntax() {
+    // Alternate syntax for substring
+    let sql = "SELECT SUBSTRING(foo FROM bar) FROM person";
+    let err = logical_plan(sql).expect_err("query should have failed");
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
     );
 }
 

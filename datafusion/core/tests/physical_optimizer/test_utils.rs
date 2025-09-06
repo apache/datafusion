@@ -56,7 +56,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -266,6 +266,7 @@ pub fn bounded_window_exec_with_partition(
         schema.as_ref(),
         false,
         false,
+        None,
     )
     .unwrap();
 
@@ -381,7 +382,11 @@ pub fn projection_exec(
     expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(Arc::new(ProjectionExec::try_new(expr, input)?))
+    let proj_exprs: Vec<ProjectionExpr> = expr
+        .into_iter()
+        .map(|(expr, alias)| ProjectionExpr { expr, alias })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
 }
 
 /// A test [`ExecutionPlan`] whose requirements can be configured.

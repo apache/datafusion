@@ -361,6 +361,41 @@ select * from directory_test;
 1 2
 3 4
 
+statement count 0
+CREATE EXTERNAL TABLE
+directory_with_dots_test(a bigint, b bigint)
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/external_versioned_parquet_table.v0/';
+
+query I
+INSERT INTO directory_with_dots_test values (1, 2), (3, 4);
+----
+2
+
+query II
+select * from directory_with_dots_test;
+----
+1 2
+3 4
+
+statement count 0
+CREATE EXTERNAL TABLE
+directory_with_dots_readback
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/external_versioned_parquet_table.v0/';
+
+query TTT
+describe directory_with_dots_readback
+----
+a Int64 YES
+b Int64 YES
+
+query II
+select * from directory_with_dots_readback
+----
+1 2
+3 4
+
 statement ok
 CREATE EXTERNAL TABLE
 table_without_values(field1 BIGINT NULL, field2 BIGINT NULL)

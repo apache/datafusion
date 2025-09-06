@@ -44,6 +44,7 @@ use datafusion_physical_expr::{
     PhysicalExpr,
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use parking_lot::RwLock;
 
 /// Global TopK
 ///
@@ -121,11 +122,36 @@ pub struct TopK {
     /// Common sort prefix between the input and the sort expressions to allow early exit optimization
     common_sort_prefix: Arc<[PhysicalSortExpr]>,
     /// Filter matching the state of the `TopK` heap used for dynamic filter pushdown
-    filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    filter: Arc<RwLock<TopKDynamicFilters>>,
     /// If true, indicates that all rows of subsequent batches are guaranteed
     /// to be greater (by byte order, after row conversion) than the top K,
     /// which means the top K won't change and the computation can be finished early.
     pub(crate) finished: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TopKDynamicFilters {
+    /// The current *global* threshold for the dynamic filter.
+    /// This is shared across all partitions and is updated by any of them.
+    /// Stored as row bytes for efficient comparison.
+    threshold_row: Option<Vec<u8>>,
+    /// The expression used to evaluate the dynamic filter
+    /// Only updated when lock held for the duration of the update
+    expr: Arc<DynamicFilterPhysicalExpr>,
+}
+
+impl TopKDynamicFilters {
+    /// Create a new `TopKDynamicFilters` with the given expression
+    pub fn new(expr: Arc<DynamicFilterPhysicalExpr>) -> Self {
+        Self {
+            threshold_row: None,
+            expr,
+        }
+    }
+
+    pub fn expr(&self) -> Arc<DynamicFilterPhysicalExpr> {
+        Arc::clone(&self.expr)
+    }
 }
 
 // Guesstimate for memory allocation: estimated number of bytes used per row in the RowConverter
@@ -160,7 +186,7 @@ impl TopK {
         batch_size: usize,
         runtime: Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
-        filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
     ) -> Result<Self> {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
@@ -214,41 +240,39 @@ impl TopK {
 
         let mut selected_rows = None;
 
-        if let Some(filter) = self.filter.as_ref() {
-            // If a filter is provided, update it with the new rows
-            let filter = filter.current()?;
-            let filtered = filter.evaluate(&batch)?;
-            let num_rows = batch.num_rows();
-            let array = filtered.into_array(num_rows)?;
-            let mut filter = array.as_boolean().clone();
-            let true_count = filter.true_count();
-            if true_count == 0 {
-                // nothing to filter, so no need to update
-                return Ok(());
+        // If a filter is provided, update it with the new rows
+        let filter = self.filter.read().expr.current()?;
+        let filtered = filter.evaluate(&batch)?;
+        let num_rows = batch.num_rows();
+        let array = filtered.into_array(num_rows)?;
+        let mut filter = array.as_boolean().clone();
+        let true_count = filter.true_count();
+        if true_count == 0 {
+            // nothing to filter, so no need to update
+            return Ok(());
+        }
+        // only update the keys / rows if the filter does not match all rows
+        if true_count < num_rows {
+            // Indices in `set_indices` should be correct if filter contains nulls
+            // So we prepare the filter here. Note this is also done in the `FilterBuilder`
+            // so there is no overhead to do this here.
+            if filter.nulls().is_some() {
+                filter = prep_null_mask_filter(&filter);
             }
-            // only update the keys / rows if the filter does not match all rows
-            if true_count < num_rows {
-                // Indices in `set_indices` should be correct if filter contains nulls
-                // So we prepare the filter here. Note this is also done in the `FilterBuilder`
-                // so there is no overhead to do this here.
-                if filter.nulls().is_some() {
-                    filter = prep_null_mask_filter(&filter);
-                }
 
-                let filter_predicate = FilterBuilder::new(&filter);
-                let filter_predicate = if sort_keys.len() > 1 {
-                    // Optimize filter when it has multiple sort keys
-                    filter_predicate.optimize().build()
-                } else {
-                    filter_predicate.build()
-                };
-                selected_rows = Some(filter);
-                sort_keys = sort_keys
-                    .iter()
-                    .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
-                    .collect::<Result<Vec<_>>>()?;
-            }
-        };
+            let filter_predicate = FilterBuilder::new(&filter);
+            let filter_predicate = if sort_keys.len() > 1 {
+                // Optimize filter when it has multiple sort keys
+                filter_predicate.optimize().build()
+            } else {
+                filter_predicate.build()
+            };
+            selected_rows = Some(filter);
+            sort_keys = sort_keys
+                .iter()
+                .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
+                .collect::<Result<Vec<_>>>()?;
+        }
         // reuse existing `Rows` to avoid reallocations
         let rows = &mut self.scratch_rows;
         rows.clear();
@@ -319,19 +343,89 @@ impl TopK {
     /// (a > 2 OR (a = 2 AND b < 3))
     /// ```
     fn update_filter(&mut self) -> Result<()> {
-        let Some(filter) = &self.filter else {
-            return Ok(());
-        };
-        let Some(thresholds) = self.heap.get_threshold_values(&self.expr)? else {
+        // If the heap doesn't have k elements yet, we can't create thresholds
+        let Some(max_row) = self.heap.max() else {
             return Ok(());
         };
 
+        let new_threshold_row = &max_row.row;
+
+        // Fast path: check if the current value in topk is better than what is
+        // currently set in the filter with a read only lock
+        let needs_update = self
+            .filter
+            .read()
+            .threshold_row
+            .as_ref()
+            .map(|current_row| {
+                // new < current means new threshold is more selective
+                new_threshold_row < current_row
+            })
+            .unwrap_or(true); // No current threshold, so we need to set one
+
+        // exit early if the current values are better
+        if !needs_update {
+            return Ok(());
+        }
+
+        // Extract scalar values BEFORE acquiring lock to reduce critical section
+        let thresholds = match self.heap.get_threshold_values(&self.expr)? {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+
+        // Build the filter expression OUTSIDE any synchronization
+        let predicate = Self::build_filter_expression(&self.expr, thresholds)?;
+        let new_threshold = new_threshold_row.to_vec();
+
+        // update the threshold. Since there was a lock gap, we must check if it is still the best
+        // may have changed while we were building the expression without the lock
+        let mut filter = self.filter.write();
+        let old_threshold = filter.threshold_row.take();
+
+        // Update filter if we successfully updated the threshold
+        // (or if there was no previous threshold and we're the first)
+        match old_threshold {
+            Some(old_threshold) => {
+                // new threshold is still better than the old one
+                if new_threshold.as_slice() < old_threshold.as_slice() {
+                    filter.threshold_row = Some(new_threshold);
+                } else {
+                    // some other thread updated the threshold to a better
+                    // one while we were building so there is no need to
+                    // update the filter
+                    filter.threshold_row = Some(old_threshold);
+                    return Ok(());
+                }
+            }
+            None => {
+                // No previous threshold, so we can set the new one
+                filter.threshold_row = Some(new_threshold);
+            }
+        };
+
+        // Update the filter expression
+        if let Some(pred) = predicate {
+            if !pred.eq(&lit(true)) {
+                filter.expr.update(pred)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Build the filter expression with the given thresholds.
+    /// This is now called outside of any locks to reduce critical section time.
+    fn build_filter_expression(
+        sort_exprs: &[PhysicalSortExpr],
+        thresholds: Vec<ScalarValue>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Create filter expressions for each threshold
         let mut filters: Vec<Arc<dyn PhysicalExpr>> =
             Vec::with_capacity(thresholds.len());
 
         let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
-        for (sort_expr, value) in self.expr.iter().zip(thresholds.iter()) {
+        for (sort_expr, value) in sort_exprs.iter().zip(thresholds.iter()) {
             // Create the appropriate operator based on sort order
             let op = if sort_expr.options.descending {
                 // For descending sort, we want col > threshold (exclude smaller values)
@@ -403,13 +497,7 @@ impl TopK {
             .into_iter()
             .reduce(|a, b| Arc::new(BinaryExpr::new(a, Operator::Or, b)));
 
-        if let Some(predicate) = dynamic_predicate {
-            if !predicate.eq(&lit(true)) {
-                filter.update(predicate)?;
-            }
-        }
-
-        Ok(())
+        Ok(dynamic_predicate)
     }
 
     /// If input ordering shares a common sort prefix with the TopK, and if the TopK's heap is full,
@@ -852,6 +940,7 @@ impl Eq for TopKRow {}
 
 impl PartialOrd for TopKRow {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // TODO PartialOrd is not consistent with PartialEq; PartialOrd contract is violated
         Some(self.cmp(other))
     }
 }
@@ -1053,7 +1142,9 @@ mod tests {
             2,
             runtime,
             &metrics,
-            None,
+            Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+            )))),
         )?;
 
         // Create the first batch with two columns:
