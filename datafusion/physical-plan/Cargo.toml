@@ -71,10 +71,12 @@ tokio = { workspace = true }
 criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
+datafusion-sql = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
+sqlparser = { workspace = true }
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "fs",
