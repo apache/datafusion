@@ -1872,6 +1872,7 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-functions-match_recognize",
  "datafusion-functions-nested",
  "datafusion-functions-table",
  "datafusion-functions-window",
@@ -2374,6 +2375,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-functions-match_recognize"
+version = "49.0.2"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-doc",
+ "datafusion-expr",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
+ "datafusion-functions-window",
+ "datafusion-functions-window-common",
+ "datafusion-macros",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "log",
+ "paste",
+]
+
+[[package]]
 name = "datafusion-functions-nested"
 version = "49.0.2"
 dependencies = [
@@ -2417,6 +2438,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-doc",
  "datafusion-expr",
+ "datafusion-functions",
  "datafusion-functions-window-common",
  "datafusion-macros",
  "datafusion-physical-expr",
@@ -2689,6 +2711,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-functions-match_recognize",
  "datafusion-functions-nested",
  "datafusion-functions-window",
  "env_logger",
@@ -6314,9 +6337,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.37.0"
+version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07cec4dc2d2e357ca1e610cfb07de2fa7a10fc3e9fe89f72545f3d244ea87753"
+checksum = "252800745060e7b9ffb7b2badbd8b31cfa4aa2e61af879d0a3bf2a317c20217d"
 dependencies = [
  "libc",
  "memchr",

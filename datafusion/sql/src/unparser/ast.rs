@@ -409,6 +409,7 @@ enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
     Unnest(UnnestRelationBuilder),
+    MatchRecognize(MatchRecognizeRelationBuilder),
     Empty,
 }
 
@@ -431,6 +432,11 @@ impl RelationBuilder {
         self
     }
 
+    pub fn match_recognize(&mut self, value: MatchRecognizeRelationBuilder) -> &mut Self {
+        self.relation = Some(TableFactorBuilder::MatchRecognize(value));
+        self
+    }
+
     pub fn empty(&mut self) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Empty);
         self
@@ -447,6 +453,9 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Unnest(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
+            Some(TableFactorBuilder::MatchRecognize(ref mut rel_builder)) => {
+                rel_builder.alias = value;
+            }
             Some(TableFactorBuilder::Empty) => (),
             None => (),
         }
@@ -457,6 +466,7 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Unnest(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::MatchRecognize(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,
             None => return Err(Into::into(UninitializedFieldError::from("relation"))),
         })
@@ -658,6 +668,97 @@ impl UnnestRelationBuilder {
 }
 
 impl Default for UnnestRelationBuilder {
+    fn default() -> Self {
+        Self::create_empty()
+    }
+}
+
+#[derive(Clone)]
+pub struct MatchRecognizeRelationBuilder {
+    pub table: Option<Box<ast::TableFactor>>, // inner relation
+    pub partition_by: Vec<ast::Expr>,
+    pub order_by: Vec<ast::OrderByExpr>,
+    pub measures: Vec<ast::Measure>,
+    pub rows_per_match: Option<ast::RowsPerMatch>,
+    pub after_match_skip: Option<ast::AfterMatchSkip>,
+    pub pattern: Option<ast::MatchRecognizePattern>,
+    pub symbols: Vec<ast::SymbolDefinition>,
+    pub alias: Option<ast::TableAlias>,
+}
+
+#[allow(dead_code)]
+impl MatchRecognizeRelationBuilder {
+    pub fn table(&mut self, value: ast::TableFactor) -> &mut Self {
+        self.table = Some(Box::new(value));
+        self
+    }
+    pub fn partition_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
+        self.partition_by = value;
+        self
+    }
+    pub fn order_by(&mut self, value: Vec<ast::OrderByExpr>) -> &mut Self {
+        self.order_by = value;
+        self
+    }
+    pub fn measures(&mut self, value: Vec<ast::Measure>) -> &mut Self {
+        self.measures = value;
+        self
+    }
+    pub fn rows_per_match(&mut self, value: Option<ast::RowsPerMatch>) -> &mut Self {
+        self.rows_per_match = value;
+        self
+    }
+    pub fn after_match_skip(&mut self, value: Option<ast::AfterMatchSkip>) -> &mut Self {
+        self.after_match_skip = value;
+        self
+    }
+    pub fn pattern(&mut self, value: ast::MatchRecognizePattern) -> &mut Self {
+        self.pattern = Some(value);
+        self
+    }
+    pub fn symbols(&mut self, value: Vec<ast::SymbolDefinition>) -> &mut Self {
+        self.symbols = value;
+        self
+    }
+    pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
+        self.alias = value;
+        self
+    }
+    pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+        Ok(ast::TableFactor::MatchRecognize {
+            table: match self.table {
+                Some(ref value) => value.clone(),
+                None => return Err(Into::into(UninitializedFieldError::from("table"))),
+            },
+            partition_by: self.partition_by.clone(),
+            order_by: self.order_by.clone(),
+            measures: self.measures.clone(),
+            rows_per_match: self.rows_per_match.clone(),
+            after_match_skip: self.after_match_skip.clone(),
+            pattern: match self.pattern {
+                Some(ref value) => value.clone(),
+                None => return Err(Into::into(UninitializedFieldError::from("pattern"))),
+            },
+            symbols: self.symbols.clone(),
+            alias: self.alias.clone(),
+        })
+    }
+    fn create_empty() -> Self {
+        Self {
+            table: Default::default(),
+            partition_by: Default::default(),
+            order_by: Default::default(),
+            measures: Default::default(),
+            rows_per_match: Default::default(),
+            after_match_skip: Default::default(),
+            pattern: Default::default(),
+            symbols: Default::default(),
+            alias: Default::default(),
+        }
+    }
+}
+
+impl Default for MatchRecognizeRelationBuilder {
     fn default() -> Self {
         Self::create_empty()
     }

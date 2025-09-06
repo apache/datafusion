@@ -29,6 +29,7 @@ use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
+mod match_recognize;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Create a `LogicalPlan` that scans the named relation
@@ -182,6 +183,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
                         .build()?;
                 (plan, alias)
+            }
+            TableFactor::MatchRecognize {
+                table,
+                partition_by,
+                order_by,
+                measures,
+                rows_per_match,
+                after_match_skip,
+                pattern,
+                symbols,
+                alias: _,
+            } => {
+                let plan = self.plan_match_recognize(
+                    table,
+                    partition_by,
+                    order_by,
+                    measures,
+                    rows_per_match,
+                    after_match_skip,
+                    pattern,
+                    symbols,
+                    planner_context,
+                )?;
+                (plan, None)
             }
             // @todo Support TableFactory::TableFunction?
             _ => {
