@@ -1,0 +1,878 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# ============================================================================
+# MATCH_RECOGNIZE Demo over TPCH `lineitem`
+# ----------------------------------------------------------------------------
+# This file contains a curated set of commented demo scenarios that
+# showcase the breadth of DataFusion's MATCH_RECOGNIZE
+# capabilities over the TPCH `lineitem` table.
+# ============================================================================
+
+# ============================================================================
+# Init: Create the lineitem table
+# ----------------------------------------------------------------------------
+# The `lineitem.tbl` file stored in the `data` folder is an extract of the
+# first 200 rows of the `lineitem` table from the `test_files/tpch/data` folder.
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS lineitem (
+        l_orderkey BIGINT,
+        l_partkey BIGINT,
+        l_suppkey BIGINT,
+        l_linenumber INTEGER,
+        l_quantity DECIMAL(15, 2),
+        l_extendedprice DECIMAL(15, 2),
+        l_discount DECIMAL(15, 2),
+        l_tax DECIMAL(15, 2),
+        l_returnflag VARCHAR,
+        l_linestatus VARCHAR,
+        l_shipdate DATE,
+        l_commitdate DATE,
+        l_receiptdate DATE,
+        l_shipinstruct VARCHAR,
+        l_shipmode VARCHAR,
+        l_rev VARCHAR,
+) STORED AS CSV LOCATION 'test_files/match_recognize/demo/data/lineitem.tbl' OPTIONS ('format.delimiter' '|', 'format.has_header' 'false');
+
+# ============================================================================
+# Demo 1: Window functions in DEFINE clause
+# ----------------------------------------------------------------------------
+# Demonstrates LAG/LEAD/FIRST_VALUE in DEFINE over PARTITION BY l_orderkey
+# ORDER BY l_linenumber. In EXPLAIN, look for WindowAgg/BoundedWindowAgg
+# producing these window columns and MatchRecognize DEFINEs that reference them.
+query TT
+EXPLAIN
+SELECT *
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    PATTERN (A B C)
+    DEFINE
+        A AS l_quantity > LAG(l_quantity),
+        B AS l_extendedprice < LEAD(l_extendedprice),
+        C AS l_discount >= FIRST_VALUE(l_discount)
+)
+----
+logical_plan
+01)Projection: lineitem.l_orderkey, last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS match_no
+02)--Aggregate: groupBy=[[lineitem.l_orderkey, __mr_match_number]], aggr=[[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: partition_by=[lineitem.l_orderkey] order_by=[lineitem.l_linenumber ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A B C] symbols=[A,B,C] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: lineitem.l_quantity > lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, B: lineitem.l_extendedprice < lead(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, C: lineitem.l_discount >= first_value(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING] output={passthrough_columns=[lineitem.l_orderkey], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------WindowAggr: windowExpr=[[lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, first_value(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: lineitem projection=[l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount]
+physical_plan
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@2 as match_no]
+02)--AggregateExec: mode=FinalPartitioned, gby=[l_orderkey@0 as l_orderkey, __mr_match_number@1 as __mr_match_number], aggr=[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=PartiallySorted([1])
+03)----SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@1], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[l_orderkey@0 as l_orderkey, __mr_match_number@1 as __mr_match_number], aggr=[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted
+07)------------MatchRecognizePatternExec: pattern=[A B C] output={passthrough_columns=[l_orderkey], metadata=[__mr_match_number,__mr_match_sequence_number]}
+08)--------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@1 as l_linenumber, l_quantity@2 as l_quantity, l_extendedprice@3 as l_extendedprice, l_discount@4 as l_discount, lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as lead(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, first_value(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@7 as first_value(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, l_quantity@2 > lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as __mr_symbol_a, l_extendedprice@3 < lead(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as __mr_symbol_b, l_discount@4 >= first_value(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@7 as __mr_symbol_c]
+09)----------------WindowAggExec: wdw=[lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }, lead(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "lead(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }, first_value(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "first_value(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+10)------------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true]
+11)--------------------CoalesceBatchesExec: target_batch_size=8192
+12)----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/match_recognize/demo/data/lineitem.tbl]]}, projection=[l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount], file_type=csv, has_header=false
+
+# ============================================================================
+# Demo 2: Complex PATTERN — anchors, alternation, concatenation, quantifiers,
+#         repetition, and exclusion
+# ----------------------------------------------------------------------------
+# EXPLAIN a complex pattern (anchors/alternation/quantifiers) with an exclusion
+# block and per-symbol SUMs (X, E). In the plan, note the Filter on
+# __mr_is_excluded_row (rows emitted after exclusion/mode handling) and the
+# classifier-based SUMs.
+query TT
+EXPLAIN
+SELECT l_orderkey, match_no, sum_x_qty, sum_e_qty
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        MATCH_NUMBER() AS match_no,
+        SUM(X.l_quantity) AS sum_x_qty,
+        SUM(E.l_quantity) AS sum_e_qty
+    ALL ROWS PER MATCH
+    PATTERN (^ ((A{2,} | (B C+)) D? ({- X -}) E{2,4} F*) $)
+    DEFINE
+        A AS l_quantity > LAG(l_quantity),
+        B AS l_discount < 0.05,
+        C AS l_extendedprice > LAG(l_extendedprice),
+        D AS l_tax >= 0.05,
+        E AS l_quantity BETWEEN 10 AND 20,
+        F AS l_extendedprice <= 1000,
+        X AS l_discount BETWEEN 0.05 AND 0.07
+)
+----
+logical_plan
+01)Projection: lineitem.l_orderkey, __mr_match_number AS match_no, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum_x_qty, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum_e_qty
+02)--Filter: NOT __mr_classifier_x
+03)----Projection: lineitem.l_orderkey, __mr_match_number, __mr_classifier_x, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+04)------WindowAggr: windowExpr=[[sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------MatchRecognize: partition_by=[lineitem.l_orderkey] order_by=[lineitem.l_linenumber ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[^ ((A{2,}|(B C+)) D? (X) E{2,4} F*) $] symbols=[A,B,C,D,E,F,X] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: lineitem.l_quantity > lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, B: lineitem.l_discount < Decimal128(Some(5),15,2) AS lineitem.l_discount < Float64(0.05), C: lineitem.l_extendedprice > lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, D: lineitem.l_tax >= Decimal128(Some(5),15,2) AS lineitem.l_tax >= Float64(0.05), E: lineitem.l_quantity >= Decimal128(Some(1000),15,2) AND lineitem.l_quantity <= Decimal128(Some(2000),15,2) AS lineitem.l_quantity BETWEEN Int64(10) AND Int64(20), F: lineitem.l_extendedprice <= Decimal128(Some(100000),15,2) AS lineitem.l_extendedprice <= Int64(1000), X: lineitem.l_discount >= Decimal128(Some(5),15,2) AND lineitem.l_discount <= Decimal128(Some(7),15,2) AS lineitem.l_discount BETWEEN Float64(0.05) AND Float64(0.07)] output={passthrough_columns=[lineitem.l_orderkey,lineitem.l_quantity], metadata=[__mr_match_number,__mr_match_sequence_number], classifier_flags=[E,X]}
+06)----------WindowAggr: windowExpr=[[lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+07)------------TableScan: lineitem projection=[l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax]
+physical_plan
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_match_number@1 as match_no, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum_x_qty, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum_e_qty]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: NOT __mr_classifier_x@2, projection=[l_orderkey@0, __mr_match_number@1, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4]
+04)------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_match_number@2 as __mr_match_number, __mr_classifier_x@5 as __mr_classifier_x, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+05)--------BoundedWindowAggExec: wdw=[sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_x) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Decimal128(25, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Decimal128(25, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+06)----------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, __mr_match_number@2 ASC NULLS LAST, __mr_match_sequence_number@3 ASC NULLS LAST], preserve_partitioning=[true]
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@2], 4), input_partitions=4
+09)----------------MatchRecognizePatternExec: pattern=[^ ((A{2,}|(B C+)) D? (X) E{2,4} F*) $] output={passthrough_columns=[l_orderkey,l_quantity], metadata=[__mr_match_number,__mr_match_sequence_number], classifier_flags=[E,X]}
+10)------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@1 as l_linenumber, l_quantity@2 as l_quantity, l_extendedprice@3 as l_extendedprice, l_discount@4 as l_discount, l_tax@5 as l_tax, lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@7 as lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, l_quantity@2 > lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as __mr_symbol_a, l_discount@4 < Some(5),15,2 as __mr_symbol_b, l_extendedprice@3 > lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@7 as __mr_symbol_c, l_tax@5 >= Some(5),15,2 as __mr_symbol_d, l_quantity@2 >= Some(1000),15,2 AND l_quantity@2 <= Some(2000),15,2 as __mr_symbol_e, l_extendedprice@3 <= Some(100000),15,2 as __mr_symbol_f, l_discount@4 >= Some(5),15,2 AND l_discount@4 <= Some(7),15,2 as __mr_symbol_x]
+11)--------------------BoundedWindowAggExec: wdw=[lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+12)----------------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true]
+13)------------------------CoalesceBatchesExec: target_batch_size=8192
+14)--------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+15)----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+16)------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/match_recognize/demo/data/lineitem.tbl]]}, projection=[l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax], file_type=csv, has_header=false
+
+
+
+query TT
+EXPLAIN
+SELECT l_orderkey, match_no, l_linenumber, sum_e_qty
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        MATCH_NUMBER() AS match_no,
+        SUM(E.l_quantity) AS sum_e_qty
+    ALL ROWS PER MATCH
+    PATTERN (ANY* E+ ANY*)
+    DEFINE
+        E AS l_quantity BETWEEN 10 AND 20
+)
+----
+logical_plan
+01)Projection: lineitem.l_orderkey, __mr_match_number AS match_no, lineitem.l_linenumber, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum_e_qty
+02)--WindowAggr: windowExpr=[[sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----MatchRecognize: partition_by=[lineitem.l_orderkey] order_by=[lineitem.l_linenumber ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[ANY* E+ ANY*] symbols=[ANY,E] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[ANY: Boolean(true), E: lineitem.l_quantity >= Decimal128(Some(1000),15,2) AND lineitem.l_quantity <= Decimal128(Some(2000),15,2) AS lineitem.l_quantity BETWEEN Int64(10) AND Int64(20)] output={passthrough_columns=[lineitem.l_orderkey,lineitem.l_linenumber,lineitem.l_quantity], metadata=[__mr_match_number,__mr_match_sequence_number], classifier_flags=[E]}
+04)------TableScan: lineitem projection=[l_orderkey, l_linenumber, l_quantity]
+physical_plan
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_match_number@3 as match_no, l_linenumber@1 as l_linenumber, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as sum_e_qty]
+02)--BoundedWindowAggExec: wdw=[sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Decimal128(25, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[l_orderkey@0 ASC NULLS LAST, __mr_match_number@3 ASC NULLS LAST, __mr_match_sequence_number@4 ASC NULLS LAST], preserve_partitioning=[true]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@3], 4), input_partitions=4
+06)----------MatchRecognizePatternExec: pattern=[ANY* E+ ANY*] output={passthrough_columns=[l_orderkey,l_linenumber,l_quantity], metadata=[__mr_match_number,__mr_match_sequence_number], classifier_flags=[E]}
+07)------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true]
+08)--------------CoalesceBatchesExec: target_batch_size=8192
+09)----------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+10)------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@1 as l_linenumber, l_quantity@2 as l_quantity, true as __mr_symbol_any, l_quantity@2 >= Some(1000),15,2 AND l_quantity@2 <= Some(2000),15,2 as __mr_symbol_e]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/match_recognize/demo/data/lineitem.tbl]]}, projection=[l_orderkey, l_linenumber, l_quantity], file_type=csv, has_header=false
+
+
+
+query TT
+EXPLAIN
+SELECT l_orderkey, match_no, l_linenumber, sum_e_qty
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        MATCH_NUMBER() AS match_no,
+        SUM(E.l_quantity) AS sum_e_qty
+    ALL ROWS PER MATCH
+    AFTER MATCH SKIP TO FIRST E
+    PATTERN (ANY* E+ ANY*)
+    DEFINE
+        E AS l_quantity BETWEEN 10 AND 20
+)
+----
+logical_plan
+01)Projection: lineitem.l_orderkey, __mr_match_number AS match_no, lineitem.l_linenumber, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum_e_qty
+02)--WindowAggr: windowExpr=[[sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----MatchRecognize: partition_by=[lineitem.l_orderkey] order_by=[lineitem.l_linenumber ASC NULLS LAST] after_skip=[TO FIRST E] pattern=[ANY* E+ ANY*] symbols=[ANY,E] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[ANY: Boolean(true), E: lineitem.l_quantity >= Decimal128(Some(1000),15,2) AND lineitem.l_quantity <= Decimal128(Some(2000),15,2) AS lineitem.l_quantity BETWEEN Int64(10) AND Int64(20)] output={passthrough_columns=[lineitem.l_orderkey,lineitem.l_linenumber,lineitem.l_quantity], metadata=[__mr_match_number,__mr_match_sequence_number], classifier_flags=[E]}
+04)------TableScan: lineitem projection=[l_orderkey, l_linenumber, l_quantity]
+physical_plan
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_match_number@3 as match_no, l_linenumber@1 as l_linenumber, sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as sum_e_qty]
+02)--BoundedWindowAggExec: wdw=[sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(lineitem.l_quantity) FILTER (WHERE __mr_classifier_e) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Decimal128(25, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[l_orderkey@0 ASC NULLS LAST, __mr_match_number@3 ASC NULLS LAST, __mr_match_sequence_number@4 ASC NULLS LAST], preserve_partitioning=[true]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@3], 4), input_partitions=4
+06)----------MatchRecognizePatternExec: pattern=[ANY* E+ ANY*] output={passthrough_columns=[l_orderkey,l_linenumber,l_quantity], metadata=[__mr_match_number,__mr_match_sequence_number], classifier_flags=[E]}
+07)------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true]
+08)--------------CoalesceBatchesExec: target_batch_size=8192
+09)----------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+10)------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@1 as l_linenumber, l_quantity@2 as l_quantity, true as __mr_symbol_any, l_quantity@2 >= Some(1000),15,2 AND l_quantity@2 <= Some(2000),15,2 as __mr_symbol_e]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/match_recognize/demo/data/lineitem.tbl]]}, projection=[l_orderkey, l_linenumber, l_quantity], file_type=csv, has_header=false
+
+# ============================================================================
+# Demo 3: PERMUTE operator in PATTERN
+# ----------------------------------------------------------------------------
+# EXPLAIN `PERMUTE(A,B,C,D)` with predicates on `lineitem` columns. Inspect the
+# MatchRecognize pattern to confirm all permutations are considered.
+query TT
+EXPLAIN
+SELECT *
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    PATTERN (PERMUTE(A,B,C,D))
+    DEFINE
+        A AS l_quantity < 5,
+        B AS l_quantity BETWEEN 5 AND 10,
+        C AS l_discount < 0.05,
+        D AS l_tax >= 0.05
+)
+----
+logical_plan
+01)Projection: lineitem.l_orderkey, last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS match_no
+02)--Aggregate: groupBy=[[lineitem.l_orderkey, __mr_match_number]], aggr=[[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: partition_by=[lineitem.l_orderkey] order_by=[lineitem.l_linenumber ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[PERMUTE(A,B,C,D)] symbols=[A,B,C,D] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: lineitem.l_quantity < Decimal128(Some(500),15,2) AS lineitem.l_quantity < Int64(5), B: lineitem.l_quantity >= Decimal128(Some(500),15,2) AND lineitem.l_quantity <= Decimal128(Some(1000),15,2) AS lineitem.l_quantity BETWEEN Int64(5) AND Int64(10), C: lineitem.l_discount < Decimal128(Some(5),15,2) AS lineitem.l_discount < Float64(0.05), D: lineitem.l_tax >= Decimal128(Some(5),15,2) AS lineitem.l_tax >= Float64(0.05)] output={passthrough_columns=[lineitem.l_orderkey], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------TableScan: lineitem projection=[l_orderkey, l_linenumber, l_quantity, l_discount, l_tax]
+physical_plan
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@2 as match_no]
+02)--AggregateExec: mode=FinalPartitioned, gby=[l_orderkey@0 as l_orderkey, __mr_match_number@1 as __mr_match_number], aggr=[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=PartiallySorted([1])
+03)----SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@1], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[l_orderkey@0 as l_orderkey, __mr_match_number@1 as __mr_match_number], aggr=[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted
+07)------------MatchRecognizePatternExec: pattern=[PERMUTE(A,B,C,D)] output={passthrough_columns=[l_orderkey], metadata=[__mr_match_number,__mr_match_sequence_number]}
+08)--------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true]
+09)----------------CoalesceBatchesExec: target_batch_size=8192
+10)------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+11)--------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@1 as l_linenumber, l_quantity@2 as l_quantity, l_discount@3 as l_discount, l_tax@4 as l_tax, l_quantity@2 < Some(500),15,2 as __mr_symbol_a, l_quantity@2 >= Some(500),15,2 AND l_quantity@2 <= Some(1000),15,2 as __mr_symbol_b, l_discount@3 < Some(5),15,2 as __mr_symbol_c, l_tax@4 >= Some(5),15,2 as __mr_symbol_d]
+12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/match_recognize/demo/data/lineitem.tbl]]}, projection=[l_orderkey, l_linenumber, l_quantity, l_discount, l_tax], file_type=csv, has_header=false
+
+# ============================================================================
+# Demo 4: Complex navigation functions in MEASURES (ALL ROWS PER MATCH)
+# ----------------------------------------------------------------------------
+# Uses PREV/NEXT on symbol-qualified columns with offsets/defaults and
+# arithmetic in MEASURES. ALL ROWS PER MATCH exposes per-row results; verify
+# edge handling (NULLs/defaults) and symbol qualification.
+query IIRRR
+SELECT l_orderkey, l_linenumber, prev_a_qty_2, next_b_disc_1_default_0, delta_extprice
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        PREV(A.l_quantity, 2) AS prev_a_qty_2,
+        NEXT(B.l_discount, 1, 0) AS next_b_disc_1_default_0,
+        NEXT(A.l_extendedprice) - PREV(A.l_extendedprice) AS delta_extprice
+    ALL ROWS PER MATCH
+    PATTERN (A+ B*)
+    DEFINE
+        A AS l_quantity > 15,
+        B AS l_discount > 0.05
+)
+WHERE l_orderkey < 8
+ORDER BY 1, 2
+----
+1 1 NULL NULL NULL
+1 2 NULL NULL -14175.71
+1 3 NULL 0.09 -14175.71
+1 4 NULL 0.1 -14175.71
+1 5 NULL 0.07 -14175.71
+1 6 NULL NULL NULL
+2 1 NULL NULL NULL
+3 1 NULL NULL NULL
+3 2 NULL NULL -12407.67
+3 3 45 NULL NULL
+3 5 NULL NULL NULL
+3 6 NULL NULL NULL
+4 1 NULL NULL NULL
+5 2 NULL NULL NULL
+5 3 NULL NULL NULL
+6 1 NULL NULL NULL
+7 3 NULL NULL NULL
+7 4 NULL NULL -21826.4
+7 5 46 NULL 29906.8
+7 6 28 NULL NULL
+
+# ============================================================================
+# Demo 5: Complex aggregation functions in MEASURES (ONE ROW PER MATCH)
+# ----------------------------------------------------------------------------
+# Summarizes each match with symbol-qualified aggregates: COUNT(A.*),
+# COUNT(B.*), SUM(A.l_quantity), AVG(B.l_extendedprice), MIN/MAX. ONE ROW PER
+# MATCH returns one row per match; verify correct symbol filtering (A vs B).
+query IIIRRRR
+SELECT l_orderkey, a_count, b_count, sum_a_qty, avg_b_extprice, min_a_disc, max_b_tax
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        COUNT(A.*) AS a_count,
+        COUNT(B.*) AS b_count,
+        SUM(A.l_quantity) AS sum_a_qty,
+        AVG(B.l_extendedprice) AS avg_b_extprice,
+        MIN(A.l_discount) AS min_a_disc,
+        MAX(B.l_tax) AS max_b_tax
+    ONE ROW PER MATCH
+    PATTERN (A+ B+)
+    DEFINE
+        A AS l_quantity < 10,
+        B AS l_quantity >= 10
+)
+ORDER BY 1, 2, 3, 4
+----
+1 1 3 8 36475.133333 0.1 0.06
+3 1 2 2 31772.07 0.01 0.02
+7 1 4 9 51072.11 0.08 0.07
+32 2 1 6 65585.52 0.09 0.06
+33 1 1 5 53110.99 0.05 0
+35 1 3 7 42613.456666 0.06 0.06
+67 1 1 4 11064.24 0.09 0.05
+67 1 3 5 48669.483333 0.03 0.07
+68 1 6 3 50089.985 0.05 0.08
+69 1 2 3 43597.975 0.09 0.04
+70 1 1 8 19962.93 0.03 0.06
+70 1 3 1 34693.06 0.03 0.05
+71 1 4 3 52814.025 0.09 0.07
+98 1 2 1 17801.84 0 0.03
+99 1 2 5 59177.34 0.02 0.02
+103 1 3 6 44298.533333 0.03 0.07
+163 1 2 5 19150.4 0.02 0.07
+165 1 4 3 50261.43 0.01 0.06
+192 1 2 2 37843.375 0.06 0.05
+193 1 2 9 24755.295 0.06 0.07
+194 1 2 1 35524.08 0.04 0.08
+194 1 2 8 32358.81 0.04 0.03
+195 1 3 6 54028.36 0.04 0.08
+197 1 3 8 27528.856666 0.09 0.02
+
+# ============================================================================
+# Demo 6: Complex window functions in MEASURES (explicit frames)
+# ----------------------------------------------------------------------------
+# EXPLAIN window functions directly in MEASURES (LAG/LEAD/FIRST_VALUE/
+# LAST_VALUE) over the match sequence. Look for window lowering ordered by
+# `__mr_match_sequence_number` and the Aggregate above.
+query TT
+EXPLAIN
+SELECT l_orderkey, prev_qty, next_qty, first_ext, last_ext
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        LAG(l_quantity) AS prev_qty,
+        LEAD(l_quantity) AS next_qty,
+        FIRST_VALUE(l_extendedprice) AS first_ext,
+        LAST_VALUE(l_extendedprice) AS last_ext
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS l_quantity > 0
+)
+----
+logical_plan
+01)Projection: lineitem.l_orderkey, last_value(lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS prev_qty, last_value(lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS next_qty, first_value(lineitem.l_extendedprice) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS first_ext, last_value(lineitem.l_extendedprice) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS last_ext
+02)--Aggregate: groupBy=[[lineitem.l_orderkey, __mr_match_number]], aggr=[[last_value(lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], first_value(lineitem.l_extendedprice) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(lineitem.l_extendedprice) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----Projection: lineitem.l_orderkey, lineitem.l_extendedprice, __mr_match_number, __mr_match_sequence_number, lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------MatchRecognize: partition_by=[lineitem.l_orderkey] order_by=[lineitem.l_linenumber ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: lineitem.l_quantity > Decimal128(Some(0),15,2) AS lineitem.l_quantity > Int64(0)] output={passthrough_columns=[lineitem.l_orderkey,lineitem.l_quantity,lineitem.l_extendedprice], metadata=[__mr_match_number,__mr_match_sequence_number]}
+06)----------TableScan: lineitem projection=[l_orderkey, l_linenumber, l_quantity, l_extendedprice]
+physical_plan
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, last_value(lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@2 as prev_qty, last_value(lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@3 as next_qty, first_value(lineitem.l_extendedprice) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@4 as first_ext, last_value(lineitem.l_extendedprice) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@5 as last_ext]
+02)--AggregateExec: mode=SinglePartitioned, gby=[l_orderkey@0 as l_orderkey, __mr_match_number@2 as __mr_match_number], aggr=[last_value(lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], first_value(lineitem.l_extendedprice) ORDER BY [__mr_match_sequence_number ASC NULLS LAST], last_value(lineitem.l_extendedprice) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted
+03)----ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_extendedprice@2 as l_extendedprice, __mr_match_number@3 as __mr_match_number, __mr_match_sequence_number@4 as __mr_match_sequence_number, lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+04)------BoundedWindowAggExec: wdw=[lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lead(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [__mr_match_sequence_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+05)--------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, __mr_match_number@3 ASC NULLS LAST, __mr_match_sequence_number@4 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@3], 4), input_partitions=4
+08)--------------MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[l_orderkey,l_quantity,l_extendedprice], metadata=[__mr_match_number,__mr_match_sequence_number]}
+09)----------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+12)----------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@1 as l_linenumber, l_quantity@2 as l_quantity, l_extendedprice@3 as l_extendedprice, l_quantity@2 > Some(0),15,2 as __mr_symbol_a]
+13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/match_recognize/demo/data/lineitem.tbl]]}, projection=[l_orderkey, l_linenumber, l_quantity, l_extendedprice], file_type=csv, has_header=false
+
+# ============================================================================
+# Demo 7: ONE ROW PER MATCH vs non-trivial ALL ROWS PER MATCH
+# ----------------------------------------------------------------------------
+# Contrasts ONE ROW PER MATCH (per-match summary) with a non-trivial ALL ROWS
+# PER MATCH (per-row details). Observe row cardinality differences plus
+# CLASSIFIER() and MATCH_SEQUENCE_NUMBER() behavior.
+query IIII
+SELECT l_orderkey, match_no, seq, cnt
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        MATCH_NUMBER() AS match_no,
+        MATCH_SEQUENCE_NUMBER() AS seq,
+        COUNT(A.*) AS cnt
+    ONE ROW PER MATCH
+    PATTERN (A+ B+)
+    DEFINE
+        A AS l_quantity < 12,
+        B AS l_quantity >= 12
+)
+ORDER BY 1, 2
+----
+1 1 4 1
+3 1 3 1
+7 1 5 1
+32 1 3 2
+33 1 2 1
+35 1 4 1
+67 1 2 1
+67 2 4 1
+68 1 7 1
+69 1 3 1
+70 1 2 1
+70 2 4 2
+71 1 5 1
+98 1 2 1
+99 1 4 2
+103 1 4 1
+163 1 3 1
+165 1 5 1
+192 1 3 1
+193 1 3 1
+194 1 3 1
+194 2 3 1
+195 1 4 1
+197 1 4 1
+
+query IITII
+SELECT l_orderkey, l_linenumber, classifier, match_no, seq
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        CLASSIFIER() AS classifier,
+        MATCH_NUMBER() AS match_no,
+        MATCH_SEQUENCE_NUMBER() AS seq
+    ALL ROWS PER MATCH
+    PATTERN (A+ B+)
+    DEFINE
+        A AS l_quantity < 12,
+        B AS l_quantity >= 12
+)
+WHERE l_orderkey < 36
+ORDER BY 1, 2, 3, 4
+----
+1 3 A 1 1
+1 4 B 1 2
+1 5 B 1 3
+1 6 B 1 4
+3 4 A 1 1
+3 5 B 1 2
+3 6 B 1 3
+7 2 A 1 1
+7 3 B 1 2
+7 4 B 1 3
+7 5 B 1 4
+7 6 B 1 5
+32 3 A 1 1
+32 4 A 1 2
+32 5 B 1 3
+33 3 A 1 1
+33 4 B 1 2
+35 3 A 1 1
+35 4 B 1 2
+35 5 B 1 3
+35 6 B 1 4
+
+# ============================================================================
+# Demo 8: Complex AFTER MATCH SKIP semantics
+# ----------------------------------------------------------------------------
+# Compares SKIP strategies (PAST LAST ROW, TO NEXT ROW, TO FIRST A, TO LAST B)
+# on the same pattern. Observe how emitted match boundaries and counts vary
+# with the policy.
+query II
+SELECT l_orderkey, match_no
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_partkey, l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    ONE ROW PER MATCH
+    AFTER MATCH SKIP PAST LAST ROW
+    PATTERN (A+ B)
+    DEFINE
+        A AS l_quantity < 10,
+        B AS l_quantity >= 10
+)
+ORDER BY 1, 2
+----
+1 1
+3 1
+7 1
+7 2
+32 1
+35 1
+67 1
+67 2
+68 1
+69 1
+70 1
+71 1
+98 1
+99 1
+129 1
+165 1
+166 1
+193 1
+194 1
+195 1
+197 1
+
+query II
+SELECT l_orderkey, match_no
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_partkey, l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    ONE ROW PER MATCH
+    AFTER MATCH SKIP TO NEXT ROW
+    PATTERN (A+ B)
+    DEFINE
+        A AS l_quantity < 10,
+        B AS l_quantity >= 10
+)
+ORDER BY 1, 2
+----
+1 1
+3 1
+7 1
+7 2
+32 1
+32 2
+32 3
+35 1
+67 1
+67 2
+68 1
+69 1
+70 1
+70 2
+71 1
+98 1
+99 1
+129 1
+165 1
+166 1
+193 1
+194 1
+195 1
+197 1
+
+query II
+SELECT l_orderkey, match_no
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_partkey, l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    ONE ROW PER MATCH
+    AFTER MATCH SKIP TO FIRST A
+    PATTERN (A+ B)
+    DEFINE
+        A AS l_quantity < 10,
+        B AS l_quantity >= 10
+)
+ORDER BY 1, 2
+----
+1 1
+3 1
+7 1
+7 2
+32 1
+32 2
+32 3
+35 1
+67 1
+67 2
+68 1
+69 1
+70 1
+70 2
+71 1
+98 1
+99 1
+129 1
+165 1
+166 1
+193 1
+194 1
+195 1
+197 1
+
+query II
+SELECT l_orderkey, match_no
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_partkey, l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    ONE ROW PER MATCH
+    AFTER MATCH SKIP TO LAST B
+    PATTERN (A+ B)
+    DEFINE
+        A AS l_quantity < 10,
+        B AS l_quantity >= 10
+)
+ORDER BY 1, 2
+----
+1 1
+3 1
+7 1
+7 2
+32 1
+35 1
+67 1
+67 2
+68 1
+69 1
+70 1
+71 1
+98 1
+99 1
+129 1
+165 1
+166 1
+193 1
+194 1
+195 1
+197 1
+
+# ============================================================================
+# Demo 9: Alternation-focused pattern with quantifiers and anchors
+# ----------------------------------------------------------------------------
+# EXPLAIN an alternation-heavy pattern with nested quantifiers and anchors,
+# plus an exclusion block. Inspect the MatchRecognize pattern string, branching
+# due to alternation, and predicate rewrites.
+query TT
+EXPLAIN
+SELECT *
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    PATTERN (^ ((A{2,} B?) | (C+ ({- D -}) E{3})) $)
+    DEFINE
+        A AS l_quantity > 15,
+        B AS l_discount < 0.05,
+        C AS l_extendedprice > 1000,
+        D AS l_tax >= 0.05,
+        E AS l_quantity BETWEEN 5 AND 12
+)
+----
+logical_plan
+01)Projection: lineitem.l_orderkey, last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST] AS match_no
+02)--Aggregate: groupBy=[[lineitem.l_orderkey, __mr_match_number]], aggr=[[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]]]
+03)----MatchRecognize: partition_by=[lineitem.l_orderkey] order_by=[lineitem.l_linenumber ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[^ ((A{2,} B?)|(C+ ({- D -}) E{3})) $] symbols=[A,B,C,D,E] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: lineitem.l_quantity > Decimal128(Some(1500),15,2) AS lineitem.l_quantity > Int64(15), B: lineitem.l_discount < Decimal128(Some(5),15,2) AS lineitem.l_discount < Float64(0.05), C: lineitem.l_extendedprice > Decimal128(Some(100000),15,2) AS lineitem.l_extendedprice > Int64(1000), D: lineitem.l_tax >= Decimal128(Some(5),15,2) AS lineitem.l_tax >= Float64(0.05), E: lineitem.l_quantity >= Decimal128(Some(500),15,2) AND lineitem.l_quantity <= Decimal128(Some(1200),15,2) AS lineitem.l_quantity BETWEEN Int64(5) AND Int64(12)] output={passthrough_columns=[lineitem.l_orderkey], metadata=[__mr_match_number,__mr_match_sequence_number]}
+04)------TableScan: lineitem projection=[l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax]
+physical_plan
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]@2 as match_no]
+02)--AggregateExec: mode=FinalPartitioned, gby=[l_orderkey@0 as l_orderkey, __mr_match_number@1 as __mr_match_number], aggr=[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=PartiallySorted([1])
+03)----SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@1], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[l_orderkey@0 as l_orderkey, __mr_match_number@1 as __mr_match_number], aggr=[last_value(__mr_match_number) ORDER BY [__mr_match_sequence_number ASC NULLS LAST]], ordering_mode=Sorted
+07)------------MatchRecognizePatternExec: pattern=[^ ((A{2,} B?)|(C+ ({- D -}) E{3})) $] output={passthrough_columns=[l_orderkey], metadata=[__mr_match_number,__mr_match_sequence_number]}
+08)--------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true]
+09)----------------CoalesceBatchesExec: target_batch_size=8192
+10)------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+11)--------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@1 as l_linenumber, l_quantity@2 as l_quantity, l_extendedprice@3 as l_extendedprice, l_discount@4 as l_discount, l_tax@5 as l_tax, l_quantity@2 > Some(1500),15,2 as __mr_symbol_a, l_discount@4 < Some(5),15,2 as __mr_symbol_b, l_extendedprice@3 > Some(100000),15,2 as __mr_symbol_c, l_tax@5 >= Some(5),15,2 as __mr_symbol_d, l_quantity@2 >= Some(500),15,2 AND l_quantity@2 <= Some(1200),15,2 as __mr_symbol_e]
+12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/match_recognize/demo/data/lineitem.tbl]]}, projection=[l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax], file_type=csv, has_header=false
+
+# ============================================================================
+# Demo 10: End-to-end pattern with PERMUTE + exclusion + aggregation + navigation
+# ----------------------------------------------------------------------------
+# Combines PERMUTE(A,B,C), an exclusion block on X, symbol-qualified
+# aggregates, and PREV/NEXT navigation. ONE ROW PER MATCH yields a concise
+# per-match summary; verify symbol filtering and navigation defaults.
+query IIRRRR
+SELECT l_orderkey, a_count, sum_a_qty, avg_b_extprice, prev_a_qty_1_default_0, next_c_disc_1_default_0
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        COUNT(A.*) AS a_count,
+        SUM(A.l_quantity) AS sum_a_qty,
+        AVG(B.l_extendedprice) AS avg_b_extprice,
+        PREV(A.l_quantity, 1, 0) AS prev_a_qty_1_default_0,
+        NEXT(C.l_discount, 1, 0) AS next_c_disc_1_default_0
+    ONE ROW PER MATCH
+    PATTERN (PERMUTE(A,B,C) ({- X -}*))
+    DEFINE
+        A AS l_quantity > 20,
+        B AS l_extendedprice > 1500,
+        C AS l_discount >= 0.03,
+        X AS l_tax < 0.02
+)
+WHERE l_orderkey < 70
+ORDER BY 1, 2, 3
+----
+1 1 28 31329.6 0 0
+1 1 36 24386.67 17 0
+3 1 28 3681.86 2 0
+3 1 45 88489.1 0 0
+5 1 26 26517.75 15 0
+7 1 28 41997.22 0 0
+7 1 46 13490.4 9 0.1
+32 1 28 54809.28 0 0
+32 1 44 4701.08 4 0
+33 1 31 30657.6 0 0.09
+35 1 24 37746.46 0 0
+35 1 25 64735.66 0 0
+37 1 40 62075.13 0 0
+39 1 32 58370.35 0 0
+39 1 44 41018.9 0 0
+65 1 26 28366.36 0 0
+67 1 44 11064.24 5 0.08
+68 1 27 35017.5 0 NULL
+68 1 46 4823.1 3 NULL
+69 1 42 4964.25 3 NULL
+69 1 48 42509.12 0 NULL
+
+# ============================================================================
+# Demo 11: ALL ROWS PER MATCH modes
+# ----------------------------------------------------------------------------
+# Shows SHOW EMPTY MATCHES, OMIT EMPTY MATCHES, and WITH UNMATCHED ROWS using
+# a pattern `(A* B?)` over quantity bands. Expect both non-empty matches (A/B)
+# and empties; compare row presence and CLASSIFIER()/MATCH_SEQUENCE_NUMBER().
+query IITI
+SELECT l_orderkey, l_linenumber, classifier, seq
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        CLASSIFIER() AS classifier,
+        MATCH_SEQUENCE_NUMBER() AS seq
+    ALL ROWS PER MATCH OMIT EMPTY MATCHES
+    PATTERN (A* B?)
+    DEFINE
+        A AS l_quantity < 12,
+        B AS l_quantity BETWEEN 12 AND 14
+)
+WHERE l_orderkey < 70
+ORDER BY 1, 2, 3, 4
+----
+1 3 A 1
+3 4 A 1
+7 1 B 1
+7 2 A 1
+7 7 A 1
+32 3 A 1
+32 4 A 2
+32 6 A 1
+33 3 A 1
+34 1 B 1
+34 3 A 1
+35 3 A 1
+67 1 A 1
+67 2 B 2
+67 3 A 1
+68 1 A 1
+69 4 A 1
+
+query IITI
+SELECT l_orderkey, l_linenumber, classifier, seq
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        CLASSIFIER() AS classifier,
+        MATCH_SEQUENCE_NUMBER() AS seq
+    ALL ROWS PER MATCH SHOW EMPTY MATCHES
+    PATTERN (A* B?)
+    DEFINE
+        A AS l_quantity < 12,
+        B AS l_quantity BETWEEN 12 AND 14
+)
+WHERE l_orderkey < 7
+ORDER BY 1, 2, 3, 4
+----
+1 1 NULL 1
+1 2 NULL 1
+1 3 A 1
+1 4 NULL 1
+1 5 NULL 1
+1 6 NULL 1
+2 1 NULL 1
+3 1 NULL 1
+3 2 NULL 1
+3 3 NULL 1
+3 4 A 1
+3 5 NULL 1
+3 6 NULL 1
+4 1 NULL 1
+4 1 NULL 1
+5 1 NULL 1
+5 1 NULL 1
+5 2 NULL 1
+5 3 NULL 1
+6 1 NULL 1
+6 1 NULL 1
+
+query IITI
+SELECT l_orderkey, l_linenumber, classifier, seq
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+        CLASSIFIER() AS classifier,
+        MATCH_SEQUENCE_NUMBER() AS seq
+    ALL ROWS PER MATCH WITH UNMATCHED ROWS
+    PATTERN (A* B?)
+    DEFINE
+        A AS l_quantity < 12,
+        B AS l_quantity BETWEEN 12 AND 14
+)
+WHERE l_orderkey < 4
+ORDER BY 1, 2, 3, 4
+----
+1 1 NULL 1
+1 2 NULL 1
+1 3 A 1
+1 4 NULL 1
+1 5 NULL 1
+1 6 NULL 1
+2 1 NULL 1
+3 1 NULL 1
+3 2 NULL 1
+3 3 NULL 1
+3 4 A 1
+3 5 NULL 1
+3 6 NULL 1
+
+# ============================================================================
+# Cleanup: Drop the lineitem table
+# ----------------------------------------------------------------------------
+# Drop the lineitem table after the demo.
+statement ok
+DROP TABLE lineitem;
