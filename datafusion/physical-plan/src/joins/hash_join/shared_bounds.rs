@@ -19,6 +19,8 @@
 // TODO: include the link to the Dynamic Filter blog post.
 
 use std::fmt;
+use std::future::Future;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use crate::joins::PartitionMode;
@@ -30,6 +32,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
+use futures::task::AtomicWaker;
 use itertools::Itertools;
 use parking_lot::Mutex;
 
@@ -119,7 +122,9 @@ struct SharedBoundsState {
     /// Each element represents the column bounds computed by one partition.
     bounds: Vec<PartitionBounds>,
     /// Number of partitions that have reported completion.
-    completed_partitions: usize,
+    completed_partitions: Arc<AtomicUsize>,
+    /// Cached wakers to wake when all partitions are complete
+    wakers: Vec<Arc<AtomicWaker>>,
 }
 
 impl SharedBoundsAccumulator {
@@ -170,7 +175,8 @@ impl SharedBoundsAccumulator {
         Self {
             inner: Mutex::new(SharedBoundsState {
                 bounds: Vec::with_capacity(expected_calls),
-                completed_partitions: 0,
+                completed_partitions: Arc::new(AtomicUsize::new(0)),
+                wakers: Vec::new(),
             }),
             total_partitions: expected_calls,
             dynamic_filter,
@@ -253,44 +259,119 @@ impl SharedBoundsAccumulator {
     /// bounds from the current partition, increments the completion counter, and when all
     /// partitions have reported, creates an OR'd filter from individual partition bounds.
     ///
+    /// It returns a [`BoundsWaiter`] future that can be awaited to ensure the filter has been
+    /// updated before proceeding. This is important to delay probe-side scans until the filter
+    /// is ready.
+    ///
     /// # Arguments
+    /// * `partition` - The partition identifier reporting its bounds
     /// * `partition_bounds` - The bounds computed by this partition (if any)
     ///
     /// # Returns
-    /// * `Result<()>` - Ok if successful, Err if filter update failed
+    /// * `Result<Option<BoundsWaiter>>` - Ok if successful, Err if filter update failed
     pub(crate) fn report_partition_bounds(
         &self,
         partition: usize,
         partition_bounds: Option<Vec<ColumnBounds>>,
-    ) -> Result<()> {
-        let mut inner = self.inner.lock();
+    ) -> Result<Option<BoundsWaiter>> {
+        // Scope for lock to avoid holding it across await points
+        let maybe_waiter = {
+            let mut inner = self.inner.lock();
 
-        // Store bounds in the accumulator - this runs once per partition
-        if let Some(bounds) = partition_bounds {
-            // Only push actual bounds if they exist
-            inner.bounds.push(PartitionBounds::new(partition, bounds));
-        }
+            // Store bounds in the accumulator - this runs once per partition
+            if let Some(bounds) = partition_bounds {
+                // Only push actual bounds if they exist
+                inner.bounds.push(PartitionBounds::new(partition, bounds));
+            }
 
-        // Increment the completion counter
-        // Even empty partitions must report to ensure proper termination
-        inner.completed_partitions += 1;
-        let completed = inner.completed_partitions;
-        let total_partitions = self.total_partitions;
+            // Increment the completion counter
+            // Even empty partitions must report to ensure proper termination
+            inner
+                .completed_partitions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let completed = inner
+                .completed_partitions
+                .load(std::sync::atomic::Ordering::SeqCst);
+            let total_partitions = self.total_partitions;
 
-        // Critical synchronization point: Only update the filter when ALL partitions are complete
-        // Troubleshooting: If you see "completed > total_partitions", check partition
-        // count calculation in new_from_partition_mode() - it may not match actual execution calls
-        if completed == total_partitions && !inner.bounds.is_empty() {
-            let filter_expr = self.create_filter_from_partition_bounds(&inner.bounds)?;
-            self.dynamic_filter.update(filter_expr)?;
-        }
+            // Critical synchronization point: Only update the filter when ALL partitions are complete
+            // Troubleshooting: If you see "completed > total_partitions", check partition
+            // count calculation in new_from_partition_mode() - it may not match actual execution calls
+            if completed == total_partitions {
+                if !inner.bounds.is_empty() {
+                    let filter_expr =
+                        self.create_filter_from_partition_bounds(&inner.bounds)?;
+                    self.dynamic_filter.update(filter_expr)?;
+                }
 
-        Ok(())
+                // Notify any waiters that the filter is ready
+                for waker in inner.wakers.drain(..) {
+                    waker.wake();
+                }
+
+                None
+            } else {
+                let waker = Arc::new(AtomicWaker::new());
+                inner.wakers.push(Arc::clone(&waker));
+                Some(BoundsWaiter::new(
+                    total_partitions,
+                    Arc::clone(&inner.completed_partitions),
+                    waker,
+                ))
+            }
+        };
+
+        Ok(maybe_waiter)
     }
 }
 
 impl fmt::Debug for SharedBoundsAccumulator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SharedBoundsAccumulator")
+    }
+}
+
+/// Utility future to wait until all partitions have reported completion
+/// and the dynamic filter has been updated.
+#[derive(Clone)]
+pub(crate) struct BoundsWaiter {
+    waker: Arc<AtomicWaker>,
+    total: usize,
+    completed: Arc<AtomicUsize>,
+}
+
+impl BoundsWaiter {
+    pub fn new(
+        total: usize,
+        completed: Arc<AtomicUsize>,
+        waker: Arc<AtomicWaker>,
+    ) -> Self {
+        Self {
+            waker,
+            total,
+            completed,
+        }
+    }
+}
+
+impl Future for BoundsWaiter {
+    type Output = ();
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // Quick check to avoid registration if already complete
+        if self.completed.load(std::sync::atomic::Ordering::Relaxed) >= self.total {
+            return std::task::Poll::Ready(());
+        }
+
+        self.waker.register(cx.waker());
+
+        if self.completed.load(std::sync::atomic::Ordering::Relaxed) >= self.total {
+            std::task::Poll::Ready(())
+        } else {
+            std::task::Poll::Pending
+        }
     }
 }
