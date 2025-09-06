@@ -662,6 +662,11 @@ impl DefaultPhysicalPlanner {
                     )?)
                 }
             }
+            LogicalPlan::MatchRecognize(_) => {
+                return not_impl_err!(
+                    "Physical plan does not support DistributeBy partitioning"
+                );
+            }
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 group_expr,

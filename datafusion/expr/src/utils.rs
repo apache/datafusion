@@ -35,7 +35,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap,
-    Result, TableReference,
+    Result, ScalarValue, TableReference,
 };
 
 use indexmap::IndexSet;
@@ -621,6 +621,32 @@ pub fn find_out_reference_exprs(expr: &Expr) -> Vec<Expr> {
     find_exprs_in_expr(expr, &|nested_expr| {
         matches!(nested_expr, Expr::OuterReferenceColumn { .. })
     })
+}
+
+/// Collect all symbol names referenced via the internal `mr_symbol(value, 'SYM')` wrapper.
+/// Returned in order of occurrence (depth first) with duplicates omitted.
+/// Used exclusively in a MATCH_RECOGNIZE context.
+pub fn find_symbol_predicates(expr: &Expr) -> Vec<String> {
+    let nodes = find_exprs_in_expr(
+        expr,
+        &|e| matches!(e, Expr::ScalarFunction(f) if f.name() == "mr_symbol"),
+    );
+
+    let mut seen = HashSet::new();
+    let mut symbols = Vec::new();
+
+    for e in nodes {
+        if let Expr::ScalarFunction(f) = e {
+            if let Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) = f.args.get(1) {
+                let sym = s.to_uppercase();
+                if seen.insert(sym.clone()) {
+                    symbols.push(sym);
+                }
+            }
+        }
+    }
+
+    symbols
 }
 
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that

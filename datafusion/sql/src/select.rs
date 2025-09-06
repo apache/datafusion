@@ -745,17 +745,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
-                let object_name = match object_name {
+                let qualifier = match object_name {
                     SelectItemQualifiedWildcardKind::ObjectName(object_name) => {
-                        object_name
+                        self.object_name_to_table_reference(object_name)?
                     }
-                    SelectItemQualifiedWildcardKind::Expr(_) => {
+                    _ => {
                         return plan_err!(
-                            "Qualified wildcard with expression not supported"
-                        )
+                            "Only simple object names are supported in qualified wildcards"
+                        );
                     }
                 };
-                let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
                     empty_from,

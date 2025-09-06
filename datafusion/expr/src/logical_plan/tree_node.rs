@@ -40,16 +40,17 @@
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
     Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
-    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    Limit, LogicalPlan, MatchRecognize, Partitioning, Prepare, Projection,
+    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan,
+    Union, Unnest, UserDefinedLogicalNode, Values, Window,
 };
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
 use crate::expr::{Exists, InSubquery};
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion,
-    TreeNodeRewriter, TreeNodeVisitor,
+    TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion, TreeNodeRewriter,
+    TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, Result};
 
@@ -345,6 +346,31 @@ impl TreeNode for LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::MatchRecognize(MatchRecognize {
+                input,
+                schema,
+                partition_by,
+                order_by,
+                after_skip,
+                rows_per_match,
+                pattern,
+                symbols,
+                defines,
+                output_spec,
+            }) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::MatchRecognize(MatchRecognize {
+                    input,
+                    schema,
+                    partition_by,
+                    order_by,
+                    after_skip,
+                    rows_per_match,
+                    pattern,
+                    symbols,
+                    defines,
+                    output_spec,
+                })
+            }),
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -461,6 +487,24 @@ impl LogicalPlan {
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             },
+            LogicalPlan::MatchRecognize(MatchRecognize {
+                partition_by,
+                order_by,
+                defines,
+                ..
+            }) => {
+                partition_by.apply_elements(&mut f)?;
+                order_by.apply_elements(&mut f)?;
+
+                // Visit DEFINE expressions
+                defines
+                    .iter()
+                    .map(|(e, _)| e.clone())
+                    .collect::<Vec<_>>()
+                    .apply_elements(&mut f)?;
+
+                Ok(TreeNodeRecursion::Continue)
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
@@ -640,6 +684,56 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::MatchRecognize(MatchRecognize {
+                input,
+                partition_by,
+                order_by,
+                schema,
+                after_skip,
+                rows_per_match,
+                pattern,
+                symbols,
+                defines,
+                output_spec,
+            }) => {
+                // map partition_by and order_by
+                let transformed_po = (partition_by, order_by).map_elements(&mut f)?;
+                let (partition_by, order_by) = transformed_po.data;
+
+                // map define and measures expressions individually to preserve aliases
+                let defs_exprs_old: Vec<Expr> =
+                    defines.iter().map(|(e, _)| e.clone()).collect();
+                let defs_transformed = defs_exprs_old.map_elements(&mut f)?;
+                let defs_exprs = defs_transformed.data;
+                let defines_new: Vec<(Expr, String)> = defines
+                    .iter()
+                    .zip(defs_exprs)
+                    .map(|((_, name), e)| (e, name.clone()))
+                    .collect();
+
+                Transformed::new(
+                    LogicalPlan::MatchRecognize(MatchRecognize {
+                        input,
+                        partition_by,
+                        order_by,
+                        schema,
+                        after_skip,
+                        rows_per_match,
+                        pattern,
+                        symbols,
+                        defines: defines_new,
+                        output_spec,
+                    }),
+                    transformed_po.transformed || defs_transformed.transformed,
+                    // Conservatively propagate Stop if any child requested it
+                    match (transformed_po.tnr, defs_transformed.tnr) {
+                        (TreeNodeRecursion::Stop, _) | (_, TreeNodeRecursion::Stop) => {
+                            TreeNodeRecursion::Stop
+                        }
+                        _ => TreeNodeRecursion::Continue,
+                    },
+                )
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)
@@ -866,5 +960,22 @@ impl LogicalPlan {
                 _ => Ok(Transformed::no(expr)),
             })
         })
+    }
+}
+
+impl<'a> TreeNodeContainer<'a, Expr> for (Expr, String) {
+    fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        f(&self.0)
+    }
+
+    fn map_elements<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        let t = f(self.0)?;
+        Ok(Transformed::new((t.data, self.1), t.transformed, t.tnr))
     }
 }
