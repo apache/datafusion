@@ -15,12 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    fmt::Display,
-    hash::Hash,
-    sync::{Arc, RwLock},
-};
+use parking_lot::RwLock;
+use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
 
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
@@ -71,6 +67,11 @@ impl Inner {
             generation: 1,
             expr,
         }
+    }
+
+    /// Clone the inner expression.
+    fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
     }
 }
 
@@ -176,20 +177,8 @@ impl DynamicFilterPhysicalExpr {
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let inner = Arc::clone(
-            &self
-                .inner
-                .read()
-                .map_err(|_| {
-                    datafusion_common::DataFusionError::Execution(
-                        "Failed to acquire read lock for inner".to_string(),
-                    )
-                })?
-                .expr,
-        );
-        let inner =
-            Self::remap_children(&self.children, self.remapped_children.as_ref(), inner)?;
-        Ok(inner)
+        let expr = Arc::clone(self.inner.read().expr());
+        Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
     }
 
     /// Update the current expression.
@@ -199,11 +188,6 @@ impl DynamicFilterPhysicalExpr {
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
     pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let mut current = self.inner.write().map_err(|_| {
-            datafusion_common::DataFusionError::Execution(
-                "Failed to acquire write lock for inner".to_string(),
-            )
-        })?;
         // Remap the children of the new expression to match the original children
         // We still do this again in `current()` but doing it preventively here
         // reduces the work needed in some cases if `current()` is called multiple times
@@ -213,10 +197,13 @@ impl DynamicFilterPhysicalExpr {
             self.remapped_children.as_ref(),
             new_expr,
         )?;
-        // Update the inner expression to the new expression.
-        current.expr = new_expr;
-        // Increment the generation to indicate that the expression has changed.
-        current.generation += 1;
+
+        // Load the current inner, increment generation, and store the new one
+        let mut current = self.inner.write();
+        *current = Inner {
+            generation: current.generation + 1,
+            expr: new_expr,
+        };
         Ok(())
     }
 }
@@ -253,10 +240,8 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         {
             use datafusion_common::internal_err;
             // Check if the data type has changed.
-            let mut data_type_lock = self
-                .data_type
-                .write()
-                .expect("Failed to acquire write lock for data_type");
+            let mut data_type_lock = self.data_type.write();
+
             if let Some(existing) = &*data_type_lock {
                 if existing != &res {
                     // If the data type has changed, we have a bug.
@@ -278,10 +263,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         {
             use datafusion_common::internal_err;
             // Check if the nullability has changed.
-            let mut nullable_lock = self
-                .nullable
-                .write()
-                .expect("Failed to acquire write lock for nullable");
+            let mut nullable_lock = self.nullable.write();
             if let Some(existing) = *nullable_lock {
                 if existing != res {
                     // If the nullability has changed, we have a bug.
@@ -324,10 +306,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
     fn snapshot_generation(&self) -> u64 {
         // Return the current generation of the expression.
-        self.inner
-            .read()
-            .expect("Failed to acquire read lock for inner")
-            .generation
+        self.inner.read().generation
     }
 }
 

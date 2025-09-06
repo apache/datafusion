@@ -751,6 +751,9 @@ pub use object_store;
 #[cfg(feature = "parquet")]
 pub use parquet;
 
+#[cfg(feature = "avro")]
+pub use datafusion_datasource_avro::apache_avro;
+
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
 // for details, see https://github.com/apache/datafusion/issues/6648
@@ -803,6 +806,11 @@ pub mod physical_expr_common {
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr {
     pub use datafusion_physical_expr::*;
+}
+
+/// re-export of [`datafusion_physical_expr_adapter`] crate
+pub mod physical_expr_adapter {
+    pub use datafusion_physical_expr_adapter::*;
 }
 
 /// re-export of [`datafusion_physical_plan`] crate

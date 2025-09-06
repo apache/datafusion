@@ -20,11 +20,11 @@
 use crate::{FileRange, PartitionedFile};
 use datafusion_common::Statistics;
 use itertools::Itertools;
-use std::cmp::min;
+use std::cmp::{min, Ordering};
 use std::collections::BinaryHeap;
 use std::iter::repeat_with;
 use std::mem;
-use std::ops::{Index, IndexMut};
+use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 
 /// Repartition input files into `target_partitions` partitions, if total file size exceed
@@ -304,6 +304,7 @@ impl FileGroupPartitioner {
                     None
                 }
             })
+            .map(CompareByRangeSize)
             .collect();
 
         // No files can be redistributed
@@ -337,7 +338,7 @@ impl FileGroupPartitioner {
                 source_index,
                 file_size,
                 new_groups,
-            } = to_repartition;
+            } = to_repartition.into_inner();
             assert_eq!(file_groups[source_index].len(), 1);
             let original_file = file_groups[source_index].pop().unwrap();
 
@@ -503,7 +504,7 @@ impl Default for FileGroup {
 }
 
 /// Tracks how a individual file will be repartitioned
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ToRepartition {
     /// the index from which the original file will be taken
     source_index: usize,
@@ -520,16 +521,38 @@ impl ToRepartition {
     }
 }
 
-impl PartialOrd for ToRepartition {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+struct CompareByRangeSize(ToRepartition);
+impl CompareByRangeSize {
+    fn into_inner(self) -> ToRepartition {
+        self.0
+    }
+}
+impl Ord for CompareByRangeSize {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.range_size().cmp(&other.0.range_size())
+    }
+}
+impl PartialOrd for CompareByRangeSize {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
-/// Order based on individual range
-impl Ord for ToRepartition {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.range_size().cmp(&other.range_size())
+impl PartialEq for CompareByRangeSize {
+    fn eq(&self, other: &Self) -> bool {
+        // PartialEq must be consistent with PartialOrd
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for CompareByRangeSize {}
+impl Deref for CompareByRangeSize {
+    type Target = ToRepartition;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for CompareByRangeSize {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

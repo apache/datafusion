@@ -207,7 +207,7 @@ CREATE EXTERNAL TABLE test (
     c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH ORDER (c2 ASC, c5 + c8 DESC NULL FIRST)
+WITH ORDER (c2 ASC, c5 + c8 DESC NULLS FIRST)
 LOCATION '/path/to/aggregate_test_100.csv'
 OPTIONS ('has_header' 'true');
 ```

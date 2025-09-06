@@ -103,20 +103,6 @@ pub struct Centroid {
     weight: f64,
 }
 
-impl PartialOrd for Centroid {
-    fn partial_cmp(&self, other: &Centroid) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for Centroid {}
-
-impl Ord for Centroid {
-    fn cmp(&self, other: &Centroid) -> Ordering {
-        self.mean.total_cmp(&other.mean)
-    }
-}
-
 impl Centroid {
     pub fn new(mean: f64, weight: f64) -> Self {
         Centroid { mean, weight }
@@ -138,6 +124,10 @@ impl Centroid {
         self.weight = new_weight;
         self.mean = new_sum / new_weight;
         new_sum
+    }
+
+    pub fn cmp_mean(&self, other: &Self) -> Ordering {
+        self.mean.total_cmp(&other.mean)
     }
 }
 
@@ -331,7 +321,7 @@ impl TDigest {
         result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr);
         compressed.shrink_to_fit();
-        compressed.sort();
+        compressed.sort_by(|a, b| a.cmp_mean(b));
 
         result.centroids = compressed;
         result
@@ -349,7 +339,7 @@ impl TDigest {
         let mut j = middle;
 
         while i < middle && j < last {
-            match centroids[i].cmp(&centroids[j]) {
+            match centroids[i].cmp_mean(&centroids[j]) {
                 Ordering::Less => {
                     result.push(centroids[i].clone());
                     i += 1;
@@ -466,7 +456,7 @@ impl TDigest {
         result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr.clone());
         compressed.shrink_to_fit();
-        compressed.sort();
+        compressed.sort_by(|a, b| a.cmp_mean(b));
 
         result.count = count;
         result.min = min;
