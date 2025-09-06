@@ -19,6 +19,7 @@
 
 pub mod ast;
 mod expr;
+mod match_recognize;
 mod plan;
 mod rewrite;
 mod utils;

@@ -40,9 +40,9 @@
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
     Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
-    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    Limit, LogicalPlan, MatchRecognize, Partitioning, Prepare, Projection,
+    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan,
+    Union, Unnest, UserDefinedLogicalNode, Values, Window,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -345,6 +345,31 @@ impl TreeNode for LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::MatchRecognize(MatchRecognize {
+                input,
+                schema,
+                partition_by,
+                order_by,
+                after_skip,
+                rows_per_match,
+                pattern,
+                symbols,
+                defines,
+                output_spec,
+            }) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::MatchRecognize(MatchRecognize {
+                    input,
+                    schema,
+                    partition_by,
+                    order_by,
+                    after_skip,
+                    rows_per_match,
+                    pattern,
+                    symbols,
+                    defines,
+                    output_spec,
+                })
+            }),
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -461,6 +486,16 @@ impl LogicalPlan {
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             },
+            LogicalPlan::MatchRecognize(MatchRecognize {
+                partition_by,
+                order_by,
+                defines,
+                ..
+            }) => {
+                (partition_by, order_by, defines).apply_ref_elements(&mut f)?;
+
+                Ok(TreeNodeRecursion::Continue)
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
@@ -640,6 +675,33 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::MatchRecognize(MatchRecognize {
+                input,
+                partition_by,
+                order_by,
+                schema,
+                after_skip,
+                rows_per_match,
+                pattern,
+                symbols,
+                defines,
+                output_spec,
+            }) => (partition_by, order_by, defines)
+                .map_elements(f)?
+                .update_data(|(partition_by, order_by, defines)| {
+                    LogicalPlan::MatchRecognize(MatchRecognize {
+                        input,
+                        partition_by,
+                        order_by,
+                        schema,
+                        after_skip,
+                        rows_per_match,
+                        pattern,
+                        symbols,
+                        defines,
+                        output_spec,
+                    })
+                }),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)

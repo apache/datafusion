@@ -17,6 +17,10 @@
 
 //! [`OptimizeProjections`] identifies and eliminates unused columns
 
+#[cfg(test)]
+#[macro_use]
+mod test_utils;
+mod match_recognize;
 mod required_indices;
 
 use crate::optimizer::ApplyOrder;
@@ -252,6 +256,13 @@ fn optimize_projections(
                 }
             });
         }
+        LogicalPlan::MatchRecognize(match_recognize) => {
+            return match_recognize::rewrite_match_recognize(
+                match_recognize,
+                indices,
+                config,
+            );
+        }
         LogicalPlan::TableScan(table_scan) => {
             let TableScan {
                 table_name,
@@ -404,7 +415,8 @@ fn optimize_projections(
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
         | LogicalPlan::Window(_)
-        | LogicalPlan::TableScan(_) => {
+        | LogicalPlan::TableScan(_)
+        | LogicalPlan::MatchRecognize(_) => {
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"
             );
@@ -963,28 +975,10 @@ mod tests {
         not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
         Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
     };
-    use insta::assert_snapshot;
-
-    use crate::assert_optimized_plan_eq_snapshot;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, max, min};
     use datafusion_functions_aggregate::min_max::max_udaf;
-
-    macro_rules! assert_optimized_plan_equal {
-        (
-            $plan:expr,
-            @ $expected:literal $(,)?
-        ) => {{
-            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
-            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(OptimizeProjections::new())];
-            assert_optimized_plan_eq_snapshot!(
-                optimizer_ctx,
-                rules,
-                $plan,
-                @ $expected,
-            )
-        }};
-    }
+    use insta::assert_snapshot;
 
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct NoOpUserDefined {

@@ -17,12 +17,14 @@
 
 //! `lead` and `lag` window function implementations
 
-use crate::utils::{get_scalar_value_from_args, get_signed_integer};
+use crate::utils::{
+    get_scalar_value_from_args, get_signed_integer, shift_with_default_value,
+};
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
     Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
@@ -442,38 +444,6 @@ fn evaluate_all_with_ignore_null(
 
     let new_array = new_array_results?;
     ScalarValue::iter_to_array(new_array)
-}
-// TODO: change the original arrow::compute::kernels::window::shift impl to support an optional default value
-fn shift_with_default_value(
-    array: &ArrayRef,
-    offset: i64,
-    default_value: &ScalarValue,
-) -> Result<ArrayRef> {
-    use datafusion_common::arrow::compute::concat;
-
-    let value_len = array.len() as i64;
-    if offset == 0 {
-        Ok(Arc::clone(array))
-    } else if offset == i64::MIN || offset.abs() >= value_len {
-        default_value.to_array_of_size(value_len as usize)
-    } else {
-        let slice_offset = (-offset).clamp(0, value_len) as usize;
-        let length = array.len() - offset.unsigned_abs() as usize;
-        let slice = array.slice(slice_offset, length);
-
-        // Generate array with remaining `null` items
-        let nulls = offset.unsigned_abs() as usize;
-        let default_values = default_value.to_array_of_size(nulls)?;
-
-        // Concatenate both arrays, add nulls after if shift > 0 else before
-        if offset > 0 {
-            concat(&[default_values.as_ref(), slice.as_ref()])
-                .map_err(|e| arrow_datafusion_err!(e))
-        } else {
-            concat(&[slice.as_ref(), default_values.as_ref()])
-                .map_err(|e| arrow_datafusion_err!(e))
-        }
-    }
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {

@@ -851,6 +851,11 @@ pub mod functions_window {
     pub use datafusion_functions_window::*;
 }
 
+/// re-export of [`datafusion_functions_match_recognize`] crate
+pub mod functions_match_recognize {
+    pub use datafusion_functions_match_recognize::*;
+}
+
 /// re-export of [`datafusion_functions_table`] crate
 pub mod functions_table {
     pub use datafusion_functions_table::*;

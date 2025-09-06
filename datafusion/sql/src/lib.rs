@@ -43,6 +43,7 @@
 
 mod cte;
 mod expr;
+pub mod match_recognize;
 pub mod parser;
 pub mod planner;
 mod query;

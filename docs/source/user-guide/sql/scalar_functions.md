@@ -4947,7 +4947,10 @@ union_tag(union_expression)
 
 - [arrow_cast](#arrow_cast)
 - [arrow_typeof](#arrow_typeof)
+- [classifier](#classifier)
 - [get_field](#get_field)
+- [match_number](#match_number)
+- [match_sequence_number](#match_sequence_number)
 - [version](#version)
 
 ### `arrow_cast`
@@ -5001,6 +5004,14 @@ arrow_typeof(expression)
 +---------------------------+------------------------+
 ```
 
+### `classifier`
+
+Returns the symbol (classifier) for the current row within the pattern match.
+
+```sql
+classifier()
+```
+
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
@@ -5042,6 +5053,22 @@ get_field(expression1, expression2)
 | fusion                |
 | arrow                 |
 +-----------------------+
+```
+
+### `match_number`
+
+Returns the match number of the current row within MATCH_RECOGNIZE.
+
+```sql
+match_number()
+```
+
+### `match_sequence_number`
+
+Returns the sequence number of the current row within the current match.
+
+```sql
+match_sequence_number()
 ```
 
 ### `version`

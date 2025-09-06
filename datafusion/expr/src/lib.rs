@@ -59,6 +59,7 @@ pub mod interval_arithmetic {
     pub use datafusion_expr_common::interval_arithmetic::*;
 }
 pub mod logical_plan;
+pub mod match_recognize;
 pub mod planner;
 pub mod registry;
 pub mod simplify;

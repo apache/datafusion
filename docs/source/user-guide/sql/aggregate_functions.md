@@ -58,8 +58,10 @@ Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/
 - [bool_and](#bool_and)
 - [bool_or](#bool_or)
 - [count](#count)
+- [first](#first)
 - [first_value](#first_value)
 - [grouping](#grouping)
+- [last](#last)
 - [last_value](#last_value)
 - [max](#max)
 - [mean](#mean)
@@ -242,6 +244,19 @@ count(expression)
 +------------------+
 ```
 
+### `first`
+
+Returns the first value in a MATCH_RECOGNIZE pattern match. This function is used internally when MATCH_RECOGNIZE measures are rewritten to aggregates.
+
+```sql
+first(expression[, classifier_mask])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **classifier_mask**: Optional Boolean. Restrict to rows matching the symbol.
+
 ### `first_value`
 
 Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
@@ -291,6 +306,19 @@ grouping(expression)
 | NULL        | 1           |
 +-------------+-------------+
 ```
+
+### `last`
+
+Returns the last value in a MATCH_RECOGNIZE pattern match. This function is used internally when MATCH_RECOGNIZE measures are rewritten to aggregates.
+
+```sql
+last(expression[, classifier_mask])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **classifier_mask**: Optional Boolean. Restrict to rows matching the symbol.
 
 ### `last_value`
 

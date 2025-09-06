@@ -15,22 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, MatchRecognizeClause, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchema, Dependency, Diagnostic, Result, Span,
+    DFSchema, Dependency, Diagnostic, Result, ScalarValue, Span, TableReference,
 };
 use datafusion_expr::expr::{
     NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction,
 };
+use datafusion_expr::match_recognize::columns::{
+    classifier_bits_col_name, MrMetadataColumn,
+};
+use datafusion_expr::match_recognize::find_symbol_predicate;
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
-use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
+use datafusion_expr::{
+    expr, Expr, ExprSchemable, Literal, WindowFrame, WindowFunctionDefinition,
+};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    ObjectName, OrderByExpr, Spanned, WindowType,
+    Ident, ObjectName, OrderByExpr, OrderByOptions, RowsPerMatch, Spanned,
+    WindowFrame as SQLWindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    WindowType,
 };
 
 /// Suggest a valid function based on an invalid input function name
@@ -212,6 +220,72 @@ impl FunctionArgs {
     }
 }
 
+fn validate_match_recognize_function(
+    function_name: &str,
+    clause: &MatchRecognizeClause,
+) -> Result<()> {
+    match (clause, function_name) {
+        (MatchRecognizeClause::Define, "prev") => plan_err!("Function '{function_name}' is not available in the MATCH_RECOGNIZE DEFINE subclause. Use LAG instead which navigates to the previous row within the current window frame"),
+        (MatchRecognizeClause::Define, "first") => plan_err!("Function '{function_name}' is not available in the MATCH_RECOGNIZE DEFINE subclause. Use FIRST_VALUE instead which navigates to the first row of the current window frame"),
+        (_, _) => Ok(()),
+    }
+}
+
+fn match_recognize_partitioning(
+    clause: &MatchRecognizeClause,
+    partition_by: &[SQLExpr],
+    order_by: &[OrderByExpr],
+) -> (Vec<SQLExpr>, Vec<OrderByExpr>) {
+    match clause {
+        MatchRecognizeClause::Measures => {
+            // augment the partitioning scheme with the virtual match_number column
+            let mut partition_by = partition_by.to_vec();
+            partition_by.push(SQLExpr::Identifier(Ident::new(
+                MrMetadataColumn::MatchNumber.as_ref(),
+            )));
+            // order by the virtual match_sequence_number column
+            let order_by = vec![OrderByExpr {
+                expr: SQLExpr::Identifier(Ident::new(
+                    MrMetadataColumn::MatchSequenceNumber.as_ref(),
+                )),
+                options: OrderByOptions {
+                    asc: None,
+                    nulls_first: None,
+                },
+                with_fill: None,
+            }];
+            (partition_by, order_by)
+        }
+        MatchRecognizeClause::Define => (partition_by.to_vec(), order_by.to_vec()),
+    }
+}
+
+fn match_recognize_window_frame(
+    clause: &MatchRecognizeClause,
+    rows_per_match: &Option<RowsPerMatch>,
+    function_name: &str,
+) -> Result<SQLWindowFrame> {
+    let start_bound = match (clause, function_name) {
+        (MatchRecognizeClause::Measures, _) => WindowFrameBound::Preceding(None),
+        (MatchRecognizeClause::Define, "next" | "last") => WindowFrameBound::CurrentRow,
+        (MatchRecognizeClause::Define, "lag" | "lead" | "first_value" | "last_value") => WindowFrameBound::Preceding(None), 
+        (MatchRecognizeClause::Define, _) => return plan_err!("MATCH_RECOGNIZE requires an explicit window frame in the DEFINE clause for function '{function_name}'"),
+    };
+    let end_bound = match (clause, rows_per_match, function_name) {
+        (MatchRecognizeClause::Measures, _, "prev" | "next" | "lag" | "lead") => WindowFrameBound::Following(None),
+        (MatchRecognizeClause::Measures, Some(RowsPerMatch::AllRows(_)), _) => WindowFrameBound::CurrentRow,
+        (MatchRecognizeClause::Measures, _, _) => WindowFrameBound::Following(None),
+        (MatchRecognizeClause::Define, _, "last") => WindowFrameBound::CurrentRow,
+        (MatchRecognizeClause::Define, _, "next" | "lag" | "lead" | "first_value" | "last_value") => WindowFrameBound::Following(None),
+        (MatchRecognizeClause::Define, _, _) => return plan_err!("MATCH_RECOGNIZE requires an explicit window frame in the DEFINE clause for function '{function_name}'"),
+    };
+    Ok(SQLWindowFrame {
+        units: WindowFrameUnits::Rows,
+        start_bound,
+        end_bound: Some(end_bound),
+    })
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -231,6 +305,81 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             within_group,
             function_without_parentheses,
         } = function_args;
+
+        let over = if let Some(mr_context) = planner_context.match_recognize_context() {
+            let function_name = object_name.to_string().to_ascii_lowercase();
+            validate_match_recognize_function(&function_name, &mr_context.clause)?;
+
+            match over {
+                Some(WindowType::WindowSpec(window)) => {
+                    if let Some(window_name) = window.window_name {
+                        return plan_err!("MATCH_RECOGNIZE does not support window names: {window_name}");
+                    }
+                    if !window.partition_by.is_empty() {
+                        return plan_err!("MATCH_RECOGNIZE does not support PARTITION BY in OVER clause");
+                    }
+                    if !window.order_by.is_empty() {
+                        return plan_err!(
+                            "MATCH_RECOGNIZE does not support ORDER BY in OVER clause"
+                        );
+                    }
+
+                    let (partition_by, order_by) = match_recognize_partitioning(
+                        &mr_context.clause,
+                        &mr_context.partition_by,
+                        &mr_context.order_by,
+                    );
+                    Some(WindowType::WindowSpec(WindowSpec {
+                        window_name: None,
+                        partition_by,
+                        order_by,
+                        window_frame: window.window_frame,
+                    }))
+                }
+                None => {
+                    // Check if the function is registered as a Window UDF
+                    let is_window_preferred =
+                        matches!(mr_context.clause, MatchRecognizeClause::Define)
+                            || matches!(
+                                mr_context.rows_per_match,
+                                Some(RowsPerMatch::AllRows(_))
+                            );
+                    if self.find_window_func(function_name.as_str()).is_ok()
+                        && (is_window_preferred
+                            || self
+                                .context_provider
+                                .get_aggregate_meta(function_name.as_str())
+                                .is_none())
+                    {
+                        let (partition_by, order_by) = match_recognize_partitioning(
+                            &mr_context.clause,
+                            &mr_context.partition_by,
+                            &mr_context.order_by,
+                        );
+                        let window_frame = match_recognize_window_frame(
+                            &mr_context.clause,
+                            &mr_context.rows_per_match,
+                            function_name.as_str(),
+                        )?;
+                        Some(WindowType::WindowSpec(WindowSpec {
+                            window_name: None,
+                            partition_by,
+                            order_by,
+                            window_frame: Some(window_frame),
+                        }))
+                    } else {
+                        None
+                    }
+                }
+                Some(WindowType::NamedWindow(window)) => {
+                    return plan_err!(
+                        "MATCH_RECOGNIZE does not support named windows: {window}"
+                    );
+                }
+            }
+        } else {
+            over
+        };
 
         if over.is_some() && !within_group.is_empty() {
             return plan_err!("OVER and WITHIN GROUP clause cannot be used together. \
@@ -365,11 +514,91 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 WindowFrame::new((!order_by.is_empty()).then_some(false))
             };
 
-            if let Ok(fun) = self.find_window_func(&name) {
-                let args = self.function_args_to_expr(args, schema, planner_context)?;
+            if let Ok(mut fun) = self.find_window_func(&name) {
+                // In MATCH_RECOGNIZE context, prefer WindowUDF implementation
+                // for MR navigation functions even if an AggregateUDF of the same
+                // name exists (e.g., "first", "last"). The MR aggregate variants
+                // are planning-time only and must not be used as runtime window
+                // aggregates.
+                if planner_context.match_recognize_context().is_some() {
+                    match name.as_str() {
+                        "first" | "last" | "prev" | "next" => {
+                            if let Some(wmeta) =
+                                self.context_provider.get_window_meta(name.as_str())
+                            {
+                                fun = WindowFunctionDefinition::WindowUDF(wmeta);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let mut args =
+                    self.function_args_to_expr(args, schema, planner_context)?;
+
+                // Inject implicit virtual column arguments for MATCH_RECOGNIZE metadata
+                // functions invoked without arguments. These UDWFs operate on hidden
+                // columns that the MATCH_RECOGNIZE planner adds to the schema. When the
+                // user calls the function without arguments (e.g. `CLASSIFIER()`), we
+                // transparently add the corresponding virtual column reference so that
+                // the underlying implementation receives the expected input.
+                if planner_context.match_recognize_context().is_some() {
+                    match name.as_str() {
+                        "classifier" => args.push(datafusion_expr::col(
+                            MrMetadataColumn::Classifier.as_ref(),
+                        )),
+                        "match_number" => args.push(datafusion_expr::col(
+                            MrMetadataColumn::MatchNumber.as_ref(),
+                        )),
+                        "match_sequence_number" => {
+                            args.push(datafusion_expr::col(
+                                MrMetadataColumn::MatchSequenceNumber.as_ref(),
+                            ));
+                        }
+                        // Handle FIRST/LAST/PREV/NEXT which may need the classifier bitset column
+                        // appended. These functions always have at least one user-supplied
+                        // argument (the value expression).
+                        "first" | "last" => {
+                            let value_expr = args.remove(0);
+
+                            if let Some(symbol) = find_symbol_predicate(&value_expr)? {
+                                let mask_col = datafusion_expr::col(
+                                    classifier_bits_col_name(&symbol),
+                                );
+                                args = vec![value_expr, mask_col];
+                            } else {
+                                args = vec![value_expr];
+                            }
+                        }
+                        "prev" | "next" => {
+                            let value_expr = args.remove(0);
+                            let offset_expr = if !args.is_empty() {
+                                args.remove(0)
+                            } else {
+                                ScalarValue::Null.lit()
+                            };
+                            let default_expr = if !args.is_empty() {
+                                args.remove(0)
+                            } else {
+                                ScalarValue::Null.lit()
+                            };
+
+                            if let Some(symbol) = find_symbol_predicate(&value_expr)? {
+                                let mask_col = datafusion_expr::col(
+                                    classifier_bits_col_name(&symbol),
+                                );
+                                // New convention: classifier_mask is last
+                                args =
+                                    vec![value_expr, offset_expr, default_expr, mask_col];
+                            } else {
+                                args = vec![value_expr, offset_expr, default_expr];
+                            }
+                        }
+                        _ => {}
+                    }
+                }
 
                 // Plan FILTER clause if present
-                let filter = filter
+                let filter: Option<Box<Expr>> = filter
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
                     .transpose()?
                     .map(Box::new);
@@ -656,7 +885,46 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Ok(expr)
             }
             FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
-                let qualifier = self.object_name_to_table_reference(object_name)?;
+                let qualifier =
+                    self.object_name_to_table_reference(object_name.clone())?;
+
+                // If we are inside a MATCH_RECOGNIZE context, treat this as a symbol wildcard (e.g. `A.*`).
+                // Represent it using the internal `mr_symbol(<wildcard>, 'SYM')` wrapper.
+                // Validation that this form is only used with COUNT is performed during
+                // MATCH_RECOGNIZE planning.
+                if planner_context.match_recognize_context().is_some() {
+                    match qualifier {
+                        // Expect a single-part object name such as `A`.
+                        TableReference::Bare { table } => {
+                            let mr = self
+                                .context_provider
+                                .get_function_meta("mr_symbol")
+                                .ok_or_else(|| {
+                                    internal_datafusion_err!(
+                                        "Unable to find expected 'mr_symbol' function"
+                                    )
+                                })?;
+
+                            let args = vec![
+                                #[expect(deprecated)]
+                                Expr::Wildcard {
+                                    qualifier: None,
+                                    options: Box::new(WildcardOptions::default()),
+                                },
+                                ScalarValue::Utf8(Some(table.to_string())).lit(),
+                            ];
+                            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                                mr, args,
+                            )));
+                        }
+                        _ => {
+                            return plan_err!(
+                                "MATCH_RECOGNIZE qualified wildcards must be of the form `<symbol>.*`. Got: {object_name}"
+                            );
+                        }
+                    }
+                }
+
                 // Sanity check on qualifier with schema
                 let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
                 if qualified_indices.is_empty() {

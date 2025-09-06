@@ -40,6 +40,7 @@ use crate::expr_rewriter::{
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
+use crate::match_recognize::AfterMatchSkip;
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
@@ -47,8 +48,8 @@ use crate::utils::{
 use crate::{
     build_join_schema, expr_vec_fmt, requalify_sides_if_needed, BinaryExpr,
     CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, LogicalPlanBuilder,
-    Operator, Prepare, TableProviderFilterPushDown, TableSource,
-    WindowFunctionDefinition,
+    MatchRecognize, NamedExpr, Operator, Prepare, TableProviderFilterPushDown,
+    TableSource, WindowFunctionDefinition,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -291,6 +292,8 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// Pattern Matching of a MatchRecognize SQL statement
+    MatchRecognize(MatchRecognize),
 }
 
 impl Default for LogicalPlan {
@@ -355,6 +358,7 @@ impl LogicalPlan {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
             }
+            LogicalPlan::MatchRecognize(MatchRecognize { schema, .. }) => schema,
         }
     }
 
@@ -477,6 +481,7 @@ impl LogicalPlan {
                 recursive_term,
                 ..
             }) => vec![static_term, recursive_term],
+            LogicalPlan::MatchRecognize(MatchRecognize { input, .. }) => vec![input],
             LogicalPlan::Statement(stmt) => stmt.inputs(),
             // plans without inputs
             LogicalPlan::TableScan { .. }
@@ -595,7 +600,8 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Unnest(_) => Ok(None),
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::MatchRecognize(_) => Ok(None),
         }
     }
 
@@ -752,6 +758,7 @@ impl LogicalPlan {
                 // Update schema with unnested column type.
                 unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
             }
+            LogicalPlan::MatchRecognize(_) => Ok(self),
         }
     }
 
@@ -1145,6 +1152,55 @@ impl LogicalPlan {
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
+            LogicalPlan::MatchRecognize(match_recognize) => {
+                let input = self.only_input(inputs)?;
+
+                // Extract expressions in the same order as expressions() method:
+                // partition_by, order_by, defines
+                let partition_by_len = match_recognize.partition_by.len();
+                let order_by_len = match_recognize.order_by.len();
+                let defines_len = match_recognize.defines.len();
+
+                // Verify we have the expected number of expressions
+                let expected_len = partition_by_len + order_by_len + defines_len;
+                if expr.len() != expected_len {
+                    return internal_err!(
+                        "Invalid number of new MatchRecognize expressions: expected {}, got {}",
+                        expected_len,
+                        expr.len()
+                    );
+                }
+
+                // Split expressions into their respective parts
+                let mut expr_iter = expr.into_iter();
+
+                let new_partition_by: Vec<Expr> =
+                    expr_iter.by_ref().take(partition_by_len).collect();
+                let new_order_by: Vec<SortExpr> = expr_iter
+                    .by_ref()
+                    .take(order_by_len)
+                    .zip(match_recognize.order_by.iter())
+                    .map(|(e, sort_expr)| sort_expr.with_expr(e))
+                    .collect();
+                let new_defines: Vec<NamedExpr> = expr_iter
+                    .by_ref()
+                    .take(defines_len)
+                    .zip(match_recognize.defines.iter().map(|ne| ne.name.clone()))
+                    .map(|(expr, name)| NamedExpr { expr, name })
+                    .collect();
+
+                Ok(LogicalPlan::MatchRecognize(MatchRecognize::try_new(
+                    Arc::new(input),
+                    new_partition_by,
+                    new_order_by,
+                    match_recognize.after_skip.clone(),
+                    match_recognize.rows_per_match.clone(),
+                    match_recognize.pattern.clone(),
+                    match_recognize.symbols.clone(),
+                    new_defines,
+                    match_recognize.output_spec.clone(),
+                )?))
+            }
         }
     }
 
@@ -1380,6 +1436,22 @@ impl LogicalPlan {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_) => None,
+            LogicalPlan::MatchRecognize(MatchRecognize {
+                input, after_skip, ..
+            }) => {
+                if let Some(max_rows) = input.max_rows() {
+                    match after_skip {
+                        // No overlap possible: at most one match can start on each input row
+                        AfterMatchSkip::PastLastRow => Some(max_rows),
+
+                        // Overlap allowed: each row can be the start of a match that can extend
+                        // to the end of the stream.  This gives 1 + 2 + … + n matches.
+                        _ => Some(max_rows * (max_rows + 1) / 2),
+                    }
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -2026,6 +2098,9 @@ impl LogicalPlan {
                         write!(f, "Unnest: lists[{}] structs[{}]",
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
+                    }
+                    LogicalPlan::MatchRecognize(match_recognize) => {
+                        write!(f, "{match_recognize}")
                     }
                 }
             }

@@ -1813,6 +1813,7 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-functions-match_recognize",
  "datafusion-functions-nested",
  "datafusion-functions-table",
  "datafusion-functions-window",
@@ -2297,6 +2298,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-functions-match_recognize"
+version = "50.1.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-doc",
+ "datafusion-expr",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
+ "datafusion-functions-window",
+ "datafusion-functions-window-common",
+ "datafusion-macros",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "log",
+ "paste",
+]
+
+[[package]]
 name = "datafusion-functions-nested"
 version = "50.1.0"
 dependencies = [
@@ -2341,6 +2362,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-doc",
  "datafusion-expr",
+ "datafusion-functions",
  "datafusion-functions-window-common",
  "datafusion-macros",
  "datafusion-physical-expr",
@@ -2595,6 +2617,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-functions-match_recognize",
  "datafusion-functions-nested",
  "datafusion-functions-window",
  "env_logger",

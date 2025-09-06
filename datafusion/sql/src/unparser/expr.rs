@@ -344,6 +344,16 @@ impl Unparser<'_> {
                     } else {
                         Vec::new()
                     };
+                let argument_clauses =
+                    if order_by.is_empty() || agg.func.is_ordered_set_aggregate() {
+                        vec![]
+                    } else {
+                        let order_by_exprs = order_by
+                            .iter()
+                            .map(|sort_expr| self.sort_to_sql(sort_expr))
+                            .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                        vec![ast::FunctionArgumentClause::OrderBy(order_by_exprs)]
+                    };
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName::from(vec![Ident {
                         value: func_name.to_string(),
@@ -354,7 +364,7 @@ impl Unparser<'_> {
                         duplicate_treatment: distinct
                             .then_some(DuplicateTreatment::Distinct),
                         args,
-                        clauses: vec![],
+                        clauses: argument_clauses,
                     }),
                     filter,
                     null_treatment: None,

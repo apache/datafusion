@@ -1085,17 +1085,11 @@ impl OptimizerRule for PushDownFilter {
                     .reduce(|a, b| &a & &b)
                     .unwrap_or_default();
 
-                let predicates = split_conjunction_owned(filter.predicate);
-                let mut keep_predicates = vec![];
-                let mut push_predicates = vec![];
-                for expr in predicates {
-                    let cols = expr.column_refs();
-                    if cols.iter().all(|c| potential_partition_keys.contains(c)) {
-                        push_predicates.push(expr);
-                    } else {
-                        keep_predicates.push(expr);
-                    }
-                }
+                let (push_predicates, keep_predicates) =
+                    partition_predicates_by_allowed_columns(
+                        filter.predicate,
+                        &potential_partition_keys,
+                    );
 
                 // Unlike with aggregations, there are no cases where we have to replace, e.g.,
                 // `a+b` with Column(a)+Column(b). This is because partition expressions are not
@@ -1106,25 +1100,36 @@ impl OptimizerRule for PushDownFilter {
                 // optimizers, such as the one used by Postgres.
 
                 let window_input = Arc::clone(&window.input);
-                Transformed::yes(LogicalPlan::Window(window))
-                    .transform_data(|new_plan| {
-                        // If we have a filter to push, we push it down to the input of the window
-                        if let Some(predicate) = conjunction(push_predicates) {
-                            let new_filter = make_filter(predicate, window_input)?;
-                            insert_below(new_plan, new_filter)
-                        } else {
-                            Ok(Transformed::no(new_plan))
-                        }
-                    })?
-                    .map_data(|child_plan| {
-                        // if there are any remaining predicates we can't push, add them
-                        // back as a filter
-                        if let Some(predicate) = conjunction(keep_predicates) {
-                            make_filter(predicate, Arc::new(child_plan))
-                        } else {
-                            Ok(child_plan)
-                        }
-                    })
+                pushdown_filter_with_predicates(
+                    LogicalPlan::Window(window),
+                    window_input,
+                    push_predicates,
+                    keep_predicates,
+                )
+            }
+            // Tries to push filters based on the PARTITION BY columns of MATCH_RECOGNIZE.
+            // Only predicates that reference exclusively those columns are pushed below.
+            LogicalPlan::MatchRecognize(match_recognize) => {
+                // Build the set of partition keys from partition_by
+                let partition_keys: HashSet<Column> = match_recognize
+                    .partition_by
+                    .iter()
+                    .map(|e| Column::from_qualified_name(e.schema_name().to_string()))
+                    .collect();
+
+                let (push_predicates, keep_predicates) =
+                    partition_predicates_by_allowed_columns(
+                        filter.predicate,
+                        &partition_keys,
+                    );
+
+                let mr_input = Arc::clone(&match_recognize.input);
+                pushdown_filter_with_predicates(
+                    LogicalPlan::MatchRecognize(match_recognize),
+                    mr_input,
+                    push_predicates,
+                    keep_predicates,
+                )
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
             LogicalPlan::TableScan(scan) => {
@@ -1344,6 +1349,53 @@ fn rewrite_projection(
 /// Creates a new LogicalPlan::Filter node.
 pub fn make_filter(predicate: Expr, input: Arc<LogicalPlan>) -> Result<LogicalPlan> {
     Filter::try_new(predicate, input).map(LogicalPlan::Filter)
+}
+
+/// Split a predicate into two groups: those that reference only the allowed columns (push)
+/// and those that reference other columns (keep).
+fn partition_predicates_by_allowed_columns(
+    predicate: Expr,
+    allowed: &HashSet<Column>,
+) -> (Vec<Expr>, Vec<Expr>) {
+    let predicates = split_conjunction_owned(predicate);
+    let mut push_predicates = Vec::new();
+    let mut keep_predicates = Vec::new();
+
+    for expr in predicates {
+        let cols = expr.column_refs();
+        if cols.iter().all(|c| allowed.contains(c)) {
+            push_predicates.push(expr);
+        } else {
+            keep_predicates.push(expr);
+        }
+    }
+
+    (push_predicates, keep_predicates)
+}
+
+/// Apply filter pushdown given pre-partitioned push/keep predicates.
+fn pushdown_filter_with_predicates(
+    plan: LogicalPlan,
+    input: Arc<LogicalPlan>,
+    push_predicates: Vec<Expr>,
+    keep_predicates: Vec<Expr>,
+) -> Result<Transformed<LogicalPlan>> {
+    Transformed::yes(plan)
+        .transform_data(|new_plan| {
+            if let Some(predicate) = conjunction(push_predicates) {
+                let new_filter = make_filter(predicate, Arc::clone(&input))?;
+                insert_below(new_plan, new_filter)
+            } else {
+                Ok(Transformed::no(new_plan))
+            }
+        })?
+        .map_data(|child_plan| {
+            if let Some(predicate) = conjunction(keep_predicates) {
+                make_filter(predicate, Arc::new(child_plan))
+            } else {
+                Ok(child_plan)
+            }
+        })
 }
 
 /// Replace the existing child of the single input node with `new_child`.
