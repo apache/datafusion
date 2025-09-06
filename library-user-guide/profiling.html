@@ -683,7 +683,7 @@ in images such as this:</p>
 </section>
 <section id="step-3-running-the-flamegraph-tool">
 <h3>Step 3: Running the Flamegraph Tool<a class="headerlink" href="#step-3-running-the-flamegraph-tool" title="Link to this heading">¶</a></h3>
-<p>To generate a flamegraph, you’ll need to use the – separator to pass arguments to the binary you’re profiling. For datafusion-cli, you need to make sure to run the command with sudo permissions (especially on macOS, where DTrace requires elevated privileges).</p>
+<p>To generate a flamegraph, you’ll need to use the <code class="docutils literal notranslate"><span class="pre">--</span></code> separator to pass arguments to the binary you’re profiling. For datafusion-cli, you need to make sure to run the command with sudo permissions (especially on macOS, where DTrace requires elevated privileges).</p>
 <p>Here is a general example:</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>flamegraph<span class="w"> </span>--<span class="w"> </span>datafusion-cli<span class="w"> </span>-f<span class="w"> </span>&lt;path_to_sql_file/sql_file.sql&gt;
 </pre></div>
