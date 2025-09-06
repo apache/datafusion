@@ -150,18 +150,13 @@ impl FileOpener for ParquetOpener {
         let expr_adapter_factory = self.expr_adapter_factory.clone();
         let mut predicate_file_schema = Arc::clone(&self.logical_file_schema);
 
-        let mut enable_page_index = self.enable_page_index;
+        let enable_page_index = self.enable_page_index;
         let encryption_context = self.get_encryption_context();
 
         Ok(Box::pin(async move {
             let file_decryption_properties = encryption_context
                 .get_file_decryption_properties(&file_location)
                 .await?;
-            // For now, page index does not work with encrypted files. See:
-            // https://github.com/apache/arrow-rs/issues/7629
-            if file_decryption_properties.is_some() {
-                enable_page_index = false;
-            }
 
             // Prune this file using the file level statistics and partition values.
             // Since dynamic filters may have been updated since planning it is possible that we are able
