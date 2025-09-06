@@ -38,16 +38,19 @@ workspace = true
 name = "datafusion_execution"
 
 [features]
+default = ["sql"]
+
 parquet_encryption = [
     "parquet/encryption",
 ]
+sql = []
 
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
-datafusion-expr = { workspace = true }
+datafusion-common = { workspace = true, default-features = false }
+datafusion-expr = { workspace = true, default-features = false }
 futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true, features = ["fs"] }

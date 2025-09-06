@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{parse_identifiers_normalized, quote_identifier};
+use crate::utils::parse_identifiers_normalized;
+use crate::utils::quote_identifier;
 use std::sync::Arc;
 
 /// A fully resolved path to a table of the form "catalog.schema.table"
@@ -367,26 +368,32 @@ mod tests {
         let actual = TableReference::from("TABLE");
         assert_eq!(expected, actual);
 
-        // if fail to parse, take entire input string as identifier
-        let expected = TableReference::Bare {
-            table: "TABLE()".into(),
-        };
-        let actual = TableReference::from("TABLE()");
-        assert_eq!(expected, actual);
+        // Disable this test for non-sql features so that we don't need to reproduce
+        // things like table function upper case conventions, since those will not
+        // be used if SQL is not selected.
+        #[cfg(feature = "sql")]
+        {
+            // if fail to parse, take entire input string as identifier
+            let expected = TableReference::Bare {
+                table: "TABLE()".into(),
+            };
+            let actual = TableReference::from("TABLE()");
+            assert_eq!(expected, actual);
+        }
     }
 
     #[test]
     fn test_table_reference_to_vector() {
-        let table_reference = TableReference::parse_str("table");
+        let table_reference = TableReference::from("table");
         assert_eq!(vec!["table".to_string()], table_reference.to_vec());
 
-        let table_reference = TableReference::parse_str("schema.table");
+        let table_reference = TableReference::from("schema.table");
         assert_eq!(
             vec!["schema".to_string(), "table".to_string()],
             table_reference.to_vec()
         );
 
-        let table_reference = TableReference::parse_str("catalog.schema.table");
+        let table_reference = TableReference::from("catalog.schema.table");
         assert_eq!(
             vec![
                 "catalog".to_string(),

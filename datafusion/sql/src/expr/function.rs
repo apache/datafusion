@@ -22,13 +22,15 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions, WindowFunction};
+use datafusion_expr::expr::{
+    NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction,
+};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    NullTreatment, ObjectName, OrderByExpr, Spanned, WindowType,
+    ObjectName, OrderByExpr, Spanned, WindowType,
 };
 
 /// Suggest a valid function based on an invalid input function name
@@ -115,7 +117,7 @@ impl FunctionArgs {
                 order_by: vec![],
                 over,
                 filter,
-                null_treatment,
+                null_treatment: null_treatment.map(|v| v.into()),
                 distinct: false,
                 within_group,
                 function_without_parentheses: matches!(args, FunctionArguments::None),
@@ -197,7 +199,7 @@ impl FunctionArgs {
             order_by,
             over,
             filter,
-            null_treatment,
+            null_treatment: null_treatment.map(|v| v.into()),
             distinct,
             within_group,
             function_without_parentheses: false,

@@ -18,13 +18,12 @@
 //! Column
 
 use crate::error::{_schema_err, add_possible_columns_to_diag};
-use crate::utils::{parse_identifiers_normalized, quote_identifier};
+use crate::utils::parse_identifiers_normalized;
+use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
 use std::collections::HashSet;
-use std::convert::Infallible;
 use std::fmt;
-use std::str::FromStr;
 
 /// A named reference to a qualified field in a schema.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -140,6 +139,7 @@ impl Column {
     }
 
     /// Deserialize a fully qualified name string into a column preserving column text case
+    #[cfg(feature = "sql")]
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
         Self::from_idents(parse_identifiers_normalized(&flat_name, true)).unwrap_or_else(
@@ -149,6 +149,11 @@ impl Column {
                 spans: Spans::new(),
             },
         )
+    }
+
+    #[cfg(not(feature = "sql"))]
+    pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
+        Self::from_qualified_name(flat_name)
     }
 
     /// return the column's name.
@@ -356,8 +361,9 @@ impl From<(Option<&TableReference>, &FieldRef)> for Column {
     }
 }
 
-impl FromStr for Column {
-    type Err = Infallible;
+#[cfg(feature = "sql")]
+impl std::str::FromStr for Column {
+    type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(s.into())
