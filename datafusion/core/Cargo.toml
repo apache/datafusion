@@ -123,6 +123,7 @@ datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-match_recognize = { workspace = true }
 datafusion-functions-nested = { workspace = true, optional = true }
 datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
@@ -172,7 +173,7 @@ rand_distr = "0.5"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.37.0"
+sysinfo = "0.36.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 

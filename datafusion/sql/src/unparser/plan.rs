@@ -32,6 +32,8 @@ use super::{
     },
     Unparser,
 };
+use crate::match_recognize::pattern_convert::df_pattern_to_sql;
+use crate::unparser::ast::MatchRecognizeRelationBuilder;
 use crate::unparser::ast::UnnestRelationBuilder;
 use crate::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
@@ -43,13 +45,22 @@ use datafusion_common::{
     tree_node::{TransformedResult, TreeNode},
     Column, DataFusionError, Result, ScalarValue, TableReference,
 };
-use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
+use datafusion_expr::match_recognize::{
+    columns::MrMetadataColumn, AfterMatchSkip, EmptyMatchesMode, RowsPerMatch,
+};
 use datafusion_expr::{
     expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
-use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
+use datafusion_expr::{
+    expr::OUTER_REFERENCE_COLUMN_PREFIX,
+    match_recognize::columns::classifier_bits_col_name,
+};
+use sqlparser::ast::{
+    self, visit_expressions_mut, Function, FunctionArgumentList, FunctionArguments,
+    Ident, ObjectNamePart, OrderByKind, SetExpr, TableAliasColumnDef,
+};
 use std::{sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
@@ -101,6 +112,7 @@ impl Unparser<'_> {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
             | LogicalPlan::Window(_)
+            | LogicalPlan::MatchRecognize(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
@@ -124,8 +136,28 @@ impl Unparser<'_> {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
+            | LogicalPlan::Unnest(_) => {
+                not_impl_err!("Unsupported plan: {plan:?}")
+            }
         }
+    }
+
+    /// Build a nullary MATCH_RECOGNIZE metadata function call (e.g., `classifier()`)
+    fn mr_function_call(&self, name: &str) -> ast::Expr {
+        ast::Expr::Function(Function {
+            name: ast::ObjectName(vec![ObjectNamePart::Identifier(Ident::new(name))]),
+            args: FunctionArguments::List(FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+            parameters: FunctionArguments::None,
+            uses_odbc_syntax: false,
+        })
     }
 
     /// Try to unparse a [UserDefinedLogicalNode] to a SQL statement.
@@ -332,6 +364,155 @@ impl Unparser<'_> {
         relation: &mut RelationBuilder,
     ) -> Result<()> {
         match plan {
+            LogicalPlan::MatchRecognize(mr) => {
+                // Build inner relation from the MR input plan
+                let mut inner_relation = RelationBuilder::default();
+                self.select_to_sql_recursively(
+                    mr.input.as_ref(),
+                    query,
+                    select,
+                    &mut inner_relation,
+                )?;
+                let inner_tf = match inner_relation.build()? {
+                    Some(tf) => tf,
+                    None => {
+                        return internal_err!(
+                            "Failed to build inner relation for MATCH_RECOGNIZE"
+                        )
+                    }
+                };
+
+                // Partition by / Order by
+                let partition_by = mr
+                    .partition_by
+                    .iter()
+                    .map(|e| self.expr_to_sql(e))
+                    .collect::<Result<Vec<_>>>()?;
+                let order_by = self.sorts_to_sql(&mr.order_by)?;
+                let order_by_exprs = match order_by {
+                    OrderByKind::Expressions(list) => list,
+                    OrderByKind::All(_) => {
+                        return internal_err!(
+                            "Unsupported ORDER BY ALL in MATCH_RECOGNIZE unparser"
+                        );
+                    }
+                };
+
+                // Include minimal virtual MEASURES for MR metadata columns
+                // (__mr_classifier, __mr_match_number, __mr_match_sequence_number, __mr_is_excluded_row)
+                // as well as classifier bitset columns (__mr_classifier_<symbol>)
+                let measures: Vec<ast::Measure> = mr
+                    .output_spec
+                    .metadata_columns
+                    .iter()
+                    .map(|meta_col: &MrMetadataColumn| {
+                        // Create function call expression
+                        let func_expr =
+                            self.mr_function_call(meta_col.measure_function_name());
+
+                        // Create Measure with expression and alias
+                        ast::Measure {
+                            expr: func_expr,
+                            alias: Ident::new(meta_col.as_ref()),
+                        }
+                    })
+                    .chain(mr.output_spec.classifier_bitset_symbols.iter().map(|sym| {
+                        let alias = classifier_bits_col_name(sym);
+                        // convert to Measure: `classifier() == "<SYM>" AS <alias>`
+                        let expr = {
+                            // Build classifier() function call
+                            let func_expr = self.mr_function_call(
+                                MrMetadataColumn::Classifier.measure_function_name(),
+                            );
+
+                            // Build '<SYM>' string literal
+                            let sym_lit = ast::Expr::value(
+                                ast::Value::SingleQuotedString(sym.clone()),
+                            );
+
+                            // classifier() = '<SYM>'
+                            self.binary_op_to_sql(
+                                func_expr,
+                                sym_lit,
+                                ast::BinaryOperator::Eq,
+                            )
+                        };
+                        ast::Measure {
+                            expr,
+                            alias: Ident::new(alias),
+                        }
+                    }))
+                    .collect();
+
+                // Rows per match (SQL-facing): use the rows_per_match_internal field
+                let rows_per_match = match &mr.rows_per_match {
+                    RowsPerMatch::OneRow => ast::RowsPerMatch::OneRow,
+                    RowsPerMatch::AllRows(mode) => {
+                        let m = mode.as_ref().map(|m| match m {
+                            EmptyMatchesMode::Show => ast::EmptyMatchesMode::Show,
+                            EmptyMatchesMode::Omit => ast::EmptyMatchesMode::Omit,
+                            EmptyMatchesMode::WithUnmatched => {
+                                ast::EmptyMatchesMode::WithUnmatched
+                            }
+                        });
+                        ast::RowsPerMatch::AllRows(m)
+                    }
+                };
+
+                // After match skip
+                let after_match_skip = match &mr.after_skip {
+                    AfterMatchSkip::PastLastRow => ast::AfterMatchSkip::PastLastRow,
+                    AfterMatchSkip::ToNextRow => ast::AfterMatchSkip::ToNextRow,
+                    AfterMatchSkip::ToFirst(s) => ast::AfterMatchSkip::ToFirst(
+                        self.new_ident_quoted_if_needs(s.clone()),
+                    ),
+                    AfterMatchSkip::ToLast(s) => ast::AfterMatchSkip::ToLast(
+                        self.new_ident_quoted_if_needs(s.clone()),
+                    ),
+                };
+
+                // Pattern
+                let pattern_ast = df_pattern_to_sql(&mr.pattern);
+
+                // DEFINE symbols from mr.defines (expr, symbol_name)
+                let symbols = mr
+                    .defines
+                    .iter()
+                    .map(|(e, sym)| {
+                        let mut def_ast = self.expr_to_sql(e)?;
+                        // Strip table qualifiers to avoid being treated as symbol qualifiers
+                        let _ = visit_expressions_mut(&mut def_ast, |expr| {
+                            if let ast::Expr::CompoundIdentifier(ids) = expr {
+                                if let Some(last) = ids.last().cloned() {
+                                    *expr = ast::Expr::Identifier(last);
+                                }
+                            }
+                            std::ops::ControlFlow::<()>::Continue(())
+                        });
+                        Ok(ast::SymbolDefinition {
+                            symbol: self.new_ident_quoted_if_needs(sym.clone()),
+                            definition: def_ast,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Assemble MatchRecognize relation
+                let mut mr_builder = MatchRecognizeRelationBuilder::default();
+                mr_builder
+                    .table(inner_tf)
+                    .partition_by(partition_by)
+                    .order_by(order_by_exprs)
+                    .measures(measures)
+                    .rows_per_match(Some(rows_per_match))
+                    .after_match_skip(Some(after_match_skip))
+                    .pattern(pattern_ast)
+                    .symbols(symbols)
+                    .alias(None);
+
+                // Set as the relation for this SELECT
+                relation.match_recognize(mr_builder);
+                Ok(())
+            }
             LogicalPlan::TableScan(scan) => {
                 if let Some(unparsed_table_scan) = Self::unparse_table_scan_pushdown(
                     plan,
@@ -421,14 +602,43 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
+                // Skip filters that operate solely on MR metadata columns; these
+                // were added during planning for ROWS PER MATCH semantics and should
+                // not appear in the unparsed SQL.
+                fn references_only_mr_metadata(expr: &Expr) -> bool {
+                    let mut only_mr = true;
+                    let mut saw_any_column = false;
+                    let _ = expr.apply(|e| {
+                        if let Expr::Column(c) = e {
+                            saw_any_column = true;
+                            let n = c.name.as_str();
+                            let is_mr = n == MrMetadataColumn::Classifier.as_ref()
+                                || n == MrMetadataColumn::MatchNumber.as_ref()
+                                || n == MrMetadataColumn::MatchSequenceNumber.as_ref()
+                                || n == MrMetadataColumn::IsExcludedRow.as_ref();
+                            if !is_mr {
+                                only_mr = false;
+                                return Ok(
+                                    datafusion_common::tree_node::TreeNodeRecursion::Stop,
+                                );
+                            }
+                        }
+                        Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                    });
+                    // Only skip a filter if it references MR metadata columns and nothing else.
+                    only_mr && saw_any_column
+                }
+
                 if let Some(agg) =
                     find_agg_node_within_select(plan, select.already_projected())
                 {
                     let unprojected =
                         unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
-                    let filter_expr = self.expr_to_sql(&unprojected)?;
-                    select.having(Some(filter_expr));
-                } else {
+                    if !references_only_mr_metadata(&unprojected) {
+                        let filter_expr = self.expr_to_sql(&unprojected)?;
+                        select.having(Some(filter_expr));
+                    }
+                } else if !references_only_mr_metadata(&filter.predicate) {
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));
                 }

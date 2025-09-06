@@ -1,0 +1,58 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ../init_data.slt.part
+
+# ----------------------------------------------------------------------
+# Anchor tests (start ^ and end $)
+# ----------------------------------------------------------------------
+
+# Test 1: Start anchor (^) should only match the very first row of the input
+#         that also satisfies the DEFINE predicate.
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (^ A)
+    DEFINE A AS price < 130
+)
+----
+DDOG 2024-01-01 125
+
+# Test 2: End anchor ($) should only match when the predicate row is the
+#         last row of the input.
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A $)
+    DEFINE A AS company = 'CRM' AND price = 266
+)
+----
+CRM 2024-01-12 266
+
+# Test 3: Combination of start and end anchors that cannot be satisfied
+#         (there is more than one row in the input), so it should return no rows.
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (^ A $)
+    DEFINE A AS price < 130
+)
+----
