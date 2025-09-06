@@ -74,3 +74,8 @@ FROM VALUES
 AS v(y, m, w, d, h, mi, s);
 ----
 0 0 0 0 0 0 -Infinity NULL
+
+query error DataFusion error: Execution error: months overflow
+SELECT make_interval(2147483647, 1, 0, 0, 0, 0, 0.0);
+
+# null <- SELECT make_interval(2147483647, 1, 0, 0, 0, 0, 0.0);

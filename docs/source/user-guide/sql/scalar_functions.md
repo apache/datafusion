@@ -1993,6 +1993,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [datetrunc](#datetrunc)
 - [from_unixtime](#from_unixtime)
 - [make_date](#make_date)
+- [make_interval](#make_interval)
 - [now](#now)
 - [to_char](#to_char)
 - [to_date](#to_date)
@@ -2224,6 +2225,41 @@ make_date(year, month, day)
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+
+### `make_interval`
+
+Construct an INTERVAL (MonthDayNano) from component parts. Missing arguments default to 0; if any provided argument is NULL on a row, the result is NULL.
+
+```sql
+make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]])
+```
+
+#### Arguments
+
+- **years**: Years to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators.
+- **months**: Months to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators.
+- **weeks**: Weeks to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators.
+- **days**: Days to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators.
+- **hours**: Hours to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators.
+- **mins**: Minutes to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators.
+- **secs**: Seconds to use when making the interval (may be fractional). Optional; defaults to 0. Must be finite (not NaN/±Inf). Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```sql
+-- Inline example without creating a table
+> SELECT
+      y, m, w, d, h, mi, s,
+      make_interval(y, m, w, d, h, mi, s) AS interval
+    FROM VALUES
+      (1,   1,   1,   1,   1,   1,   1.0)
+    AS v(y, m, w, d, h, mi, s);
++---+---+---+---+---+----+-----+--------------------------------------------------------------------------+
+| y | m | w | d | h | mi | s   | interval                                                                 |
++---+---+---+---+---+----+-----+--------------------------------------------------------------------------+
+| 1 | 1 | 1 | 1 | 1 | 1  | 1.0 | IntervalMonthDayNano { months: 13, days: 8, nanoseconds: 3661000000000 } |
++---+---+---+---+---+----+-----+--------------------------------------------------------------------------+
+```
 
 ### `now`
 

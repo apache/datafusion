@@ -280,6 +280,8 @@ mod tests {
             Some(5),
             Some(6),
             Some(7),
+            Some(8),
+            Some(9),
         ]));
         let month = Arc::new(Int32Array::from(vec![
             Some(1),
@@ -289,6 +291,8 @@ mod tests {
             Some(5),
             Some(6),
             Some(7),
+            Some(8),
+            Some(9),
         ]));
         let week = Arc::new(Int32Array::from(vec![
             Some(1),
@@ -298,6 +302,8 @@ mod tests {
             Some(5),
             Some(6),
             Some(7),
+            Some(8),
+            Some(9),
         ]));
         let day = Arc::new(Int32Array::from(vec![
             Some(1),
@@ -307,6 +313,8 @@ mod tests {
             Some(5),
             Some(6),
             Some(7),
+            Some(8),
+            Some(9),
         ]));
         let hour = Arc::new(Int32Array::from(vec![
             Some(1),
@@ -316,6 +324,8 @@ mod tests {
             None,
             Some(6),
             Some(7),
+            Some(8),
+            Some(9),
         ]));
         let min = Arc::new(Int32Array::from(vec![
             Some(1),
@@ -325,6 +335,8 @@ mod tests {
             Some(5),
             None,
             Some(7),
+            Some(8),
+            Some(9),
         ]));
         let sec = Arc::new(Float64Array::from(vec![
             Some(1.0),
@@ -334,6 +346,8 @@ mod tests {
             Some(5.0),
             Some(6.0),
             None,
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
         ]));
 
         let out = run_make_interval_month_day_nano(vec![
@@ -351,5 +365,86 @@ mod tests {
         for i in 0..out.len() {
             assert!(out.is_null(i), "row {i} should be NULL");
         }
+    }
+
+    #[test]
+    fn error_months_overflow_should_be_null() {
+        // months = year*12 + month → overflow -> NULL
+        let year = Arc::new(Int32Array::from(vec![Some(i32::MAX)])) as ArrayRef;
+        let month = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let week = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let day = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let hour = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let min = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let sec = Arc::new(Float64Array::from(vec![Some(0.0)])) as ArrayRef;
+
+        let err = run_make_interval_month_day_nano(vec![
+            year, month, week, day, hour, min, sec,
+        ])
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("months overflow"), "{msg}");
+    }
+
+    #[test]
+    fn happy_path_all_present_single_row() {
+        // 1y 2m 3w 4d 5h 6m 7.25s
+        let year = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let month = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+        let week = Arc::new(Int32Array::from(vec![Some(3)])) as ArrayRef;
+        let day = Arc::new(Int32Array::from(vec![Some(4)])) as ArrayRef;
+        let hour = Arc::new(Int32Array::from(vec![Some(5)])) as ArrayRef;
+        let mins = Arc::new(Int32Array::from(vec![Some(6)])) as ArrayRef;
+        let secs = Arc::new(Float64Array::from(vec![Some(7.25)])) as ArrayRef;
+
+        let out = run_make_interval_month_day_nano(vec![
+            year, month, week, day, hour, mins, secs,
+        ])
+        .unwrap();
+        assert_eq!(out.data_type(), &Interval(MonthDayNano));
+
+        let out = out
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out.null_count(), 0);
+
+        let v: IntervalMonthDayNano = out.value(0);
+        assert_eq!(v.months, 1 * 12 + 2); // 14
+        assert_eq!(v.days, 3 * 7 + 4); // 25
+        let expected_nanos = (5_i64 * 3600 + 6 * 60 + 7) * 1_000_000_000 + 250_000_000;
+        assert_eq!(v.nanoseconds, expected_nanos);
+    }
+    #[test]
+    fn negative_components_and_fractional_seconds() {
+        // -1y -2m  -1w -1d  -1h -1m  -1.5s
+        let year = Arc::new(Int32Array::from(vec![Some(-1)])) as ArrayRef;
+        let month = Arc::new(Int32Array::from(vec![Some(-2)])) as ArrayRef;
+        let week = Arc::new(Int32Array::from(vec![Some(-1)])) as ArrayRef;
+        let day = Arc::new(Int32Array::from(vec![Some(-1)])) as ArrayRef;
+        let hour = Arc::new(Int32Array::from(vec![Some(-1)])) as ArrayRef;
+        let mins = Arc::new(Int32Array::from(vec![Some(-1)])) as ArrayRef;
+        let secs = Arc::new(Float64Array::from(vec![Some(-1.5)])) as ArrayRef;
+
+        let out = run_make_interval_month_day_nano(vec![
+            year, month, week, day, hour, mins, secs,
+        ])
+        .unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out.null_count(), 0);
+        let v = out.value(0);
+
+        assert_eq!(v.months, -1 * 12 + (-2)); // -14
+        assert_eq!(v.days, -1 * 7 + (-1)); // -8
+
+        // -(1h + 1m + 1.5s) en nanos
+        let expected_nanos = -((3600_i64 + 60 + 1) * 1_000_000_000 + 500_000_000);
+        assert_eq!(v.nanoseconds, expected_nanos);
     }
 }
