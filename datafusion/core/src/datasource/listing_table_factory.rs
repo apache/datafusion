@@ -398,6 +398,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_odd_directory_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(dir.path());
+        path.extend(["odd.v1", "odd.v2"]);
+        fs::create_dir_all(&path).unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable {
+            name,
+            location: String::from(path.to_str().unwrap()),
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert_eq!("", listing_options.file_extension);
+    }
+
+    #[tokio::test]
     async fn test_create_with_hive_partitions() {
         let dir = tempfile::tempdir().unwrap();
         let mut path = PathBuf::from(dir.path());
