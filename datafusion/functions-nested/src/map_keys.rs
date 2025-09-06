@@ -121,7 +121,8 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new_list_field(map_array.key_type().clone(), false)),
+        // internal array nullability is true to be in sync with DuckDB
+        Arc::new(Field::new_list_field(map_array.key_type().clone(), true)),
         map_array.offsets().clone(),
         Arc::clone(map_array.keys()),
         map_array.nulls().cloned(),
