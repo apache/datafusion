@@ -25,7 +25,8 @@ use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::{DataType, IntervalMonthDayNano};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -337,13 +338,15 @@ mod tests {
 
         let out = run_make_interval_month_day_nano(vec![
             year, month, week, day, hour, min, sec,
-        ]).unwrap();
+        ])
+        .unwrap();
         let out = out
             .as_any()
             .downcast_ref::<IntervalMonthDayNanoArray>()
             .ok_or_else(|| {
                 DataFusionError::Internal("expected IntervalMonthDayNano".into())
-            }).unwrap();
+            })
+            .unwrap();
 
         for i in 0..out.len() {
             assert!(out.is_null(i), "row {i} should be NULL");
