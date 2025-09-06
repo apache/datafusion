@@ -29,6 +29,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 use datafusion_functions::unicode;
+use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_nested::map::map_udf;
@@ -135,6 +136,8 @@ fn roundtrip_statement() -> Result<()> {
             "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
             "select id, count(*), first_name from person group by first_name, id",
             "select id, sum(age), first_name from person group by first_name, id",
+            "select id, array_agg(age), first_name from person group by first_name, id",
+            "select id, array_agg(age order by age), first_name from person group by first_name, id",
             "select id, count(*), first_name
             from person
             where id!=3 and first_name=='test'
@@ -236,6 +239,7 @@ fn roundtrip_statement() -> Result<()> {
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
+            .with_aggregate_function(array_agg_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner));
@@ -251,6 +255,262 @@ fn roundtrip_statement() -> Result<()> {
 
         assert_eq!(plan, plan_roundtrip);
     }
+
+    Ok(())
+}
+
+/// Helper function to create a MockSessionState configured for match_recognize tests
+fn create_match_recognize_test_state() -> MockSessionState {
+    let mut state = MockSessionState::default();
+    // Register all match_recognize functions
+    for f in datafusion_functions::all_default_functions() {
+        state = state.with_scalar_function(f);
+    }
+    for f in datafusion_functions_match_recognize::all_default_scalar_functions() {
+        state = state.with_scalar_function(f);
+    }
+    for f in datafusion_functions_aggregate::all_default_aggregate_functions() {
+        state = state.with_aggregate_function(f);
+    }
+    for f in datafusion_functions_match_recognize::all_default_aggregate_functions() {
+        state = state.with_aggregate_function(f);
+    }
+    for f in datafusion_functions_window::all_default_window_functions() {
+        state = state.with_window_function(f);
+    }
+    for f in datafusion_functions_match_recognize::all_default_window_functions() {
+        state = state.with_window_function(f);
+    }
+
+    state = state.with_expr_planner(Arc::new(
+        datafusion_functions_match_recognize::planner::MatchRecognizeFunctionPlanner,
+    ));
+    state
+}
+
+#[test]
+fn roundtrip_match_recognize_basic() -> Result<()> {
+    let query = r#"SELECT * FROM j1 MATCH_RECOGNIZE(
+        PARTITION BY j1_string
+        ORDER BY j1_id
+        MEASURES A.j1_id AS last_a
+        PATTERN (A+)
+        DEFINE A AS j1_id > 1
+    )"#;
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: create_match_recognize_test_state(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let actual_sql = roundtrip_statement.to_string();
+    insta::assert_snapshot!(actual_sql, @"SELECT j1.j1_string, last_a FROM (SELECT j1.j1_string, last_value(j1.j1_id ORDER BY __mr_match_sequence_number ASC NULLS LAST) FILTER (WHERE __mr_classifier_a) AS last_a FROM j1 MATCH_RECOGNIZE(PARTITION BY j1.j1_string ORDER BY j1.j1_id ASC NULLS LAST MEASURES classifier() AS __mr_classifier, match_number() AS __mr_match_number, match_sequence_number() AS __mr_match_sequence_number, classifier() = 'A' AS __mr_classifier_a ALL ROWS PER MATCH SHOW EMPTY MATCHES AFTER MATCH SKIP PAST LAST ROW PATTERN (A+) DEFINE A AS (j1_id > 1)) GROUP BY j1.j1_string, __mr_match_number)");
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_match_recognize_rows_per_match_modes() -> Result<()> {
+    let query = r#"SELECT * FROM j1 MATCH_RECOGNIZE(
+        PARTITION BY j1_string
+        ORDER BY j1_id
+        ALL ROWS PER MATCH WITH UNMATCHED ROWS
+        PATTERN (A?)
+        DEFINE A AS j1_id > 1
+    )"#;
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: create_match_recognize_test_state(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let actual_sql: String = roundtrip_statement.to_string();
+    insta::assert_snapshot!(actual_sql, @"SELECT j1.j1_id, j1.j1_string FROM (SELECT j1.j1_id, j1.j1_string FROM j1 MATCH_RECOGNIZE(PARTITION BY j1.j1_string ORDER BY j1.j1_id ASC NULLS LAST MEASURES classifier() AS __mr_classifier, match_number() AS __mr_match_number, match_sequence_number() AS __mr_match_sequence_number, classifier() = 'A' AS __mr_classifier_a ALL ROWS PER MATCH WITH UNMATCHED ROWS AFTER MATCH SKIP PAST LAST ROW PATTERN (A?) DEFINE A AS (j1_id > 1)))");
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_match_recognize_with_exclude() -> Result<()> {
+    let query = r#"SELECT * FROM j1 MATCH_RECOGNIZE(
+        PARTITION BY j1_string
+        ORDER BY j1_id
+        ALL ROWS PER MATCH
+        PATTERN (A ({- A -})+ B)
+        DEFINE A AS j1_id > 1, B AS j1_id < 5
+    )"#;
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: create_match_recognize_test_state(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let actual_sql = roundtrip_statement.to_string();
+    insta::assert_snapshot!(actual_sql, @"SELECT j1.j1_id, j1.j1_string FROM (SELECT j1.j1_id, j1.j1_string FROM j1 MATCH_RECOGNIZE(PARTITION BY j1.j1_string ORDER BY j1.j1_id ASC NULLS LAST MEASURES classifier() AS __mr_classifier, match_number() AS __mr_match_number, match_sequence_number() AS __mr_match_sequence_number, classifier() = 'A' AS __mr_classifier_a, classifier() = 'A_excl' AS __mr_classifier_a_excl, classifier() = 'B' AS __mr_classifier_b ALL ROWS PER MATCH SHOW EMPTY MATCHES AFTER MATCH SKIP PAST LAST ROW PATTERN (A ( A_excl )+ B) DEFINE A AS (j1_id > 1), B AS (j1_id < 5), A_excl AS (j1_id > 1)) WHERE NOT __mr_classifier_a_excl)");
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_match_recognize_after_match_skip() -> Result<()> {
+    let query = r#"SELECT * FROM j1 MATCH_RECOGNIZE(
+        PARTITION BY j1_string
+        ORDER BY j1_id
+        ALL ROWS PER MATCH
+        AFTER MATCH SKIP TO FIRST A
+        PATTERN (A+ B*)
+        DEFINE A AS j1_id > 1, B AS j1_id < 5
+    )"#;
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: create_match_recognize_test_state(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let actual_sql = roundtrip_statement.to_string();
+    insta::assert_snapshot!(actual_sql, @"SELECT j1.j1_id, j1.j1_string FROM (SELECT j1.j1_id, j1.j1_string FROM j1 MATCH_RECOGNIZE(PARTITION BY j1.j1_string ORDER BY j1.j1_id ASC NULLS LAST MEASURES classifier() AS __mr_classifier, match_number() AS __mr_match_number, match_sequence_number() AS __mr_match_sequence_number, classifier() = 'A' AS __mr_classifier_a, classifier() = 'B' AS __mr_classifier_b ALL ROWS PER MATCH SHOW EMPTY MATCHES AFTER MATCH SKIP TO FIRST A PATTERN (A+ B*) DEFINE A AS (j1_id > 1), B AS (j1_id < 5)))");
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_match_recognize_complex_pattern() -> Result<()> {
+    let query = r#"SELECT * FROM j1 MATCH_RECOGNIZE(
+        ORDER BY j1_id
+        ALL ROWS PER MATCH
+        PATTERN (^+ A $*)
+        DEFINE A AS j1_id > 1
+    )"#;
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: create_match_recognize_test_state(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let actual_sql = roundtrip_statement.to_string();
+    insta::assert_snapshot!(actual_sql, @"SELECT j1.j1_id, j1.j1_string FROM (SELECT j1.j1_id, j1.j1_string FROM j1 MATCH_RECOGNIZE(ORDER BY j1.j1_id ASC NULLS LAST MEASURES classifier() AS __mr_classifier, match_number() AS __mr_match_number, match_sequence_number() AS __mr_match_sequence_number, classifier() = 'A' AS __mr_classifier_a ALL ROWS PER MATCH SHOW EMPTY MATCHES AFTER MATCH SKIP PAST LAST ROW PATTERN (^+ A $*) DEFINE A AS (j1_id > 1)))");
+
+    Ok(())
+}
+
+#[test]
+fn match_recognize_measures_basic() -> Result<()> {
+    let query = r#"SELECT * FROM j1 MATCH_RECOGNIZE(
+        PARTITION BY j1_string
+        ORDER BY j1_id
+        MEASURES LAST_VALUE(A.j1_id) AS last_a
+        PATTERN (A+)
+        DEFINE A AS j1_id > 1
+    )"#;
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: create_match_recognize_test_state(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let actual_sql = roundtrip_statement.to_string();
+    // Expect the unparser to rewrite LAST(A.x) to an MR-specific window form
+    // Expect a window LAST_VALUE over MR partition/order
+    insta::assert_snapshot!(actual_sql, @"SELECT j1.j1_string, last_a FROM (SELECT j1.j1_string, last_value(j1.j1_id ORDER BY __mr_match_sequence_number ASC NULLS LAST) FILTER (WHERE __mr_classifier_a) AS last_a FROM j1 MATCH_RECOGNIZE(PARTITION BY j1.j1_string ORDER BY j1.j1_id ASC NULLS LAST MEASURES classifier() AS __mr_classifier, match_number() AS __mr_match_number, match_sequence_number() AS __mr_match_sequence_number, classifier() = 'A' AS __mr_classifier_a ALL ROWS PER MATCH SHOW EMPTY MATCHES AFTER MATCH SKIP PAST LAST ROW PATTERN (A+) DEFINE A AS (j1_id > 1)) GROUP BY j1.j1_string, __mr_match_number)");
+
+    Ok(())
+}
+
+#[test]
+fn match_recognize_measures_multiple() -> Result<()> {
+    let query = r#"SELECT * FROM j1 MATCH_RECOGNIZE(
+        PARTITION BY j1_string
+        ORDER BY j1_id
+        MEASURES LAST_VALUE(A.j1_id) AS last_a, FIRST_VALUE(A.j1_id) AS first_a
+        PATTERN (A+)
+        DEFINE A AS j1_id > 1
+    )"#;
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: create_match_recognize_test_state(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let actual_sql = roundtrip_statement.to_string();
+    insta::assert_snapshot!(actual_sql, @"SELECT j1.j1_string, last_a, first_a FROM (SELECT j1.j1_string, last_value(j1.j1_id ORDER BY __mr_match_sequence_number ASC NULLS LAST) FILTER (WHERE __mr_classifier_a) AS last_a, first_value(j1.j1_id ORDER BY __mr_match_sequence_number ASC NULLS LAST) FILTER (WHERE __mr_classifier_a) AS first_a FROM j1 MATCH_RECOGNIZE(PARTITION BY j1.j1_string ORDER BY j1.j1_id ASC NULLS LAST MEASURES classifier() AS __mr_classifier, match_number() AS __mr_match_number, match_sequence_number() AS __mr_match_sequence_number, classifier() = 'A' AS __mr_classifier_a ALL ROWS PER MATCH SHOW EMPTY MATCHES AFTER MATCH SKIP PAST LAST ROW PATTERN (A+) DEFINE A AS (j1_id > 1)) GROUP BY j1.j1_string, __mr_match_number)");
+
+    Ok(())
+}
+
+#[test]
+fn match_recognize_measures_metadata_columns() -> Result<()> {
+    let query = r#"SELECT * FROM j1 MATCH_RECOGNIZE(
+        PARTITION BY j1_string
+        ORDER BY j1_id
+        MEASURES CLASSIFIER() AS cls, MATCH_NUMBER() AS mn, MATCH_SEQUENCE_NUMBER() AS ms
+        PATTERN (A+)
+        DEFINE A AS j1_id > 1
+    )"#;
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: create_match_recognize_test_state(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let actual_sql = roundtrip_statement.to_string();
+    // Expect classifier to be emitted as a window over MR metadata columns
+    insta::assert_snapshot!(actual_sql, @"SELECT j1.j1_string, cls, mn, ms FROM (SELECT j1.j1_string, last_value(__mr_classifier ORDER BY __mr_match_sequence_number ASC NULLS LAST) AS cls, last_value(__mr_match_number ORDER BY __mr_match_sequence_number ASC NULLS LAST) AS mn, last_value(__mr_match_sequence_number ORDER BY __mr_match_sequence_number ASC NULLS LAST) AS ms FROM j1 MATCH_RECOGNIZE(PARTITION BY j1.j1_string ORDER BY j1.j1_id ASC NULLS LAST MEASURES classifier() AS __mr_classifier, match_number() AS __mr_match_number, match_sequence_number() AS __mr_match_sequence_number, classifier() = 'A' AS __mr_classifier_a ALL ROWS PER MATCH SHOW EMPTY MATCHES AFTER MATCH SKIP PAST LAST ROW PATTERN (A+) DEFINE A AS (j1_id > 1)) GROUP BY j1.j1_string, __mr_match_number)");
 
     Ok(())
 }

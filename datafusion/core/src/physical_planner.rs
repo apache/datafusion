@@ -664,6 +664,9 @@ impl DefaultPhysicalPlanner {
                     )?)
                 }
             }
+            LogicalPlan::MatchRecognize(_) => {
+                return not_impl_err!("Physical plan does not support MatchRecognize");
+            }
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 group_expr,

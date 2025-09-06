@@ -33,7 +33,10 @@ use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Resul
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
-use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
+use sqlparser::ast::{
+    ArrayElemTypeDef, ExactNumberInfo, Expr as SQLExpr, OrderByExpr, RowsPerMatch,
+    TimezoneInfo,
+};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
@@ -239,6 +242,36 @@ impl IdentNormalizer {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum MatchRecognizeClause {
+    Define,
+    Measures,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchRecognizeContext {
+    pub clause: MatchRecognizeClause,
+    pub rows_per_match: Option<RowsPerMatch>,
+    pub partition_by: Vec<SQLExpr>,
+    pub order_by: Vec<OrderByExpr>,
+}
+
+impl MatchRecognizeContext {
+    pub fn new(
+        clause: MatchRecognizeClause,
+        rows_per_match: Option<RowsPerMatch>,
+        partition_by: Vec<SQLExpr>,
+        order_by: Vec<OrderByExpr>,
+    ) -> Self {
+        Self {
+            clause,
+            rows_per_match,
+            partition_by,
+            order_by,
+        }
+    }
+}
+
 /// Struct to store the states used by the Planner. The Planner will leverage the states
 /// to resolve CTEs, Views, subqueries and PREPARE statements. The states include
 /// Common Table Expression (CTE) provided with WITH clause and
@@ -267,6 +300,8 @@ pub struct PlannerContext {
     outer_from_schema: Option<DFSchemaRef>,
     /// The query schema defined by the table
     create_table_schema: Option<DFSchemaRef>,
+    /// The optional MATCH_RECOGNIZE context
+    match_recognize_context: Option<MatchRecognizeContext>,
 }
 
 impl Default for PlannerContext {
@@ -284,6 +319,7 @@ impl PlannerContext {
             outer_query_schema: None,
             outer_from_schema: None,
             create_table_schema: None,
+            match_recognize_context: None,
         }
     }
 
@@ -373,6 +409,35 @@ impl PlannerContext {
     /// Remove the plan of CTE / Subquery for the specified name
     pub(super) fn remove_cte(&mut self, cte_name: &str) {
         self.ctes.remove(cte_name);
+    }
+
+    pub fn match_recognize_context(&self) -> Option<&MatchRecognizeContext> {
+        self.match_recognize_context.as_ref()
+    }
+
+    /// Enables the MATCH_RECOGNIZE context, returning an error if it's already enabled
+    pub fn enable_match_recognize_context(
+        &mut self,
+        clause: MatchRecognizeClause,
+        rows_per_match: Option<RowsPerMatch>,
+        partition_by: &[SQLExpr],
+        order_by: &[OrderByExpr],
+    ) -> Result<()> {
+        if self.match_recognize_context.is_some() {
+            return plan_err!("Nested MATCH_RECOGNIZE clauses are not allowed");
+        }
+        self.match_recognize_context = Some(MatchRecognizeContext::new(
+            clause,
+            rows_per_match,
+            partition_by.to_vec(),
+            order_by.to_vec(),
+        ));
+        Ok(())
+    }
+
+    /// Disables the MATCH_RECOGNIZE context
+    pub fn disable_match_recognize_context(&mut self) {
+        self.match_recognize_context = None;
     }
 }
 
