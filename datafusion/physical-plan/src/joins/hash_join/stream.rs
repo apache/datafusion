@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::joins::hash_join::exec::JoinLeftData;
-use crate::joins::hash_join::shared_bounds::SharedBoundsAccumulator;
+use crate::joins::hash_join::shared_bounds::{BoundsWaiter, SharedBoundsAccumulator};
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
 };
@@ -50,7 +50,7 @@ use datafusion_common::{
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
-use futures::{ready, Stream, StreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt};
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -120,6 +120,8 @@ impl BuildSide {
 pub(super) enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
     WaitBuildSide,
+    /// Waiting for bounds to be reported by all partitions
+    WaitPartitionBoundsReport,
     /// Indicates that build-side has been collected, and stream is ready for fetching probe-side
     FetchProbeBatch,
     /// Indicates that non-empty batch has been fetched from probe-side, and is ready to be processed
@@ -205,6 +207,9 @@ pub(super) struct HashJoinStream {
     right_side_ordered: bool,
     /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
     bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
+    /// Optional future to signal when bounds have been reported by all partitions
+    /// and the dynamic filter has been updated
+    bounds_waiter: Option<BoundsWaiter>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -325,6 +330,7 @@ impl HashJoinStream {
             hashes_buffer,
             right_side_ordered,
             bounds_accumulator,
+            bounds_waiter: None,
         }
     }
 
@@ -338,6 +344,9 @@ impl HashJoinStream {
             return match self.state {
                 HashJoinStreamState::WaitBuildSide => {
                     handle_state!(ready!(self.collect_build_side(cx)))
+                }
+                HashJoinStreamState::WaitPartitionBoundsReport => {
+                    handle_state!(ready!(self.wait_for_partition_bounds_report(cx)))
                 }
                 HashJoinStreamState::FetchProbeBatch => {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
@@ -353,6 +362,17 @@ impl HashJoinStream {
                 HashJoinStreamState::Completed => Poll::Ready(None),
             };
         }
+    }
+
+    fn wait_for_partition_bounds_report(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        if let Some(ref mut fut) = self.bounds_waiter {
+            ready!(fut.poll_unpin(cx));
+        }
+        self.state = HashJoinStreamState::FetchProbeBatch;
+        Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
     /// Collects build-side data by polling `OnceFut` future from initialized build-side
@@ -376,13 +396,14 @@ impl HashJoinStream {
         // Dynamic filter coordination between partitions:
         // Report bounds to the accumulator which will handle synchronization and filter updates
         if let Some(ref bounds_accumulator) = self.bounds_accumulator {
-            bounds_accumulator
+            self.bounds_waiter = bounds_accumulator
                 .report_partition_bounds(self.partition, left_data.bounds.clone())?;
+            self.state = HashJoinStreamState::WaitPartitionBoundsReport;
+        } else {
+            self.state = HashJoinStreamState::FetchProbeBatch;
         }
 
-        self.state = HashJoinStreamState::FetchProbeBatch;
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
-
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
