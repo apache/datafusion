@@ -922,6 +922,11 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     let plan = FilterPushdown::new_post_optimization()
         .optimize(plan, &config)
         .unwrap();
+
+    // Test for https://github.com/apache/datafusion/pull/17371: dynamic filter linking survives `with_new_children`
+    let children = plan.children().into_iter().map(Arc::clone).collect();
+    let plan = plan.with_new_children(children).unwrap();
+
     let config = SessionConfig::new().with_batch_size(10);
     let session_ctx = SessionContext::new_with_config(config);
     session_ctx.register_object_store(
@@ -1095,7 +1100,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     // Top-level CoalesceBatchesExec
     let cb =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
-    // Top-level CoalesceParititionsExec
+    // Top-level CoalescePartitionsExec
     let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
     // Add a sort for determistic output
     let plan = Arc::new(SortExec::new(

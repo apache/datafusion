@@ -354,12 +354,18 @@ pub struct HashJoinExec {
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
-    /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result
-    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
-    /// Shared bounds accumulator for coordinating dynamic filter updates across partitions
-    /// Only created when dynamic filter pushdown is enabled.
-    /// Lazily initialized at execution time to use actual runtime partition counts
-    bounds_accumulator: Option<OnceLock<Arc<SharedBoundsAccumulator>>>,
+    /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
+    /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
+    dynamic_filter: Option<HashJoinExecDynamicFilter>,
+}
+
+#[derive(Clone)]
+struct HashJoinExecDynamicFilter {
+    /// Dynamic filter that we'll update with the results of the build side once that is done.
+    filter: Arc<DynamicFilterPhysicalExpr>,
+    /// Bounds accumulator to keep track of the min/max bounds on the join keys for each partition.
+    /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
+    bounds_accumulator: OnceLock<Arc<SharedBoundsAccumulator>>,
 }
 
 impl fmt::Debug for HashJoinExec {
@@ -453,7 +459,6 @@ impl HashJoinExec {
             null_equality,
             cache,
             dynamic_filter: None,
-            bounds_accumulator: None,
         })
     }
 
@@ -638,6 +643,21 @@ impl HashJoinExec {
     ///
     /// This function is public so other downstream projects can use it to
     /// construct `HashJoinExec` with right side as the build side.
+    ///
+    /// For using this interface directly, please refer to below:
+    ///
+    /// Hash join execution may require specific input partitioning (for example,
+    /// the left child may have a single partition while the right child has multiple).
+    ///
+    /// Calling this function on join nodes whose children have already been repartitioned
+    /// (e.g., after a `RepartitionExec` has been inserted) may break the partitioning
+    /// requirements of the hash join. Therefore, ensure you call this function
+    /// before inserting any repartitioning operators on the join's children.
+    ///
+    /// In DataFusion's default SQL interface, this function is used by the `JoinSelection`
+    /// physical optimizer rule to determine a good join order, which is
+    /// executed before the `EnforceDistribution` rule (the rule that may
+    /// insert `RepartitionExec` operators).
     pub fn swap_inputs(
         &self,
         partition_mode: PartitionMode,
@@ -837,7 +857,6 @@ impl ExecutionPlan for HashJoinExec {
             )?,
             // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
-            bounds_accumulator: None,
         }))
     }
 
@@ -860,7 +879,6 @@ impl ExecutionPlan for HashJoinExec {
             cache: self.cache.clone(),
             // Reset dynamic filter and bounds accumulator to initial state
             dynamic_filter: None,
-            bounds_accumulator: None,
         }))
     }
 
@@ -942,32 +960,28 @@ impl ExecutionPlan for HashJoinExec {
         let batch_size = context.session_config().batch_size();
 
         // Initialize bounds_accumulator lazily with runtime partition counts (only if enabled)
-        let bounds_accumulator = if enable_dynamic_filter_pushdown
-            && self.dynamic_filter.is_some()
-        {
-            if let Some(ref bounds_accumulator_oncelock) = self.bounds_accumulator {
-                let dynamic_filter = Arc::clone(self.dynamic_filter.as_ref().unwrap());
-                let on_right = self
-                    .on
-                    .iter()
-                    .map(|(_, right_expr)| Arc::clone(right_expr))
-                    .collect::<Vec<_>>();
-
-                Some(Arc::clone(bounds_accumulator_oncelock.get_or_init(|| {
-                    Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
-                        self.mode,
-                        self.left.as_ref(),
-                        self.right.as_ref(),
-                        dynamic_filter,
-                        on_right,
-                    ))
-                })))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let bounds_accumulator = enable_dynamic_filter_pushdown
+            .then(|| {
+                self.dynamic_filter.as_ref().map(|df| {
+                    let filter = Arc::clone(&df.filter);
+                    let on_right = self
+                        .on
+                        .iter()
+                        .map(|(_, right_expr)| Arc::clone(right_expr))
+                        .collect::<Vec<_>>();
+                    Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
+                        Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
+                            self.mode,
+                            self.left.as_ref(),
+                            self.right.as_ref(),
+                            filter,
+                            on_right,
+                        ))
+                    })))
+                })
+            })
+            .flatten()
+            .flatten();
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -1162,8 +1176,10 @@ impl ExecutionPlan for HashJoinExec {
                     column_indices: self.column_indices.clone(),
                     null_equality: self.null_equality,
                     cache: self.cache.clone(),
-                    dynamic_filter: Some(dynamic_filter),
-                    bounds_accumulator: Some(OnceLock::new()),
+                    dynamic_filter: Some(HashJoinExecDynamicFilter {
+                        filter: dynamic_filter,
+                        bounds_accumulator: OnceLock::new(),
+                    }),
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
             }

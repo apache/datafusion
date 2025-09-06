@@ -314,9 +314,11 @@ pub fn serialize_expr(
                         ref partition_by,
                         ref order_by,
                         ref window_frame,
-                        // TODO: support null treatment in proto
+                        // TODO: support null treatment, distinct, and filter in proto.
+                        // See https://github.com/apache/datafusion/issues/17417
                         null_treatment: _,
                         distinct: _,
+                        filter: _,
                     },
             } = window_fun.as_ref();
             let mut buf = Vec::new();

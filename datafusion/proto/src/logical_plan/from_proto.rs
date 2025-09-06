@@ -301,7 +301,8 @@ pub fn parse_expr(
                     exec_datafusion_err!("missing window frame during deserialization")
                 })?;
 
-            // TODO: support proto for null treatment
+            // TODO: support null treatment, distinct, and filter in proto.
+            // See https://github.com/apache/datafusion/issues/17417
             match window_function {
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
