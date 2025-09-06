@@ -411,11 +411,12 @@ mod tests {
         assert_eq!(out.null_count(), 0);
 
         let v: IntervalMonthDayNano = out.value(0);
-        assert_eq!(v.months, 1 * 12 + 2); // 14
+        assert_eq!(v.months, 12 + 2); // 14
         assert_eq!(v.days, 3 * 7 + 4); // 25
         let expected_nanos = (5_i64 * 3600 + 6 * 60 + 7) * 1_000_000_000 + 250_000_000;
         assert_eq!(v.nanoseconds, expected_nanos);
     }
+
     #[test]
     fn negative_components_and_fractional_seconds() {
         // -1y -2m  -1w -1d  -1h -1m  -1.5s
@@ -440,8 +441,8 @@ mod tests {
         assert_eq!(out.null_count(), 0);
         let v = out.value(0);
 
-        assert_eq!(v.months, -1 * 12 + (-2)); // -14
-        assert_eq!(v.days, -1 * 7 + (-1)); // -8
+        assert_eq!(v.months, -12 + (-2)); // -14
+        assert_eq!(v.days, -7 + (-1)); // -8
 
         // -(1h + 1m + 1.5s) en nanos
         let expected_nanos = -((3600_i64 + 60 + 1) * 1_000_000_000 + 500_000_000);
