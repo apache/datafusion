@@ -2544,6 +2544,7 @@ fn test_unparse_window() -> Result<()> {
             window_frame: WindowFrame::new(None),
             null_treatment: None,
             distinct: false,
+            filter: None,
         },
     }));
     let table_scan = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
