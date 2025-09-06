@@ -101,19 +101,23 @@ pub struct UnionExec {
 
 impl UnionExec {
     /// Create a new UnionExec
-    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
-        let schema = union_schema(&inputs);
+    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
+        if inputs.is_empty() {
+            return exec_err!("UnionExec requires at least one input");
+        }
+        
+        let schema = union_schema(&inputs)?;
         // The schema of the inputs and the union schema is consistent when:
         // - They have the same number of fields, and
         // - Their fields have same types at the same indices.
         // Here, we know that schemas are consistent and the call below can
         // not return an error.
         let cache = Self::compute_properties(&inputs, schema).unwrap();
-        UnionExec {
+        Ok(UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
+        })
     }
 
     /// Get inputs of the execution plan
@@ -220,7 +224,7 @@ impl ExecutionPlan for UnionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(UnionExec::new(children)))
+        Ok(Arc::new(UnionExec::new(children)?))
     }
 
     fn execute(
@@ -319,7 +323,7 @@ impl ExecutionPlan for UnionExec {
             .map(|child| make_with_child(projection, child))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Some(Arc::new(UnionExec::new(new_children))))
+        Ok(Some(Arc::new(UnionExec::new(new_children)?)))
     }
 }
 
@@ -373,7 +377,7 @@ impl InterleaveExec {
                 "Not all InterleaveExec children have a consistent hash partitioning"
             );
         }
-        let cache = Self::compute_properties(&inputs);
+        let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -387,17 +391,17 @@ impl InterleaveExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(inputs: &[Arc<dyn ExecutionPlan>]) -> PlanProperties {
-        let schema = union_schema(inputs);
+    fn compute_properties(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<PlanProperties> {
+        let schema = union_schema(inputs)?;
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             emission_type_from_children(inputs),
             boundedness_from_children(inputs),
-        )
+        ))
     }
 }
 
@@ -538,7 +542,11 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
             .all(|partition| partition == *reference)
 }
 
-fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
+fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
+    if inputs.is_empty() {
+        return exec_err!("Cannot create union schema from empty inputs");
+    }
+    
     let first_schema = inputs[0].schema();
 
     let fields = (0..first_schema.fields().len())
@@ -581,7 +589,7 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
         .flat_map(|i| i.schema().metadata().clone().into_iter())
         .collect();
 
-    Arc::new(Schema::new_with_metadata(fields, all_metadata_merged))
+    Ok(Arc::new(Schema::new_with_metadata(fields, all_metadata_merged)))
 }
 
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
@@ -710,7 +718,7 @@ mod tests {
         let csv = test::scan_partitioned(4);
         let csv2 = test::scan_partitioned(5);
 
-        let union_exec = Arc::new(UnionExec::new(vec![csv, csv2]));
+        let union_exec = Arc::new(UnionExec::new(vec![csv, csv2])?);
 
         // Should have 9 partitions and 9 output batches
         assert_eq!(
@@ -892,7 +900,7 @@ mod tests {
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_orderings(union_expected_orderings);
 
-            let union = UnionExec::new(vec![child1, child2]);
+            let union = UnionExec::new(vec![child1, child2])?;
             let union_eq_properties = union.properties().equivalence_properties();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
@@ -915,5 +923,57 @@ mod tests {
         for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }
+    }
+
+    #[test]
+    fn test_union_empty_inputs() {
+        // Test that UnionExec::new fails with empty inputs
+        let result = UnionExec::new(vec![]);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("UnionExec requires at least one input"));
+    }
+
+    #[test]
+    fn test_union_schema_empty_inputs() {
+        // Test that union_schema fails with empty inputs
+        let result = union_schema(&[]);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot create union schema from empty inputs"));
+    }
+
+    #[test]
+    fn test_union_single_input() -> Result<()> {
+        // Test that UnionExec works with a single input
+        let schema = create_test_schema()?;
+        let memory_exec = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
+        let union = UnionExec::new(vec![memory_exec])?;
+        
+        // Check that schema is correct
+        assert_eq!(union.schema(), schema);
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_multiple_inputs_still_works() -> Result<()> {
+        // Test that existing functionality with multiple inputs still works
+        let schema = create_test_schema()?;
+        let memory_exec1 = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
+        let memory_exec2 = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
+        
+        let union = UnionExec::new(vec![memory_exec1, memory_exec2])?;
+        
+        // Check that schema is correct
+        assert_eq!(union.schema(), schema);
+        // Check that we have 2 inputs
+        assert_eq!(union.inputs().len(), 2);
+        
+        Ok(())
     }
 }
