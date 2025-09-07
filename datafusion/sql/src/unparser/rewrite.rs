@@ -107,19 +107,19 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
 /// the Window plan in a SubqueryAlias, effectively creating a derived table.
 ///
 /// Example transformation:
-/// 
+///
 /// Filter: condition
 ///   Window: window_function
 ///     TableScan: table
-/// 
+///
 /// becomes:
-/// 
+///
 /// Filter: condition
 ///   SubqueryAlias: __qualify_subquery
 ///     Projection: table.column1, table.column2
 ///       Window: window_function
 ///         TableScan: table
-/// 
+///
 pub(super) fn rewrite_qualify(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let plan = plan.clone();
 

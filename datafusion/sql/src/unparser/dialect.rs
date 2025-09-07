@@ -421,6 +421,10 @@ impl Dialect for DuckDBDialect {
 pub struct MySqlDialect {}
 
 impl Dialect for MySqlDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -482,6 +486,10 @@ impl Dialect for MySqlDialect {
 pub struct SqliteDialect {}
 
 impl Dialect for SqliteDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
