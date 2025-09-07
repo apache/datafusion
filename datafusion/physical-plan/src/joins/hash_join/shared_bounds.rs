@@ -222,12 +222,12 @@ impl SharedBoundsAccumulator {
                 }
             }
 
-            // Combine all column predicates for this partition with AND
+            // Combine all column predicates for this partition with OR
             if !column_predicates.is_empty() {
                 let partition_predicate = column_predicates
                     .into_iter()
                     .reduce(|acc, pred| {
-                        Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                        Arc::new(BinaryExpr::new(acc, Operator::Or, pred))
                             as Arc<dyn PhysicalExpr>
                     })
                     .unwrap();
