@@ -124,6 +124,10 @@ impl<'a> BinaryTypeCoercer<'a> {
 
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
+        // Special handling for arithmetic operations with both `lhs` and `rhs` NULL:
+        // When both operands are NULL, we are providing a concrete numeric type (Int64)
+        // to allow the arithmetic operation to proceed. This ensures NULL `op` NULL returns NULL
+        // instead of failing during planning.
         if is_both_null(self.lhs, self.rhs) && is_arithmetic(self.op) {
             return Ok(Signature::uniform(DataType::Int64));
         }
