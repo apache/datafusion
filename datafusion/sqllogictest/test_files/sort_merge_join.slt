@@ -20,7 +20,7 @@
 ##########
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = false;
+set datafusion.optimizer.prefer_sort_merge_join = true;
 
 statement ok
 CREATE TABLE t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100), ('Bob', 1);

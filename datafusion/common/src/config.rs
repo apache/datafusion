@@ -822,9 +822,34 @@ config_namespace! {
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true
 
-        /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
+        /// When set to true, the physical plan optimizer will prefer HashJoin when applicable.
+        /// If there are multiple preferred and applicable join types, the optimizer
+        /// will choose one based on heuristics.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
-        pub prefer_hash_join: bool, default = true
+        pub prefer_hash_join: bool, default = false
+
+        /// When set to true, the physical plan optimizer will prefer SortMergeJoin when applicable.
+        /// If there are multiple preferred and applicable join types, the optimizer
+        /// will choose one according to heuristics.
+        pub prefer_sort_merge_join: bool, default = false
+
+        /// When set to true, the physical plan optimizer will prefer NestedLoopJoin
+        /// when applicable.
+        /// If there are multiple preferred and applicable join types, the optimizer
+        /// will choose one according to heuristics.
+        pub prefer_nested_loop_join: bool, default = false
+
+        /// Enables planning HashJoin operators. If set to false, the optimizer will avoid
+        /// producing HashJoin plans and consider other join strategies instead.
+        pub enable_hash_join: bool, default = true
+
+        /// Enables planning SortMergeJoin operators. If set to false, the optimizer will avoid
+        /// producing SortMergeJoin plans and consider other join strategies instead.
+        pub enable_sort_merge_join: bool, default = true
+
+        /// Enables planning NestedLoopJoin operators. If set to false, the optimizer will avoid
+        /// producing NestedLoopJoin plans and consider other join strategies instead.
+        pub enable_nested_loop_join: bool, default = true
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition

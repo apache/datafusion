@@ -41,9 +41,7 @@ use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils as join_utils;
-use crate::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
-};
+// Join exec types used by join_planner module
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use crate::physical_plan::repartition::RepartitionExec;
@@ -58,7 +56,6 @@ use crate::physical_plan::{
 use crate::schema_equivalence::schema_satisfied_by;
 
 use arrow::array::{builder::StringBuilder, RecordBatch};
-use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{
@@ -79,8 +76,8 @@ use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
-    WindowFrameBound, WriteOp,
+    Filter, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame, WindowFrameBound,
+    WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
@@ -102,6 +99,10 @@ use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::debug;
 use tokio::sync::Mutex;
+
+// Submodules
+mod join_planner;
+use self::join_planner::plan_join_exec;
 
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
@@ -1165,64 +1166,15 @@ impl DefaultPhysicalPlanner {
                     _ => None,
                 };
 
-                let prefer_hash_join =
-                    session_state.config_options().optimizer.prefer_hash_join;
-
-                let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
-                        // cross join if there is no join conditions and no join filter set
-                        Arc::new(CrossJoinExec::new(physical_left, physical_right))
-                    } else {
-                        // there is no equal join condition, use the nested loop join
-                        Arc::new(NestedLoopJoinExec::try_new(
-                            physical_left,
-                            physical_right,
-                            join_filter,
-                            join_type,
-                            None,
-                        )?)
-                    }
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
-                    && !prefer_hash_join
-                {
-                    // Use SortMergeJoin if hash join is not preferred
-                    let join_on_len = join_on.len();
-                    Arc::new(SortMergeJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        *join_type,
-                        vec![SortOptions::default(); join_on_len],
-                        *null_equality,
-                    )?)
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
-                    && prefer_hash_join
-                {
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        PartitionMode::Auto,
-                        *null_equality,
-                    )?)
-                } else {
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        PartitionMode::CollectLeft,
-                        *null_equality,
-                    )?)
-                };
+                let join: Arc<dyn ExecutionPlan> = plan_join_exec(
+                    session_state,
+                    physical_left,
+                    physical_right,
+                    join_on,
+                    join_filter,
+                    join_type,
+                    null_equality,
+                )?;
 
                 // If plan was mutated previously then need to create the ExecutionPlan
                 // for the new Projection that was applied on top.

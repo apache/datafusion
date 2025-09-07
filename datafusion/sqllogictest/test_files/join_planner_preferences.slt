@@ -1,0 +1,220 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Join Planner Preferences & Enablement Tests
+##
+## These tests verify the interaction of the following configuration options:
+## - datafusion.optimizer.enable_hash_join
+## - datafusion.optimizer.enable_sort_merge_join
+## - datafusion.optimizer.enable_nested_loop_join
+## - datafusion.optimizer.prefer_hash_join
+## - datafusion.optimizer.prefer_sort_merge_join
+## - datafusion.optimizer.prefer_nested_loop_join
+##
+## Strategy: set configs via SQL, then EXPLAIN a simple equi-join and
+## assert which physical join operator is chosen.
+##########
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# Ensure SortMergeJoin is eligible when enabled and preferred
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+# Avoid plan noise from batch coalescing so the join node is top-level
+statement ok
+set datafusion.execution.coalesce_batches = false;
+
+statement ok
+CREATE TABLE jt1(a int, b text) AS VALUES (1, 'x'), (2, 'y'), (3, 'z');
+
+statement ok
+CREATE TABLE jt2(a int, b text) AS VALUES (1, 'p'), (2, 'q'), (4, 'r');
+
+##########
+## Config 1 -- Enable all, no preference -> expect HashJoin
+##########
+statement ok
+set datafusion.optimizer.enable_nested_loop_join = true;
+
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.enable_hash_join = true;
+
+statement ok
+set datafusion.optimizer.prefer_nested_loop_join = false;
+
+statement ok
+set datafusion.optimizer.prefer_sort_merge_join = false;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 2 -- Force SMJ (only SMJ enabled) -> expect SortMergeJoin
+##########
+statement ok
+set datafusion.optimizer.enable_nested_loop_join = false;
+
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.enable_hash_join = false;
+
+statement ok
+set datafusion.optimizer.prefer_nested_loop_join = false;
+
+statement ok
+set datafusion.optimizer.prefer_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 3 -- Prefer SMJ, others allowed -> expect SortMergeJoin
+##########
+statement ok
+set datafusion.optimizer.enable_nested_loop_join = true;
+
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.enable_hash_join = true;
+
+statement ok
+set datafusion.optimizer.prefer_nested_loop_join = false;
+
+statement ok
+set datafusion.optimizer.prefer_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 4 -- Prefer SMJ and HJ equally -> expect HashJoin (HJ > SMJ)
+##########
+statement ok
+set datafusion.optimizer.enable_nested_loop_join = true;
+
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.enable_hash_join = true;
+
+statement ok
+set datafusion.optimizer.prefer_nested_loop_join = false;
+
+statement ok
+set datafusion.optimizer.prefer_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 5 -- Prefer disabled type (NLJ preferred but disabled) -> expect HashJoin
+##########
+statement ok
+set datafusion.optimizer.enable_nested_loop_join = false;
+
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.enable_hash_join = true;
+
+statement ok
+set datafusion.optimizer.prefer_nested_loop_join = true;
+
+statement ok
+set datafusion.optimizer.prefer_sort_merge_join = false;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 6 -- No join type enabled -> expect planning error
+##########
+statement ok
+set datafusion.optimizer.enable_nested_loop_join = false;
+
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = false;
+
+statement ok
+set datafusion.optimizer.enable_hash_join = false;
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan_error Error during planning: No enabled join algorithm is applicable for this join. Possible join types are [HJ, SMJ]. Try to enable them through configurations like `datafusion.optimizer.enable_hash_join`

@@ -2218,7 +2218,7 @@ async fn roundtrip_logical_plan_sort_merge_join() -> Result<()> {
     )
     .await?;
 
-    ctx.sql("SET datafusion.optimizer.prefer_hash_join = false")
+    ctx.sql("SET datafusion.optimizer.prefer_sort_merge_join = true")
         .await?
         .show()
         .await?;

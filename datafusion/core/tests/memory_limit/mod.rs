@@ -174,7 +174,7 @@ async fn sort_merge_join_no_spill() {
     // Planner chooses MergeJoin only if number of partitions > 1
     let config = SessionConfig::new()
         .with_target_partitions(2)
-        .set_bool("datafusion.optimizer.prefer_hash_join", false);
+        .set_bool("datafusion.optimizer.prefer_sort_merge_join", true);
 
     TestCase::new()
         .with_query(

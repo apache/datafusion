@@ -2727,6 +2727,9 @@ statement ok
 set datafusion.optimizer.prefer_hash_join = false;
 
 statement ok
+set datafusion.optimizer.prefer_sort_merge_join = true;
+
+statement ok
 set datafusion.execution.target_partitions = 2;
 
 statement ok
@@ -3152,6 +3155,9 @@ set datafusion.explain.logical_plan_only = false;
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+set datafusion.optimizer.prefer_sort_merge_join = true;
 
 statement ok
 set datafusion.execution.target_partitions = 2;
