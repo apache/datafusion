@@ -761,6 +761,11 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#ffi-user-defined-aggregate-function-signature-change">
+     FFI user defined aggregate function signature change
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#added-physicalexpr-is-volatile-node">
      Added
      <code class="docutils literal notranslate">
@@ -1495,6 +1500,19 @@ Reimplementation for any custom <code class="docutils literal notranslate"><span
 </pre></div>
 </div>
 <p>If you have custom implementations of <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> or work directly with <code class="docutils literal notranslate"><span class="pre">FileOpenFuture</span></code>, you’ll need to update your error handling to use <code class="docutils literal notranslate"><span class="pre">DataFusionError</span></code> instead of <code class="docutils literal notranslate"><span class="pre">ArrowError</span></code>. The <code class="docutils literal notranslate"><span class="pre">FileStreamState</span></code> enum’s <code class="docutils literal notranslate"><span class="pre">Open</span></code> variant has also been updated accordingly. See <a class="reference external" href="https://github.com/apache/datafusion/pull/17397">#17397</a> for more details.</p>
+</section>
+<section id="ffi-user-defined-aggregate-function-signature-change">
+<h3>FFI user defined aggregate function signature change<a class="headerlink" href="#ffi-user-defined-aggregate-function-signature-change" title="Link to this heading">¶</a></h3>
+<p>The Foreign Function Interface (FFI) signature for user defined aggregate functions
+has been updated to call <code class="docutils literal notranslate"><span class="pre">return_field</span></code> instead of <code class="docutils literal notranslate"><span class="pre">return_type</span></code> on the underlying
+aggregate function. This is to support metadata handling with these aggregate functions.
+This change should be transparent to most users. If you have written unit tests to call
+<code class="docutils literal notranslate"><span class="pre">return_type</span></code> directly, you may need to change them to calling <code class="docutils literal notranslate"><span class="pre">return_field</span></code> instead.</p>
+<p>This update is a breaking change to the FFI API. The current best practice when using the
+FFI crate is to ensure that all libraries that are interacting are using the same
+underlying Rust version. Issue <a class="reference external" href="https://github.com/apache/datafusion/issues/17374">#17374</a> has been opened to discuss stabilization of
+this interface so that these libraries can be used across different DataFusion versions.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/17407">#17407</a> for details.</p>
 </section>
 <section id="added-physicalexpr-is-volatile-node">
 <h3>Added <code class="docutils literal notranslate"><span class="pre">PhysicalExpr::is_volatile_node</span></code><a class="headerlink" href="#added-physicalexpr-is-volatile-node" title="Link to this heading">¶</a></h3>
