@@ -3771,6 +3771,9 @@ impl serde::Serialize for CsvScanExecNode {
         if self.newlines_in_values {
             len += 1;
         }
+        if self.truncate_rows {
+            len += 1;
+        }
         if self.optional_escape.is_some() {
             len += 1;
         }
@@ -3792,6 +3795,9 @@ impl serde::Serialize for CsvScanExecNode {
         }
         if self.newlines_in_values {
             struct_ser.serialize_field("newlinesInValues", &self.newlines_in_values)?;
+        }
+        if self.truncate_rows {
+            struct_ser.serialize_field("truncateRows", &self.truncate_rows)?;
         }
         if let Some(v) = self.optional_escape.as_ref() {
             match v {
@@ -3825,6 +3831,8 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             "quote",
             "newlines_in_values",
             "newlinesInValues",
+            "truncate_rows",
+            "truncateRows",
             "escape",
             "comment",
         ];
@@ -3836,6 +3844,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             Delimiter,
             Quote,
             NewlinesInValues,
+            TruncateRows,
             Escape,
             Comment,
         }
@@ -3864,6 +3873,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "quote" => Ok(GeneratedField::Quote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
+                            "truncateRows" | "truncate_rows" => Ok(GeneratedField::TruncateRows),
                             "escape" => Ok(GeneratedField::Escape),
                             "comment" => Ok(GeneratedField::Comment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -3890,6 +3900,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut delimiter__ = None;
                 let mut quote__ = None;
                 let mut newlines_in_values__ = None;
+                let mut truncate_rows__ = None;
                 let mut optional_escape__ = None;
                 let mut optional_comment__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -3924,6 +3935,12 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             }
                             newlines_in_values__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::TruncateRows => {
+                            if truncate_rows__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("truncateRows"));
+                            }
+                            truncate_rows__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Escape => {
                             if optional_escape__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("escape"));
@@ -3944,6 +3961,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                     delimiter: delimiter__.unwrap_or_default(),
                     quote: quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
+                    truncate_rows: truncate_rows__.unwrap_or_default(),
                     optional_escape: optional_escape__,
                     optional_comment: optional_comment__,
                 })

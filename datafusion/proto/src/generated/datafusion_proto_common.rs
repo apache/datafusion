@@ -646,6 +646,9 @@ pub struct CsvOptions {
     /// Optional terminator character as a byte
     #[prost(bytes = "vec", tag = "17")]
     pub terminator: ::prost::alloc::vec::Vec<u8>,
+    /// Indicates if truncated rows are allowed
+    #[prost(bytes = "vec", tag = "18")]
+    pub truncated_rows: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
