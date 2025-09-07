@@ -78,7 +78,7 @@ repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
 rust-version = "1.86.0"
 # Define DataFusion version
-version = "49.0.2"
+version = "50.0.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
