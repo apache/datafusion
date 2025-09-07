@@ -364,6 +364,15 @@ impl HashJoinStream {
         }
     }
 
+    /// Optional step to wait until bounds have been reported by all partitions.
+    /// This state is only entered if a bounds accumulator is present.
+    ///
+    /// ## Why wait?
+    ///
+    /// The dynamic filter is only built once all partitions have reported their bounds.
+    /// If we do not wait here, the probe-side scan may start before the filter is ready.
+    /// This can lead to the probe-side scan missing the opportunity to apply the filter
+    /// and skip reading unnecessary data.
     fn wait_for_partition_bounds_report(
         &mut self,
         cx: &mut std::task::Context<'_>,

@@ -361,11 +361,9 @@ impl Future for BoundsWaiter {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        // Quick check to avoid registration if already complete
-        if self.completed.load(std::sync::atomic::Ordering::Relaxed) >= self.total {
-            return std::task::Poll::Ready(());
-        }
-
+        // Ensure we register the waker first so we do not fall victim
+        // to lost wakeups. This is a no-op if our current waker and our
+        // stored waker are the same.
         self.waker.register(cx.waker());
 
         if self.completed.load(std::sync::atomic::Ordering::Relaxed) >= self.total {
