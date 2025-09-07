@@ -391,7 +391,6 @@ impl Statistics {
     /// parameter to compute global statistics in a multi-partition setting.
     pub fn with_fetch(
         mut self,
-        _schema: SchemaRef,
         fetch: Option<usize>,
         skip: usize,
         n_partitions: usize,
@@ -1256,10 +1255,7 @@ mod tests {
         };
 
         // Apply fetch of 100 rows (10% of original)
-        let result = original_stats
-            .clone()
-            .with_fetch(schema.clone(), Some(100), 0, 1)
-            .unwrap();
+        let result = original_stats.clone().with_fetch(Some(100), 0, 1).unwrap();
 
         // Check num_rows
         assert_eq!(result.num_rows, Precision::Exact(100));
@@ -1337,10 +1333,7 @@ mod tests {
             }],
         };
 
-        let result = original_stats
-            .clone()
-            .with_fetch(schema.clone(), Some(500), 0, 1)
-            .unwrap();
+        let result = original_stats.clone().with_fetch(Some(500), 0, 1).unwrap();
 
         // Check num_rows is inexact
         assert_eq!(result.num_rows, Precision::Inexact(500));
@@ -1371,10 +1364,7 @@ mod tests {
             column_statistics: vec![col_stats_i64(10)],
         };
 
-        let result = original_stats
-            .clone()
-            .with_fetch(schema.clone(), Some(50), 100, 1)
-            .unwrap();
+        let result = original_stats.clone().with_fetch(Some(50), 100, 1).unwrap();
 
         assert_eq!(result.num_rows, Precision::Exact(0));
         // When ratio is 0/100 = 0, byte size should be 0
@@ -1396,10 +1386,7 @@ mod tests {
             column_statistics: vec![col_stats_i64(10)],
         };
 
-        let result = original_stats
-            .clone()
-            .with_fetch(schema.clone(), None, 0, 1)
-            .unwrap();
+        let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
 
         // Stats should be unchanged when no fetch and no skip
         assert_eq!(result.num_rows, Precision::Exact(100));
@@ -1424,7 +1411,7 @@ mod tests {
         // Skip 200, fetch 300, so we get rows 200-500
         let result = original_stats
             .clone()
-            .with_fetch(schema.clone(), Some(300), 200, 1)
+            .with_fetch(Some(300), 200, 1)
             .unwrap();
 
         assert_eq!(result.num_rows, Precision::Exact(300));
@@ -1448,10 +1435,7 @@ mod tests {
         };
 
         // Fetch 100 per partition, 4 partitions = 400 total
-        let result = original_stats
-            .clone()
-            .with_fetch(schema.clone(), Some(100), 0, 4)
-            .unwrap();
+        let result = original_stats.clone().with_fetch(Some(100), 0, 4).unwrap();
 
         assert_eq!(result.num_rows, Precision::Exact(400));
         // 400/1000 = 0.4, so 8000 * 0.4 = 3200
@@ -1479,10 +1463,7 @@ mod tests {
             }],
         };
 
-        let result = original_stats
-            .clone()
-            .with_fetch(schema.clone(), Some(100), 0, 1)
-            .unwrap();
+        let result = original_stats.clone().with_fetch(Some(100), 0, 1).unwrap();
 
         // With absent input stats, output should be inexact estimate
         assert_eq!(result.num_rows, Precision::Inexact(100));
@@ -1507,10 +1488,7 @@ mod tests {
         };
 
         // Skip 50, fetch 100, but only 50 rows remain
-        let result = original_stats
-            .clone()
-            .with_fetch(schema.clone(), Some(100), 50, 1)
-            .unwrap();
+        let result = original_stats.clone().with_fetch(Some(100), 50, 1).unwrap();
 
         assert_eq!(result.num_rows, Precision::Exact(50));
         // 50/100 = 0.5, so 800 * 0.5 = 400
@@ -1540,9 +1518,7 @@ mod tests {
             column_statistics: vec![original_col_stats.clone()],
         };
 
-        let result = original_stats
-            .with_fetch(schema.clone(), Some(250), 0, 1)
-            .unwrap();
+        let result = original_stats.with_fetch(Some(250), 0, 1).unwrap();
 
         let result_col_stats = &result.column_statistics[0];
 
