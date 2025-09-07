@@ -22,7 +22,7 @@ use std::fmt::{self, Debug, Display};
 use crate::{Result, ScalarValue};
 
 use crate::error::_plan_err;
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema};
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
