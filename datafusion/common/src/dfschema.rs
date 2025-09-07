@@ -883,7 +883,7 @@ impl DFSchema {
     ///     HashMap::new()
     /// ).unwrap();
     ///
-    /// println!("{}", schema.print_schema());
+    /// println!("{}", schema.print_schema_tree());
     /// ```
     ///
     /// Output:
@@ -892,7 +892,7 @@ impl DFSchema {
     ///  |-- id: int32 (nullable = false)
     ///  |-- name: utf8 (nullable = true)
     /// ```
-    pub fn print_schema(&self) -> String {
+    pub fn print_schema_tree(&self) -> String {
         let mut result = String::from("root\n");
 
         for (qualifier, field) in self.iter() {
@@ -1951,7 +1951,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
         let expected = "root\n |-- id: int32 (nullable = false)\n |-- name: string (nullable = true)\n |-- age: int64 (nullable = true)\n |-- active: boolean (nullable = false)";
 
         assert_eq!(output, expected);
@@ -1968,7 +1968,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
         let expected = "root\n |-- table1.id: int32 (nullable = false)\n |-- table1.name: string (nullable = true)";
 
         assert_eq!(output, expected);
@@ -2003,7 +2003,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
         let expected = "root\n |-- id: int32 (nullable = false)\n |-- address: struct (nullable = true)\n |    |-- street: string (nullable = true)\n |    |-- city: string (nullable = true)\n |-- tags: list (nullable = true)\n |    |-- item: string (nullable = true)\n |-- score: decimal (nullable = true)";
 
         assert_eq!(output, expected);
@@ -2012,7 +2012,7 @@ mod tests {
     #[test]
     fn test_print_schema_empty() {
         let schema = DFSchema::empty();
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
         let expected = "root";
 
         assert_eq!(output, expected);
@@ -2087,7 +2087,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
 
         // Check that the output contains the expected structure
         assert!(output.starts_with("root\n"));
@@ -2127,7 +2127,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
         let expected = "root\n |-- table1.id: int32 (nullable = false)\n |-- name: string (nullable = true)\n |-- table2.score: float64 (nullable = true)\n |-- active: boolean (nullable = false)";
 
         assert_eq!(output, expected);
@@ -2161,7 +2161,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
         let expected = "root\n |-- array_map_field: list (nullable = false)\n |    |-- item: map (nullable = false)\n |    |    |-- key: string (nullable = false)\n |    |    |-- value: string (valueContainsNull = false)";
 
         assert_eq!(output, expected);
@@ -2298,7 +2298,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
         // Verify the structure contains expected complex type combinations
         assert!(output.starts_with("root\n"));
 
@@ -2385,7 +2385,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema();
+        let output = schema.print_schema_tree();
         // Verify all edge case types are formatted correctly
         assert!(output.contains(" |-- null_field: null (nullable = true)"));
         assert!(output.contains(" |-- binary_field: binary (nullable = false)"));
