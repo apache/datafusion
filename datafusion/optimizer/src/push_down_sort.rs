@@ -25,8 +25,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
-use datafusion_expr::logical_plan::{LogicalPlan, TableScan};
-use datafusion_expr::{Expr, SortExpr};
+use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::{Expr, ScanOrdering, SortExpr};
 
 /// Optimization rule that pushes sort expressions down to table scans
 /// when the sort can potentially be optimized by the table provider.
@@ -123,22 +123,10 @@ impl OptimizerRule for PushDownSort {
             return Ok(Transformed::no(plan));
         }
 
-        // If the table scan already has preferred ordering, don't overwrite it
-        // This preserves any existing sort preferences from other optimizations
-        if table_scan.preferred_ordering.is_some() {
-            return Ok(Transformed::no(plan));
-        }
-
         // Create new TableScan with preferred ordering
-        let new_table_scan = TableScan {
-            table_name: table_scan.table_name.clone(),
-            source: Arc::clone(&table_scan.source),
-            projection: table_scan.projection.clone(),
-            projected_schema: Arc::clone(&table_scan.projected_schema),
-            filters: table_scan.filters.clone(),
-            fetch: table_scan.fetch,
-            preferred_ordering: Some(sort.expr.clone()),
-        };
+        let new_table_scan = table_scan.clone().with_ordering(
+            ScanOrdering::default().with_preferred_ordering(sort.expr.clone()),
+        );
 
         // Preserve the Sort node as a fallback while passing the ordering
         // preference to the TableScan as an optimization hint
@@ -275,7 +263,7 @@ mod tests {
             LogicalPlan::Sort(sort) => {
                 // Check that TableScan has preferred_ordering
                 if let LogicalPlan::TableScan(ts) = sort.input.as_ref() {
-                    assert!(ts.preferred_ordering.is_some());
+                    assert!(ts.ordering.is_some());
                 } else {
                     panic!("Expected TableScan input");
                 }
