@@ -165,39 +165,40 @@ pub fn map_from_keys_values_offsets(
     )?))
 }
 
-pub fn map_deduplicate_keys(
+fn map_deduplicate_keys(
     keys: &ArrayRef,
     values: &ArrayRef,
     offsets: &[i32],
 ) -> Result<(ArrayRef, ArrayRef, OffsetBuffer<i32>)> {
-    let num_rows = offsets.len() - 1;
-    let mut new_offsets = Vec::with_capacity(num_rows + 1);
-    new_offsets.push(0);
-    let mut last_offset = 0;
+    let offsets_len = offsets.len();
+    let mut new_offsets = Vec::with_capacity(offsets_len);
+
+    let mut cur_offset = 0;
+    let mut new_last_offset = 0;
+    new_offsets.push(new_last_offset);
 
     let mut needed_rows_builder = BooleanBuilder::new();
-    for row_num in 0..num_rows {
-        let cur_offset = offsets[row_num] as usize;
-        let next_offset = offsets[row_num + 1] as usize;
-        let num_entries = next_offset - cur_offset;
-        let keys_slice = keys.slice(cur_offset, num_entries);
+    for next_row_num in 1..offsets_len {
+        let num_entries = offsets[next_row_num] as usize - cur_offset;
         let mut seen_keys = HashSet::new();
         let mut needed_rows_one = [false].repeat(num_entries);
-        for index in (0..num_entries).rev() {
-            let key = ScalarValue::try_from_array(&keys_slice, index)?.compacted();
+        for cur_entry_idx in (0..num_entries).rev() {
+            let key = ScalarValue::try_from_array(&keys, cur_offset + cur_entry_idx)?
+                .compacted();
             if seen_keys.contains(&key) {
                 // TODO: implement configuration and logic for spark.sql.mapKeyDedupPolicy=EXCEPTION (this is default spark-config)
                 // exec_err!("invalid argument: duplicate keys in map")
                 // https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961
             } else {
                 // This code implements deduplication logic for spark.sql.mapKeyDedupPolicy=LAST_WIN (this is NOT default spark-config)
-                needed_rows_one[index] = true;
+                needed_rows_one[cur_entry_idx] = true;
                 seen_keys.insert(key);
-                last_offset += 1;
+                new_last_offset += 1;
             }
         }
         needed_rows_builder.append_array(&needed_rows_one.into());
-        new_offsets.push(last_offset);
+        new_offsets.push(new_last_offset);
+        cur_offset += num_entries;
     }
     let needed_rows = needed_rows_builder.finish();
     let needed_keys = filter(&keys, &needed_rows)?;

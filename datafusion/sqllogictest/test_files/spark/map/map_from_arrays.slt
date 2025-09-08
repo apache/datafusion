@@ -42,6 +42,27 @@ SELECT map_from_arrays(array(array('a', 'b'), array('c', 'd')), array(struct(1, 
 ----
 {[a, b]: {c0: 1, c1: 2, c2: 3}, [c, d]: {c0: 4, c1: 5, c2: 6}}
 
+# Test with nested function calls
+query ?
+SELECT
+    map_from_arrays(
+        array['outer_key1', 'outer_key2'],
+        array[
+            -- value for outer_key1: a map itself
+            map_from_arrays(
+                array['inner_a', 'inner_b'],
+                array[1, 2]
+            ),
+            -- value for outer_key2: another map
+            map_from_arrays(
+                array['inner_x', 'inner_y', 'inner_z'],
+                array[10, 20, 30]
+            )
+        ]
+    ) AS nested_map;
+----
+{outer_key1: {inner_a: 1, inner_b: 2}, outer_key2: {inner_x: 10, inner_y: 20, inner_z: 30}}
+
 # Test with duplicate keys
 query ?
 SELECT map_from_arrays(array(true, false, true), array('a', NULL, 'b'));
