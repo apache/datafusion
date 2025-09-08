@@ -1227,12 +1227,6 @@ mod tests {
 
     #[test]
     fn test_with_fetch_basic_preservation() {
-        // Test that column statistics and byte size are preserved (as inexact) when applying fetch
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("col1", DataType::Int32, false),
-            Field::new("col2", DataType::Int64, false),
-        ]));
-
         let original_stats = Statistics {
             num_rows: Precision::Exact(1000),
             total_byte_size: Precision::Exact(8000),
