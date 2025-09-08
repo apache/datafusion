@@ -18,6 +18,7 @@
 //! This module provides a builder for creating LogicalPlans
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
@@ -1517,39 +1518,66 @@ impl ValuesFields {
     }
 }
 
-// `name_map` tracks a mapping between a field name and the number of appearances of that field.
-//
-// Some field names might already come to this function with the count (number of times it appeared)
-// as a suffix e.g. id:1, so there's still a chance of name collisions, for example,
-// if these three fields passed to this function: "col:1", "col" and "col", the function
-// would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
-// that's why we need the `seen` set, so the fields are always unique.
-//
-pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
-    let mut name_map = HashMap::new();
-    let mut seen: HashSet<String> = HashSet::new();
+pub fn maybe_project_redundant_column(
+    input: Arc<LogicalPlan>,
+) -> Result<Arc<LogicalPlan>> {
+    // tracks a mapping between a field name and the number of appearances of that field.
+    let mut name_map = HashMap::<&str, usize>::new();
+    // tracks all the fields and aliases that were previously seen.
+    let mut seen = HashSet::<Cow<String>>::new();
 
-    fields
-        .into_iter()
-        .map(|field| {
-            let base_name = field.name();
-            let count = name_map.entry(base_name.clone()).or_insert(0);
-            let mut new_name = base_name.clone();
+    // Some field names might already come to this function with the count (number of times it appeared)
+    // as a suffix e.g. id:1, so there's still a chance of name collisions, for example,
+    // if these three fields passed to this function: "col:1", "col" and "col", the function
+    // would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
+    // That's why we need the `seen` set, so the fields are always unique.
+
+    let aliases = input
+        .schema()
+        .iter()
+        .map(|(_, field)| {
+            let original_name = field.name();
+            let mut name = Cow::Borrowed(original_name);
+
+            let count = name_map.entry(original_name).or_insert(0);
 
             // Loop until we find a name that hasn't been used
-            while seen.contains(&new_name) {
+            while seen.contains(&name) {
                 *count += 1;
-                new_name = format!("{base_name}:{count}");
+                name = Cow::Owned(format!("{original_name}:{count}"));
             }
 
-            seen.insert(new_name.clone());
+            seen.insert(name.clone());
 
-            let mut modified_field =
-                Field::new(&new_name, field.data_type().clone(), field.is_nullable());
-            modified_field.set_metadata(field.metadata().clone());
-            modified_field
+            match name {
+                Cow::Borrowed(_) => None,
+                Cow::Owned(alias) => Some(alias),
+            }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    // Check if there is at least an alias
+    let is_projection_needed = aliases.iter().any(Option::is_some);
+
+    if is_projection_needed {
+        let projection_expressions = aliases
+            .iter()
+            .zip(input.schema().iter())
+            .map(|(alias, (qualifier, field))| {
+                let column = Expr::Column(Column::new(qualifier.cloned(), field.name()));
+                match alias {
+                    None => column,
+                    Some(alias) => {
+                        Expr::Alias(Alias::new(column, qualifier.cloned(), alias))
+                    }
+                }
+            })
+            .collect();
+        let projection = Projection::try_new(projection_expressions, input)?;
+        Ok(Arc::new(LogicalPlan::Projection(projection)))
+    } else {
+        Ok(input)
+    }
 }
 
 fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
@@ -2672,34 +2700,6 @@ mod tests {
               Values: (Int32(1))
         ");
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_change_redundant_column() -> Result<()> {
-        let t1_field_1 = Field::new("a", DataType::Int32, false);
-        let t2_field_1 = Field::new("a", DataType::Int32, false);
-        let t2_field_3 = Field::new("a", DataType::Int32, false);
-        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
-        let t1_field_2 = Field::new("b", DataType::Int32, false);
-        let t2_field_2 = Field::new("b", DataType::Int32, false);
-
-        let field_vec = vec![
-            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
-        ];
-        let remove_redundant = change_redundant_column(&Fields::from(field_vec));
-
-        assert_eq!(
-            remove_redundant,
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("a:1", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("b:1", DataType::Int32, false),
-                Field::new("a:2", DataType::Int32, false),
-                Field::new("a:1:1", DataType::Int32, false),
-            ]
-        );
         Ok(())
     }
 
