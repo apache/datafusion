@@ -57,9 +57,7 @@ pub(super) fn plan_join_exec(
     null_equality: &datafusion_common::NullEquality,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Short-circuit: handle pure cross join (existing behavior)
-    if join_on.is_empty()
-        && join_filter.is_none()
-        && matches!(join_type, JoinType::Inner)
+    if join_on.is_empty() && join_filter.is_none() && matches!(join_type, JoinType::Inner)
     {
         return Ok(Arc::new(CrossJoinExec::new(physical_left, physical_right)));
     }
