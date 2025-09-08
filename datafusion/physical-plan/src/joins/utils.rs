@@ -563,11 +563,14 @@ fn estimate_inner_join_cardinality(
         .iter()
         .zip(right_stats.column_statistics.iter())
     {
-        // Break if any of statistics bounds are undefined
-        if left_stat.min_value.get_value().is_none()
-            || left_stat.max_value.get_value().is_none()
-            || right_stat.min_value.get_value().is_none()
-            || right_stat.max_value.get_value().is_none()
+        // Break if we don't have enough information to calculate a distinct count
+        // If distinct_count isn't provided directly, we need min and max to be provided
+        if (left_stat.distinct_count.get_value().is_none()
+            && (left_stat.min_value.get_value().is_none()
+                || left_stat.max_value.get_value().is_none()))
+            || (right_stat.distinct_count.get_value().is_none()
+                && (right_stat.min_value.get_value().is_none()
+                    || right_stat.max_value.get_value().is_none()))
         {
             return None;
         }
@@ -2016,20 +2019,20 @@ mod tests {
             ),
             // When we have distinct count.
             (
-                (10, Inexact(1), Inexact(10), Inexact(10), Absent),
-                (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                (10, Absent, Absent, Inexact(10), Absent),
+                (10, Absent, Absent, Inexact(10), Absent),
                 Some(Inexact(10)),
             ),
             // distinct(left) > distinct(right)
             (
-                (10, Inexact(1), Inexact(10), Inexact(5), Absent),
-                (10, Inexact(1), Inexact(10), Inexact(2), Absent),
+                (10, Absent, Absent, Inexact(5), Absent),
+                (10, Absent, Absent, Inexact(2), Absent),
                 Some(Inexact(20)),
             ),
             // distinct(right) > distinct(left)
             (
-                (10, Inexact(1), Inexact(10), Inexact(2), Absent),
-                (10, Inexact(1), Inexact(10), Inexact(5), Absent),
+                (10, Absent, Absent, Inexact(2), Absent),
+                (10, Absent, Absent, Inexact(5), Absent),
                 Some(Inexact(20)),
             ),
             // min(left) < 0 (range(left) > range(right))
@@ -2071,18 +2074,13 @@ mod tests {
             ),
             // No min or max (or both).
             (
-                (10, Absent, Absent, Inexact(3), Absent),
-                (10, Absent, Absent, Inexact(3), Absent),
+                (10, Absent, Absent, Absent, Absent),
+                (10, Absent, Absent, Absent, Absent),
                 None,
             ),
             (
-                (10, Inexact(2), Absent, Inexact(3), Absent),
-                (10, Absent, Inexact(5), Inexact(3), Absent),
-                None,
-            ),
-            (
-                (10, Absent, Inexact(3), Inexact(3), Absent),
-                (10, Inexact(1), Absent, Inexact(3), Absent),
+                (10, Inexact(2), Absent, Absent, Absent),
+                (10, Absent, Inexact(5), Absent, Absent),
                 None,
             ),
             (
