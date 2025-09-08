@@ -91,15 +91,21 @@ SELECT make_interval(0, 0, 0, 0, 2147483647, 1, 0.0);
 NULL
 
 # seconds is now blank line
+#query ?
+#SELECT make_interval(0, 0, 0, 0, 0, 0, 0.0);
+#----
+#0.000000000 secs
+
+#query ?
+#SELECT make_interval();
+#----
+#0.000000000 secs
+
 
 query ?
-SELECT make_interval(0, 0, 0, 0, 0, 0, 0.0);
+SELECT INTERVAL '1' SECOND AS iv;
 ----
-
-
-query ?
-SELECT make_interval();
-----
+1.000000000 secs
 
 
 #>>> spark.sql("SELECT make_interval() AS interval FROM VALUES (1), (2) AS t(x)").show()
