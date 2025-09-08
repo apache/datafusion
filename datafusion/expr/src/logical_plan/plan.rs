@@ -29,7 +29,7 @@ use super::invariants::{
     InvariantLevel,
 };
 use super::DdlStatement;
-use crate::builder::{change_redundant_column, unnest_with_options};
+use crate::builder::{maybe_project_redundant_column, unnest_with_options};
 use crate::expr::{
     intersect_metadata_for_union, Placeholder, Sort as SortExpr, WindowFunction,
     WindowFunctionParams,
@@ -2239,13 +2239,15 @@ impl SubqueryAlias {
         alias: impl Into<TableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
-        let fields = change_redundant_column(plan.schema().fields());
-        let meta_data = plan.schema().as_ref().metadata().clone();
-        let schema: Schema =
-            DFSchema::from_unqualified_fields(fields.into(), meta_data)?.into();
-        // Since schema is the same, other than qualifier, we can use existing
-        // functional dependencies:
+        let plan = maybe_project_redundant_column(plan)?;
+
+        let fields = plan.schema().fields().clone();
+        let meta_data = plan.schema().metadata().clone();
         let func_dependencies = plan.schema().functional_dependencies().clone();
+
+        let schema = DFSchema::from_unqualified_fields(fields, meta_data)?;
+        let schema = Schema::from(schema);
+
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
                 .with_functional_dependencies(func_dependencies)?,
