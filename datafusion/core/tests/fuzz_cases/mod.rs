@@ -17,6 +17,7 @@
 
 mod aggregate_fuzz;
 mod distinct_count_string_fuzz;
+mod join_dynamic_filter_pushdown;
 mod join_fuzz;
 mod merge_fuzz;
 mod sort_fuzz;
