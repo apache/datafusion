@@ -368,7 +368,7 @@ mod tests {
         let result = LogFunc::new().invoke_with_args(args);
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().to_string(),
+            result.unwrap_err().to_string().lines().next().unwrap(),
             "Arrow error: Cast error: Casting from Date32 to Float64 not supported"
         );
     }
@@ -1076,7 +1076,7 @@ mod tests {
         let result = LogFunc::new().invoke_with_args(args);
         assert!(result.is_err());
         assert_eq!(
-            "Arrow error: Compute error: Log cannot use non-integer or small base -2",
+            "Arrow error: Compute error: Log base must be greater than 1: -2",
             result.unwrap_err().to_string()
         );
     }
@@ -1098,8 +1098,8 @@ mod tests {
         };
         let result = LogFunc::new().invoke_with_args(args);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().starts_with(
-            "Arrow error: Compute error: Log of a large Decimal256 is not supported"
-        ));
+        assert_eq!(result.unwrap_err().to_string().lines().next().unwrap(),
+            "Arrow error: Not yet implemented: Log of Decimal256 larger than Decimal128 is not yet supported: 170141183460469231731687303715884106727"
+        );
     }
 }
