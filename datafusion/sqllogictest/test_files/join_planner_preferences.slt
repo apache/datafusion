@@ -217,4 +217,4 @@ set datafusion.optimizer.enable_hash_join = false;
 query TT
 EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
 ----
-physical_plan_error Error during planning: No enabled join algorithm is applicable for this join. Possible join types are [HJ, SMJ]. Try to enable them through configurations like `datafusion.optimizer.enable_hash_join`
+physical_plan_error Error during planning: No enabled join algorithm is applicable for this join. Possible join types are [Hj, Smj]. Try to enable them through configurations like `datafusion.optimizer.enable_hash_join`
