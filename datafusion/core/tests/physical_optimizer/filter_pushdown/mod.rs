@@ -1065,7 +1065,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     ];
     let probe_repartition = Arc::new(
         RepartitionExec::try_new(
-            probe_scan,
+            Arc::clone(&probe_scan),
             Partitioning::Hash(probe_hash_exprs, partition_count),
         )
         .unwrap(),
@@ -1198,6 +1198,13 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     );
 
     let result = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    let probe_scan_metrics = probe_scan.metrics().unwrap();
+
+    // The probe side had 4 rows, but after applying the dynamic filter only 2 rows should remain.
+    // The number of output rows from the probe side scan should stay consistent across executions.
+    // Issue: https://github.com/apache/datafusion/issues/17451
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
 
     insta::assert_snapshot!(
         result,

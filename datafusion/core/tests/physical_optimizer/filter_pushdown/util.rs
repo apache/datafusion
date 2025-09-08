@@ -27,6 +27,7 @@ use datafusion_datasource::{
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
     displayable,
@@ -62,12 +63,6 @@ impl FileOpener for TestOpener {
         _file_meta: FileMeta,
         _file: PartitionedFile,
     ) -> Result<FileOpenFuture> {
-        if let Some(predicate) = &self.predicate {
-            println!(
-                "Predicate when calling open: {}",
-                fmt_sql(predicate.as_ref())
-            );
-        }
         let mut batches = self.batches.clone();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -84,6 +79,12 @@ impl FileOpener for TestOpener {
             let (mapper, projection) = factory.map_schema(&batches[0].schema()).unwrap();
             let mut new_batches = Vec::new();
             for batch in batches {
+                let batch = if let Some(predicate) = &self.predicate {
+                    batch_filter(&batch, predicate)?
+                } else {
+                    batch
+                };
+
                 let batch = batch.project(&projection).unwrap();
                 let batch = mapper.map_batch(batch).unwrap();
                 new_batches.push(batch);
