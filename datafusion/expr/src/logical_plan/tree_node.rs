@@ -362,6 +362,7 @@ impl TreeNode for LogicalPlan {
                 lateral_join_condition,
                 left,
                 right,
+                any_join,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::DependentJoin(DependentJoin {
                     schema,
@@ -372,6 +373,7 @@ impl TreeNode for LogicalPlan {
                     lateral_join_condition,
                     left,
                     right,
+                    any_join,
                 })
             }),
         })

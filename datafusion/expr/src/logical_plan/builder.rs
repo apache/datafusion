@@ -55,9 +55,10 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, not_impl_err, plan_datafusion_err,
-    plan_err, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, NullEquality,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, NullEquality, Result, ScalarValue, TableReference, ToDFSchema,
+    UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -918,12 +919,25 @@ impl LogicalPlanBuilder {
             .collect();
         let metadata = schema.metadata().clone();
         let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
+        let any_join = match subquery_expr {
+            Some(ref expr) => match expr {
+                Expr::Exists(_) | Expr::InSubquery(_) => true,
+                _ => false,
+            },
+            None => match lateral_join_condition {
+                None => {
+                    return internal_err!("at least lateral join or subquery expr must be set to build dependent join");
+                }
+                Some(_) => false,
+            },
+        };
 
         Ok(Self::new(LogicalPlan::DependentJoin(DependentJoin {
             schema: DFSchemaRef::new(dfschema),
             left: Arc::new(left),
             right: Arc::new(right),
             correlated_columns,
+            any_join,
             subquery_expr,
             subquery_name,
             subquery_depth,

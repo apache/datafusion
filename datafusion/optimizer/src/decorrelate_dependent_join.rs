@@ -56,9 +56,14 @@ pub struct DependentJoinDecorrelator {
     replacement_map: IndexMap<String, Expr>,
     // if during the top down traversal, we observe any operator that requires
     // joining all rows from the lhs with nullable rows on the rhs
+    // this is true for the case of exists and in subquery
     any_join: bool,
     delim_scan_id: usize,
     dscan_cols: Vec<Column>,
+    // TODO: check if delim_join should be disable if there is a unnest operator
+    // in the subquery
+    // https://github.com/duckdb/duckdb/pull/4044
+    // perform_delim: bool
 }
 
 // normal join, but remove redundant columns
@@ -181,6 +186,7 @@ impl DependentJoinDecorrelator {
         lateral_depth: usize,
     ) -> Result<LogicalPlan> {
         if let LogicalPlan::DependentJoin(djoin) = plan {
+            self.any_join = djoin.any_join;
             let perform_delim = true;
             let left = djoin.left.as_ref();
 
@@ -224,7 +230,7 @@ impl DependentJoinDecorrelator {
                 djoin,
                 &self.correlated_columns,
                 false,
-                false,
+                self.any_join,
                 self.delim_scan_id,
                 djoin.subquery_depth,
             );
@@ -576,7 +582,7 @@ impl DependentJoinDecorrelator {
     fn push_down_dependent_join_internal(
         &mut self,
         plan: &LogicalPlan,
-        parent_propagate_nulls: bool,
+        parent_propagate_nulls: &mut bool,
         lateral_depth: usize,
     ) -> Result<LogicalPlan> {
         // First check if the logical plan has correlated expressions.
@@ -631,6 +637,9 @@ impl DependentJoinDecorrelator {
             }
             LogicalPlan::Projection(old_proj) => {
                 // TODO: Take propagate_null_value into consideration.
+                for expr in old_proj.expr.iter() {
+                    *parent_propagate_nulls &= expr.propagate_null_values()?;
+                }
 
                 // If the node has no correlated expressions, push the cross product with the
                 // delim scan only below the projection. This will preserve positionality of the
@@ -687,6 +696,13 @@ impl DependentJoinDecorrelator {
             }
             LogicalPlan::Aggregate(old_agg) => {
                 // TODO: support propagates null values
+                for expr in old_agg.aggr_expr.iter() {
+                    *parent_propagate_nulls &= expr.propagate_null_values()?;
+                }
+                for expr in old_agg.group_expr.iter() {
+                    *parent_propagate_nulls &= expr.propagate_null_values()?;
+                }
+                // parent_propagate_null_values &= expr->PropagatesNullValues();
 
                 // First we flatten the dependent join in the child of the projection.
                 let new_input = self.push_down_dependent_join_internal(
@@ -753,7 +769,7 @@ impl DependentJoinDecorrelator {
                     // aggregate and the delim scan.
                     // This does not always have to be a LEFt OUTER JOIN, depending on whether
                     // aggr func return NULL or a value.
-                    let join_type = if self.any_join || !parent_propagate_nulls {
+                    let join_type = if self.any_join || !*parent_propagate_nulls {
                         JoinType::Left
                     } else {
                         JoinType::Inner
@@ -828,7 +844,7 @@ impl DependentJoinDecorrelator {
                 }
             }
             LogicalPlan::DependentJoin(_) => {
-                return self.decorrelate(plan, parent_propagate_nulls, lateral_depth);
+                return self.decorrelate(plan, *parent_propagate_nulls, lateral_depth);
             }
             LogicalPlan::Join(old_join) => {
                 let mut left_has_correlation = false;
@@ -1151,7 +1167,7 @@ impl DependentJoinDecorrelator {
                 // Push down into child.
                 let new_input = self.push_down_dependent_join(
                     old_distinct.input().as_ref(),
-                    parent_propagate_nulls,
+                    *parent_propagate_nulls,
                     lateral_depth,
                 )?;
                 // Add all correlated columns to the DISTINCT targets.
@@ -1182,7 +1198,7 @@ impl DependentJoinDecorrelator {
             LogicalPlan::Sort(old_sort) => {
                 let new_input = self.push_down_dependent_join(
                     old_sort.input.as_ref(),
-                    parent_propagate_nulls,
+                    *parent_propagate_nulls,
                     lateral_depth,
                 )?;
                 let mut sort = old_sort.clone();
@@ -1288,12 +1304,12 @@ impl DependentJoinDecorrelator {
     fn push_down_dependent_join(
         &mut self,
         node: &LogicalPlan,
-        parent_propagate_nulls: bool,
+        mut parent_propagate_nulls: bool,
         lateral_depth: usize,
     ) -> Result<LogicalPlan> {
         let mut new_plan = self.push_down_dependent_join_internal(
             node,
-            parent_propagate_nulls,
+            &mut parent_propagate_nulls,
             lateral_depth,
         )?;
         if !self.replacement_map.is_empty() {
