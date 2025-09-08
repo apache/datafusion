@@ -1077,7 +1077,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             "Arrow error: Compute error: Log base must be greater than 1: -2",
-            result.unwrap_err().to_string()
+            result.unwrap_err().to_string().lines().next().unwrap()
         );
     }
 
