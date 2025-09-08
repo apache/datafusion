@@ -128,7 +128,9 @@ impl<'a> BinaryTypeCoercer<'a> {
         // When both operands are NULL, we are providing a concrete numeric type (Int64)
         // to allow the arithmetic operation to proceed. This ensures NULL `op` NULL returns NULL
         // instead of failing during planning.
-        if is_both_null(self.lhs, self.rhs) && is_arithmetic(self.op) {
+        if matches!((self.lhs, self.rhs), (DataType::Null, DataType::Null))
+            && self.op.is_numerical_operators()
+        {
             return Ok(Signature::uniform(DataType::Int64));
         }
 
@@ -139,7 +141,7 @@ impl<'a> BinaryTypeCoercer<'a> {
             // For all other cases (including temporal arithmetic and non-arithmetic operators),
             // we can delegate to signature_inner(&coerced, &coerced), which handles the necessary logic for those operators.
             // In those cases, signature_inner is designed to work with the coerced type, even if it originated from a NULL.
-            if is_arithmetic(self.op) && !coerced.is_temporal() {
+            if self.op.is_numerical_operators() && !coerced.is_temporal() {
                 let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for arithmetic operation {coerced} {} {coerced}: {e}",
@@ -319,17 +321,6 @@ impl<'a> BinaryTypeCoercer<'a> {
     pub fn get_input_types(&'a self) -> Result<(DataType, DataType)> {
         self.signature().map(|sig| (sig.lhs, sig.rhs))
     }
-}
-
-#[inline]
-fn is_both_null(lhs: &DataType, rhs: &DataType) -> bool {
-    matches!(lhs, DataType::Null) && matches!(rhs, DataType::Null)
-}
-
-#[inline]
-fn is_arithmetic(op: &Operator) -> bool {
-    use Operator::*;
-    matches!(op, Plus | Minus | Multiply | Divide | Modulo)
 }
 
 // TODO Move the rest inside of BinaryTypeCoercer

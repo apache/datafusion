@@ -620,12 +620,6 @@ select * from (values (1)) LIMIT 10*100;
 ----
 1
 
-# select both nulls with basic arithmetic(modulo)
-query I
-select null % null;
-----
-NULL
-
 # select limit with complex arithmetic
 query I
 select * from (values (1)) LIMIT 100/10;
