@@ -107,45 +107,35 @@ impl LogFunc {
 /// Binary function to calculate an integer logarithm of Decimal128 `value` using `base` base
 /// Returns error if base is invalid
 fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> {
-    if !base.is_finite() || base.trunc() != base || (base as u32) < 2 {
-        Err(ArrowError::ComputeError(format!(
-            "Log cannot use non-integer or small base {base}"
-        )))
+    if !base.is_finite() || base.trunc() != base {
+        return Err(ArrowError::ComputeError(format!(
+            "Log cannot use non-integer base: {base}"
+        )));
+    }
+    if (base as u32) < 2 {
+        return Err(ArrowError::ComputeError(format!(
+            "Log base must be greater than 1: {base}"
+        )));
+    }
+
+    let unscaled_value = decimal128_to_i128(value, scale)?;
+    if unscaled_value > 0 {
+        let log_value: u32 = unscaled_value.ilog(base as i128);
+        Ok(log_value as f64)
     } else {
-        let unscaled_value = decimal128_to_i128(value, scale)?;
-        if unscaled_value > 0 {
-            let log_value: u32 = unscaled_value.ilog(base as i128);
-            Ok(log_value as f64)
-        } else {
-            // Reflect f64::log behaviour
-            Ok(f64::NAN)
-        }
+        // Reflect f64::log behaviour
+        Ok(f64::NAN)
     }
 }
 
 /// Binary function to calculate an integer logarithm of Decimal128 `value` using `base` base
 /// Returns error if base is invalid or if value is out of bounds of Decimal128
 fn log_decimal256(value: i256, scale: i8, base: f64) -> Result<f64, ArrowError> {
-    if !base.is_finite() || base.trunc() != base || (base as u32) < 2 {
-        Err(ArrowError::ComputeError(format!(
-            "Log cannot use non-integer or small base {base}"
-        )))
-    } else {
-        match value.to_i128() {
-            Some(short_value) => {
-                // Calculate logarithm only for 128-bit decimals
-                let unscaled_value = decimal128_to_i128(short_value, scale)?;
-                if unscaled_value > 0 {
-                    let log_value: u32 = unscaled_value.ilog(base as i128);
-                    Ok(log_value as f64)
-                } else {
-                    Ok(f64::NAN)
-                }
-            }
-            None => Err(ArrowError::ComputeError(format!(
-                "Log of a large Decimal256 is not supported: {value}"
-            ))),
-        }
+    match value.to_i128() {
+        Some(value) => log_decimal128(value, scale, base),
+        None => Err(ArrowError::NotYetImplemented(format!(
+            "Log of Decimal256 larger than Decimal128 is not yet supported: {value}"
+        ))),
     }
 }
 
