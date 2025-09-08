@@ -890,7 +890,7 @@ impl DFSchema {
     ///  |-- name: utf8 (nullable = true)
     /// "
     /// ```
-    pub fn print_schema_tree(&self) -> String {
+    pub fn print_schema_tree(&self) -> impl Display + '_ {
         let mut result = String::from("root\n");
 
         for (qualifier, field) in self.iter() {
