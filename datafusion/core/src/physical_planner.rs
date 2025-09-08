@@ -45,7 +45,7 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use crate::physical_plan::projection::ProjectionExec;
+use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -1650,6 +1650,7 @@ pub fn create_window_expr_with_name(
                         window_frame,
                         null_treatment,
                         distinct,
+                        filter,
                     },
             } = window_fun.as_ref();
             let physical_args =
@@ -1669,6 +1670,11 @@ pub fn create_window_expr_with_name(
             let window_frame = Arc::new(window_frame.clone());
             let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
+            let physical_filter = filter
+                .as_ref()
+                .map(|f| create_physical_expr(f, logical_schema, execution_props))
+                .transpose()?;
+
             windows::create_window_expr(
                 fun,
                 name,
@@ -1679,6 +1685,7 @@ pub fn create_window_expr_with_name(
                 physical_schema,
                 ignore_nulls,
                 *distinct,
+                physical_filter,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),
@@ -2185,17 +2192,25 @@ impl DefaultPhysicalPlanner {
             PlannedExprResult::ExprWithName(physical_exprs),
             input_physical_schema.as_ref(),
         )? {
-            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => Ok(
-                Arc::new(ProjectionExec::try_new(physical_exprs, input_exec)?),
-            ),
+            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => {
+                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
+                    .into_iter()
+                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
+                    .collect();
+                Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input_exec)?))
+            }
             PlanAsyncExpr::Async(
                 async_map,
                 PlannedExprResult::ExprWithName(physical_exprs),
             ) => {
                 let async_exec =
                     AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
+                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
+                    .into_iter()
+                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
+                    .collect();
                 let new_proj_exec =
-                    ProjectionExec::try_new(physical_exprs, Arc::new(async_exec))?;
+                    ProjectionExec::try_new(proj_exprs, Arc::new(async_exec))?;
                 Ok(Arc::new(new_proj_exec))
             }
             _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
@@ -2700,7 +2715,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
+        let expected = "expr: [ProjectionExpr { expr: BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);

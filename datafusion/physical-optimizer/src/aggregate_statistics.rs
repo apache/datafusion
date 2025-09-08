@@ -22,7 +22,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
 use datafusion_physical_plan::{expressions, ExecutionPlan};
 use std::sync::Arc;
@@ -67,8 +67,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 if let Some((optimizable_statistic, name)) =
                     take_optimizable_value_from_statistics(&statistics_args, expr)
                 {
-                    projections
-                        .push((expressions::lit(optimizable_statistic), name.to_owned()));
+                    projections.push(ProjectionExpr {
+                        expr: expressions::lit(optimizable_statistic),
+                        alias: name.to_owned(),
+                    });
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
                     break;

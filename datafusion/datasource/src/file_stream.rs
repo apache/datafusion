@@ -37,7 +37,6 @@ use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
 
-use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::instant::Instant;
 use datafusion_common::ScalarValue;
@@ -225,7 +224,6 @@ impl FileStream {
                             let result = self
                                 .pc_projector
                                 .project(batch, partition_values)
-                                .map_err(|e| ArrowError::ExternalError(e.into()))
                                 .map(|batch| match &mut self.remain {
                                     Some(remain) => {
                                         if *remain > batch.num_rows() {
@@ -247,7 +245,7 @@ impl FileStream {
                                 self.state = FileStreamState::Error
                             }
                             self.file_stream_metrics.time_scanning_total.start();
-                            return Poll::Ready(Some(result.map_err(Into::into)));
+                            return Poll::Ready(Some(result));
                         }
                         Some(Err(err)) => {
                             self.file_stream_metrics.file_scan_errors.add(1);
@@ -281,7 +279,7 @@ impl FileStream {
                                 },
                                 OnError::Fail => {
                                     self.state = FileStreamState::Error;
-                                    return Poll::Ready(Some(Err(err.into())));
+                                    return Poll::Ready(Some(Err(err)));
                                 }
                             }
                         }
@@ -345,7 +343,7 @@ impl RecordBatchStream for FileStream {
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
 pub type FileOpenFuture =
-    BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
+    BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch>>>>;
 
 /// Describes the behavior of the `FileStream` if file opening or scanning fails
 pub enum OnError {
@@ -376,7 +374,7 @@ pub trait FileOpener: Unpin + Send + Sync {
 /// is ready
 pub enum NextOpen {
     Pending(FileOpenFuture),
-    Ready(Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>),
+    Ready(Result<BoxStream<'static, Result<RecordBatch>>>),
 }
 
 pub enum FileStreamState {
@@ -396,7 +394,7 @@ pub enum FileStreamState {
         /// Partitioning column values for the current batch_iter
         partition_values: Vec<ScalarValue>,
         /// The reader instance
-        reader: BoxStream<'static, Result<RecordBatch, ArrowError>>,
+        reader: BoxStream<'static, Result<RecordBatch>>,
         /// A [`FileOpenFuture`] for the next file to be processed,
         /// and its corresponding partition column values, if any.
         /// This allows the next file to be opened in parallel while the
@@ -526,7 +524,6 @@ mod tests {
     use crate::file_scan_config::FileScanConfigBuilder;
     use crate::tests::make_partition;
     use crate::PartitionedFile;
-    use arrow::error::ArrowError;
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -540,7 +537,7 @@ mod tests {
     use arrow::array::RecordBatch;
     use arrow::datatypes::Schema;
 
-    use datafusion_common::{assert_batches_eq, internal_err};
+    use datafusion_common::{assert_batches_eq, exec_err, internal_err};
 
     /// Test `FileOpener` which will simulate errors during file opening or scanning
     #[derive(Default)]
@@ -566,9 +563,7 @@ mod tests {
             if self.error_opening_idx.contains(&idx) {
                 Ok(futures::future::ready(internal_err!("error opening")).boxed())
             } else if self.error_scanning_idx.contains(&idx) {
-                let error = futures::future::ready(Err(ArrowError::IpcError(
-                    "error scanning".to_owned(),
-                )));
+                let error = futures::future::ready(exec_err!("error scanning"));
                 let stream = futures::stream::once(error).boxed();
                 Ok(futures::future::ready(Ok(stream)).boxed())
             } else {

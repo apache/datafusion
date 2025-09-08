@@ -1223,7 +1223,7 @@ mod tests {
 
     use crate::common::collect;
     use crate::expressions::PhysicalSortExpr;
-    use crate::projection::ProjectionExec;
+    use crate::projection::{ProjectionExec, ProjectionExpr};
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
     use crate::windows::{
@@ -1378,6 +1378,7 @@ mod tests {
                 &input.schema(),
                 false,
                 false,
+                None,
             )?],
             input,
             input_order_mode,
@@ -1402,7 +1403,11 @@ mod tests {
                 (expr, name)
             })
             .collect::<Vec<_>>();
-        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+        let proj_exprs: Vec<ProjectionExpr> = exprs
+            .into_iter()
+            .map(|(expr, alias)| ProjectionExpr { expr, alias })
+            .collect();
+        Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
     fn task_context_helper() -> TaskContext {
