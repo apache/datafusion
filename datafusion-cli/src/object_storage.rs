@@ -1121,6 +1121,7 @@ pub mod instrumented {
         }
 
         pub fn set_instrument_mode(&self, mode: InstrumentedObjectStoreMode) {
+            self.instrument_mode.store(mode as u8, Ordering::Relaxed);
             for s in self.stores.read().iter() {
                 s.set_instrument_mode(mode)
             }
