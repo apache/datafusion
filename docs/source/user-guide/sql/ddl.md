@@ -182,7 +182,7 @@ hive_partitioned/
         └── file2.parquet
 ```
 
-Users can specify the top level `my_table` directory as an `EXTERNAL TABLE` and leverage the Hive partitions to query
+Users can specify the top level `hive_partitioned` directory as an `EXTERNAL TABLE` and leverage the Hive partitions to query
 and filter data.
 
 ```sql

@@ -24,7 +24,7 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
-### ListingTable automatically detects Hive Partitoned tables
+### ListingTable automatically detects Hive Partitioned tables
 
 DataFusion 50.0.0 automatically infers Hive partitions when using the `ListingTableFactory` and `CREATE EXTERNAL TABLE`. Previously,
 when creating a `ListingTable`, datasets that use Hive partitioning (e.g.
