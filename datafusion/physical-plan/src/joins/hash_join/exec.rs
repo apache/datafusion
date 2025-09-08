@@ -26,7 +26,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBoundsAccumulator};
+use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBuildAccumulator};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
@@ -87,11 +87,11 @@ const HASH_JOIN_SEED: RandomState =
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
-    pub(super) hash_map: Box<dyn JoinHashMapType>,
+    pub(super) hash_map: Arc<dyn JoinHashMapType>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
-    values: Vec<ArrayRef>,
+    pub(super) values: Vec<ArrayRef>,
     /// Shared bitmap builder for visited left indices
     visited_indices_bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially
@@ -109,7 +109,7 @@ pub(super) struct JoinLeftData {
 impl JoinLeftData {
     /// Create a new `JoinLeftData` from its parts
     pub(super) fn new(
-        hash_map: Box<dyn JoinHashMapType>,
+        hash_map: Arc<dyn JoinHashMapType>,
         batch: RecordBatch,
         values: Vec<ArrayRef>,
         visited_indices_bitmap: SharedBitmapBuilder,
@@ -366,7 +366,7 @@ struct HashJoinExecDynamicFilter {
     filter: Arc<DynamicFilterPhysicalExpr>,
     /// Bounds accumulator to keep track of the min/max bounds on the join keys for each partition.
     /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
-    bounds_accumulator: OnceLock<Arc<SharedBoundsAccumulator>>,
+    build_accumulator: OnceLock<Arc<SharedBuildAccumulator>>,
 }
 
 impl fmt::Debug for HashJoinExec {
@@ -827,7 +827,7 @@ impl ExecutionPlan for HashJoinExec {
     /// Creates a new HashJoinExec with different children while preserving configuration.
     ///
     /// This method is called during query optimization when the optimizer creates new
-    /// plan nodes. Importantly, it creates a fresh bounds_accumulator via `try_new`
+    /// plan nodes. Importantly, it creates a fresh build_accumulator via `try_new`
     /// rather than cloning the existing one because partitioning may have changed.
     fn with_new_children(
         self: Arc<Self>,
@@ -912,26 +912,34 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
+        let enable_hash_collection =
+            context.session_config().hash_join_sideways_hash_passing();
+        let should_compute_bounds =
+            enable_dynamic_filter_pushdown && !enable_hash_collection;
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
-        let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.try_once(|| {
-                let left_stream = self.left.execute(0, Arc::clone(&context))?;
-
+        let (left_fut, reservation) = match self.mode {
+            PartitionMode::CollectLeft => {
                 let reservation =
                     MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
+                (
+                    self.left_fut.try_once(|| {
+                        let left_stream = self.left.execute(0, Arc::clone(&context))?;
 
-                Ok(collect_left_input(
-                    self.random_state.clone(),
-                    left_stream,
-                    on_left.clone(),
-                    join_metrics.clone(),
+                        Ok(collect_left_input(
+                            self.random_state.clone(),
+                            left_stream,
+                            on_left.clone(),
+                            join_metrics.clone(),
+                            reservation.new_empty(),
+                            need_produce_result_in_final(self.join_type),
+                            self.right().output_partitioning().partition_count(),
+                            should_compute_bounds,
+                        ))
+                    })?,
                     reservation,
-                    need_produce_result_in_final(self.join_type),
-                    self.right().output_partitioning().partition_count(),
-                    enable_dynamic_filter_pushdown,
-                ))
-            })?,
+                )
+            }
             PartitionMode::Partitioned => {
                 let left_stream = self.left.execute(partition, Arc::clone(&context))?;
 
@@ -939,16 +947,19 @@ impl ExecutionPlan for HashJoinExec {
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
 
-                OnceFut::new(collect_left_input(
-                    self.random_state.clone(),
-                    left_stream,
-                    on_left.clone(),
-                    join_metrics.clone(),
+                (
+                    OnceFut::new(collect_left_input(
+                        self.random_state.clone(),
+                        left_stream,
+                        on_left.clone(),
+                        join_metrics.clone(),
+                        reservation.new_empty(),
+                        need_produce_result_in_final(self.join_type),
+                        1,
+                        should_compute_bounds,
+                    )),
                     reservation,
-                    need_produce_result_in_final(self.join_type),
-                    1,
-                    enable_dynamic_filter_pushdown,
-                ))
+                )
             }
             PartitionMode::Auto => {
                 return plan_err!(
@@ -960,8 +971,8 @@ impl ExecutionPlan for HashJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // Initialize bounds_accumulator lazily with runtime partition counts (only if enabled)
-        let bounds_accumulator = enable_dynamic_filter_pushdown
+        // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
+        let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
                     let filter = Arc::clone(&df.filter);
@@ -970,13 +981,18 @@ impl ExecutionPlan for HashJoinExec {
                         .iter()
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
-                    Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
-                        Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
+                    let null_equality = self.null_equality;
+                    let random_state = self.random_state.clone();
+                    Some(Arc::clone(df.build_accumulator.get_or_init(|| {
+                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
                             filter,
                             on_right,
+                            null_equality,
+                            random_state,
+                            reservation,
                         ))
                     })))
                 })
@@ -1019,8 +1035,9 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             vec![],
             self.right.output_ordering().is_some(),
-            bounds_accumulator,
+            build_accumulator,
             self.mode,
+            enable_hash_collection,
         )))
     }
 
@@ -1180,7 +1197,7 @@ impl ExecutionPlan for HashJoinExec {
                     cache: self.cache.clone(),
                     dynamic_filter: Some(HashJoinExecDynamicFilter {
                         filter: dynamic_filter,
-                        bounds_accumulator: OnceLock::new(),
+                        build_accumulator: OnceLock::new(),
                     }),
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
@@ -1329,7 +1346,7 @@ impl BuildSideState {
 /// When `should_compute_bounds` is true, this function computes the min/max bounds
 /// for each join key column but does NOT update the dynamic filter. Instead, the
 /// bounds are stored in the returned `JoinLeftData` and later coordinated by
-/// `SharedBoundsAccumulator` to ensure all partitions contribute their bounds
+/// `SharedBuildAccumulator` to ensure all partitions contribute their bounds
 /// before updating the filter exactly once.
 ///
 /// # Returns
@@ -1471,9 +1488,9 @@ async fn collect_left_input(
     };
 
     let data = JoinLeftData::new(
-        hashmap,
+        Arc::from(hashmap),
         single_batch,
-        left_values.clone(),
+        left_values,
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,

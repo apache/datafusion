@@ -21,11 +21,20 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::joins::hash_join::hash_eval::HashEvalPhysicalExpr;
+use crate::joins::utils::JoinHashMapType;
+use crate::joins::utils::NoHashHasher;
+use crate::joins::utils::NoHashSet;
 use crate::joins::PartitionMode;
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 
+use ahash::RandomState;
+use datafusion_common::utils::memory::estimate_memory_size;
+use datafusion_common::HashSet;
+use datafusion_common::NullEquality;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
@@ -78,7 +87,7 @@ impl PartitionBounds {
     }
 }
 
-/// Coordinates dynamic filter bounds collection across multiple partitions
+/// Coordinates information collected from the build side of the join, across multiple partitions
 ///
 /// This structure ensures that dynamic filters are built with complete information from all
 /// relevant partitions before being applied to probe-side scans. Incomplete filters would
@@ -86,14 +95,14 @@ impl PartitionBounds {
 ///
 /// ## Synchronization Strategy
 ///
-/// 1. Each partition computes bounds from its build-side data
-/// 2. Bounds are stored in the shared vector
-/// 3. A barrier tracks how many partitions have reported their bounds
-/// 4. When the last partition reports, bounds are merged and the filter is updated exactly once
+/// 1. Each partition values computed from its build-side data (e.g. min/max bounds, available hashes)
+/// 2. The per-partition information is accumulated in partition-agnostic state
+/// 3. A [`Barrier`] is used to track reporters. Once the last partition reports, the information is merged and the filter is updated exactly once
 ///
 /// ## Partition Counting
 ///
 /// The `total_partitions` count represents how many times `collect_build_side` will be called:
+///
 /// - **CollectLeft**: Number of output partitions (each accesses shared build data)
 /// - **Partitioned**: Number of input partitions (each builds independently)
 ///
@@ -101,7 +110,7 @@ impl PartitionBounds {
 ///
 /// All fields use a single mutex to ensure correct coordination between concurrent
 /// partition executions.
-pub(crate) struct SharedBoundsAccumulator {
+pub(crate) struct SharedBuildAccumulator {
     /// Shared state protected by a single mutex to avoid ordering concerns
     inner: Mutex<SharedBoundsState>,
     barrier: Barrier,
@@ -109,17 +118,21 @@ pub(crate) struct SharedBoundsAccumulator {
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter bounds
     on_right: Vec<PhysicalExprRef>,
+    null_equality: NullEquality,
+    random_state: RandomState,
 }
 
-/// State protected by SharedBoundsAccumulator's mutex
+/// State protected by SharedBuildAccumulator's mutex
 struct SharedBoundsState {
     /// Bounds from completed partitions.
     /// Each element represents the column bounds computed by one partition.
     bounds: Vec<PartitionBounds>,
+    left_hashes: NoHashSet<u64>,
+    reservation: MemoryReservation,
 }
 
-impl SharedBoundsAccumulator {
-    /// Creates a new SharedBoundsAccumulator configured for the given partition mode
+impl SharedBuildAccumulator {
+    /// Creates a new SharedBuildAccumulator configured for the given partition mode
     ///
     /// This method calculates how many times `collect_build_side` will be called based on the
     /// partition mode's execution pattern. This count is critical for determining when we have
@@ -150,6 +163,9 @@ impl SharedBoundsAccumulator {
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
+        null_equality: NullEquality,
+        random_state: RandomState,
+        reservation: MemoryReservation,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -168,10 +184,16 @@ impl SharedBoundsAccumulator {
         Self {
             inner: Mutex::new(SharedBoundsState {
                 bounds: Vec::with_capacity(expected_calls),
+                left_hashes: HashSet::with_hasher(core::hash::BuildHasherDefault::<
+                    NoHashHasher,
+                >::default()),
+                reservation,
             }),
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
             on_right,
+            null_equality,
+            random_state,
         }
     }
 
@@ -244,11 +266,11 @@ impl SharedBoundsAccumulator {
         Ok(combined_predicate)
     }
 
-    /// Report bounds from a completed partition and update dynamic filter if all partitions are done
+    /// Report information from a completed partition and update dynamic filter if all partitions are done
     ///
     /// This method coordinates the dynamic filter updates across all partitions. It stores the
-    /// bounds from the current partition, increments the completion counter, and when all
-    /// partitions have reported, creates an OR'd filter from individual partition bounds.
+    /// information from the current partition, increments the completion counter, and when all
+    /// partitions have reported, updates the dynamic filter with the appropriate expressions.
     ///
     /// This method is async and uses a [`tokio::sync::Barrier`] to wait for all partitions
     /// to report their bounds. Once that occurs, the method will resolve for all callers and the
@@ -264,13 +286,15 @@ impl SharedBoundsAccumulator {
     /// # Arguments
     /// * `left_side_partition_id` - The identifier for the **left-side** partition reporting its bounds
     /// * `partition_bounds` - The bounds computed by this partition (if any)
+    /// * `left_hash_map` - The hashes from the build side for this partition (if any)
     ///
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed
-    pub(crate) async fn report_partition_bounds(
+    pub(crate) async fn report_information(
         &self,
         left_side_partition_id: usize,
         partition_bounds: Option<Vec<ColumnBounds>>,
+        left_hash_map: Option<Arc<dyn JoinHashMapType>>,
     ) -> Result<()> {
         // Store bounds in the accumulator - this runs once per partition
         if let Some(bounds) = partition_bounds {
@@ -292,22 +316,59 @@ impl SharedBoundsAccumulator {
             }
         }
 
+        if let Some(left_hash_map) = left_hash_map {
+            if left_hash_map.num_hashes() > 0 {
+                let mut inner = self.inner.lock();
+
+                let fixed_size = size_of::<NoHashSet<u64>>();
+
+                let estimated_additional_size =
+                    estimate_memory_size::<u64>(left_hash_map.num_hashes(), fixed_size)?;
+                inner.reservation.try_grow(estimated_additional_size)?;
+                inner.left_hashes.extend(left_hash_map.hashes());
+            }
+        }
+
         if self.barrier.wait().await.is_leader() {
             // All partitions have reported, so we can update the filter
-            let inner = self.inner.lock();
-            if !inner.bounds.is_empty() {
-                let filter_expr =
-                    self.create_filter_from_partition_bounds(&inner.bounds)?;
-                self.dynamic_filter.update(filter_expr)?;
-            }
+            let mut inner = self.inner.lock();
+            let maybe_bounds_expr = if !inner.bounds.is_empty() {
+                Some(self.create_filter_from_partition_bounds(&inner.bounds)?)
+            } else {
+                None
+            };
+
+            let maybe_hash_eval_expr = if !inner.left_hashes.is_empty() {
+                Some(Arc::new(HashEvalPhysicalExpr::new(
+                    self.on_right.clone(),
+                    std::mem::take(&mut inner.left_hashes),
+                    self.null_equality,
+                    self.random_state.clone(),
+                )) as Arc<dyn PhysicalExpr>)
+            } else {
+                None
+            };
+
+            let filter_expr = match (maybe_bounds_expr, maybe_hash_eval_expr) {
+                (None, Some(expr)) | (Some(expr), None) => expr,
+                // This branch shouldn't be taken
+                (Some(bounds_expr), Some(hash_eval_expr)) => Arc::new(BinaryExpr::new(
+                    bounds_expr,
+                    Operator::And,
+                    hash_eval_expr.clone(),
+                )),
+                _ => return Ok(()),
+            };
+
+            self.dynamic_filter.update(filter_expr)?;
         }
 
         Ok(())
     }
 }
 
-impl fmt::Debug for SharedBoundsAccumulator {
+impl fmt::Debug for SharedBuildAccumulator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SharedBoundsAccumulator")
+        write!(f, "SharedBuildAccumulator")
     }
 }

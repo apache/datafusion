@@ -1691,6 +1691,8 @@ pub fn update_hash(
     Ok(())
 }
 
+/// Returns indices taking into account null equality. Needs to compare values directly thus needs
+/// reference into left/right arrays.
 pub(super) fn equal_rows_arr(
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
@@ -1750,6 +1752,75 @@ fn eq_dyn_null(
     match null_equality {
         NullEquality::NullEqualsNothing => eq(&left, &right),
         NullEquality::NullEqualsNull => not_distinct(&left, &right),
+    }
+}
+
+/// Hash set with [`NoHashHasher`]
+pub type NoHashSet<T> =
+    datafusion_common::HashSet<T, core::hash::BuildHasherDefault<NoHashHasher>>;
+
+/// Identity hasher. Useful for fast hashing of pre-hashed values.
+#[derive(Default)]
+pub struct NoHashHasher(u64);
+
+impl std::hash::Hasher for NoHashHasher {
+    fn write(&mut self, _: &[u8]) {
+        panic!("Cannot write arbitrary bytes into `NoHashHasher`")
+    }
+
+    #[inline]
+    fn write_u8(&mut self, n: u8) {
+        self.0 = u64::from(n)
+    }
+
+    #[inline]
+    fn write_u16(&mut self, n: u16) {
+        self.0 = u64::from(n)
+    }
+
+    #[inline]
+    fn write_u32(&mut self, n: u32) {
+        self.0 = u64::from(n)
+    }
+
+    #[inline]
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n
+    }
+
+    #[inline]
+    fn write_usize(&mut self, n: usize) {
+        self.0 = n as u64
+    }
+
+    #[inline]
+    fn write_i8(&mut self, n: i8) {
+        self.0 = n as u64
+    }
+
+    #[inline]
+    fn write_i16(&mut self, n: i16) {
+        self.0 = n as u64
+    }
+
+    #[inline]
+    fn write_i32(&mut self, n: i32) {
+        self.0 = n as u64
+    }
+
+    #[inline]
+    fn write_i64(&mut self, n: i64) {
+        self.0 = n as u64
+    }
+
+    #[inline]
+    fn write_isize(&mut self, n: isize) {
+        self.0 = n as u64
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
     }
 }
 

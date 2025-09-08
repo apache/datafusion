@@ -397,6 +397,17 @@ impl SessionConfig {
         self.options.execution.batch_size
     }
 
+    /// Get whether sideways passing of the build side hash table is enabled
+    pub fn hash_join_sideways_hash_passing(&self) -> bool {
+        self.options.execution.hash_join_sideways_hash_passing
+    }
+
+    /// Get whether sideways passing of the build side hash table is enabled
+    pub fn with_hash_join_sideways_hash_passing(mut self, enabled: bool) -> Self {
+        self.options_mut().execution.hash_join_sideways_hash_passing = enabled;
+        self
+    }
+
     /// Enables or disables the coalescence of small batches into larger batches
     pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
         self.options_mut().execution.coalesce_batches = enabled;
