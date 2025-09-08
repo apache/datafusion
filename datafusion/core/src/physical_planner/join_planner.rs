@@ -108,7 +108,7 @@ pub(super) fn plan_join_exec(
         );
     }
 
-    // Step 2: Choose and plan the physical join type according to preference
+    // Step 3: Choose and plan the physical join type according to preference
     // from the configuration, and also the built-in heuristics
     // ----------------------------------------------------------------------
 
