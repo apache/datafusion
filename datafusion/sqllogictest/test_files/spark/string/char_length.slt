@@ -16,16 +16,16 @@
 # under the License.
 
 query T
-SELECT Query: SELECT CHAR_LENGTH('Spark SQL ');
+SELECT CHAR_LENGTH('Spark SQL ');
 ----
 10
 
 query T
-SELECT Query: SELECT char_length('Spark SQL ');
+SELECT char_length('Spark SQL ');
 ----
 10
 
 query T
-SELECT Query: SELECT char_length(x'537061726b2053514c');
+SELECT char_length(x'537061726b2053514c');
 ----
 9

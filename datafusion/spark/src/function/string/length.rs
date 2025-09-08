@@ -16,10 +16,9 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, BinaryArrayType, PrimitiveArray,
-    StringArrayType,
+    Array, ArrayRef, AsArray, BinaryArrayType, PrimitiveArray, StringArrayType,
 };
-use arrow::datatypes::{DataType, Int32Type, Int64Type};
+use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::exec_err;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -99,35 +98,34 @@ fn spark_length(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            character_length::<Int32Type, _>(string_array)
+            character_length::<_>(string_array)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            character_length::<Int64Type, _>(string_array)
+            character_length::<_>(string_array)
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
-            character_length::<Int32Type, _>(string_array)
+            character_length::<_>(string_array)
         }
         DataType::Binary => {
             let binary_array = args[0].as_binary::<i32>();
-            byte_length::<Int32Type, _>(binary_array)
+            byte_length::<_>(binary_array)
         }
         DataType::LargeBinary => {
             let binary_array = args[0].as_binary::<i64>();
-            byte_length::<Int64Type, _>(binary_array)
+            byte_length::<_>(binary_array)
         }
         DataType::BinaryView => {
             let binary_array = args[0].as_binary_view();
-            byte_length::<Int32Type, _>(binary_array)
+            byte_length::<_>(binary_array)
         }
         other => exec_err!("Unsupported data type {other:?} for function `length`"),
     }
 }
 
-fn character_length<'a, T, V>(array: V) -> datafusion_common::Result<ArrayRef>
+fn character_length<'a, V>(array: V) -> datafusion_common::Result<ArrayRef>
 where
-    T: ArrowPrimitiveType,
     V: StringArrayType<'a>,
 {
     // String characters are variable length encoded in UTF-8, counting the
@@ -171,9 +169,8 @@ where
     Ok(Arc::new(array))
 }
 
-fn byte_length<'a, T, V>(array: V) -> datafusion_common::Result<ArrayRef>
+fn byte_length<'a, V>(array: V) -> datafusion_common::Result<ArrayRef>
 where
-    T: ArrowPrimitiveType,
     V: BinaryArrayType<'a>,
 {
     let nulls = array.nulls().cloned();
