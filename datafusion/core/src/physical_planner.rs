@@ -41,7 +41,6 @@ use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils as join_utils;
-// Join exec types used by join_planner module
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use crate::physical_plan::repartition::RepartitionExec;
