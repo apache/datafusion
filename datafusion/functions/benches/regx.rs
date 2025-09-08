@@ -26,7 +26,7 @@ use datafusion_functions::regex::regexpcount::regexp_count_func;
 use datafusion_functions::regex::regexpinstr::regexp_instr_func;
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
-use datafusion_functions::regex::regexpreplace::regexp_replace_with_flags;
+use datafusion_functions::regex::regexpreplace::regexp_replace;
 use rand::distr::Alphanumeric;
 use rand::prelude::IndexedRandom;
 use rand::rngs::ThreadRng;
@@ -267,11 +267,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_replace_with_flags::<i32, _, _, _, _>(
+                regexp_replace::<i32, _, _, _, _>(
                     data.as_string::<i32>(),
                     regex.as_string::<i32>(),
                     replacement.as_string::<i32>(),
-                    flags.as_string::<i32>(),
+                    Some(flags.as_string::<i32>()),
                 )
                 .expect("regexp_replace should work on valid values"),
             )
@@ -289,11 +289,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_replace_with_flags::<i32, _, _, _, _>(
+                regexp_replace::<i32, _, _, _, _>(
                     data.as_string_view(),
                     regex.as_string_view(),
                     &*replacement,
-                    flags.as_string_view(),
+                    Some(flags.as_string_view()),
                 )
                 .expect("regexp_replace should work on valid values"),
             )
