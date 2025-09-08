@@ -178,8 +178,8 @@ fn map_deduplicate_keys(
     new_offsets.push(new_last_offset);
 
     let mut needed_rows_builder = BooleanBuilder::new();
-    for next_row_num in 1..offsets_len {
-        let num_entries = offsets[next_row_num] as usize - cur_offset;
+    for next_offset in offsets.iter().skip(1) {
+        let num_entries = *next_offset as usize - cur_offset;
         let mut seen_keys = HashSet::new();
         let mut needed_rows_one = [false].repeat(num_entries);
         for cur_entry_idx in (0..num_entries).rev() {
