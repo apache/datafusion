@@ -1227,6 +1227,7 @@ mod tests {
 
     #[test]
     fn test_with_fetch_basic_preservation() {
+        // Test that column statistics and byte size are preserved (as inexact) when applying fetch
         let original_stats = Statistics {
             num_rows: Precision::Exact(1000),
             total_byte_size: Precision::Exact(8000),
@@ -1309,12 +1310,6 @@ mod tests {
     #[test]
     fn test_with_fetch_inexact_input() {
         // Test that inexact input statistics remain inexact
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         let original_stats = Statistics {
             num_rows: Precision::Inexact(1000),
             total_byte_size: Precision::Inexact(8000),
@@ -1346,12 +1341,6 @@ mod tests {
     #[test]
     fn test_with_fetch_skip_all_rows() {
         // Test when skip >= num_rows (all rows are skipped)
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         let original_stats = Statistics {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
@@ -1368,12 +1357,6 @@ mod tests {
     #[test]
     fn test_with_fetch_no_limit() {
         // Test when fetch is None and skip is 0 (no limit applied)
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         let original_stats = Statistics {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
@@ -1390,12 +1373,6 @@ mod tests {
     #[test]
     fn test_with_fetch_with_skip() {
         // Test with both skip and fetch
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         let original_stats = Statistics {
             num_rows: Precision::Exact(1000),
             total_byte_size: Precision::Exact(8000),
@@ -1416,12 +1393,6 @@ mod tests {
     #[test]
     fn test_with_fetch_multi_partition() {
         // Test with multiple partitions
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         let original_stats = Statistics {
             num_rows: Precision::Exact(1000), // per partition
             total_byte_size: Precision::Exact(8000),
@@ -1439,12 +1410,6 @@ mod tests {
     #[test]
     fn test_with_fetch_absent_stats() {
         // Test with absent statistics
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         let original_stats = Statistics {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
@@ -1469,12 +1434,6 @@ mod tests {
     #[test]
     fn test_with_fetch_fetch_exceeds_rows() {
         // Test when fetch is larger than available rows after skip
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         let original_stats = Statistics {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
@@ -1492,12 +1451,6 @@ mod tests {
     #[test]
     fn test_with_fetch_preserves_all_column_stats() {
         // Comprehensive test that all column statistic fields are preserved
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         let original_col_stats = ColumnStatistics {
             null_count: Precision::Exact(42),
             max_value: Precision::Exact(ScalarValue::Int32(Some(999))),
