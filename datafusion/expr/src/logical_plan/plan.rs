@@ -2593,6 +2593,14 @@ impl PartialOrd for Window {
     }
 }
 
+/// Communicates the desired ordering of the output of a scan operation.
+/// This can be used by implementers of [`TableProvider`] to optimize the order in which data is output from the scan.
+/// It is a hint and not a requirement:
+/// - If this information is completely ignored, e.g. data is scanned randomly, the query will still be correct because a sort will be applied to the data.
+/// - Partially ordered data will also be re-sorted but this may result in optimizations like early stopping, additional data pruning, reduced memory usage during the sort, etc.
+/// - If the scan produces exactly the requested ordering, and sets it's properties to reflect this, upstream sorts may be optimized away.
+/// 
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Default)]
 pub struct ScanOrdering {
     /// Optional preferred ordering for the scan that matches the output order of upstream query nodes.
@@ -2604,7 +2612,8 @@ pub struct ScanOrdering {
 }
 
 impl ScanOrdering {
-    /// Create a new ScanOrdering
+    /// Attatch a preferred ordering to the scan ordering.
+    /// See [`ScanOrdering`] for details on how this is used.
     pub fn with_preferred_ordering(mut self, preferred_ordering: Vec<SortExpr>) -> Self {
         self.preferred_ordering = Some(preferred_ordering);
         self
@@ -2690,7 +2699,7 @@ impl PartialOrd for TableScan {
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
-            /// Optional preferred ordering for the scan
+            /// Ordering information passed from the query to the scan.
             pub ordering: &'a Option<ScanOrdering>,
         }
         let comparable_self = ComparableTableScan {
@@ -2779,57 +2788,8 @@ impl TableScan {
         })
     }
 
-    /// Sets the preferred ordering for this table scan using the builder pattern.
-    ///
-    /// The preferred ordering serves as a hint to table providers about the desired
-    /// sort order for the data. Table providers can use this information to optimize
-    /// data access patterns, choose appropriate indexes, or leverage existing sort
-    /// orders in the underlying storage.
-    ///
-    /// # Parameters
-    ///
-    /// * `preferred_ordering` - An optional vector of sort expressions representing
-    ///   the desired ordering. `None` indicates no specific ordering preference.
-    ///
-    /// # Returns
-    ///
-    /// Returns `self` to enable method chaining in the builder pattern.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use datafusion_expr::{col, SortExpr};
-    /// # use datafusion_expr::logical_plan::{TableScan, builder::table_source};
-    /// # use std::sync::Arc;
-    /// # use datafusion_common::{TableReference, DFSchema};
-    /// # use arrow::datatypes::{Schema, Field, DataType};
-    ///
-    /// // Create a table scan with preferred ordering by column 'a' ascending
-    /// # let table_name = TableReference::bare("test");
-    /// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-    /// # let source = table_source(&schema);
-    /// # let projection = None;
-    /// # let projected_schema = Arc::new(datafusion_common::DFSchema::empty());
-    /// # let filters = vec![];
-    /// # let fetch = None;
-    /// let table_scan = TableScan {
-    ///     table_name,
-    ///     source,
-    ///     projection,
-    ///     projected_schema,
-    ///     filters,
-    ///     fetch,
-    ///     preferred_ordering: None,
-    /// }.with_preferred_ordering(Some(vec![
-    ///     SortExpr::new(col("a"), true, false) // ASC NULLS LAST
-    /// ]));
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// This is purely an optimization hint. The table provider may choose to ignore
-    /// the preferred ordering if it cannot be efficiently satisfied, and the query
-    /// execution engine should not rely on the data being returned in this order.
+    /// Sets the ordering information for the scan.
+    /// See [`ScanOrdering`] for details on how this is used.
     pub fn with_ordering(mut self, ordering: ScanOrdering) -> Self {
         self.ordering = Some(ordering);
         self
