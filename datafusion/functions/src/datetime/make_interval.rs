@@ -19,7 +19,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray, PrimitiveBuilder};
+use arrow::array::{
+    Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray, PrimitiveBuilder,
+};
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::{DataType, IntervalMonthDayNano, IntervalMonthDayNanoType};
@@ -174,50 +176,57 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
     let years = args
         .first()
         .map(|a| {
-            a.as_primitive_opt::<Int32Type>()
-                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[0] must be Int32"))
+            a.as_primitive_opt::<Int32Type>().ok_or_else(|| {
+                plan_datafusion_err!("make_dt_interval arg[0] must be Int32")
+            })
         })
         .transpose()?;
     let months = args
         .get(1)
         .map(|a| {
-            a.as_primitive_opt::<Int32Type>()
-                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[1] must be Int32"))
+            a.as_primitive_opt::<Int32Type>().ok_or_else(|| {
+                plan_datafusion_err!("make_dt_interval arg[1] must be Int32")
+            })
         })
         .transpose()?;
     let weeks = args
         .get(2)
         .map(|a| {
-            a.as_primitive_opt::<Int32Type>()
-                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[2] must be Int32"))
+            a.as_primitive_opt::<Int32Type>().ok_or_else(|| {
+                plan_datafusion_err!("make_dt_interval arg[2] must be Int32")
+            })
         })
         .transpose()?;
     let days: Option<&PrimitiveArray<Int32Type>> = args
         .get(3)
         .map(|a| {
-            a.as_primitive_opt::<Int32Type>()
-                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[3] must be Int32"))
+            a.as_primitive_opt::<Int32Type>().ok_or_else(|| {
+                plan_datafusion_err!("make_dt_interval arg[3] must be Int32")
+            })
         })
         .transpose()?;
     let hours: Option<&PrimitiveArray<Int32Type>> = args
         .get(4)
         .map(|a| {
-            a.as_primitive_opt::<Int32Type>()
-                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[4] must be Int32"))
+            a.as_primitive_opt::<Int32Type>().ok_or_else(|| {
+                plan_datafusion_err!("make_dt_interval arg[4] must be Int32")
+            })
         })
         .transpose()?;
     let mins: Option<&PrimitiveArray<Int32Type>> = args
         .get(5)
         .map(|a| {
-            a.as_primitive_opt::<Int32Type>()
-                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[5] must be Int32"))
+            a.as_primitive_opt::<Int32Type>().ok_or_else(|| {
+                plan_datafusion_err!("make_dt_interval arg[5] must be Int32")
+            })
         })
         .transpose()?;
     let secs: Option<&PrimitiveArray<Float64Type>> = args
         .get(6)
         .map(|a| {
-            a.as_primitive_opt::<Float64Type>()
-                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[6] must be Float64"))
+            a.as_primitive_opt::<Float64Type>().ok_or_else(|| {
+                plan_datafusion_err!("make_dt_interval arg[6] must be Float64")
+            })
         })
         .transpose()?;
 
