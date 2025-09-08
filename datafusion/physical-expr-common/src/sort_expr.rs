@@ -368,10 +368,9 @@ impl LexOrdering {
     /// If the vector is empty, returns `None`.
     pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
         let exprs = exprs.into_iter();
-        let (items_min, items_max) = exprs.size_hint();
         let mut candidate = Self {
             // not valid yet; valid publicly-returned instance must be non-empty
-            exprs: Vec::with_capacity(items_max.unwrap_or(items_min)),
+            exprs: Vec::new(),
             set: HashSet::new(),
         };
         for expr in exprs {
