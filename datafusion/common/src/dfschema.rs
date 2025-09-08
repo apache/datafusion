@@ -883,14 +883,12 @@ impl DFSchema {
     ///     HashMap::new()
     /// ).unwrap();
     ///
-    /// println!("{}", schema.print_schema_tree());
-    /// ```
-    ///
-    /// Output:
-    /// ```text
+    /// assert_eq!(schema.print_schema_tree().to_string(),
+    /// r#"
     /// root
     ///  |-- id: int32 (nullable = false)
     ///  |-- name: utf8 (nullable = true)
+    /// "
     /// ```
     pub fn print_schema_tree(&self) -> String {
         let mut result = String::from("root\n");
