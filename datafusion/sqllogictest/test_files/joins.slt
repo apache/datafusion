@@ -4201,14 +4201,15 @@ query TT rowsort
 -- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
 EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
 ----
-01)CoalesceBatchesExec: target_batch_size=3, fetch=20
+01)GlobalLimitExec: skip=0, fetch=20
 01)Limit: skip=0, fetch=20
-02)--Full Join: t0.c1 = t1.c1
-02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)]
-03)----DataSourceExec: partitions=1, partition_sizes=[2]
+02)--Full Join:  Filter: t0.c2 >= t1.c2
+02)--PiecewiseMergeJoin: operator=GtEq, join_type=Full, on=(c2 >= c2)
+03)----SortExec: expr=[c2@1 ASC NULLS LAST], preserve_partitioning=[false]
 03)----TableScan: t0 projection=[c1, c2]
-04)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)------DataSourceExec: partitions=1, partition_sizes=[2]
 04)----TableScan: t1 projection=[c1, c2, c3]
+05)----DataSourceExec: partitions=1, partition_sizes=[2]
 logical_plan
 physical_plan
 

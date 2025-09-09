@@ -1296,12 +1296,11 @@ impl DefaultPhysicalPlanner {
                             session_state.execution_props(),
                         )?;
 
-
                         Arc::new(PiecewiseMergeJoinExec::try_new(
                             physical_left,
                             physical_right,
                             (on_left, on_right),
-                            op,                  
+                            op,
                             *join_type,
                         )?)
                     } else {

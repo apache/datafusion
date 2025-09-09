@@ -35,14 +35,11 @@ use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
-use log::debug;
 use std::{cmp::Ordering, task::ready};
 use std::{sync::Arc, task::Poll};
 
 use crate::handle_state;
-use crate::joins::piecewise_merge_join::exec::{
-    BufferedSide, BufferedSideReadyState, 
-};
+use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
 use crate::joins::utils::{compare_join_arrays, get_final_indices_from_shared_bitmap};
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
@@ -108,7 +105,7 @@ pub(super) struct ClassicPWMJStream {
     join_metrics: BuildProbeJoinMetrics,
     // Tracking incremental state for emitting record batches
     batch_process_state: BatchProcessState,
-    // Creates batch size 
+    // Creates batch size
     batch_size: usize,
 }
 
@@ -298,8 +295,8 @@ impl ClassicPWMJStream {
                     let empty_stream_batch =
                         RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
 
-                    let buffered_chunk_ref = buffered_indices
-                        .slice(start_idx, self.batch_size);
+                    let buffered_chunk_ref =
+                        buffered_indices.slice(start_idx, self.batch_size);
                     let new_buffered_indices = buffered_chunk_ref
                         .as_any()
                         .downcast_ref::<UInt64Array>()
@@ -316,9 +313,8 @@ impl ClassicPWMJStream {
                         new_buffered_indices.clone(),
                     )?;
 
-                    self.batch_process_state.set_process_rest(Some(
-                        start_idx + self.batch_size,
-                    ));
+                    self.batch_process_state
+                        .set_process_rest(Some(start_idx + self.batch_size));
                     self.batch_process_state.continue_process = true;
 
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
@@ -372,10 +368,8 @@ impl ClassicPWMJStream {
             let empty_stream_batch =
                 RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
 
-            let indices_chunk_ref = buffered_indices.slice(
-                self.batch_process_state.start_idx,
-                self.batch_size,
-            );
+            let indices_chunk_ref = buffered_indices
+                .slice(self.batch_process_state.start_idx, self.batch_size);
 
             let indices_chunk = indices_chunk_ref
                 .as_any()
@@ -508,7 +502,7 @@ fn resolve_classic_join(
 
     let mut buffered_indices = UInt64Builder::default();
     let mut stream_indices = UInt32Builder::default();
-    debug!("wow!");
+
     // Our pivot variable allows us to start probing on the buffered side where we last matched
     // in the previous stream row.
     let mut pivot = batch_process_state.pivot();
@@ -524,18 +518,13 @@ fn resolve_classic_join(
                 if let Some(start_idx) = batch_process_state.process_rest {
                     let count = buffered_values.len() - start_idx;
                     if count >= batch_size {
-                        let stream_repeated =
-                            vec![row_idx as u32; batch_size];
-                        batch_process_state.set_process_rest(Some(
-                            start_idx + batch_size,
-                        ));
-                        batch_process_state.set_rows(
-                            batch_process_state.num_rows
-                                + batch_size,
-                        );
+                        let stream_repeated = vec![row_idx as u32; batch_size];
+                        batch_process_state
+                            .set_process_rest(Some(start_idx + batch_size));
+                        batch_process_state
+                            .set_rows(batch_process_state.num_rows + batch_size);
                         let buffered_range: Vec<u64> = (start_idx as u64
-                            ..((start_idx as u64)
-                                + (batch_size as u64)))
+                            ..((start_idx as u64) + (batch_size as u64)))
                             .collect();
                         stream_indices.append_slice(&stream_repeated);
                         buffered_indices.append_slice(&buffered_range);
@@ -584,21 +573,15 @@ fn resolve_classic_join(
 
                             // If the current output + new output is over our process value then we want to be
                             // able to change that
-                            if batch_process_state.num_rows + count
-                                >= batch_size
-                            {
-                                let process_batch_size = batch_size
-                                    - batch_process_state.num_rows;
+                            if batch_process_state.num_rows + count >= batch_size {
+                                let process_batch_size =
+                                    batch_size - batch_process_state.num_rows;
                                 let stream_repeated =
                                     vec![row_idx as u32; process_batch_size];
                                 batch_process_state.set_rows(
                                     batch_process_state.num_rows + process_batch_size,
                                 );
 
-                                debug!(
-                                    "pivot: {}, process_batch_size: {}",
-                                    pivot, process_batch_size
-                                );
                                 let buffered_range: Vec<u64> = (pivot as u64
                                     ..(pivot + process_batch_size) as u64)
                                     .collect();
@@ -628,10 +611,7 @@ fn resolve_classic_join(
                             // Update the number of rows processed
                             batch_process_state
                                 .set_rows(batch_process_state.num_rows + count);
-                            debug!(
-                                "pivot: {}, process_batch_size: {}",
-                                pivot, buffered_len
-                            );
+
                             let stream_repeated = vec![row_idx as u32; count];
                             let buffered_range: Vec<u64> =
                                 (pivot as u64..buffered_len as u64).collect();
@@ -649,15 +629,13 @@ fn resolve_classic_join(
 
                             // If the current output + new output is over our process value then we want to be
                             // able to change that
-                            if batch_process_state.num_rows + count
-                                >= batch_size
-                            {
+                            if batch_process_state.num_rows + count >= batch_size {
                                 // Update the start index so it repeats the process
                                 batch_process_state.set_start_idx(row_idx);
                                 batch_process_state.set_pivot(pivot);
 
-                                let process_batch_size = batch_size
-                                    - batch_process_state.num_rows;
+                                let process_batch_size =
+                                    batch_size - batch_process_state.num_rows;
                                 let stream_repeated =
                                     vec![row_idx as u32; process_batch_size];
                                 batch_process_state
@@ -717,8 +695,7 @@ fn resolve_classic_join(
         if (!found || batch_process_state.not_found)
             && matches!(join_type, JoinType::Right | JoinType::Full)
         {
-            let remaining = batch_size
-                .saturating_sub(batch_process_state.num_rows);
+            let remaining = batch_size.saturating_sub(batch_process_state.num_rows);
             if remaining == 0 {
                 let batch = process_batch(
                     &mut buffered_indices,
