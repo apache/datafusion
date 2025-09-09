@@ -2521,6 +2521,10 @@ config_namespace! {
         // The input regex for Nulls when loading CSVs.
         pub null_regex: Option<String>, default = None
         pub comment: Option<u8>, default = None
+        // Whether to allow truncated rows when parsing.
+        // By default this is set to false and will error if the CSV rows have different lengths.
+        // When set to true then it will allow records with less than the expected number of columns
+        pub truncated_rows: Option<bool>, default = None
     }
 }
 
@@ -2610,6 +2614,15 @@ impl CsvOptions {
         compression: CompressionTypeVariant,
     ) -> Self {
         self.compression = compression;
+        self
+    }
+
+    /// Whether to allow truncated rows when parsing.
+    /// By default this is set to false and will error if the CSV rows have different lengths.
+    /// When set to true then it will allow records with less than the expected number of columns and fill the missing columns with nulls.
+    /// If the record’s schema is not nullable, then it will still return an error.
+    pub fn with_truncated_rows(mut self, allow: bool) -> Self {
+        self.truncated_rows = Some(allow);
         self
     }
 
