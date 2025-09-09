@@ -51,6 +51,7 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
+use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
@@ -105,6 +106,9 @@ pub(super) struct ParquetOpener {
     #[cfg(feature = "parquet_encryption")]
     pub encryption_factory:
         Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
+    /// Maximum size of the predicate cache, in bytes. If none, uses
+    /// the arrow-rs default.
+    pub max_predicate_cache_size: Option<usize>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -152,6 +156,7 @@ impl FileOpener for ParquetOpener {
 
         let enable_page_index = self.enable_page_index;
         let encryption_context = self.get_encryption_context();
+        let max_predicate_cache_size = self.max_predicate_cache_size;
 
         Ok(Box::pin(async move {
             let file_decryption_properties = encryption_context
@@ -401,27 +406,64 @@ impl FileOpener for ParquetOpener {
                 builder = builder.with_limit(limit)
             }
 
+            if let Some(max_predicate_cache_size) = max_predicate_cache_size {
+                builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
+            }
+
+            // metrics from the arrow reader itself
+            let arrow_reader_metrics = ArrowReaderMetrics::enabled();
+
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
                 .with_row_groups(row_group_indexes)
+                .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
-            let stream = stream
-                .map_err(DataFusionError::from)
-                .map(move |b| b.and_then(|b| schema_mapping.map_batch(b)));
+            let files_ranges_pruned_statistics =
+                file_metrics.files_ranges_pruned_statistics.clone();
+            let predicate_cache_inner_records =
+                file_metrics.predicate_cache_inner_records.clone();
+            let predicate_cache_records = file_metrics.predicate_cache_records.clone();
+
+            let stream = stream.map_err(DataFusionError::from).map(move |b| {
+                b.and_then(|b| {
+                    copy_arrow_reader_metrics(
+                        &arrow_reader_metrics,
+                        &predicate_cache_inner_records,
+                        &predicate_cache_records,
+                    );
+                    schema_mapping.map_batch(b)
+                })
+            });
 
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
                     stream,
                     file_pruner,
-                    file_metrics.files_ranges_pruned_statistics.clone(),
+                    files_ranges_pruned_statistics,
                 )
                 .boxed())
             } else {
                 Ok(stream.boxed())
             }
         }))
+    }
+}
+
+/// Copies metrics from ArrowReaderMetrics (the metrics collected by the
+/// arrow-rs parquet reader) to the parquet file metrics for DataFusion
+fn copy_arrow_reader_metrics(
+    arrow_reader_metrics: &ArrowReaderMetrics,
+    predicate_cache_inner_records: &Count,
+    predicate_cache_records: &Count,
+) {
+    if let Some(v) = arrow_reader_metrics.records_read_from_inner() {
+        predicate_cache_inner_records.add(v);
+    }
+
+    if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
+        predicate_cache_records.add(v);
     }
 }
 
@@ -823,6 +865,7 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
 
@@ -911,6 +954,7 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
 
@@ -1015,6 +1059,7 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
         let make_meta = || FileMeta {
@@ -1129,6 +1174,7 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
 
@@ -1244,6 +1290,7 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
 
@@ -1426,6 +1473,7 @@ mod test {
             expr_adapter_factory: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
+            max_predicate_cache_size: None,
         };
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);
