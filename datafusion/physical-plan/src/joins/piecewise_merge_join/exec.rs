@@ -433,7 +433,7 @@ impl PiecewiseMergeJoinExec {
         }
     }
 
-    // TODO: We implement this with the physical planner.
+    // TODO
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         todo!()
     }

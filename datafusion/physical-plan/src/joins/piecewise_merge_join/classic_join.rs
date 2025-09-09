@@ -353,7 +353,6 @@ impl ClassicPWMJStream {
             return exec_err!("Batch process state should hold buffered indices");
         }
 
-        // Pass in piecewise flag to allow Right Semi/Anti/Mark joins to also be processed
         let (buffered_indices, streamed_indices) = get_final_indices_from_shared_bitmap(
             &buffered_data.visited_indices_bitmap,
             self.join_type,

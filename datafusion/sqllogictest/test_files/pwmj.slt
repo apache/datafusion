@@ -35,36 +35,50 @@ INSERT INTO join_t2 VALUES
   (44, 'x', 3),
   (55, 'w', 3);
 
-# --- sanity: ITI matches your sample -------------------------------------------------
-query ITI
-SELECT t2_id, t2_name, t2_int
-FROM join_t2
-ORDER BY t2_id;
-----
-11 z 3
-22 y 1
-44 x 3
-55 w 3
-
-# =====================================================================================
-# PWMJ candidates: exactly one join range predicate; any extra filters are per-side.
-# =====================================================================================
-
-# 1)  GT with pushdowns (your exact example)
 query II
 SELECT t1.t1_id, t2.t2_id
 FROM join_t1 t1
 JOIN join_t2 t2
-  ON t1.t1_id > t2.t2_id          -- single join predicate (range)
-WHERE t1.t1_id > 10               -- left pushdown
-  AND t2.t2_int > 1               -- right pushdown
+  ON t1.t1_id > t2.t2_id          
+WHERE t1.t1_id > 10              
+  AND t2.t2_int > 1               
 ORDER BY 1;
 ----
 22 11
 33 11
 44 11
 
-# 2)  GTE; right pushed to equality (t2_int = 3)
+query TT
+EXPLAIN
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id > t2.t2_id          
+WHERE t1.t1_id > 10              
+  AND t2.t2_int > 1               
+ORDER BY 1;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST
+02)--Inner Join:  Filter: t1.t1_id > t2.t2_id
+03)----SubqueryAlias: t1
+04)------Filter: join_t1.t1_id > Int32(10)
+05)--------TableScan: join_t1 projection=[t1_id]
+06)----SubqueryAlias: t2
+07)------Projection: join_t2.t2_id
+08)--------Filter: join_t2.t2_int > Int32(1)
+09)----------TableScan: join_t2 projection=[t2_id, t2_int]
+physical_plan
+01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
+03)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------FilterExec: t1_id@0 > 10
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=8192
+08)------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
 query II
 SELECT t1.t1_id, t2.t2_id
 FROM join_t1 t1
@@ -78,6 +92,37 @@ ORDER BY 1,2;
 33 11
 44 11
 44 44
+
+query TT
+EXPLAIN
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id >= t2.t2_id
+WHERE t1.t1_id >= 22
+  AND t2.t2_int = 3
+ORDER BY 1,2;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST, t2.t2_id ASC NULLS LAST
+02)--Inner Join:  Filter: t1.t1_id >= t2.t2_id
+03)----SubqueryAlias: t1
+04)------Filter: join_t1.t1_id >= Int32(22)
+05)--------TableScan: join_t1 projection=[t1_id]
+06)----SubqueryAlias: t2
+07)------Projection: join_t2.t2_id
+08)--------Filter: join_t2.t2_int = Int32(3)
+09)----------TableScan: join_t2 projection=[t2_id, t2_int]
+physical_plan
+01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--PiecewiseMergeJoin: operator=GtEq, join_type=Inner, on=(t1_id >= t2_id)
+03)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------FilterExec: t1_id@0 >= 22
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=8192
+08)------FilterExec: t2_int@1 = 3, projection=[t2_id@0]
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.t1_id, t2.t2_id
@@ -138,4 +183,33 @@ ORDER BY 1,2;
 44 55
 44 44
 
-
+query TT
+EXPLAIN
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id <= t2.t2_id
+WHERE t1.t1_id IN (11, 44)
+  AND t2.t2_name <> 'y'
+ORDER BY 1,2;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST, t2.t2_id ASC NULLS LAST
+02)--Inner Join:  Filter: t1.t1_id <= t2.t2_id
+03)----SubqueryAlias: t1
+04)------Filter: join_t1.t1_id = Int32(11) OR join_t1.t1_id = Int32(44)
+05)--------TableScan: join_t1 projection=[t1_id]
+06)----SubqueryAlias: t2
+07)------Projection: join_t2.t2_id
+08)--------Filter: join_t2.t2_name != Utf8View("y")
+09)----------TableScan: join_t2 projection=[t2_id, t2_name]
+physical_plan
+01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--PiecewiseMergeJoin: operator=LtEq, join_type=Inner, on=(t1_id <= t2_id)
+03)----SortExec: expr=[t1_id@0 DESC NULLS LAST], preserve_partitioning=[false]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------FilterExec: t1_id@0 = 11 OR t1_id@0 = 44
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=8192
+08)------FilterExec: t2_name@1 != y, projection=[t2_id@0]
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
