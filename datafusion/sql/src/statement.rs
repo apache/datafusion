@@ -1715,7 +1715,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let format = format.as_ref().unwrap_or(&options.explain.format);
 
             // verbose mode only supports indent format
-            let format: ExplainFormat = if verbose { ExplainFormat::Indent } else { format.parse()? };
+            let format: ExplainFormat = if verbose {
+                ExplainFormat::Indent
+            } else {
+                format.parse()?
+            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
