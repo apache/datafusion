@@ -24,6 +24,17 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### ListingTable automatically detects Hive Partitioned tables
+
+DataFusion 50.0.0 automatically infers Hive partitions when using the `ListingTableFactory` and `CREATE EXTERNAL TABLE`. Previously,
+when creating a `ListingTable`, datasets that use Hive partitioning (e.g.
+`/table_root/column1=value1/column2=value2/data.parquet`) would not have the Hive columns reflected in
+the table's schema or data. The previous behavior can be
+restored by setting the `datafusion.execution.listing_table_factory_infer_partitions` configuration option to `false`.
+See [issue #17049] for more details.
+
+[issue #17049]: https://github.com/apache/datafusion/issues/17049
+
 ### `MSRV` updated to 1.86.0
 
 The Minimum Supported Rust Version (MSRV) has been updated to [`1.86.0`].

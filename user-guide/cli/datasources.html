@@ -797,6 +797,26 @@ path, and it will automatically read all compatible files within that directory.
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;gs://bucket/my_table/&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
+<p>When specifying a directory path that has a Hive compliant partition structure, by default, DataFusion CLI will
+automatically parse and incorporate the Hive columns and their values into the table’s schema and data. Given the
+following remote object paths:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">gs://bucket/my_table/a=1/b=100/file1.parquet</span>
+<span class="go">gs://bucket/my_table/a=2/b=200/file2.parquet</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">my_table</span></code> can be queried and filtered on the Hive columns:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">my_table</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;gs://bucket/my_table/&#39;</span><span class="p">;</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">my_table</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">b</span><span class="o">=</span><span class="mi">200</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+</pre></div>
+</div>
 </section>
 <section id="formats">
 <h1>Formats<a class="headerlink" href="#formats" title="Link to this heading">¶</a></h1>

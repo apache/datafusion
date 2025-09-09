@@ -840,6 +840,31 @@ table (multiple files with the same schema)</p>
 <span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
+<p>Tables that are partitioned using a Hive compliant partitioning scheme will have their columns and values automatically
+detected and incorporated into the table’s schema and data. Given the following example directory structure:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">hive_partitioned/</span>
+<span class="go">├── a=1</span>
+<span class="go">│   └── b=200</span>
+<span class="go">│       └── file1.parquet</span>
+<span class="go">└── a=2</span>
+<span class="go">    └── b=100</span>
+<span class="go">        └── file2.parquet</span>
+</pre></div>
+</div>
+<p>Users can specify the top level <code class="docutils literal notranslate"><span class="pre">hive_partitioned</span></code> directory as an <code class="docutils literal notranslate"><span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> and leverage the Hive partitions to query
+and filter data.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">hive_partitioned</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/hive_partitioned/&#39;</span><span class="p">;</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">hive_partitioned</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">b</span><span class="o">=</span><span class="mi">100</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">                </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------+</span>
+</pre></div>
+</div>
 </section>
 <section id="example-unbounded-data-sources">
 <h3>Example: Unbounded Data Sources<a class="headerlink" href="#example-unbounded-data-sources" title="Link to this heading">¶</a></h3>
