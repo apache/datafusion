@@ -267,7 +267,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_replace::<i32, _, _, _, _>(
+                regexp_replace::<i32, _>(
                     data.as_string::<i32>(),
                     regex.as_string::<i32>(),
                     replacement.as_string::<i32>(),
@@ -289,7 +289,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_replace::<i32, _, _, _, _>(
+                regexp_replace::<i32, _>(
                     data.as_string_view(),
                     regex.as_string_view(),
                     &*replacement,
