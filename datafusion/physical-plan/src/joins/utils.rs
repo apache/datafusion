@@ -44,7 +44,11 @@ use arrow::array::{
     UInt32Array, UInt32Builder, UInt64Array,
 };
 use arrow::array::{
-    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, StringArray, StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt8Array
+    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, StringArray,
+    StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt8Array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::eq;
