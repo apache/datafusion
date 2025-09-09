@@ -884,11 +884,9 @@ impl DFSchema {
     /// ).unwrap();
     ///
     /// assert_eq!(schema.print_schema_tree().to_string(),
-    /// r#"
-    /// root
+    /// r#"root
     ///  |-- id: int32 (nullable = false)
-    ///  |-- name: utf8 (nullable = true)
-    /// "
+    ///  |-- name: utf8 (nullable = true)"#);
     /// ```
     pub fn print_schema_tree(&self) -> impl Display + '_ {
         let mut result = String::from("root\n");
