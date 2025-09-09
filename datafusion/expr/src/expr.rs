@@ -2003,9 +2003,9 @@ impl Expr {
             }
             _ => {}
         };
-        let mut propagate_null_values = false;
+        let mut propagate_null_values = true;
         self.apply_children(|e| {
-            if e.propagate_null_values()? {
+            if !e.propagate_null_values()? {
                 propagate_null_values = false;
                 return Ok(TreeNodeRecursion::Stop);
             }

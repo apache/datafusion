@@ -338,13 +338,13 @@ where exists (
 # 4
 
 # fail
-# query B rowsort
-# select t1_int > (select avg(t1_int) from t1) from t1
-# ----
-# false
-# false
-# true
-# true
+query B rowsort
+select t1_int > (select avg(t1_int) from t1) from t1
+----
+false
+false
+true
+true
 
 query TT
 explain SELECT t1_id, (SELECT case when max(t2.t2_id) > 1 then 'a' else 'b' end FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
