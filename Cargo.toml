@@ -106,7 +106,7 @@ arrow-schema = { version = "56.0.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.10"
-chrono = { version = "0.4.41", default-features = false }
+chrono = { version = "0.4.42", default-features = false }
 criterion = "0.5.1"
 ctor = "0.4.3"
 dashmap = "6.0.1"
@@ -152,7 +152,7 @@ futures = "0.3"
 half = { version = "2.6.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
-indexmap = "2.11.0"
+indexmap = "2.11.1"
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.3", default-features = false }

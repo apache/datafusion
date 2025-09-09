@@ -1,0 +1,75 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query I
+copy (values('foo'), ('bar'))
+to 'test_files/scratch/listing_table_partitions/single_part/a=1/file1.parquet';
+----
+2
+
+query I
+copy (values('baz'))
+to 'test_files/scratch/listing_table_partitions/single_part/a=1/file2.parquet';
+----
+1
+
+statement count 0
+create external table single_part
+stored as parquet location 'test_files/scratch/listing_table_partitions/single_part/';
+
+query TT
+select * from single_part order by (column1);
+----
+bar 1
+baz 1
+foo 1
+
+query I
+copy (values('foo'), ('bar')) to 'test_files/scratch/listing_table_partitions/multi_part/a=1/b=100/file1.parquet';
+----
+2
+
+query I
+copy (values('baz')) to 'test_files/scratch/listing_table_partitions/multi_part/a=1/b=200/file1.parquet';
+----
+1
+
+statement count 0
+create external table multi_part
+stored as parquet location 'test_files/scratch/listing_table_partitions/multi_part/';
+
+query TTT
+select * from multi_part where b=200; 
+----
+baz 1 200
+
+statement count 0
+set datafusion.execution.listing_table_factory_infer_partitions = false;
+
+statement count 0
+create external table infer_disabled
+stored as parquet location 'test_files/scratch/listing_table_partitions/multi_part/';
+
+query T
+select * from infer_disabled order by (column1);
+----
+bar
+baz
+foo
+
+statement count 0
+set datafusion.execution.listing_table_factory_infer_partitions = true;
