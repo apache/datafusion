@@ -979,7 +979,7 @@ fn format_field_with_indent(
                         &child_indent,
                     );
                     let value_contains_null =
-                        if field.is_nullable() { "true" } else { "false" };
+                        field.is_nullable().to_string().to_lowercase();
                     // Handle complex value types properly
                     match inner_fields[1].data_type() {
                         DataType::Struct(_)
@@ -996,7 +996,7 @@ fn format_field_with_indent(
                             );
                         }
                         _ => {
-                            result.push_str(&format!("{child_indent}|-- value: {} (valueContainsNull = {value_contains_null})\n",
+                            result.push_str(&format!("{child_indent}|-- value: {} (nullable = {value_contains_null})\n",
                                 format_simple_data_type(inner_fields[1].data_type())));
                         }
                     }
@@ -1041,25 +1041,29 @@ fn format_simple_data_type(data_type: &DataType) -> String {
         DataType::Float16 => "float16".to_string(),
         DataType::Float32 => "float32".to_string(),
         DataType::Float64 => "float64".to_string(),
-        DataType::Utf8 => "string".to_string(),
-        DataType::LargeUtf8 => "string".to_string(),
+        DataType::Utf8 => "utf8".to_string(),
+        DataType::LargeUtf8 => "large_utf8".to_string(),
         DataType::Binary => "binary".to_string(),
-        DataType::LargeBinary => "binary".to_string(),
-        DataType::FixedSizeBinary(_) => "binary".to_string(),
-        DataType::Date32 => "date".to_string(),
-        DataType::Date64 => "date".to_string(),
-        DataType::Time32(_) => "time".to_string(),
-        DataType::Time64(_) => "time".to_string(),
+        DataType::LargeBinary => "large_binary".to_string(),
+        DataType::FixedSizeBinary(_) => "fixed_size_binary".to_string(),
+        DataType::Date32 => "date32".to_string(),
+        DataType::Date64 => "date64".to_string(),
+        DataType::Time32(_) => "time32".to_string(),
+        DataType::Time64(_) => "time64".to_string(),
         DataType::Timestamp(_, tz) => match tz {
-            Some(_) => "timestamp".to_string(),
+            Some(tz_str) => format!("timestamp ({tz_str})"),
             None => "timestamp".to_string(),
         },
         DataType::Interval(_) => "interval".to_string(),
         DataType::Dictionary(_, value_type) => {
             format_simple_data_type(value_type.as_ref())
         }
-        DataType::Decimal128(_, _) => "decimal".to_string(),
-        DataType::Decimal256(_, _) => "decimal".to_string(),
+        DataType::Decimal128(precision, scale) => {
+            format!("decimal128({precision}, {scale})")
+        }
+        DataType::Decimal256(precision, scale) => {
+            format!("decimal256({precision}, {scale})")
+        }
         DataType::Null => "null".to_string(),
         _ => format!("{data_type:?}").to_lowercase(),
     }
@@ -1950,9 +1954,14 @@ mod tests {
         .unwrap();
 
         let output = schema.print_schema_tree();
-        let expected = "root\n |-- id: int32 (nullable = false)\n |-- name: string (nullable = true)\n |-- age: int64 (nullable = true)\n |-- active: boolean (nullable = false)";
 
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- id: int32 (nullable = false)
+         |-- name: utf8 (nullable = true)
+         |-- age: int64 (nullable = true)
+         |-- active: boolean (nullable = false)
+        ");
     }
 
     #[test]
@@ -1967,9 +1976,12 @@ mod tests {
         .unwrap();
 
         let output = schema.print_schema_tree();
-        let expected = "root\n |-- table1.id: int32 (nullable = false)\n |-- table1.name: string (nullable = true)";
 
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- table1.id: int32 (nullable = false)
+         |-- table1.name: utf8 (nullable = true)
+        ");
     }
 
     #[test]
@@ -2002,18 +2014,23 @@ mod tests {
         .unwrap();
 
         let output = schema.print_schema_tree();
-        let expected = "root\n |-- id: int32 (nullable = false)\n |-- address: struct (nullable = true)\n |    |-- street: string (nullable = true)\n |    |-- city: string (nullable = true)\n |-- tags: list (nullable = true)\n |    |-- item: string (nullable = true)\n |-- score: decimal (nullable = true)";
-
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- id: int32 (nullable = false)
+         |-- address: struct (nullable = true)
+         |    |-- street: utf8 (nullable = true)
+         |    |-- city: utf8 (nullable = true)
+         |-- tags: list (nullable = true)
+         |    |-- item: utf8 (nullable = true)
+         |-- score: decimal128(10, 2) (nullable = true)
+        ");
     }
 
     #[test]
     fn test_print_schema_empty() {
         let schema = DFSchema::empty();
         let output = schema.print_schema_tree();
-        let expected = "root";
-
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output, @r###"root"###);
     }
 
     #[test]
@@ -2087,19 +2104,22 @@ mod tests {
 
         let output = schema.print_schema_tree();
 
-        // Check that the output contains the expected structure
-        assert!(output.starts_with("root\n"));
-        assert!(output.contains(" |-- simple_field: string (nullable = true)"));
-        assert!(output.contains(" |-- inner: struct (nullable = true)"));
-        assert!(output.contains(" |    |-- level1: string (nullable = true)"));
-        assert!(output.contains(" |    |-- level2: int32 (nullable = false)"));
-        assert!(output.contains(" |-- nested_list: list (nullable = true)"));
-        assert!(output.contains(" |    |-- item: struct (nullable = true)"));
-        assert!(output.contains(" |    |    |-- id: int64 (nullable = false)"));
-        assert!(output.contains(" |    |    |-- value: float64 (nullable = true)"));
-        assert!(output.contains(" |-- map_data: map (nullable = true)"));
-        assert!(output.contains(" |    |-- key: string (nullable = false)"));
-        assert!(output.contains(" |-- timestamp_field: timestamp (nullable = false)"));
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- simple_field: utf8 (nullable = true)
+         |-- inner: struct (nullable = true)
+         |    |-- level1: utf8 (nullable = true)
+         |    |-- level2: int32 (nullable = false)
+         |-- nested_list: list (nullable = true)
+         |    |-- item: struct (nullable = true)
+         |    |    |-- id: int64 (nullable = false)
+         |    |    |-- value: float64 (nullable = true)
+         |-- map_data: map (nullable = true)
+         |    |-- key: utf8 (nullable = false)
+         |    |-- value: list (nullable = true)
+         |    |    |-- item: int32 (nullable = true)
+         |-- timestamp_field: timestamp (UTC) (nullable = false)
+        ");
     }
 
     #[test]
@@ -2126,9 +2146,14 @@ mod tests {
         .unwrap();
 
         let output = schema.print_schema_tree();
-        let expected = "root\n |-- table1.id: int32 (nullable = false)\n |-- name: string (nullable = true)\n |-- table2.score: float64 (nullable = true)\n |-- active: boolean (nullable = false)";
 
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- table1.id: int32 (nullable = false)
+         |-- name: utf8 (nullable = true)
+         |-- table2.score: float64 (nullable = true)
+         |-- active: boolean (nullable = false)
+        ");
     }
 
     #[test]
@@ -2160,9 +2185,14 @@ mod tests {
         .unwrap();
 
         let output = schema.print_schema_tree();
-        let expected = "root\n |-- array_map_field: list (nullable = false)\n |    |-- item: map (nullable = false)\n |    |    |-- key: string (nullable = false)\n |    |    |-- value: string (valueContainsNull = false)";
 
-        assert_eq!(output, expected);
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- array_map_field: list (nullable = false)
+         |    |-- item: map (nullable = false)
+         |    |    |-- key: utf8 (nullable = false)
+         |    |    |-- value: utf8 (nullable = false)
+        ");
     }
 
     #[test]
@@ -2297,52 +2327,38 @@ mod tests {
         .unwrap();
 
         let output = schema.print_schema_tree();
-        // Verify the structure contains expected complex type combinations
-        assert!(output.starts_with("root\n"));
 
-        // List of structs
-        assert!(output.contains(" |-- list_of_structs: list (nullable = true)"));
-        assert!(output.contains(" |    |-- item: struct (nullable = true)"));
-        assert!(output.contains(" |    |    |-- id: int32 (nullable = false)"));
-        assert!(output.contains(" |    |    |-- name: string (nullable = true)"));
-        assert!(output.contains(" |    |    |-- score: float64 (nullable = true)"));
-
-        // Struct with lists
-        assert!(output.contains(" |-- struct_with_lists: struct (nullable = false)"));
-        assert!(output.contains(" |    |-- tags: list (nullable = true)"));
-        assert!(output.contains(" |    |    |-- item: string (nullable = true)"));
-        assert!(output.contains(" |    |-- scores: list (nullable = false)"));
-        assert!(output.contains(" |    |    |-- item: int32 (nullable = true)"));
-        assert!(output.contains(" |    |-- metadata: string (nullable = true)"));
-
-        // Map with struct values
-        assert!(output.contains(" |-- map_with_struct_values: map (nullable = true)"));
-        assert!(output.contains(" |    |-- key: string (nullable = false)"));
-        assert!(output.contains(" |    |-- value: struct (nullable = true)"));
-        assert!(output.contains(" |    |    |-- count: int64 (nullable = false)"));
-        assert!(output.contains(" |    |    |-- active: boolean (nullable = true)"));
-
-        // List of maps
-        assert!(output.contains(" |-- list_of_maps: list (nullable = true)"));
-        assert!(output.contains(" |    |-- item: map (nullable = true)"));
-        assert!(output.contains(" |    |    |-- key: string (nullable = false)"));
-        assert!(
-            output.contains(" |    |    |-- value: int32 (valueContainsNull = false)")
-        );
-
-        // Deeply nested structure
-        assert!(output.contains(" |-- deeply_nested: struct (nullable = true)"));
-        assert!(output.contains(" |    |-- level1: string (nullable = true)"));
-        assert!(output.contains(" |    |-- level2: list (nullable = false)"));
-        assert!(output.contains(" |    |    |-- item: struct (nullable = true)"));
-        assert!(output.contains(" |    |    |    |-- id: int32 (nullable = false)"));
-        assert!(output.contains(" |    |    |    |-- properties: map (nullable = true)"));
-        assert!(
-            output.contains(" |    |    |    |    |-- key: string (nullable = false)")
-        );
-        assert!(output.contains(
-            " |    |    |    |    |-- value: float64 (valueContainsNull = false)"
-        ));
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- list_of_structs: list (nullable = true)
+         |    |-- item: struct (nullable = true)
+         |    |    |-- id: int32 (nullable = false)
+         |    |    |-- name: utf8 (nullable = true)
+         |    |    |-- score: float64 (nullable = true)
+         |-- struct_with_lists: struct (nullable = false)
+         |    |-- tags: list (nullable = true)
+         |    |    |-- item: utf8 (nullable = true)
+         |    |-- scores: list (nullable = false)
+         |    |    |-- item: int32 (nullable = true)
+         |    |-- metadata: utf8 (nullable = true)
+         |-- map_with_struct_values: map (nullable = true)
+         |    |-- key: utf8 (nullable = false)
+         |    |-- value: struct (nullable = true)
+         |    |    |-- count: int64 (nullable = false)
+         |    |    |-- active: boolean (nullable = true)
+         |-- list_of_maps: list (nullable = true)
+         |    |-- item: map (nullable = true)
+         |    |    |-- key: utf8 (nullable = false)
+         |    |    |-- value: int32 (nullable = false)
+         |-- deeply_nested: struct (nullable = true)
+         |    |-- level1: utf8 (nullable = true)
+         |    |-- level2: list (nullable = false)
+         |    |    |-- item: struct (nullable = true)
+         |    |    |    |-- id: int32 (nullable = false)
+         |    |    |    |-- properties: map (nullable = true)
+         |    |    |    |    |-- key: utf8 (nullable = false)
+         |    |    |    |    |-- value: float64 (nullable = false)
+        ");
     }
 
     #[test]
@@ -2384,21 +2400,22 @@ mod tests {
         .unwrap();
 
         let output = schema.print_schema_tree();
-        // Verify all edge case types are formatted correctly
-        assert!(output.contains(" |-- null_field: null (nullable = true)"));
-        assert!(output.contains(" |-- binary_field: binary (nullable = false)"));
-        assert!(output.contains(" |-- large_binary: binary (nullable = true)"));
-        assert!(output.contains(" |-- large_utf8: string (nullable = false)"));
-        assert!(output.contains(" |-- fixed_size_binary: binary (nullable = true)"));
-        assert!(
-            output.contains(" |-- fixed_size_list: fixed size list (nullable = false)")
-        );
-        assert!(output.contains(" |    |-- item: int32 (nullable = true)"));
-        assert!(output.contains(" |-- decimal128: decimal (nullable = true)"));
-        assert!(output.contains(" |-- decimal256: decimal (nullable = false)"));
-        assert!(output.contains(" |-- date32: date (nullable = true)"));
-        assert!(output.contains(" |-- date64: date (nullable = false)"));
-        assert!(output.contains(" |-- time32_seconds: time (nullable = true)"));
-        assert!(output.contains(" |-- time64_nanoseconds: time (nullable = false)"));
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- null_field: null (nullable = true)
+         |-- binary_field: binary (nullable = false)
+         |-- large_binary: large_binary (nullable = true)
+         |-- large_utf8: large_utf8 (nullable = false)
+         |-- fixed_size_binary: fixed_size_binary (nullable = true)
+         |-- fixed_size_list: fixed size list (nullable = false)
+         |    |-- item: int32 (nullable = true)
+         |-- decimal128: decimal128(18, 4) (nullable = true)
+         |-- decimal256: decimal256(38, 10) (nullable = false)
+         |-- date32: date32 (nullable = true)
+         |-- date64: date64 (nullable = false)
+         |-- time32_seconds: time32 (nullable = true)
+         |-- time64_nanoseconds: time64 (nullable = false)
+        ");
     }
 }
