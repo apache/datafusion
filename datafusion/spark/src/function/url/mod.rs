@@ -20,15 +20,18 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 pub mod parse_url;
+pub mod try_parse_url;
 
 make_udf_function!(parse_url::ParseUrl, parse_url);
+make_udf_function!(try_parse_url::TryParseUrl, try_parse_url);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
     export_functions!((parse_url, "Extracts a part from a URL.", args));
+    export_functions!((try_parse_url, "This is a special version of parse_url that performs the same operation, but returns a NULL value instead of raising an error if the parsing cannot be performed.", args));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![parse_url()]
+    vec![parse_url(), try_parse_url()]
 }
