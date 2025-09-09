@@ -243,17 +243,14 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 /// # Ok(())
 /// # }
 /// ```
-pub fn regexp_replace<'a, T: OffsetSizeTrait, U, V, W, X>(
+pub fn regexp_replace<'a, T: OffsetSizeTrait, U>(
     string_array: U,
-    pattern_array: V,
-    replacement_array: W,
-    flags_array: Option<X>,
+    pattern_array: U,
+    replacement_array: U,
+    flags_array: Option<U>,
 ) -> Result<ArrayRef>
 where
     U: ArrayAccessor<Item = &'a str>,
-    V: ArrayAccessor<Item = &'a str>,
-    W: ArrayAccessor<Item = &'a str>,
-    X: ArrayAccessor<Item = &'a str>,
 {
     // Default implementation for regexp_replace, assumes all args are arrays
     // and args is a sequence of 3 or 4 elements.
@@ -626,7 +623,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         let string_array = args[0].as_string::<i32>();
                         let pattern_array = args[1].as_string::<i32>();
                         let replacement_array = args[2].as_string::<i32>();
-                        regexp_replace::<i32, _, _, _, _>(
+                        regexp_replace::<i32, _>(
                             string_array,
                             pattern_array,
                             replacement_array,
@@ -637,7 +634,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         let string_array = args[0].as_string_view();
                         let pattern_array = args[1].as_string_view();
                         let replacement_array = args[2].as_string_view();
-                        regexp_replace::<i32, _, _, _, _>(
+                        regexp_replace::<i32, _>(
                             string_array,
                             pattern_array,
                             replacement_array,
@@ -648,7 +645,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         let string_array = args[0].as_string::<i64>();
                         let pattern_array = args[1].as_string::<i64>();
                         let replacement_array = args[2].as_string::<i64>();
-                        regexp_replace::<i64, _, _, _, _>(
+                        regexp_replace::<i64, _>(
                             string_array,
                             pattern_array,
                             replacement_array,
@@ -673,7 +670,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         let pattern_array = args[1].as_string::<i32>();
                         let replacement_array = args[2].as_string::<i32>();
                         let flags_array = args[3].as_string::<i32>();
-                        regexp_replace::<i32, _, _, _, _>(
+                        regexp_replace::<i32, _>(
                             string_array,
                             pattern_array,
                             replacement_array,
@@ -690,7 +687,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         let pattern_array = args[1].as_string_view();
                         let replacement_array = args[2].as_string_view();
                         let flags_array = args[3].as_string_view();
-                        regexp_replace::<i32, _, _, _, _>(
+                        regexp_replace::<i32, _>(
                             string_array,
                             pattern_array,
                             replacement_array,
@@ -707,7 +704,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         let pattern_array = args[1].as_string::<i64>();
                         let replacement_array = args[2].as_string::<i64>();
                         let flags_array = args[3].as_string::<i64>();
-                        regexp_replace::<i64, _, _, _, _>(
+                        regexp_replace::<i64, _>(
                             string_array,
                             pattern_array,
                             replacement_array,
@@ -731,7 +728,7 @@ mod tests {
     use super::*;
 
     macro_rules! static_pattern_regexp_replace {
-        ($name:ident, $T:ty, $U:ty, $O:ty) => {
+        ($name:ident, $T:ty, $O:ty) => {
             #[test]
             fn $name() {
                 let values = vec!["abc", "acd", "abcd1234567890123", "123456789012abc"];
@@ -741,8 +738,8 @@ mod tests {
                     vec!["afooc", "acd", "afoocd1234567890123", "123456789012afooc"];
 
                 let values = <$T>::from(values);
-                let patterns = <$U>::from(patterns);
-                let replacements = <$U>::from(replacement);
+                let patterns = <$T>::from(patterns);
+                let replacements = <$T>::from(replacement);
                 let expected = <$T>::from(expected);
 
                 let re = _regexp_replace_static_pattern_replace::<$O>(&[
@@ -757,62 +754,9 @@ mod tests {
         };
     }
 
-    static_pattern_regexp_replace!(
-        string_array_string_args,
-        StringArray,
-        StringArray,
-        i32
-    );
-    static_pattern_regexp_replace!(
-        string_view_array_string_args,
-        StringViewArray,
-        StringArray,
-        i32
-    );
-    static_pattern_regexp_replace!(
-        large_string_array_string_args,
-        LargeStringArray,
-        StringArray,
-        i64
-    );
-
-    static_pattern_regexp_replace!(
-        string_array_string_view_args,
-        StringArray,
-        StringViewArray,
-        i32
-    );
-    static_pattern_regexp_replace!(
-        string_view_array_string_view_args,
-        StringViewArray,
-        StringViewArray,
-        i32
-    );
-    static_pattern_regexp_replace!(
-        large_string_array_string_view_args,
-        LargeStringArray,
-        StringViewArray,
-        i64
-    );
-
-    static_pattern_regexp_replace!(
-        string_array_large_string_args,
-        StringArray,
-        LargeStringArray,
-        i32
-    );
-    static_pattern_regexp_replace!(
-        string_view_array_large_string_args,
-        StringViewArray,
-        LargeStringArray,
-        i32
-    );
-    static_pattern_regexp_replace!(
-        large_string_array_large_string_args,
-        LargeStringArray,
-        LargeStringArray,
-        i64
-    );
+    static_pattern_regexp_replace!(string_array, StringArray, i32);
+    static_pattern_regexp_replace!(string_view_array, StringViewArray, i32);
+    static_pattern_regexp_replace!(large_string_array, LargeStringArray, i64);
 
     macro_rules! static_pattern_regexp_replace_with_flags {
         ($name:ident, $T:ty, $O: ty) => {
