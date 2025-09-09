@@ -3482,7 +3482,9 @@ digraph {
         let _physical_plan = planner.create_physical_plan(&logical_plan, &state).await?;
 
         let optimized_logical_plan = state.optimize(&logical_plan)?;
-        let _optimized_physical_plan = planner.create_physical_plan(&optimized_logical_plan, &state).await?;
+        let _optimized_physical_plan = planner
+            .create_physical_plan(&optimized_logical_plan, &state)
+            .await?;
 
         Ok(())
     }
