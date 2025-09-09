@@ -44,10 +44,7 @@ use arrow::array::{
     UInt32Array, UInt32Builder, UInt64Array,
 };
 use arrow::array::{
-    ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
-    StringArray, StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt8Array,
+    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, StringArray, StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt8Array
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::eq;
@@ -1829,6 +1826,10 @@ pub fn compare_join_arrays(
             DataType::UInt64 => compare_value!(UInt64Array),
             DataType::Float32 => compare_value!(Float32Array),
             DataType::Float64 => compare_value!(Float64Array),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
+            DataType::LargeBinary => compare_value!(LargeBinaryArray),
             DataType::Utf8 => compare_value!(StringArray),
             DataType::Utf8View => compare_value!(StringViewArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
