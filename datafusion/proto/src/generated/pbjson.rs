@@ -3771,6 +3771,9 @@ impl serde::Serialize for CsvScanExecNode {
         if self.newlines_in_values {
             len += 1;
         }
+        if self.truncate_rows {
+            len += 1;
+        }
         if self.optional_escape.is_some() {
             len += 1;
         }
@@ -3792,6 +3795,9 @@ impl serde::Serialize for CsvScanExecNode {
         }
         if self.newlines_in_values {
             struct_ser.serialize_field("newlinesInValues", &self.newlines_in_values)?;
+        }
+        if self.truncate_rows {
+            struct_ser.serialize_field("truncateRows", &self.truncate_rows)?;
         }
         if let Some(v) = self.optional_escape.as_ref() {
             match v {
@@ -3825,6 +3831,8 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             "quote",
             "newlines_in_values",
             "newlinesInValues",
+            "truncate_rows",
+            "truncateRows",
             "escape",
             "comment",
         ];
@@ -3836,6 +3844,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             Delimiter,
             Quote,
             NewlinesInValues,
+            TruncateRows,
             Escape,
             Comment,
         }
@@ -3864,6 +3873,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "quote" => Ok(GeneratedField::Quote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
+                            "truncateRows" | "truncate_rows" => Ok(GeneratedField::TruncateRows),
                             "escape" => Ok(GeneratedField::Escape),
                             "comment" => Ok(GeneratedField::Comment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -3890,6 +3900,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut delimiter__ = None;
                 let mut quote__ = None;
                 let mut newlines_in_values__ = None;
+                let mut truncate_rows__ = None;
                 let mut optional_escape__ = None;
                 let mut optional_comment__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -3924,6 +3935,12 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             }
                             newlines_in_values__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::TruncateRows => {
+                            if truncate_rows__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("truncateRows"));
+                            }
+                            truncate_rows__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Escape => {
                             if optional_escape__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("escape"));
@@ -3944,6 +3961,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                     delimiter: delimiter__.unwrap_or_default(),
                     quote: quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
+                    truncate_rows: truncate_rows__.unwrap_or_default(),
                     optional_escape: optional_escape__,
                     optional_comment: optional_comment__,
                 })
@@ -12624,6 +12642,192 @@ impl<'de> serde::Deserialize<'de> for MaybePhysicalSortExprs {
         deserializer.deserialize_struct("datafusion.MaybePhysicalSortExprs", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for MemoryScanExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.partitions.is_empty() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        if !self.projection.is_empty() {
+            len += 1;
+        }
+        if !self.sort_information.is_empty() {
+            len += 1;
+        }
+        if self.show_sizes {
+            len += 1;
+        }
+        if self.fetch.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.MemoryScanExecNode", len)?;
+        if !self.partitions.is_empty() {
+            struct_ser.serialize_field("partitions", &self.partitions.iter().map(pbjson::private::base64::encode).collect::<Vec<_>>())?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        if !self.projection.is_empty() {
+            struct_ser.serialize_field("projection", &self.projection)?;
+        }
+        if !self.sort_information.is_empty() {
+            struct_ser.serialize_field("sortInformation", &self.sort_information)?;
+        }
+        if self.show_sizes {
+            struct_ser.serialize_field("showSizes", &self.show_sizes)?;
+        }
+        if let Some(v) = self.fetch.as_ref() {
+            struct_ser.serialize_field("fetch", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MemoryScanExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "partitions",
+            "schema",
+            "projection",
+            "sort_information",
+            "sortInformation",
+            "show_sizes",
+            "showSizes",
+            "fetch",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Partitions,
+            Schema,
+            Projection,
+            SortInformation,
+            ShowSizes,
+            Fetch,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "partitions" => Ok(GeneratedField::Partitions),
+                            "schema" => Ok(GeneratedField::Schema),
+                            "projection" => Ok(GeneratedField::Projection),
+                            "sortInformation" | "sort_information" => Ok(GeneratedField::SortInformation),
+                            "showSizes" | "show_sizes" => Ok(GeneratedField::ShowSizes),
+                            "fetch" => Ok(GeneratedField::Fetch),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MemoryScanExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.MemoryScanExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MemoryScanExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut partitions__ = None;
+                let mut schema__ = None;
+                let mut projection__ = None;
+                let mut sort_information__ = None;
+                let mut show_sizes__ = None;
+                let mut fetch__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Partitions => {
+                            if partitions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitions"));
+                            }
+                            partitions__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::BytesDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                        GeneratedField::Projection => {
+                            if projection__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projection"));
+                            }
+                            projection__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                        GeneratedField::SortInformation => {
+                            if sort_information__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sortInformation"));
+                            }
+                            sort_information__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ShowSizes => {
+                            if show_sizes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("showSizes"));
+                            }
+                            show_sizes__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(MemoryScanExecNode {
+                    partitions: partitions__.unwrap_or_default(),
+                    schema: schema__,
+                    projection: projection__.unwrap_or_default(),
+                    sort_information: sort_information__.unwrap_or_default(),
+                    show_sizes: show_sizes__.unwrap_or_default(),
+                    fetch: fetch__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.MemoryScanExecNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for NamedStructField {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -16802,6 +17006,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::SortMergeJoin(v) => {
                     struct_ser.serialize_field("sortMergeJoin", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::MemoryScan(v) => {
+                    struct_ser.serialize_field("memoryScan", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -16865,6 +17072,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "generateSeries",
             "sort_merge_join",
             "sortMergeJoin",
+            "memory_scan",
+            "memoryScan",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16902,6 +17111,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             Cooperative,
             GenerateSeries,
             SortMergeJoin,
+            MemoryScan,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16956,6 +17166,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "cooperative" => Ok(GeneratedField::Cooperative),
                             "generateSeries" | "generate_series" => Ok(GeneratedField::GenerateSeries),
                             "sortMergeJoin" | "sort_merge_join" => Ok(GeneratedField::SortMergeJoin),
+                            "memoryScan" | "memory_scan" => Ok(GeneratedField::MemoryScan),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17207,6 +17418,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("sortMergeJoin"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::SortMergeJoin)
+;
+                        }
+                        GeneratedField::MemoryScan => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("memoryScan"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::MemoryScan)
 ;
                         }
                     }

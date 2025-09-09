@@ -940,6 +940,7 @@ impl Eq for TopKRow {}
 
 impl PartialOrd for TopKRow {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // TODO PartialOrd is not consistent with PartialEq; PartialOrd contract is violated
         Some(self.cmp(other))
     }
 }

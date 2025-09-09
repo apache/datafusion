@@ -99,6 +99,7 @@ pub fn create_window_expr(
     input_schema: &Schema,
     ignore_nulls: bool,
     distinct: bool,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateUDF(fun) => {
@@ -123,6 +124,7 @@ pub fn create_window_expr(
                 order_by,
                 window_frame,
                 aggregate,
+                filter,
             )
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
@@ -140,6 +142,7 @@ fn window_expr_from_aggregate_expr(
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.is_ever_expanding();
@@ -150,6 +153,7 @@ fn window_expr_from_aggregate_expr(
             partition_by,
             order_by,
             window_frame,
+            filter,
         ))
     } else {
         Arc::new(PlainAggregateWindowExpr::new(
@@ -157,6 +161,7 @@ fn window_expr_from_aggregate_expr(
             partition_by,
             order_by,
             window_frame,
+            filter,
         ))
     }
 }
@@ -812,6 +817,7 @@ mod tests {
                 schema.as_ref(),
                 false,
                 false,
+                None,
             )?],
             blocking_exec,
             false,
