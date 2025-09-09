@@ -440,6 +440,7 @@ impl PartialOrd for dyn WindowUDFImpl {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
         .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }

@@ -750,6 +750,7 @@ impl PartialOrd for Alias {
         };
         self.name
             .partial_cmp(&other.name)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }

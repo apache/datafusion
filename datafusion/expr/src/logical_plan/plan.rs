@@ -2062,6 +2062,7 @@ impl PartialOrd for EmptyRelation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.produce_one_row
             .partial_cmp(&other.produce_one_row)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -2118,6 +2119,7 @@ impl PartialOrd for Values {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.values
             .partial_cmp(&other.values)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -2143,6 +2145,7 @@ impl PartialOrd for Projection {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
         .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -2254,6 +2257,7 @@ impl PartialOrd for SubqueryAlias {
             Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
         .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -2600,6 +2604,7 @@ impl PartialOrd for TableScan {
         };
         comparable_self
             .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -2925,6 +2930,7 @@ impl PartialOrd for Union {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.inputs
             .partial_cmp(&other.inputs)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -3208,6 +3214,7 @@ impl PartialOrd for Explain {
         };
         comparable_self
             .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -3231,6 +3238,7 @@ impl PartialOrd for Analyze {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
         .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -3461,6 +3469,7 @@ impl PartialOrd for DistinctOn {
         };
         comparable_self
             .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -3648,6 +3657,7 @@ impl PartialOrd for Aggregate {
             }
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
         .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -3923,6 +3933,7 @@ impl PartialOrd for Join {
         };
         comparable_self
             .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
@@ -4090,6 +4101,7 @@ impl PartialOrd for Unnest {
         };
         comparable_self
             .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
             .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
