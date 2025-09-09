@@ -184,7 +184,7 @@ fn test_missing_non_aggregate_in_group_by() -> Result<()> {
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"'person.first_name' must appear in GROUP BY clause because it's not an aggregate expression");
     assert_eq!(diag.span, Some(spans["a"]));
-    assert_snapshot!(diag.helps[0].message, @"Either add 'person.first_name' to GROUP BY clause, or use an aggregare function like ANY_VALUE(person.first_name)");
+    assert_snapshot!(diag.helps[0].message, @"Either add 'person.first_name' to GROUP BY clause, or use an aggregate function like ANY_VALUE(person.first_name)");
     Ok(())
 }
 
