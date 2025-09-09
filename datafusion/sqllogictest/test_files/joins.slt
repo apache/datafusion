@@ -4197,6 +4197,14 @@ SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 20;
 3 3 3 3 true
 4 4 NULL NULL NULL
 
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.execution.batch_size = 4;
+
+
 query TT rowsort
 -- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
 EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
@@ -4228,6 +4236,9 @@ SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
 4 4 2 2 true
 4 4 3 3 false
 4 4 3 3 true
+
+statement ok
+set datafusion.execution.batch_size = 3;
 
 query IIIIB rowsort
 -- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism

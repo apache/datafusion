@@ -61,7 +61,7 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 
 /// `PiecewiseMergeJoinExec` is a join execution plan that only evaluates single range filter.
 ///
-/// The physical planner will choose to evalute this join when there is only one range predicate. This
+/// The physical planner will choose to evaluate this join when there is only one range predicate. This
 /// is a binary expression which contains [`Operator::Lt`], [`Operator::LtEq`], [`Operator::Gt`], and
 /// [`Operator::GtEq`].:
 /// Examples:

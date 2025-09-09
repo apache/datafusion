@@ -1287,12 +1287,12 @@ impl DefaultPhysicalPlanner {
 
                         let on_left = create_physical_expr(
                             lhs_logical,
-                            &left_df_schema,
+                            left_df_schema,
                             session_state.execution_props(),
                         )?;
                         let on_right = create_physical_expr(
                             rhs_logical,
-                            &right_df_schema,
+                            right_df_schema,
                             session_state.execution_props(),
                         )?;
 

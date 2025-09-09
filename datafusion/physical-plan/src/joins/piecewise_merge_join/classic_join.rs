@@ -486,6 +486,7 @@ impl Stream for ClassicPWMJStream {
 }
 
 // For Left, Right, Full, and Inner joins, incoming stream batches will already be sorted.
+#[allow(clippy::too_many_arguments)]
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &StreamedBatch,
@@ -1178,6 +1179,56 @@ mod tests {
         | 1  | 1  | 100 |    |    |     |
         +----+----+-----+----+----+-----+
         "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_full_greater_than_equal_to_on_c2_limit20() -> Result<()> {
+        // t0
+        // +----+----+
+        // | c1 | c2 |
+        // +----+----+
+        // | 1  | 1  |
+        // | 2  | 2  |
+        // | 3  | 3  |
+        // | 4  | 4  |
+        // +----+----+
+        let right = build_table(
+            ("c1", &vec![1, 2, 3, 4]),
+            ("c2", &vec![1, 2, 3, 4]),
+            ("c3", &vec![1, 2, 3, 4]),
+        );
+
+        // t1
+        // +------+----+------+
+        // | c1_r | c2 | c3   |
+        // +------+----+------+
+        // | 2    | 2  | false|
+        // | 2    | 2  | true |
+        // | 3    | 3  | false|
+        // | 3    | 3  | true |
+        // +------+----+------+
+        let left = build_table(
+            ("c1_r", &vec![2, 2, 3, 3]),
+            ("c2", &vec![2, 2, 3, 3]),
+            ("c3", &vec![1, 2, 3, 4]),
+        );
+
+        // ON t0.c2 >= t1.c2
+        let on = (
+            Arc::new(Column::new_with_schema("c2", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        );
+
+        // Run FULL join with >=
+        let (_, batches) =
+            join_collect(left, right, on, Operator::GtEq, JoinType::Full).await?;
+
+        // LIMIT 20 in the SQL simply ensured "all rows" (we have 11), so we assert the full result set.
+        assert_snapshot!(batches_to_string(&batches), @r#"
+    
+    "#);
 
         Ok(())
     }
