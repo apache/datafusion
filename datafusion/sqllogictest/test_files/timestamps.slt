@@ -3236,6 +3236,11 @@ select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brus
 ----
 2024-04-01T00:00:20
 
+query P
+select to_local_time(NULL);
+----
+NULL
+
 query PTPT
 select
   time,
