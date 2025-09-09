@@ -119,6 +119,7 @@ impl ToLocalTimeFunc {
 
         let arg_type = time_value.data_type();
         match arg_type {
+            DataType::Null => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
             Timestamp(_, None) => {
                 // if no timezone specified, just return the input
                 Ok(time_value.clone())
@@ -360,6 +361,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 
         match time_value {
             Timestamp(timeunit, _) => Ok(Timestamp(*timeunit, None)),
+            DataType::Null => Ok(Timestamp(Nanosecond, None)),
             _ => exec_err!(
                 "The to_local_time function can only accept timestamp as the arg, got {:?}", time_value
             )
@@ -385,6 +387,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 
         let first_arg = arg_types[0].clone();
         match &first_arg {
+            DataType::Null => Ok(vec![Timestamp(Nanosecond, None)]),
             Timestamp(Nanosecond, timezone) => {
                 Ok(vec![Timestamp(Nanosecond, timezone.clone())])
             }
