@@ -43,25 +43,6 @@ See [#17230] for details.
 [`1.86.0`]: https://releases.rs/docs/1.86.0/
 [#17230]: https://github.com/apache/datafusion/pull/17230
 
-### Dynamic filters apply to additional join types
-
-Dynamic filters now use join preservation metadata to decide where they can be
-applied. Filters are pushed only to the non-preserved side of a join, allowing
-outer joins to benefit from runtime pruning without changing results.
-
-For example, in a `LEFT JOIN` the left side is preserved. A query such as:
-
-```sql
-EXPLAIN SELECT *
-FROM customers c
-LEFT JOIN orders o ON c.id = o.customer_id
-ORDER BY c.id
-LIMIT 5;
-```
-
-builds a dynamic filter from `customers` and pushes it to `orders`, so rows in
-`orders` that cannot match the top five customer IDs are skipped.
-
 ### `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
 
 To address error-proneness of `ScalarUDFImpl::equals`, `AggregateUDFImpl::equals`and

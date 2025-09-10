@@ -112,113 +112,48 @@ impl JoinType {
         )
     }
 
-    /// Returns `true` if the left input is preserved in the output of this join
-    /// (i.e. the output is a subset of the left input without additional rows).
+    /// Returns true if this join type preserves all rows from its left input.
+    ///
+    /// For [`JoinType::Left`], [`JoinType::Full`], and [`JoinType::LeftMark`] joins
+    /// every row from the left side will appear in the output at least once.
     pub fn preserves_left(self) -> bool {
-        matches!(
-            self,
-            JoinType::Inner
-                | JoinType::Left
-                | JoinType::LeftSemi
-                | JoinType::LeftAnti
-                | JoinType::LeftMark
-        )
+        matches!(self, JoinType::Left | JoinType::Full | JoinType::LeftMark)
     }
 
-    /// Returns `true` if the right input is preserved in the output of this join
-    /// (i.e. the output is a subset of the right input without additional rows).
+    /// Returns true if this join type preserves all rows from its right input.
+    ///
+    /// For [`JoinType::Right`], [`JoinType::Full`], and [`JoinType::RightMark`] joins
+    /// every row from the right side will appear in the output at least once.
     pub fn preserves_right(self) -> bool {
-        matches!(
-            self,
-            JoinType::Inner
-                | JoinType::Right
-                | JoinType::RightSemi
-                | JoinType::RightAnti
-                | JoinType::RightMark
-        )
+        matches!(self, JoinType::Right | JoinType::Full | JoinType::RightMark)
     }
 
-    /// Returns `true` if the left input is preserved for the join condition
-    /// (`ON` clause) of this join type.
-    pub fn on_preserves_left(self) -> bool {
-        matches!(
-            self,
-            JoinType::Inner
-                | JoinType::Right
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::RightAnti
-                | JoinType::RightMark
-        )
-    }
-
-    /// Returns `true` if the right input is preserved for the join condition
-    /// (`ON` clause) of this join type.
-    pub fn on_preserves_right(self) -> bool {
-        matches!(
-            self,
-            JoinType::Inner
-                | JoinType::Left
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::LeftAnti
-                | JoinType::LeftMark
-        )
-    }
-
-    /// Returns which side of the join should receive dynamic filter pushdown
-    /// bounds for this join type.
+    /// Returns the input side eligible for dynamic filter pushdown.
+    ///
+    /// The side returned here can have a [`DynamicFilterPhysicalExpr`] pushed
+    /// into it, allowing values read from the opposite input to prune rows
+    /// before the join executes.  When both inputs must be preserved, such as
+    /// with [`JoinType::Full`], dynamic filter pushdown is not supported and
+    /// [`JoinSide::None`] is returned.
     pub fn dynamic_filter_side(self) -> JoinSide {
         use JoinSide::*;
-
-        let preserves_left = self.preserves_left();
-        let preserves_right = self.preserves_right();
-        let on_preserves_left = self.on_preserves_left();
-        let on_preserves_right = self.on_preserves_right();
-
-        if !preserves_left && !preserves_right {
-            None
-        } else if !preserves_left && on_preserves_left {
-            Left
-        } else if !preserves_right && on_preserves_right {
-            Right
-        } else if preserves_left && preserves_right {
-            // Both sides are preserved and participate in the join condition.
-            // Either side could receive the dynamic filter; choose the right for
-            // a deterministic result.
-            Right
-        } else {
-            // A side is not preserved by the join and its corresponding `ON`
-            // clause is also not preserved, so no dynamic filters should be
-            // pushed.
-            None
+        match self {
+            // Left-preferring joins can push dynamic filters to the right
+            JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark => Right,
+            // Right-preferring joins push filters to the left. Inner joins default to
+            // the right (probe) side for dynamic filter pushdown.
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => Left,
+            JoinType::Inner => Right,
+            // Full joins preserve both inputs and thus cannot leverage
+            // dynamic filter pushdown.
+            JoinType::Full => None,
         }
-    }
-
-    /// Returns `true` if rows from the left input may appear in the output even when
-    /// they have no matching rows on the right side of the join.
-    ///
-    /// This helper is used by join planning code to determine if the left input side
-    /// is "preserved" during execution. Dynamic filters can only be pushed to
-    /// the non-preserved side of a join without affecting its semantics.
-    pub fn preserves_unmatched_left(self) -> bool {
-        matches!(
-            self,
-            JoinType::Left | JoinType::Full | JoinType::LeftAnti | JoinType::LeftMark
-        )
-    }
-
-    /// Returns `true` if rows from the right input may appear in the output even when
-    /// they have no matching rows on the left side of the join.
-    ///
-    /// This helper is used by join planning code to determine if the right input side
-    /// is "preserved" during execution. Dynamic filters can only be pushed to
-    /// the non-preserved side of a join without affecting its semantics.
-    pub fn preserves_unmatched_right(self) -> bool {
-        matches!(
-            self,
-            JoinType::Right | JoinType::Full | JoinType::RightAnti | JoinType::RightMark
-        )
     }
 }
 
@@ -305,84 +240,64 @@ impl JoinSide {
 }
 
 #[cfg(test)]
-#[allow(clippy::type_complexity)]
-pub fn join_type_truth_table_cases() -> Vec<(JoinType, (bool, bool, bool, bool, JoinSide))>
-{
-    use JoinType::*;
-    vec![
-        (Inner, (true, true, true, true, JoinSide::Right)),
-        (Left, (true, false, false, true, JoinSide::Right)),
-        (Right, (false, true, true, false, JoinSide::Left)),
-        (Full, (false, false, false, false, JoinSide::None)),
-        (LeftSemi, (true, false, true, true, JoinSide::Right)),
-        (RightSemi, (false, true, true, true, JoinSide::Left)),
-        (LeftAnti, (true, false, false, true, JoinSide::Right)),
-        (RightAnti, (false, true, true, false, JoinSide::Left)),
-        (LeftMark, (true, false, false, true, JoinSide::Right)),
-        (RightMark, (false, true, true, false, JoinSide::Left)),
-    ]
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn join_type_truth_table() {
-        for (jt, (pl, pr, on_pl, on_pr, df_side)) in join_type_truth_table_cases() {
-            assert_eq!(jt.preserves_left(), pl, "{jt:?} preserves_left");
-            assert_eq!(jt.preserves_right(), pr, "{jt:?} preserves_right");
-            assert_eq!(jt.on_preserves_left(), on_pl, "{jt:?} on_preserves_left");
-            assert_eq!(jt.on_preserves_right(), on_pr, "{jt:?} on_preserves_right");
+    fn test_join_type_swap() {
+        assert_eq!(JoinType::Inner.swap(), JoinType::Inner);
+        assert_eq!(JoinType::Left.swap(), JoinType::Right);
+        assert_eq!(JoinType::Right.swap(), JoinType::Left);
+        assert_eq!(JoinType::Full.swap(), JoinType::Full);
+        assert_eq!(JoinType::LeftSemi.swap(), JoinType::RightSemi);
+        assert_eq!(JoinType::RightSemi.swap(), JoinType::LeftSemi);
+        assert_eq!(JoinType::LeftAnti.swap(), JoinType::RightAnti);
+        assert_eq!(JoinType::RightAnti.swap(), JoinType::LeftAnti);
+        assert_eq!(JoinType::LeftMark.swap(), JoinType::RightMark);
+        assert_eq!(JoinType::RightMark.swap(), JoinType::LeftMark);
+    }
 
-            let expected_side = if !pl && !pr {
-                JoinSide::None
-            } else if !pl && on_pl {
-                JoinSide::Left
-            } else if !pr && on_pr {
-                JoinSide::Right
-            } else {
-                // Both sides are preserved
-                JoinSide::Right
-            };
-
-            assert_eq!(df_side, expected_side, "{jt:?} case dynamic_filter_side");
-            assert_eq!(
-                jt.dynamic_filter_side(),
-                expected_side,
-                "{jt:?} dynamic_filter_side"
-            );
+    #[test]
+    fn test_join_type_supports_swap() {
+        use JoinType::*;
+        let supported = [
+            Inner, Left, Right, Full, LeftSemi, RightSemi, LeftAnti, RightAnti,
+        ];
+        for jt in supported {
+            assert!(jt.supports_swap(), "{jt:?} should support swap");
+        }
+        let not_supported = [LeftMark, RightMark];
+        for jt in not_supported {
+            assert!(!jt.supports_swap(), "{jt:?} should not support swap");
         }
     }
 
     #[test]
-    fn unmatched_preservation_helpers_truth_table() {
-        use JoinType::*;
+    fn test_preserves_sides() {
+        assert!(JoinType::Left.preserves_left());
+        assert!(JoinType::Full.preserves_left());
+        assert!(JoinType::LeftMark.preserves_left());
+        assert!(!JoinType::LeftSemi.preserves_left());
 
-        let cases = vec![
-            (Inner, (false, false)),
-            (Left, (true, false)),
-            (Right, (false, true)),
-            (Full, (true, true)),
-            (LeftSemi, (false, false)),
-            (RightSemi, (false, false)),
-            (LeftAnti, (true, false)),
-            (RightAnti, (false, true)),
-            (LeftMark, (true, false)),
-            (RightMark, (false, true)),
-        ];
+        assert!(JoinType::Right.preserves_right());
+        assert!(JoinType::Full.preserves_right());
+        assert!(JoinType::RightMark.preserves_right());
+        assert!(!JoinType::RightSemi.preserves_right());
+    }
 
-        for (jt, (mul, mur)) in cases {
-            assert_eq!(
-                jt.preserves_unmatched_left(),
-                mul,
-                "{jt:?} preserves_unmatched_left",
-            );
-            assert_eq!(
-                jt.preserves_unmatched_right(),
-                mur,
-                "{jt:?} preserves_unmatched_right",
-            );
-        }
+    #[test]
+    fn test_dynamic_filter_side() {
+        use JoinSide::*;
+
+        assert_eq!(JoinType::Inner.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::Left.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::Right.dynamic_filter_side(), Left);
+        assert_eq!(JoinType::Full.dynamic_filter_side(), None);
+        assert_eq!(JoinType::LeftSemi.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::RightSemi.dynamic_filter_side(), Left);
+        assert_eq!(JoinType::LeftAnti.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::RightAnti.dynamic_filter_side(), Left);
+        assert_eq!(JoinType::LeftMark.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::RightMark.dynamic_filter_side(), Left);
     }
 }
