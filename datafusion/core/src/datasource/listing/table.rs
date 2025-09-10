@@ -215,16 +215,16 @@ impl ListingTableConfig {
     ) -> Result<(String, Option<String>)> {
         let mut exts = path.rsplit('.');
 
-        let splitted = exts.next().unwrap_or("");
+        let split = exts.next().unwrap_or("");
 
-        let file_compression_type = FileCompressionType::from_str(splitted)
+        let file_compression_type = FileCompressionType::from_str(split)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
         if file_compression_type.is_compressed() {
-            let splitted2 = exts.next().unwrap_or("");
-            Ok((splitted2.to_string(), Some(splitted.to_string())))
+            let split2 = exts.next().unwrap_or("");
+            Ok((split2.to_string(), Some(split.to_string())))
         } else {
-            Ok((splitted.to_string(), None))
+            Ok((split.to_string(), None))
         }
     }
 
@@ -502,7 +502,7 @@ impl ListingOptions {
     ///
     /// Currently this sets `target_partitions` and `collect_stat`
     /// but if more options are added in the future that need to be coordinated
-    /// they will be synchronized thorugh this method.
+    /// they will be synchronized through this method.
     pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
         self = self.with_target_partitions(config.target_partitions());
         self = self.with_collect_stat(config.collect_statistics());
@@ -802,6 +802,9 @@ impl ListingOptions {
                     .rev()
                     .skip(1) // get parents only; skip the file itself
                     .rev()
+                    // Partitions are expected to follow the format "column_name=value", so we
+                    // should ignore any path part that cannot be parsed into the expected format
+                    .filter(|s| s.contains('='))
                     .map(|s| s.split('=').take(1).collect())
                     .collect_vec()
             })
@@ -1132,8 +1135,8 @@ impl ListingTable {
 }
 
 // Expressions can be used for parttion pruning if they can be evaluated using
-// only the partiton columns and there are partition columns.
-fn can_be_evaluted_for_partition_pruning(
+// only the partition columns and there are partition columns.
+fn can_be_evaluated_for_partition_pruning(
     partition_column_names: &[&str],
     expr: &Expr,
 ) -> bool {
@@ -1182,7 +1185,7 @@ impl TableProvider for ListingTable {
         // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
         let (partition_filters, filters): (Vec<_>, Vec<_>) =
             filters.iter().cloned().partition(|filter| {
-                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+                can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });
 
         // We should not limit the number of partitioned files to scan if there are filters and limit
@@ -1271,7 +1274,7 @@ impl TableProvider for ListingTable {
         filters
             .iter()
             .map(|filter| {
-                if can_be_evaluted_for_partition_pruning(&partition_column_names, filter)
+                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
                 {
                     // if filter can be handled by partition pruning, it is exact
                     return Ok(TableProviderFilterPushDown::Exact);

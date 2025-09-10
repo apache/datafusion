@@ -460,6 +460,7 @@ message CsvOptions {
   bytes double_quote = 15; // Indicates if quotes are doubled
   bytes newlines_in_values = 16; // Indicates if newlines are supported in values
   bytes terminator = 17; // Optional terminator character as a byte
+  bytes truncated_rows = 18; // Indicates if truncated rows are allowed
 }
 
 // Options controlling CSV format

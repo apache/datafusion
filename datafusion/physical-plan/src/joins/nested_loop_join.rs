@@ -348,6 +348,12 @@ impl NestedLoopJoinExec {
 
     /// Returns a new `ExecutionPlan` that runs NestedLoopsJoins with the left
     /// and right inputs swapped.
+    ///
+    /// # Notes:
+    ///
+    /// This function should be called BEFORE inserting any repartitioning
+    /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
+    /// for more details.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
@@ -827,7 +833,7 @@ impl Stream for NestedLoopJoinStream {
                 // side batch, before start joining.
                 NLJState::BufferingLeft => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    // inside `collect_left_input` (the rountine to buffer build
+                    // inside `collect_left_input` (the routine to buffer build
                     // -side batches), related metrics except build time will be
                     // updated.
                     // stop on drop
@@ -1583,7 +1589,7 @@ fn apply_filter_to_row_join_batch(
 /// 30
 /// 40
 ///
-/// # After applying it, only index 1 and 3 elemnt in probe_side_batch will be
+/// # After applying it, only index 1 and 3 elements in probe_side_batch will be
 /// # kept
 /// probe_side_filter:
 /// false

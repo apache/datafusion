@@ -1345,7 +1345,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
-05)--------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
+05)--------SortExec: TopK(fetch=10), expr=[c9@0 DESC], preserve_partitioning=[false]
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
 
 query III
@@ -1361,6 +1361,110 @@ SELECT
 4216440507 16858984380 28743001064
 4144173353 20935849039 28472563256
 4076864659 24997484146 28118515915
+
+# Only 1 SortExec was added, and limit 100 was turned into limit 10
+query TT
+EXPLAIN SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM (
+        SELECT c9,
+        FROM aggregate_test_100
+        ORDER BY c9 DESC
+        LIMIT 100
+    )
+    LIMIT 5
+----
+logical_plan
+01)Projection: aggregate_test_100.c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING AS sum1, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING AS sum2
+02)--Limit: skip=0, fetch=5
+03)----WindowAggr: windowExpr=[[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
+04)------WindowAggr: windowExpr=[[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
+05)--------Sort: aggregate_test_100.c9 DESC NULLS FIRST, fetch=100
+06)----------TableScan: aggregate_test_100 projection=[c9]
+physical_plan
+01)ProjectionExec: expr=[c9@0 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@2 as sum1, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@1 as sum2]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
+05)--------SortExec: TopK(fetch=10), expr=[c9@0 DESC], preserve_partitioning=[false]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+
+# ensure limit pushdown can handle bigger preceding instead of following
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query III
+SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+4268716378 24997484146 8498370520
+4229654142 29012926487 12714811027
+4216440507 28743001064 16858984380
+4144173353 28472563256 20935849039
+4076864659 28118515915 24997484146
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query III
+SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+4268716378 24997484146 8498370520
+4229654142 29012926487 12714811027
+4216440507 28743001064 16858984380
+4144173353 28472563256 20935849039
+4076864659 28118515915 24997484146
+
+# test_window_agg_sort_reversed_plan
+# Only 1 SortExec was added, limit & skip are pushed down
+query TT
+EXPLAIN SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+    OFFSET 5
+----
+logical_plan
+01)Projection: aggregate_test_100.c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING AS sum1, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING AS sum2
+02)--Limit: skip=5, fetch=5
+03)----WindowAggr: windowExpr=[[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
+04)------WindowAggr: windowExpr=[[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
+05)--------TableScan: aggregate_test_100 projection=[c9]
+physical_plan
+01)ProjectionExec: expr=[c9@0 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@2 as sum1, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@1 as sum2]
+02)--GlobalLimitExec: skip=5, fetch=5
+03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
+05)--------SortExec: TopK(fetch=15), expr=[c9@0 DESC], preserve_partitioning=[false]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
+
+query III
+SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+    OFFSET 5
+----
+4061635107 29012926487 27741341640
+4015442341 28743001064 27423817254
+3998790955 28472563256 27079733310
+3959216334 28118515915 26689577379
+3862393166 27741341640 26284746231
 
 # test_window_agg_sort_reversed_plan_builtin
 query TT
@@ -1428,7 +1532,7 @@ physical_plan
 01)ProjectionExec: expr=[c9@0 as c9, row_number() ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@2 as rn1, row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@1 as rn2]
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "row_number() ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
-04)------SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------SortExec: TopK(fetch=10), expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 06)----------SortExec: expr=[c9@0 DESC], preserve_partitioning=[false]
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
@@ -1470,7 +1574,7 @@ physical_plan
 01)ProjectionExec: expr=[c9@2 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@5 as sum1, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c1 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@3 as sum2, row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@4 as rn2]
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
-04)------SortExec: expr=[c9@2 ASC NULLS LAST, c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)------SortExec: TopK(fetch=10), expr=[c9@2 ASC NULLS LAST, c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------BoundedWindowAggExec: wdw=[row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "row_number() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 06)----------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c1 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c1 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 07)------------SortExec: expr=[c9@2 DESC, c1@0 DESC], preserve_partitioning=[false]
@@ -1639,7 +1743,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
-05)--------SortExec: expr=[c1@0 ASC NULLS LAST, c9@1 DESC], preserve_partitioning=[false]
+05)--------SortExec: TopK(fetch=10), expr=[c1@0 ASC NULLS LAST, c9@1 DESC], preserve_partitioning=[false]
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], file_type=csv, has_header=true
 
 
@@ -1683,7 +1787,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=5
 03)----BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 5 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 04)------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING: Field { name: "sum(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING], mode=[Sorted]
-05)--------SortExec: expr=[c1@0 ASC NULLS LAST, c9@1 DESC], preserve_partitioning=[false]
+05)--------SortExec: TopK(fetch=10), expr=[c1@0 ASC NULLS LAST, c9@1 DESC], preserve_partitioning=[false]
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], file_type=csv, has_header=true
 
 query III
@@ -5794,3 +5898,139 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([k@1], 2), input_partitions=2
 07)------------ProjectionExec: expr=[CAST(v@1 AS Int64) as __common_expr_1, k@0 as k, time@2 as time]
 08)--------------DataSourceExec: partitions=2, partition_sizes=[5, 4]
+
+
+# FILTER clause with window functions
+
+# Verify FILTER clause with non-aggregate window functions fails with a clear message
+query error DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions\. Found in 'row_number\(\) FILTER \(WHERE test\.c1 > Int64\(0\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT
+c1,
+ROW_NUMBER() FILTER(WHERE c1 > 0) OVER () as rn1
+FROM test
+LIMIT 5
+
+
+query error DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions\. Found in 'first_value\(test\.c1\) FILTER \(WHERE test\.c1 > Int64\(0\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT
+c1,
+FIRST_VALUE(c1) FILTER(WHERE c1 > 0) OVER () as rn1
+FROM test
+LIMIT 5
+
+
+query error DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions\. Found in 'lag\(test\.c1\) FILTER \(WHERE test\.c1 > Int64\(0\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT
+c1,
+LAG(c1) FILTER(WHERE c1 > 0) OVER () as rn1
+FROM test
+LIMIT 5
+
+
+# Check error propagation from filter to window function
+query error
+SELECT
+c1,
+SUM(c2) FILTER (WHERE c2 >= []) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum1,
+FROM test
+LIMIT 5
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: Cannot infer common argument type for comparison operation Int64 >= List(Field { name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+
+
+# EXPLAIN should display the filters
+query TT
+EXPLAIN SELECT
+c1,
+c2,
+SUM(c2) FILTER (WHERE c2 >= 2) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum1,
+SUM(c2) FILTER (WHERE c2 >= 2 AND c2 < 4 AND c1 > 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum2,
+COUNT(c2) FILTER (WHERE c2 >= 2) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as count1,
+ARRAY_AGG(c2) FILTER (WHERE c2 >= 2) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as array_agg1,
+ARRAY_AGG(c2) FILTER (WHERE c2 >= 2 AND c2 < 4 AND c1 > 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as array_agg2,
+FROM test
+ORDER BY c1, c2
+LIMIT 5
+----
+logical_plan
+01)Sort: test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST, fetch=5
+02)--Projection: test.c1, test.c2, sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum1, sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum2, count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count1, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS array_agg1, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS array_agg2
+03)----WindowAggr: windowExpr=[[sum(test.c2) FILTER (WHERE __common_expr_1 AS test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(test.c2) FILTER (WHERE __common_expr_2) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(test.c2) FILTER (WHERE __common_expr_1 AS test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE __common_expr_1 AS test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE __common_expr_2) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Projection: __common_expr_3 AS __common_expr_1, __common_expr_3 AND test.c2 < Int64(4) AND test.c1 > Int32(0) AS __common_expr_2, test.c1, test.c2
+05)--------Projection: test.c2 >= Int64(2) AS __common_expr_3, test.c1, test.c2
+06)----------TableScan: test projection=[c1, c2]
+physical_plan
+01)ProjectionExec: expr=[c1@2 as c1, c2@3 as c2, sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as sum1, sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as sum2, count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as count1, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as array_agg1, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@8 as array_agg2]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----BoundedWindowAggExec: wdw=[sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortPreservingMergeExec: [c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST]
+05)--------SortExec: expr=[c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------ProjectionExec: expr=[__common_expr_3@0 as __common_expr_1, __common_expr_3@0 AND c2@2 < 4 AND c1@1 > 0 as __common_expr_2, c1@1 as c1, c2@2 as c2]
+07)------------ProjectionExec: expr=[c2@1 >= 2 as __common_expr_3, c1@0 as c1, c2@1 as c2]
+08)--------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c1, c2], file_type=csv, has_header=false
+
+
+# FILTER filters out some rows
+query IIIII??
+SELECT
+c1,
+c2,
+SUM(c2) FILTER (WHERE c2 >= 2) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum1,
+SUM(c2) FILTER (WHERE c2 >= 2 AND c2 < 4 AND c1 >= 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum2,
+COUNT(c2) FILTER (WHERE c2 >= 2) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as count1,
+ARRAY_AGG(c2) FILTER (WHERE c2 >= 2) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as array_agg1,
+ARRAY_AGG(c2) FILTER (WHERE c2 >= 2 AND c2 < 4 AND c1 >= 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as array_agg2,
+FROM test
+ORDER BY c1, c2
+LIMIT 5
+----
+0 0 NULL NULL 0 NULL NULL
+0 1 NULL NULL 0 NULL NULL
+0 2 2 2 1 [2] [2]
+0 3 5 5 2 [2, 3] [2, 3]
+0 4 9 5 3 [2, 3, 4] [2, 3]
+
+
+# FILTER filters out no rows
+query IIIII??
+SELECT
+c1,
+c2,
+SUM(c2) FILTER (WHERE c2 >= 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum1,
+SUM(c2) FILTER (WHERE c2 >= 0 AND c2 < 1000 AND c1 >= 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum2,
+COUNT(c2) FILTER (WHERE c2 >= 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as count1,
+ARRAY_AGG(c2) FILTER (WHERE c2 >= 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as array_agg1,
+ARRAY_AGG(c2) FILTER (WHERE c2 >= 0 AND c2 < 1000 AND c1 >= 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as array_agg2,
+FROM test
+ORDER BY c1, c2
+LIMIT 5
+----
+0 0 0 0 1 [0] [0]
+0 1 1 1 2 [0, 1] [0, 1]
+0 2 3 3 3 [0, 1, 2] [0, 1, 2]
+0 3 6 6 4 [0, 1, 2, 3] [0, 1, 2, 3]
+0 4 10 10 5 [0, 1, 2, 3, 4] [0, 1, 2, 3, 4]
+
+
+# FILTER filters out every row
+query IIIII??
+SELECT
+c1,
+c2,
+SUM(c2) FILTER (WHERE c2 == -1) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum1,
+SUM(c2) FILTER (WHERE c2 >= 0 AND c2 < 0 AND c1 >= 0) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as sum2,
+COUNT(c2) FILTER (WHERE c2 == -1) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as count1,
+ARRAY_AGG(c2) FILTER (WHERE c2 >= 1000) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as array_agg1,
+ARRAY_AGG(c2) FILTER (WHERE c2 >= 0 AND c2 < 1000 AND c1 >= 1000) OVER (ORDER BY c1, c2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as array_agg2,
+FROM test
+ORDER BY c1, c2
+LIMIT 5
+----
+0 0 NULL NULL 0 NULL NULL
+0 1 NULL NULL 0 NULL NULL
+0 2 NULL NULL 0 NULL NULL
+0 3 NULL NULL 0 NULL NULL
+0 4 NULL NULL 0 NULL NULL

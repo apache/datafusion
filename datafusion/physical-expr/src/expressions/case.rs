@@ -323,12 +323,14 @@ impl CaseExpr {
         }
 
         if let Some(e) = self.else_expr() {
-            // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-            let else_ = expr
-                .evaluate_selection(batch, &remainder)?
-                .into_array(batch.num_rows())?;
-            current_value = zip(&remainder, &else_, &current_value)?;
+            if remainder.true_count() > 0 {
+                // keep `else_expr`'s data type and return type consistent
+                let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
+                let else_ = expr
+                    .evaluate_selection(batch, &remainder)?
+                    .into_array(batch.num_rows())?;
+                current_value = zip(&remainder, &else_, &current_value)?;
+            }
         }
 
         Ok(ColumnarValue::Array(current_value))
@@ -413,7 +415,7 @@ impl CaseExpr {
     fn expr_or_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
 
-        // evalute when condition on batch
+        // evaluate when condition on batch
         let when_value = self.when_then_expr[0].0.evaluate(batch)?;
         let when_value = when_value.into_array(batch.num_rows())?;
         let when_value = as_boolean_array(&when_value).map_err(|e| {

@@ -52,7 +52,7 @@ parquet = ["dep:parquet"]
 
 [dependencies]
 ahash = { workspace = true }
-apache-avro = { version = "0.17", default-features = false, features = [
+apache-avro = { version = "0.20", default-features = false, features = [
     "bzip",
     "snappy",
     "xz",

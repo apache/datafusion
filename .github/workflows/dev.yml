@@ -33,14 +33,14 @@ jobs:
     name: Check License Header
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
-      - uses: korandoru/hawkeye@cdc68d9c8ace500aefcd8f4dd39b915cd06305dd  # v6.1.1
+      - uses: korandoru/hawkeye@c3d9887d4b48e5b6c77306934606a4ff4623a2d3  # v6.2.0
 
   prettier:
     name: Use prettier to check formatting of documents
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
         with:
           node-version: "20"
       - name: Prettier check

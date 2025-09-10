@@ -69,11 +69,11 @@ pub struct FFI_AggregateUDF {
     /// FFI equivalent to the `volatility` of a [`AggregateUDF`]
     pub volatility: FFI_Volatility,
 
-    /// Determines the return type of the underlying [`AggregateUDF`] based on the
-    /// argument types.
-    pub return_type: unsafe extern "C" fn(
+    /// Determines the return field of the underlying [`AggregateUDF`] based on the
+    /// argument fields.
+    pub return_field: unsafe extern "C" fn(
         udaf: &Self,
-        arg_types: RVec<WrappedSchema>,
+        arg_fields: RVec<WrappedSchema>,
     ) -> RResult<WrappedSchema, RString>,
 
     /// FFI equivalent to the `is_nullable` of a [`AggregateUDF`]
@@ -125,7 +125,7 @@ pub struct FFI_AggregateUDF {
     pub order_sensitivity:
         unsafe extern "C" fn(udaf: &FFI_AggregateUDF) -> FFI_AggregateOrderSensitivity,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`AggregateUDF`]
@@ -160,20 +160,22 @@ impl FFI_AggregateUDF {
     }
 }
 
-unsafe extern "C" fn return_type_fn_wrapper(
+unsafe extern "C" fn return_field_fn_wrapper(
     udaf: &FFI_AggregateUDF,
-    arg_types: RVec<WrappedSchema>,
+    arg_fields: RVec<WrappedSchema>,
 ) -> RResult<WrappedSchema, RString> {
     let udaf = udaf.inner();
 
-    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
+    let arg_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&arg_fields));
 
-    let return_type = udaf
-        .return_type(&arg_types)
-        .and_then(|v| FFI_ArrowSchema::try_from(v).map_err(DataFusionError::from))
+    let return_field = udaf
+        .return_field(&arg_fields)
+        .and_then(|v| {
+            FFI_ArrowSchema::try_from(v.as_ref()).map_err(DataFusionError::from)
+        })
         .map(WrappedSchema);
 
-    rresult!(return_type)
+    rresult!(return_field)
 }
 
 unsafe extern "C" fn accumulator_fn_wrapper(
@@ -346,7 +348,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             is_nullable,
             volatility,
             aliases,
-            return_type: return_type_fn_wrapper,
+            return_field: return_field_fn_wrapper,
             accumulator: accumulator_fn_wrapper,
             create_sliding_accumulator: create_sliding_accumulator_fn_wrapper,
             create_groups_accumulator: create_groups_accumulator_fn_wrapper,
@@ -425,14 +427,22 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        unimplemented!()
+    }
 
-        let result = unsafe { (self.udaf.return_type)(&self.udaf, arg_types) };
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        let arg_fields = vec_fieldref_to_rvec_wrapped(arg_fields)?;
+
+        let result = unsafe { (self.udaf.return_field)(&self.udaf, arg_fields) };
 
         let result = df_result!(result);
 
-        result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
+        result.and_then(|r| {
+            Field::try_from(&r.0)
+                .map(Arc::new)
+                .map_err(DataFusionError::from)
+        })
     }
 
     fn is_nullable(&self) -> bool {
@@ -608,8 +618,42 @@ mod tests {
         physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
         scalar::ScalarValue,
     };
+    use std::any::Any;
+    use std::collections::HashMap;
 
     use super::*;
+
+    #[derive(Default, Debug, Hash, Eq, PartialEq)]
+    struct SumWithCopiedMetadata {
+        inner: Sum,
+    }
+
+    impl AggregateUDFImpl for SumWithCopiedMetadata {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn signature(&self) -> &Signature {
+            self.inner.signature()
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+
+        fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+            // Copy the input field, so any metadata gets returned
+            Ok(Arc::clone(&arg_fields[0]))
+        }
+
+        fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+            self.inner.accumulator(acc_args)
+        }
+    }
 
     fn create_test_foreign_udaf(
         original_udaf: impl AggregateUDFImpl + 'static,
@@ -644,8 +688,11 @@ mod tests {
         let foreign_udaf =
             create_test_foreign_udaf(Sum::new())?.with_aliases(["my_function"]);
 
-        let return_type = foreign_udaf.return_type(&[DataType::Float64])?;
-        assert_eq!(return_type, DataType::Float64);
+        let return_field =
+            foreign_udaf
+                .return_field(&[Field::new("a", DataType::Float64, true).into()])?;
+        let return_type = return_field.data_type();
+        assert_eq!(return_type, &DataType::Float64);
         Ok(())
     }
 
@@ -670,6 +717,31 @@ mod tests {
         let resultant_value = accumulator.evaluate()?;
         assert_eq!(resultant_value, ScalarValue::Float64(Some(150.)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_udaf_metadata() -> Result<()> {
+        let original_udaf = SumWithCopiedMetadata::default();
+        let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
+
+        // Convert to FFI format
+        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+
+        // Convert back to native format
+        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
+        let foreign_udaf: AggregateUDF = foreign_udaf.into();
+
+        let metadata: HashMap<String, String> =
+            [("a_key".to_string(), "a_value".to_string())]
+                .into_iter()
+                .collect();
+        let input_field = Arc::new(
+            Field::new("a", DataType::Float64, false).with_metadata(metadata.clone()),
+        );
+        let return_field = foreign_udaf.return_field(&[input_field])?;
+
+        assert_eq!(&metadata, return_field.metadata());
         Ok(())
     }
 

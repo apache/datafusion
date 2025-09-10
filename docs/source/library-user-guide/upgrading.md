@@ -24,6 +24,25 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### ListingTable automatically detects Hive Partitioned tables
+
+DataFusion 50.0.0 automatically infers Hive partitions when using the `ListingTableFactory` and `CREATE EXTERNAL TABLE`. Previously,
+when creating a `ListingTable`, datasets that use Hive partitioning (e.g.
+`/table_root/column1=value1/column2=value2/data.parquet`) would not have the Hive columns reflected in
+the table's schema or data. The previous behavior can be
+restored by setting the `datafusion.execution.listing_table_factory_infer_partitions` configuration option to `false`.
+See [issue #17049] for more details.
+
+[issue #17049]: https://github.com/apache/datafusion/issues/17049
+
+### `MSRV` updated to 1.86.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.86.0`].
+See [#17230] for details.
+
+[`1.86.0`]: https://releases.rs/docs/1.86.0/
+[#17230]: https://github.com/apache/datafusion/pull/17230
+
 ### `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
 
 To address error-proneness of `ScalarUDFImpl::equals`, `AggregateUDFImpl::equals`and
@@ -83,6 +102,38 @@ impl AsyncScalarUDFImpl for AskLLM {
 ```
 
 See [#16896](https://github.com/apache/datafusion/issues/16896) for more details.
+
+### `ProjectionExpr` changed from type alias to struct
+
+`ProjectionExpr` has been changed from a type alias to a struct with named fields to improve code clarity and maintainability.
+
+**Before:**
+
+```rust,ignore
+pub type ProjectionExpr = (Arc<dyn PhysicalExpr>, String);
+```
+
+**After:**
+
+```rust,ignore
+#[derive(Debug, Clone)]
+pub struct ProjectionExpr {
+    pub expr: Arc<dyn PhysicalExpr>,
+    pub alias: String,
+}
+```
+
+To upgrade your code:
+
+- Replace tuple construction `(expr, alias)` with `ProjectionExpr::new(expr, alias)` or `ProjectionExpr { expr, alias }`
+- Replace tuple field access `.0` and `.1` with `.expr` and `.alias`
+- Update pattern matching from `(expr, alias)` to `ProjectionExpr { expr, alias }`
+
+This mainly impacts use of `ProjectionExec`.
+
+This change was done in [#17398]
+
+[#17398]: https://github.com/apache/datafusion/pull/17398
 
 ### `SessionState`, `SessionConfig`, and `OptimizerConfig` returns `&Arc<ConfigOptions>` instead of `&ConfigOptions`
 
@@ -180,7 +231,7 @@ for more details.
 
 ### Added `ExecutionPlan::reset_state`
 
-In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the precense of a query such as `ORDER BY ... LIMIT ...`)
+In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the presence of a query such as `ORDER BY ... LIMIT ...`)
 produced incorrect results in recursive queries, a new method `reset_state` has been added to the `ExecutionPlan` trait.
 
 Any `ExecutionPlan` that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
@@ -217,6 +268,69 @@ impl LazyBatchGenerator for MyBatchGenerator {
 ```
 
 See [#17200](https://github.com/apache/datafusion/pull/17200) for details.
+
+### Refactored `DataSource::try_swapping_with_projection`
+
+We refactored `DataSource::try_swapping_with_projection` to simplify the method and minimize leakage across the ExecutionPlan <-> DataSource abstraction layer.
+Reimplementation for any custom `DataSource` should be relatively straightforward, see [#17395] for more details.
+
+[#17395]: https://github.com/apache/datafusion/pull/17395/
+
+### `FileOpenFuture` now uses `DataFusionError` instead of `ArrowError`
+
+The `FileOpenFuture` type alias has been updated to use `DataFusionError` instead of `ArrowError` for its error type. This change affects the `FileOpener` trait and any implementations that work with file streaming operations.
+
+**Before:**
+
+```rust,ignore
+pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
+```
+
+**After:**
+
+```rust,ignore
+pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch>>>>;
+```
+
+If you have custom implementations of `FileOpener` or work directly with `FileOpenFuture`, you'll need to update your error handling to use `DataFusionError` instead of `ArrowError`. The `FileStreamState` enum's `Open` variant has also been updated accordingly. See [#17397] for more details.
+
+[#17397]: https://github.com/apache/datafusion/pull/17397
+
+### FFI user defined aggregate function signature change
+
+The Foreign Function Interface (FFI) signature for user defined aggregate functions
+has been updated to call `return_field` instead of `return_type` on the underlying
+aggregate function. This is to support metadata handling with these aggregate functions.
+This change should be transparent to most users. If you have written unit tests to call
+`return_type` directly, you may need to change them to calling `return_field` instead.
+
+This update is a breaking change to the FFI API. The current best practice when using the
+FFI crate is to ensure that all libraries that are interacting are using the same
+underlying Rust version. Issue [#17374] has been opened to discuss stabilization of
+this interface so that these libraries can be used across different DataFusion versions.
+
+See [#17407] for details.
+
+[#17407]: https://github.com/apache/datafusion/pull/17407
+[#17374]: https://github.com/apache/datafusion/issues/17374
+
+### Added `PhysicalExpr::is_volatile_node`
+
+We added a method to `PhysicalExpr` to mark a `PhysicalExpr` as volatile:
+
+```rust,ignore
+impl PhysicalExpr for MyRandomExpr {
+  fn is_volatile_node(&self) -> bool {
+    true
+  }
+}
+```
+
+We've shipped this with a default value of `false` to minimize breakage but we highly recommend that implementers of `PhysicalExpr` opt into a behavior, even if it is returning `false`.
+
+You can see more discussion and example implementations in [#17351].
+
+[#17351]: https://github.com/apache/datafusion/pull/17351
 
 ## DataFusion `49.0.0`
 
@@ -614,7 +728,7 @@ to access the metadata associated with the columnar values during invocation.
 To upgrade user defined aggregate functions, there is now a function
 `return_field` that will allow you to specify both metadata and nullability of
 your function. You are not required to implement this if you do not need to
-handle metatdata.
+handle metadata.
 
 The largest change to aggregate functions happens in the accumulator arguments.
 Both the `AccumulatorArgs` and `StateFieldsArgs` now contain `FieldRef` rather
@@ -976,8 +1090,8 @@ Elapsed 0.005 seconds.
 DataFusion 46 has changed the way scalar array function signatures are
 declared. Previously, functions needed to select from a list of predefined
 signatures within the `ArrayFunctionSignature` enum. Now the signatures
-can be defined via a `Vec` of psuedo-types, which each correspond to a
-single argument. Those psuedo-types are the variants of the
+can be defined via a `Vec` of pseudo-types, which each correspond to a
+single argument. Those pseudo-types are the variants of the
 `ArrayFunctionArgument` enum and are as follows:
 
 - `Array`: An argument of type List/LargeList/FixedSizeList. All Array

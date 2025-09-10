@@ -118,7 +118,6 @@ Default features:
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
-- `parquet_encryption`: support for using [Parquet Modular Encryption]
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
@@ -128,6 +127,7 @@ Optional features:
 
 - `avro`: support for reading the [Apache Avro] format
 - `backtrace`: include backtrace information in error messages
+- `parquet_encryption`: support for using [Parquet Modular Encryption]
 - `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
 
@@ -141,7 +141,7 @@ Public methods in Apache DataFusion evolve over time: while we try to maintain a
 stable API, we also improve the API over time. As a result, we typically
 deprecate methods before removing them, according to the [deprecation guidelines].
 
-[deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html
+[deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html
 
 ## Dependencies and `Cargo.lock`
 

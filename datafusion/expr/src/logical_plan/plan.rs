@@ -31,7 +31,10 @@ use super::invariants::{
 };
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams};
+use crate::expr::{
+    intersect_metadata_for_union, Placeholder, Sort as SortExpr, WindowFunction,
+    WindowFunctionParams,
+};
 use crate::expr_rewriter::{
     create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
 };
@@ -2057,7 +2060,10 @@ pub struct EmptyRelation {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for EmptyRelation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.produce_one_row.partial_cmp(&other.produce_one_row)
+        self.produce_one_row
+            .partial_cmp(&other.produce_one_row)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2111,7 +2117,10 @@ pub struct Values {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Values {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.values.partial_cmp(&other.values)
+        self.values
+            .partial_cmp(&other.values)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2136,6 +2145,8 @@ impl PartialOrd for Projection {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2246,6 +2257,8 @@ impl PartialOrd for SubqueryAlias {
             Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2466,6 +2479,20 @@ impl Window {
             window_func_dependencies.extend(new_deps);
         }
 
+        // Validate that FILTER clauses are only used with aggregate window functions
+        if let Some(e) = window_expr.iter().find(|e| {
+            matches!(
+                e,
+                Expr::WindowFunction(wf)
+                    if !matches!(wf.fun, WindowFunctionDefinition::AggregateUDF(_))
+                        && wf.params.filter.is_some()
+            )
+        }) {
+            return plan_err!(
+                "FILTER clause can only be used with aggregate window functions. Found in '{e}'"
+            );
+        }
+
         Self::try_new_with_schema(
             window_expr,
             input,
@@ -2500,9 +2527,22 @@ impl Window {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Window {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.input.partial_cmp(&other.input) {
-            Some(Ordering::Equal) => self.window_expr.partial_cmp(&other.window_expr),
-            cmp => cmp,
+        match self.input.partial_cmp(&other.input)? {
+            Ordering::Equal => {} // continue
+            not_equal => return Some(not_equal),
+        }
+
+        match self.window_expr.partial_cmp(&other.window_expr)? {
+            Ordering::Equal => {} // continue
+            not_equal => return Some(not_equal),
+        }
+
+        // Contract for PartialOrd and PartialEq consistency requires that
+        // a == b if and only if partial_cmp(a, b) == Some(Equal).
+        if self == other {
+            Some(Ordering::Equal)
+        } else {
+            None
         }
     }
 }
@@ -2576,7 +2616,10 @@ impl PartialOrd for TableScan {
             filters: &other.filters,
             fetch: &other.fetch,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2799,15 +2842,16 @@ impl Union {
 
                     let mut field =
                         Field::new(name, data_type.clone(), final_is_nullable);
-                    field.set_metadata(intersect_maps(unmerged_metadata));
+                    field.set_metadata(intersect_metadata_for_union(unmerged_metadata));
 
                     (None, Arc::new(field))
                 },
             )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
-        let union_schema_metadata =
-            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+        let union_schema_metadata = intersect_metadata_for_union(
+            inputs.iter().map(|input| input.schema().metadata()),
+        );
 
         // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
@@ -2876,14 +2920,16 @@ impl Union {
                 };
 
                 let mut field = Field::new(&name, data_type.clone(), nullable);
-                let field_metadata =
-                    intersect_maps(fields.iter().map(|field| field.metadata()));
+                let field_metadata = intersect_metadata_for_union(
+                    fields.iter().map(|field| field.metadata()),
+                );
                 field.set_metadata(field_metadata);
                 Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
-        let union_schema_metadata =
-            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+        let union_schema_metadata = intersect_metadata_for_union(
+            inputs.iter().map(|input| input.schema().metadata()),
+        );
 
         // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
@@ -2893,25 +2939,13 @@ impl Union {
     }
 }
 
-fn intersect_maps<'a>(
-    inputs: impl IntoIterator<Item = &'a HashMap<String, String>>,
-) -> HashMap<String, String> {
-    let mut inputs = inputs.into_iter();
-    let mut merged: HashMap<String, String> = inputs.next().cloned().unwrap_or_default();
-    for input in inputs {
-        // The extra dereference below (`&*v`) is a workaround for https://github.com/rkyv/rkyv/issues/434.
-        // When this crate is used in a workspace that enables the `rkyv-64` feature in the `chrono` crate,
-        // this triggers a Rust compilation error:
-        // error[E0277]: can't compare `Option<&std::string::String>` with `Option<&mut std::string::String>`.
-        merged.retain(|k, v| input.get(k) == Some(&*v));
-    }
-    merged
-}
-
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Union {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.inputs.partial_cmp(&other.inputs)
+        self.inputs
+            .partial_cmp(&other.inputs)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3192,7 +3226,10 @@ impl PartialOrd for Explain {
             stringified_plans: &other.stringified_plans,
             logical_optimization_succeeded: &other.logical_optimization_succeeded,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3215,6 +3252,8 @@ impl PartialOrd for Analyze {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3442,7 +3481,10 @@ impl PartialOrd for DistinctOn {
             sort_expr: &other.sort_expr,
             input: &other.input,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3629,6 +3671,8 @@ impl PartialOrd for Aggregate {
             }
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3805,7 +3849,7 @@ impl Join {
         })
     }
 
-    /// Create Join with input which wrapped with projection, this method is used in physcial planning only to help
+    /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
     /// create the physical join.
     pub fn try_new_with_project_input(
         original: &LogicalPlan,
@@ -3901,7 +3945,10 @@ impl PartialOrd for Join {
             join_constraint: &other.join_constraint,
             null_equality: &other.null_equality,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -4066,7 +4113,10 @@ impl PartialOrd for Unnest {
             dependency_indices: &other.dependency_indices,
             options: &other.options,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -4277,22 +4327,20 @@ fn get_unnested_list_datatype_recursive(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
+    use crate::test::function_stub::{count, count_udaf};
     use crate::{
         binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
         GroupingSet,
     };
-
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
     use insta::{assert_debug_snapshot, assert_snapshot};
-
-    use crate::test::function_stub::count;
+    use std::hash::DefaultHasher;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -4694,6 +4742,63 @@ mod tests {
         ]
         "#
         );
+    }
+
+    #[test]
+    fn test_partial_eq_hash_and_partial_ord() {
+        let empty_values = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: true,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+
+        let count_window_function = |schema| {
+            Window::try_new_with_schema(
+                vec![Expr::WindowFunction(Box::new(WindowFunction::new(
+                    WindowFunctionDefinition::AggregateUDF(count_udaf()),
+                    vec![],
+                )))],
+                Arc::clone(&empty_values),
+                Arc::new(schema),
+            )
+            .unwrap()
+        };
+
+        let schema_without_metadata = || {
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("count", DataType::Int64, false)].into(),
+                HashMap::new(),
+            )
+            .unwrap()
+        };
+
+        let schema_with_metadata = || {
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("count", DataType::Int64, false)].into(),
+                [("key".to_string(), "value".to_string())].into(),
+            )
+            .unwrap()
+        };
+
+        // A Window
+        let f = count_window_function(schema_without_metadata());
+
+        // Same like `f`, different instance
+        let f2 = count_window_function(schema_without_metadata());
+        assert_eq!(f, f2);
+        assert_eq!(hash(&f), hash(&f2));
+        assert_eq!(f.partial_cmp(&f2), Some(Ordering::Equal));
+
+        // Same like `f`, except for schema metadata
+        let o = count_window_function(schema_with_metadata());
+        assert_ne!(f, o);
+        assert_ne!(hash(&f), hash(&o)); // hash can collide for different values but does not collide in this test
+        assert_eq!(f.partial_cmp(&o), None);
+    }
+
+    fn hash<T: Hash>(value: &T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
     }
 
     #[test]

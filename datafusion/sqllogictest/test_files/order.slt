@@ -179,7 +179,7 @@ NULL three
 2 two
 1 one
 
-statement error DataFusion error: Error during planning: Unsupported Value NULL
+statement error DataFusion error: Error during planning: Unsupported value Null
 set datafusion.sql_parser.default_null_ordering = null;
 
 # reset to default null ordering
@@ -765,6 +765,13 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 # When columns are missing the query is expected to fail
 query error DataFusion error: Error during planning: Column a is not in schema
 CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';
+
+
+# Create external table with order column expression that can't be planned
+# This is currently expected to fail, but should not panic
+query error DataFusion error: Schema error: No field named a\.
+CREATE EXTERNAL TABLE dt STORED AS CSV WITH ORDER (a || b) LOCATION 'file://path/to/table';
+
 
 # Sort with duplicate sort expressions
 # Table is sorted multiple times on the same column name and should not fail

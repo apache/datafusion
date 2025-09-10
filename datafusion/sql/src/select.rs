@@ -24,7 +24,7 @@ use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
-    CheckColumnsSatisfyExprsPurpose,
+    CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
 };
 
 use datafusion_common::error::DataFusionErrorBuilder;
@@ -84,6 +84,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         self.match_window_definitions(&mut select.projection, &select.named_window)?;
+
         // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
@@ -146,39 +147,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .transpose()?;
 
-        // Optionally the QUALIFY expression.
-        let qualify_expr_opt = select
-            .qualify
-            .map::<Result<Expr>, _>(|qualify_expr| {
-                let qualify_expr = self.sql_expr_to_logical_expr(
-                    qualify_expr,
-                    &combined_schema,
-                    planner_context,
-                )?;
-                // This step "dereferences" any aliases in the QUALIFY clause.
-                //
-                // This is how we support queries with QUALIFY expressions that
-                // refer to aliased columns.
-                //
-                // For example:
-                //
-                //   select row_number() over (PARTITION BY id) as rk from users qualify rk > 1;
-                //
-                // are rewritten as, respectively:
-                //
-                //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
-                //
-                let qualify_expr = resolve_aliases_to_exprs(qualify_expr, &alias_map)?;
-                normalize_col(qualify_expr, &projected_plan)
-            })
-            .transpose()?;
-
-        // The outer expressions we will search through for aggregates.
-        // Aggregates may be sourced from the SELECT list or from the HAVING expression.
-        let aggr_expr_haystack = select_exprs.iter().chain(having_expr_opt.iter());
-        // All of the aggregate expressions (deduplicated).
-        let aggr_exprs = find_aggregate_exprs(aggr_expr_haystack);
-
         // All of the group by expressions
         let group_by_exprs = if let GroupByExpr::Expressions(exprs, _) = select.group_by {
             exprs
@@ -223,22 +191,61 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect()
         };
 
+        // Optionally the QUALIFY expression.
+        let qualify_expr_opt = select
+            .qualify
+            .map::<Result<Expr>, _>(|qualify_expr| {
+                let qualify_expr = self.sql_expr_to_logical_expr(
+                    qualify_expr,
+                    &combined_schema,
+                    planner_context,
+                )?;
+                // This step "dereferences" any aliases in the QUALIFY clause.
+                //
+                // This is how we support queries with QUALIFY expressions that
+                // refer to aliased columns.
+                //
+                // For example:
+                //
+                //   select row_number() over (PARTITION BY id) as rk from users qualify rk > 1;
+                //
+                // are rewritten as, respectively:
+                //
+                //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
+                //
+                let qualify_expr = resolve_aliases_to_exprs(qualify_expr, &alias_map)?;
+                normalize_col(qualify_expr, &projected_plan)
+            })
+            .transpose()?;
+
+        // The outer expressions we will search through for aggregates.
+        // Aggregates may be sourced from the SELECT list or from the HAVING expression.
+        let aggr_expr_haystack = select_exprs
+            .iter()
+            .chain(having_expr_opt.iter())
+            .chain(qualify_expr_opt.iter());
+        // All of the aggregate expressions (deduplicated).
+        let aggr_exprs = find_aggregate_exprs(aggr_expr_haystack);
+
         // Process group by, aggregation or having
-        let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) = if !group_by_exprs
-            .is_empty()
-            || !aggr_exprs.is_empty()
-        {
+        let (
+            plan,
+            mut select_exprs_post_aggr,
+            having_expr_post_aggr,
+            qualify_expr_post_aggr,
+        ) = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
                 &select_exprs,
                 having_expr_opt.as_ref(),
+                qualify_expr_opt.as_ref(),
                 &group_by_exprs,
                 &aggr_exprs,
             )?
         } else {
             match having_expr_opt {
                 Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
-                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt)
+                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt, qualify_expr_opt)
             }
         };
 
@@ -252,11 +259,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // The outer expressions we will search through for window functions.
         // Window functions may be sourced from the SELECT list or from the QUALIFY expression.
-        let windows_expr_haystack =
-            select_exprs_post_aggr.iter().chain(qualify_expr_opt.iter());
-        // All of the window expressions (deduplicated).
+        let windows_expr_haystack = select_exprs_post_aggr
+            .iter()
+            .chain(qualify_expr_post_aggr.iter());
+        // All of the window expressions (deduplicated and rewritten to reference aggregates as
+        // columns from input).
         let window_func_exprs = find_window_exprs(windows_expr_haystack);
 
+        // Process window functions after aggregation as they can reference
+        // aggregate functions in their body
         let plan = if window_func_exprs.is_empty() {
             plan
         } else {
@@ -273,7 +284,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Process QUALIFY clause after window functions
         // QUALIFY filters the results of window functions, similar to how HAVING filters aggregates
-        let plan = if let Some(qualify_expr) = qualify_expr_opt {
+        let plan = if let Some(qualify_expr) = qualify_expr_post_aggr {
             // Validate that QUALIFY is used with window functions
             if window_func_exprs.is_empty() {
                 return plan_err!(
@@ -664,6 +675,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
+
+        // Handle the case where no projection is specified but we have a valid FROM clause
+        // In this case, implicitly add a wildcard projection (SELECT *)
+        let projection = if projection.is_empty() && !empty_from {
+            vec![SelectItem::Wildcard(WildcardAdditionalOptions::default())]
+        } else {
+            projection
+        };
+
         for expr in projection {
             match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
                 Ok(expr) => prepared_select_exprs.push(expr),
@@ -830,8 +850,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Create an aggregate plan.
     ///
-    /// An aggregate plan consists of grouping expressions, aggregate expressions, and an
-    /// optional HAVING expression (which is a filter on the output of the aggregate).
+    /// An aggregate plan consists of grouping expressions, aggregate expressions, an
+    /// optional HAVING expression (which is a filter on the output of the aggregate),
+    /// and an optional QUALIFY clause which may reference aggregates.
     ///
     /// # Arguments
     ///
@@ -839,27 +860,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///   "having" expressions must all be resolvable from this plan.
     /// * `select_exprs`    - The projection expressions from the SELECT clause.
     /// * `having_expr_opt` - Optional HAVING clause.
+    /// * `qualify_expr_opt` - Optional QUALIFY clause.
     /// * `group_by_exprs`  - Grouping expressions from the GROUP BY clause. These can be column
     ///   references or more complex expressions.
     /// * `aggr_exprs`      - Aggregate expressions, such as `SUM(a)` or `COUNT(1)`.
     ///
     /// # Return
     ///
-    /// The return value is a triplet of the following items:
+    /// The return value is a quadruplet of the following items:
     ///
     /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
     /// * `select_exprs_post_aggr` - The projection expressions rewritten to reference columns from
     ///   the aggregate
     /// * `having_expr_post_aggr`  - The "having" expression rewritten to reference a column from
     ///   the aggregate
+    /// * `qualify_expr_post_aggr`  - The "qualify" expression rewritten to reference a column from
+    ///   the aggregate
+    #[allow(clippy::type_complexity)]
     fn aggregate(
         &self,
         input: &LogicalPlan,
         select_exprs: &[Expr],
         having_expr_opt: Option<&Expr>,
+        qualify_expr_opt: Option<&Expr>,
         group_by_exprs: &[Expr],
         aggr_exprs: &[Expr],
-    ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
+    ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>, Option<Expr>)> {
         // create the aggregate plan
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
@@ -923,7 +949,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         check_columns_satisfy_exprs(
             &column_exprs_post_aggr,
             &select_exprs_post_aggr,
-            CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate,
+            CheckColumnsSatisfyExprsPurpose::Aggregate(
+                CheckColumnsMustReferenceAggregatePurpose::Projection,
+            ),
         )?;
 
         // Rewrite the HAVING expression to use the columns produced by the
@@ -935,7 +963,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 std::slice::from_ref(&having_expr_post_aggr),
-                CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate,
+                CheckColumnsSatisfyExprsPurpose::Aggregate(
+                    CheckColumnsMustReferenceAggregatePurpose::Having,
+                ),
             )?;
 
             Some(having_expr_post_aggr)
@@ -943,7 +973,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             None
         };
 
-        Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
+        // Rewrite the QUALIFY expression to use the columns produced by the
+        // aggregation.
+        let qualify_expr_post_aggr = if let Some(qualify_expr) = qualify_expr_opt {
+            let qualify_expr_post_aggr =
+                rebase_expr(qualify_expr, &aggr_projection_exprs, input)?;
+
+            check_columns_satisfy_exprs(
+                &column_exprs_post_aggr,
+                std::slice::from_ref(&qualify_expr_post_aggr),
+                CheckColumnsSatisfyExprsPurpose::Aggregate(
+                    CheckColumnsMustReferenceAggregatePurpose::Qualify,
+                ),
+            )?;
+
+            Some(qualify_expr_post_aggr)
+        } else {
+            None
+        };
+
+        Ok((
+            plan,
+            select_exprs_post_aggr,
+            having_expr_post_aggr,
+            qualify_expr_post_aggr,
+        ))
     }
 
     // If the projection is done over a named window, that window
