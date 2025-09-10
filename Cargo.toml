@@ -231,3 +231,6 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(tarpaulin_include)",
 ] }
 unused_qualifications = "deny"
+
+[patch.crates-io]
+apache-avro = { git = "https://github.com/timsaucer/avro-rs.git", branch = "chore/move_to_liblzma" }
