@@ -176,13 +176,13 @@ impl AggregateUDFImpl for Sum {
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)
                 // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 let new_precision = DECIMAL32_MAX_PRECISION.min(*precision + 10);
-                Ok(DataType::Decimal128(new_precision, *scale))
+                Ok(DataType::Decimal32(new_precision, *scale))
             }
             DataType::Decimal64(precision, scale) => {
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)
                 // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 let new_precision = DECIMAL64_MAX_PRECISION.min(*precision + 10);
-                Ok(DataType::Decimal128(new_precision, *scale))
+                Ok(DataType::Decimal64(new_precision, *scale))
             }
             DataType::Decimal128(precision, scale) => {
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)

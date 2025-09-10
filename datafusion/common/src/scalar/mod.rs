@@ -1087,6 +1087,12 @@ impl ScalarValue {
             DataType::UInt16 => ScalarValue::UInt16(None),
             DataType::UInt32 => ScalarValue::UInt32(None),
             DataType::UInt64 => ScalarValue::UInt64(None),
+            DataType::Decimal32(precision, scale) => {
+                ScalarValue::Decimal32(None, *precision, *scale)
+            }
+            DataType::Decimal64(precision, scale) => {
+                ScalarValue::Decimal64(None, *precision, *scale)
+            }
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::Decimal128(None, *precision, *scale)
             }
@@ -3179,6 +3185,24 @@ impl ScalarValue {
         scale: i8,
     ) -> Result<ScalarValue> {
         match array.data_type() {
+            DataType::Decimal32(_, _) => {
+                let array = as_decimal32_array(array)?;
+                if array.is_null(index) {
+                    Ok(ScalarValue::Decimal32(None, precision, scale))
+                } else {
+                    let value = array.value(index);
+                    Ok(ScalarValue::Decimal32(Some(value), precision, scale))
+                }
+            }
+            DataType::Decimal64(_, _) => {
+                let array = as_decimal64_array(array)?;
+                if array.is_null(index) {
+                    Ok(ScalarValue::Decimal64(None, precision, scale))
+                } else {
+                    let value = array.value(index);
+                    Ok(ScalarValue::Decimal64(Some(value), precision, scale))
+                }
+            }
             DataType::Decimal128(_, _) => {
                 let array = as_decimal128_array(array)?;
                 if array.is_null(index) {
@@ -3197,7 +3221,9 @@ impl ScalarValue {
                     Ok(ScalarValue::Decimal256(Some(value), precision, scale))
                 }
             }
-            _ => _internal_err!("Unsupported decimal type"),
+            other => {
+                unreachable!("Invalid type isn't decimal: {other:?}")
+            }
         }
     }
 
@@ -3311,6 +3337,16 @@ impl ScalarValue {
 
         Ok(match array.data_type() {
             DataType::Null => ScalarValue::Null,
+            DataType::Decimal32(precision, scale) => {
+                ScalarValue::get_decimal_value_from_array(
+                    array, index, *precision, *scale,
+                )?
+            }
+            DataType::Decimal64(precision, scale) => {
+                ScalarValue::get_decimal_value_from_array(
+                    array, index, *precision, *scale,
+                )?
+            }
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::get_decimal_value_from_array(
                     array, index, *precision, *scale,
