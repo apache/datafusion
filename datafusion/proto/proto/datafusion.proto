@@ -401,8 +401,14 @@ message LogicalExprNode {
     PlaceholderNode placeholder = 34;
 
     Unnest unnest = 35;
+    LambdaNode lambda = 36;
 
   }
+}
+
+message LambdaNode {
+  repeated string params = 1;
+  LogicalExprNode body = 2;
 }
 
 message Wildcard {

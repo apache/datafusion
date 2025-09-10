@@ -19,13 +19,14 @@
 
 use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
+use crate::lambda::LambdaPlanner;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{not_impl_err, DFSchema, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -150,6 +151,25 @@ impl ScalarUDF {
             Arc::new(self.clone()),
             args,
         ))
+    }
+
+    /// Attempts to call the function with optimized argument handling.
+    ///
+    /// This method first tries the inner implementation's `try_call` method,
+    /// which may return an optimized expression. If no optimization is available,
+    /// it falls back to the standard `call` method.
+    ///
+    /// # Arguments
+    /// * `args` - The arguments to pass to the function
+    ///
+    /// # Returns
+    /// An expression representing the function call result
+    pub fn try_call(&self, args: Vec<Expr>) -> Result<Expr> {
+        let result = self.inner.try_call(args.as_slice())?;
+        if let Some(expr) = result {
+            return Ok(expr);
+        }
+        Ok(self.call(args))
     }
 
     /// Returns this function's name.
@@ -312,6 +332,46 @@ impl ScalarUDF {
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
         self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+    }
+
+    /// Plans the scalar UDF with lambda function support.
+    ///
+    /// This method allows scalar UDFs to be planned with lambda functions,
+    /// enabling higher-order functions like `array_filter` that take lambda
+    /// expressions as arguments. Returns a new instance with planned lambda
+    /// functions if applicable.
+    ///
+    /// # Arguments
+    /// * `planner` - The lambda planner to use for planning lambda expressions
+    /// * `args` - The function arguments that may include lambda expressions
+    /// * `input_dfschema` - The input schema for the lambda planning context
+    ///
+    /// # Returns
+    /// An optional new ScalarUDF instance with planned lambdas, or None if no planning is needed
+    pub fn plan(
+        &self,
+        planner: &dyn LambdaPlanner,
+        args: &[Expr],
+        input_dfschema: &DFSchema,
+    ) -> Result<Option<Self>> {
+        let Some(inner) = self.inner.plan(planner, args, input_dfschema)? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::new_from_shared_impl(inner)))
+    }
+
+    /// Returns the arguments with lambda expressions included.
+    ///
+    /// This method combines regular function arguments with any lambda expressions
+    /// that are part of the function signature, useful for display and analysis.
+    ///
+    /// # Arguments
+    /// * `args` - The function arguments
+    ///
+    /// # Returns
+    /// A vector of expression references including lambda expressions
+    pub fn args_with_lambda<'a>(&'a self, args: &'a [Expr]) -> Result<Vec<&'a Expr>> {
+        self.inner.args_with_lambda(args)
     }
 }
 
@@ -745,6 +805,58 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// Attempts to optimize or transform the function call.
+    ///
+    /// This method allows UDF implementations to provide optimized versions
+    /// of function calls or transform them into different expressions.
+    /// Returns `None` if no optimization is available.
+    ///
+    /// # Arguments
+    /// * `_args` - The function arguments to potentially optimize
+    ///
+    /// # Returns
+    /// An optional optimized expression, or None if no optimization is available
+    fn try_call(&self, _args: &[Expr]) -> Result<Option<Expr>> {
+        Ok(None)
+    }
+
+    /// Plans the scalar UDF implementation with lambda function support.
+    ///
+    /// This method enables UDF implementations to work with lambda functions
+    /// by allowing them to plan and prepare lambda expressions for execution.
+    /// Returns a new implementation instance if lambda planning is needed.
+    ///
+    /// # Arguments
+    /// * `_planner` - The lambda planner for converting logical lambdas to physical
+    /// * `_args` - The function arguments that may include lambda expressions
+    /// * `_input_dfschema` - The input schema context for lambda planning
+    ///
+    /// # Returns
+    /// An optional new UDF implementation with planned lambdas, or None if no planning is needed
+    fn plan(
+        &self,
+        _planner: &dyn LambdaPlanner,
+        _args: &[Expr],
+        _input_dfschema: &DFSchema,
+    ) -> Result<Option<Arc<dyn ScalarUDFImpl>>> {
+        Ok(None)
+    }
+
+    /// Returns the function arguments combined with any lambda expressions.
+    ///
+    /// This method allows UDF implementations to specify how their arguments
+    /// should be combined with lambda expressions for display, analysis, and
+    /// schema generation purposes.
+    ///
+    /// # Arguments
+    /// * `args` - The function arguments
+    ///
+    /// # Returns
+    /// A vector of expression references including both regular args and lambdas
+    fn args_with_lambda<'a>(&'a self, args: &'a [Expr]) -> Result<Vec<&'a Expr>> {
+        Ok(args.iter().collect())
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -851,6 +963,30 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
+    }
+
+    fn plan(
+        &self,
+        planner: &dyn LambdaPlanner,
+        args: &[Expr],
+        input_dfschema: &DFSchema,
+    ) -> Result<Option<Arc<dyn ScalarUDFImpl>>> {
+        let inner = self.inner.plan(planner, args, input_dfschema)?;
+        let Some(inner) = inner else {
+            return Ok(None);
+        };
+        Ok(Some(Arc::new(AliasedScalarUDFImpl {
+            inner: inner.into(),
+            aliases: self.aliases.clone(),
+        })))
+    }
+
+    fn try_call(&self, args: &[Expr]) -> Result<Option<Expr>> {
+        self.inner.try_call(args)
+    }
+
+    fn args_with_lambda<'a>(&'a self, args: &'a [Expr]) -> Result<Vec<&'a Expr>> {
+        self.inner.args_with_lambda(args)
     }
 }
 

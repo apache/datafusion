@@ -293,7 +293,8 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
-        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
+        | Expr::GroupingSet(_)
+        | Expr::Lambda(_) => internal_err!("Unsupported predicate type"),
     })?;
     Ok(is_evaluate)
 }
