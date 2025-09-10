@@ -284,6 +284,8 @@ mod tests {
 
     #[tokio::test]
     async fn query_s3_location_test() -> Result<()> {
+        // Disable IMDS to prevent AWS SDK from attempting EC2 metadata calls during tests
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
         let bucket = "examples3bucket";
         let location = format!("s3://{bucket}/file.parquet");
 

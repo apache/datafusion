@@ -582,6 +582,8 @@ mod tests {
     }
     #[tokio::test]
     async fn copy_to_external_object_store_test() -> Result<()> {
+        // Disable IMDS to prevent AWS SDK from attempting EC2 metadata calls during tests
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
         let locations = vec![
             "s3://bucket/path/file.parquet",
             "oss://bucket/path/file.parquet",

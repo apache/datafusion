@@ -579,6 +579,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
+        // Disable IMDS in AWS SDK to avoid network calls during local tests
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
         let location = "s3://bucket/path/FAKE/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
         std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
@@ -733,6 +735,7 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_resolves_region_when_none_provided() -> Result<()> {
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
         let expected_region = "eu-central-1";
         let location = "s3://test-bucket/path/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
@@ -759,6 +762,7 @@ mod tests {
     #[tokio::test]
     async fn s3_object_store_builder_overrides_region_when_resolve_region_enabled(
     ) -> Result<()> {
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
         let original_region = "us-east-1";
         let expected_region = "eu-central-1"; // This should be the auto-detected region
         let location = "s3://test-bucket/path/file.parquet";
