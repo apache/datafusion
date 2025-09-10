@@ -565,12 +565,12 @@ fn estimate_inner_join_cardinality(
     {
         // Break if we don't have enough information to calculate a distinct count
         // If distinct_count isn't provided directly, we need min and max to be provided
-        if (left_stat.distinct_count.get_value().is_none()
-            && (left_stat.min_value.get_value().is_none()
-                || left_stat.max_value.get_value().is_none()))
-            || (right_stat.distinct_count.get_value().is_none()
-                && (right_stat.min_value.get_value().is_none()
-                    || right_stat.max_value.get_value().is_none()))
+        let has_enough_info = |stat: &ColumnStatistics| {
+            stat.distinct_count.get_value().is_some()
+                || (stat.min_value.get_value().is_some()
+                    && stat.max_value.get_value().is_some())
+        };
+        if !has_enough_info(left_stat) || !has_enough_info(right_stat)
         {
             return None;
         }
