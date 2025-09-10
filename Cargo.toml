@@ -90,7 +90,7 @@ version = "51.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-apache-avro = { version = "0.20", default-features = false }
+apache-avro = { version = "0.21", default-features = false }
 arrow = { version = "57.0.0", features = [
     "prettyprint",
     "chrono-tz",
