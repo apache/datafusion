@@ -1518,30 +1518,31 @@ impl ValuesFields {
     }
 }
 
-pub fn maybe_project_redundant_column(
-    input: Arc<LogicalPlan>,
-) -> Result<Arc<LogicalPlan>> {
-    // tracks a mapping between a field name and the number of appearances of that field.
-    let mut name_map = HashMap::<&str, usize>::new();
-    // tracks all the fields and aliases that were previously seen.
-    let mut seen = HashSet::<Cow<String>>::new();
-
+// Return a list of aliases so that if applied to `fields` it would result in a unique name for each
+// column, regardless of qualification. The returned vector length is equal to the number of fields
+// as input and will optionally contain the alias that needs to be assigned to the column in the
+// same position in order to maintain the uniqueness property.
+pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
     // Some field names might already come to this function with the count (number of times it appeared)
     // as a suffix e.g. id:1, so there's still a chance of name collisions, for example,
     // if these three fields passed to this function: "col:1", "col" and "col", the function
-    // would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
+    // would rename them to -> col:1, col, col:1 causing a posterior error when building the DFSchema.
     // That's why we need the `seen` set, so the fields are always unique.
 
-    let aliases = input
-        .schema()
+    // Tracks a mapping between a field name and the number of appearances of that field.
+    let mut name_map = HashMap::<&str, usize>::new();
+    // Tracks all the fields and aliases that were previously seen.
+    let mut seen = HashSet::<Cow<String>>::new();
+
+    fields
         .iter()
-        .map(|(_, field)| {
+        .map(|field| {
             let original_name = field.name();
             let mut name = Cow::Borrowed(original_name);
 
             let count = name_map.entry(original_name).or_insert(0);
 
-            // Loop until we find a name that hasn't been used
+            // Loop until we find a name that hasn't been used.
             while seen.contains(&name) {
                 *count += 1;
                 name = Cow::Owned(format!("{original_name}:{count}"));
@@ -1554,30 +1555,7 @@ pub fn maybe_project_redundant_column(
                 Cow::Owned(alias) => Some(alias),
             }
         })
-        .collect::<Vec<_>>();
-
-    // Check if there is at least an alias
-    let is_projection_needed = aliases.iter().any(Option::is_some);
-
-    if is_projection_needed {
-        let projection_expressions = aliases
-            .iter()
-            .zip(input.schema().iter())
-            .map(|(alias, (qualifier, field))| {
-                let column = Expr::Column(Column::new(qualifier.cloned(), field.name()));
-                match alias {
-                    None => column,
-                    Some(alias) => {
-                        Expr::Alias(Alias::new(column, qualifier.cloned(), alias))
-                    }
-                }
-            })
-            .collect();
-        let projection = Projection::try_new(projection_expressions, input)?;
-        Ok(Arc::new(LogicalPlan::Projection(projection)))
-    } else {
-        Ok(input)
-    }
+        .collect()
 }
 
 fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
@@ -2786,5 +2764,34 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_unique_field_aliases() {
+        let t1_field_1 = Field::new("a", DataType::Int32, false);
+        let t2_field_1 = Field::new("a", DataType::Int32, false);
+        let t2_field_3 = Field::new("a", DataType::Int32, false);
+        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
+        let t1_field_2 = Field::new("b", DataType::Int32, false);
+        let t2_field_2 = Field::new("b", DataType::Int32, false);
+
+        let fields = vec![
+            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
+        ];
+        let fields = Fields::from(fields);
+
+        let remove_redundant = unique_field_aliases(&fields);
+
+        assert_eq!(
+            remove_redundant,
+            vec![
+                None,
+                Some("a:1".to_string()),
+                None,
+                Some("b:1".to_string()),
+                Some("a:2".to_string()),
+                Some("a:1:1".to_string()),
+            ]
+        );
     }
 }
