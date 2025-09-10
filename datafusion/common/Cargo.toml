@@ -83,6 +83,3 @@ web-time = "1.1.0"
 chrono = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
-
-[patch.crates-io]
-apache-avro = { git = "https://github.com/timsaucer/avro-rs.git", branch = "chore/move_to_liblzma" }

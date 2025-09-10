@@ -194,7 +194,7 @@ checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
 [[package]]
 name = "apache-avro"
 version = "0.20.0"
-source = "git+https://github.com/timsaucer/avro-rs.git?branch=chore%2Fmove_to_liblzma#ffd85c4a36cc51c84728979069f5c613f43da480"
+source = "git+https://github.com/timsaucer/avro-rs.git?branch=chore%2Fmove_to_liblzma#40a77bcdd19425ca52a5bb784dee486ab1415d43"
 dependencies = [
  "bigdecimal",
  "bon",
