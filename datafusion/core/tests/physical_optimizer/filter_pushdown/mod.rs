@@ -18,7 +18,7 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
-    array::record_batch,
+    array::{record_batch, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
     util::pretty::pretty_format_batches,
 };
@@ -33,7 +33,7 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::{config::ConfigOptions, JoinType};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
@@ -946,6 +946,180 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
     -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
+    "
+    );
+}
+
+async fn right_side_dynamic_filter_test(
+    join_type: JoinType,
+) -> (
+    Arc<dyn ExecutionPlan>,
+    Arc<dyn ExecutionPlan>,
+    Vec<RecordBatch>,
+) {
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Left side with extra values that should be pruned by the dynamic filter
+    let left_batches = vec![record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap()];
+    let left_schema =
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(true)
+        .with_batches(left_batches)
+        .build();
+
+    // Right side with limited values used to build the dynamic filter
+    let right_batches = vec![record_batch!(("a", Int32, [1, 2])).unwrap()];
+    let right_schema =
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(true)
+        .with_batches(right_batches)
+        .build();
+
+    let on = vec![(
+        col("a", &left_schema).unwrap(),
+        col("a", &right_schema).unwrap(),
+    )];
+
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&left_scan),
+            right_scan,
+            on,
+            None,
+            &join_type,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    let config = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    (plan, left_scan, batches)
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_right_join() {
+    let (plan, left_scan, batches) =
+        right_side_dynamic_filter_test(JoinType::Right).await;
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= 1 AND a@0 <= 2 ]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true
+    "
+    );
+    assert_eq!(left_scan.metrics().unwrap().output_rows().unwrap(), 2);
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+
+    | a  | a  |
+    +----+----+
+    | 1  | 1  |
+    | 2  | 2  |
+    +----+----+
+    "
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_right_semi_join() {
+    let (plan, left_scan, batches) =
+        right_side_dynamic_filter_test(JoinType::RightSemi).await;
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(a@0, a@0)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= 1 AND a@0 <= 2 ]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true
+    "
+    );
+    assert_eq!(left_scan.metrics().unwrap().output_rows().unwrap(), 2);
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +---+
+    | a |
+    +---+
+    | 1 |
+    | 2 |
+    +---+
+    "
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_right_anti_join() {
+    let (plan, left_scan, batches) =
+        right_side_dynamic_filter_test(JoinType::RightAnti).await;
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(a@0, a@0)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= 1 AND a@0 <= 2 ]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true
+    "
+    );
+    assert_eq!(left_scan.metrics().unwrap().output_rows().unwrap(), 2);
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +---+
+    | a |
+    +---+
+    +---+
+    "
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_right_mark_join() {
+    let (plan, left_scan, batches) =
+        right_side_dynamic_filter_test(JoinType::RightMark).await;
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(a@0, a@0)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= 1 AND a@0 <= 2 ]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a], file_type=test, pushdown_supported=true
+    "
+    );
+    assert_eq!(left_scan.metrics().unwrap().output_rows().unwrap(), 2);
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +---+------+
+    | a | mark |
+    +---+------+
+    | 1 | true |
+    | 2 | true |
+    +---+------+
     "
     );
 }

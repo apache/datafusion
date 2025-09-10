@@ -996,44 +996,35 @@ pub(crate) fn build_batch_empty_build_side(
     column_indices: &[ColumnIndex],
     join_type: JoinType,
 ) -> Result<RecordBatch> {
-    match join_type {
-        // these join types only return data if the left side is not empty, so we return an
-        // empty RecordBatch
-        JoinType::Inner
-        | JoinType::Left
-        | JoinType::LeftSemi
-        | JoinType::RightSemi
-        | JoinType::LeftAnti
-        | JoinType::LeftMark => Ok(RecordBatch::new_empty(Arc::new(schema.clone()))),
-
-        // the remaining joins will return data for the right columns and null for the left ones
-        JoinType::Right | JoinType::Full | JoinType::RightAnti | JoinType::RightMark => {
-            let num_rows = probe_batch.num_rows();
-            let mut columns: Vec<Arc<dyn Array>> =
-                Vec::with_capacity(schema.fields().len());
-
-            for column_index in column_indices {
-                let array = match column_index.side {
-                    // left -> null array
-                    JoinSide::Left => new_null_array(
-                        build_batch.column(column_index.index).data_type(),
-                        num_rows,
-                    ),
-                    // right -> respective right array
-                    JoinSide::Right => Arc::clone(probe_batch.column(column_index.index)),
-                    // right mark -> unset boolean array as there are no matches on the left side
-                    JoinSide::None => Arc::new(BooleanArray::new(
-                        BooleanBuffer::new_unset(num_rows),
-                        None,
-                    )),
-                };
-
-                columns.push(array);
-            }
-
-            Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
-        }
+    // Joins that do not preserve unmatched rows from the right side simply
+    // produce an empty batch when the build side is empty.
+    if !join_type.preserves_unmatched_right() {
+        return Ok(RecordBatch::new_empty(Arc::new(schema.clone())));
     }
+
+    // The remaining joins will return data for the right columns and null for the left ones
+    let num_rows = probe_batch.num_rows();
+    let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
+
+    for column_index in column_indices {
+        let array = match column_index.side {
+            // left -> null array
+            JoinSide::Left => new_null_array(
+                build_batch.column(column_index.index).data_type(),
+                num_rows,
+            ),
+            // right -> respective right array
+            JoinSide::Right => Arc::clone(probe_batch.column(column_index.index)),
+            // right mark -> unset boolean array as there are no matches on the left side
+            JoinSide::None => {
+                Arc::new(BooleanArray::new(BooleanBuffer::new_unset(num_rows), None))
+            }
+        };
+
+        columns.push(array);
+    }
+
+    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
 /// The input is the matched indices for left and right and

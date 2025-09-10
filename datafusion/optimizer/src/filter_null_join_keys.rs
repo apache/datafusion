@@ -18,7 +18,6 @@
 //! [`FilterNullJoinKeys`] adds filters to join inputs when input isn't nullable
 
 use crate::optimizer::ApplyOrder;
-use crate::push_down_filter::on_lr_is_preserved;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{NullEquality, Result};
@@ -54,8 +53,8 @@ impl OptimizerRule for FilterNullJoinKeys {
                 if !join.on.is_empty()
                     && join.null_equality == NullEquality::NullEqualsNothing =>
             {
-                let (left_preserved, right_preserved) =
-                    on_lr_is_preserved(join.join_type);
+                let left_preserved = join.join_type.on_preserves_left();
+                let right_preserved = join.join_type.on_preserves_right();
 
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
