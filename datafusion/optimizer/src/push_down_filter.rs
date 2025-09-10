@@ -1966,7 +1966,10 @@ mod tests {
     // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoopPlan {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            self.input.partial_cmp(&other.input)
+            self.input
+                .partial_cmp(&other.input)
+                // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 

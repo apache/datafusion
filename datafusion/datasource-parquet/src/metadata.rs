@@ -32,7 +32,7 @@ use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
-use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_plan::Accumulator;
 use log::debug;
 use object_store::path::Path;
