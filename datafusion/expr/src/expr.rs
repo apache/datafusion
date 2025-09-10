@@ -390,7 +390,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
 }
@@ -2871,8 +2871,8 @@ impl HashNode for Expr {
             Expr::Placeholder(place_holder) => {
                 place_holder.hash(state);
             }
-            Expr::OuterReferenceColumn(data_type, column) => {
-                data_type.hash(state);
+            Expr::OuterReferenceColumn(field, column) => {
+                field.data_type().hash(state);
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
