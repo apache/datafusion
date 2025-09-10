@@ -570,8 +570,7 @@ fn estimate_inner_join_cardinality(
                 || (stat.min_value.get_value().is_some()
                     && stat.max_value.get_value().is_some())
         };
-        if !has_enough_info(left_stat) || !has_enough_info(right_stat)
-        {
+        if !has_enough_info(left_stat) || !has_enough_info(right_stat) {
             return None;
         }
 
@@ -2017,22 +2016,28 @@ mod tests {
                 (20, Inexact(1), Inexact(40), Absent, Absent),
                 Some(Inexact(10)),
             ),
-            // When we have distinct count.
+            // Distinct count matches the range
             (
-                (10, Absent, Absent, Inexact(10), Absent),
-                (10, Absent, Absent, Inexact(10), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                Some(Inexact(10)),
+            ),
+            // Distinct count takes precedence over the range
+            (
+                (10, Inexact(1), Inexact(3), Inexact(10), Absent),
+                (10, Inexact(1), Inexact(3), Inexact(10), Absent),
                 Some(Inexact(10)),
             ),
             // distinct(left) > distinct(right)
             (
-                (10, Absent, Absent, Inexact(5), Absent),
-                (10, Absent, Absent, Inexact(2), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(5), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(2), Absent),
                 Some(Inexact(20)),
             ),
             // distinct(right) > distinct(left)
             (
-                (10, Absent, Absent, Inexact(2), Absent),
-                (10, Absent, Absent, Inexact(5), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(2), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(5), Absent),
                 Some(Inexact(20)),
             ),
             // min(left) < 0 (range(left) > range(right))
@@ -2072,16 +2077,21 @@ mod tests {
                 (10, Absent, Absent, Absent, Absent),
                 None,
             ),
-            // No min or max (or both).
+            // No min or max (or both), but distinct available.
             (
-                (10, Absent, Absent, Absent, Absent),
-                (10, Absent, Absent, Absent, Absent),
-                None,
+                (10, Absent, Absent, Inexact(3), Absent),
+                (10, Absent, Absent, Inexact(3), Absent),
+                Some(Inexact(33)),
             ),
             (
-                (10, Inexact(2), Absent, Absent, Absent),
-                (10, Absent, Inexact(5), Absent, Absent),
-                None,
+                (10, Inexact(2), Absent, Inexact(3), Absent),
+                (10, Absent, Inexact(5), Inexact(3), Absent),
+                Some(Inexact(33)),
+            ),
+            (
+                (10, Absent, Inexact(3), Inexact(3), Absent),
+                (10, Inexact(1), Absent, Inexact(3), Absent),
+                Some(Inexact(33)),
             ),
             (
                 (10, Absent, Inexact(3), Absent, Absent),
