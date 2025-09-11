@@ -205,6 +205,8 @@ pub(super) struct HashJoinStream {
     hashes_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
+    /// Join expressions for the side receiving dynamic filters
+    _dynamic_filter_on: Vec<PhysicalExprRef>,
     /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
     bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
     /// Optional future to signal when bounds have been reported by all partitions
@@ -311,6 +313,7 @@ impl HashJoinStream {
         batch_size: usize,
         hashes_buffer: Vec<u64>,
         right_side_ordered: bool,
+        _dynamic_filter_on: Vec<PhysicalExprRef>,
         bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
     ) -> Self {
         Self {
@@ -329,6 +332,7 @@ impl HashJoinStream {
             batch_size,
             hashes_buffer,
             right_side_ordered,
+            _dynamic_filter_on,
             bounds_accumulator,
             bounds_waiter: None,
         }
@@ -405,15 +409,20 @@ impl HashJoinStream {
         // Dynamic filter coordination between partitions:
         // Report bounds to the accumulator which will handle synchronization and filter updates
         if let Some(ref bounds_accumulator) = self.bounds_accumulator {
-            let bounds_accumulator = Arc::clone(bounds_accumulator);
-            let partition = self.partition;
-            let left_data_bounds = left_data.bounds.clone();
-            self.bounds_waiter = Some(OnceFut::new(async move {
-                bounds_accumulator
-                    .report_partition_bounds(partition, left_data_bounds)
-                    .await
-            }));
-            self.state = HashJoinStreamState::WaitPartitionBoundsReport;
+            if self.join_type.dynamic_filter_side() == JoinSide::Right {
+                let bounds_accumulator = Arc::clone(bounds_accumulator);
+                let partition = self.partition;
+                let left_data_bounds = left_data.bounds.clone();
+                self.bounds_waiter = Some(OnceFut::new(async move {
+                    bounds_accumulator
+                        .report_partition_bounds(partition, left_data_bounds)
+                        .await
+                }));
+                self.state = HashJoinStreamState::WaitPartitionBoundsReport;
+            } else {
+                // Bounds for other sides are not collected at this stage
+                self.state = HashJoinStreamState::FetchProbeBatch;
+            }
         } else {
             self.state = HashJoinStreamState::FetchProbeBatch;
         }

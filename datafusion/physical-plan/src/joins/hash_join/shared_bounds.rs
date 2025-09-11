@@ -105,10 +105,10 @@ pub(crate) struct SharedBoundsAccumulator {
     /// Shared state protected by a single mutex to avoid ordering concerns
     inner: Mutex<SharedBoundsState>,
     barrier: Barrier,
-    /// Dynamic filter for pushdown to probe side
+    /// Dynamic filter for pushdown
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
-    /// Right side join expressions needed for creating filter bounds
-    on_right: Vec<PhysicalExprRef>,
+    /// Join expressions on the side receiving the dynamic filter
+    join_exprs: Vec<PhysicalExprRef>,
 }
 
 /// State protected by SharedBoundsAccumulator's mutex
@@ -147,7 +147,7 @@ impl SharedBoundsAccumulator {
         left_child: &dyn ExecutionPlan,
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
-        on_right: Vec<PhysicalExprRef>,
+        join_exprs: Vec<PhysicalExprRef>,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -169,7 +169,7 @@ impl SharedBoundsAccumulator {
             }),
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
-            on_right,
+            join_exprs,
         }
     }
 
@@ -197,16 +197,16 @@ impl SharedBoundsAccumulator {
             // Create range predicates for each join key in this partition
             let mut column_predicates = Vec::with_capacity(partition_bounds.len());
 
-            for (col_idx, right_expr) in self.on_right.iter().enumerate() {
+            for (col_idx, expr) in self.join_exprs.iter().enumerate() {
                 if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
                     // Create predicate: col >= min AND col <= max
                     let min_expr = Arc::new(BinaryExpr::new(
-                        Arc::clone(right_expr),
+                        Arc::clone(expr),
                         Operator::GtEq,
                         lit(column_bounds.min.clone()),
                     )) as Arc<dyn PhysicalExpr>;
                     let max_expr = Arc::new(BinaryExpr::new(
-                        Arc::clone(right_expr),
+                        Arc::clone(expr),
                         Operator::LtEq,
                         lit(column_bounds.max.clone()),
                     )) as Arc<dyn PhysicalExpr>;

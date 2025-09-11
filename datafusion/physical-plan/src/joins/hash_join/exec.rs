@@ -918,6 +918,7 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
+        let df_side = self.join_type.dynamic_filter_side();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
@@ -935,7 +936,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                    enable_dynamic_filter_pushdown,
+                    enable_dynamic_filter_pushdown && df_side == JoinSide::Right,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -953,7 +954,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                    enable_dynamic_filter_pushdown,
+                    enable_dynamic_filter_pushdown && df_side == JoinSide::Right,
                 ))
             }
             PartitionMode::Auto => {
@@ -966,23 +967,34 @@ impl ExecutionPlan for HashJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
+        // Select join expressions for dynamic filter side
+        let dynamic_filter_on = match df_side {
+            JoinSide::Left => self
+                .on
+                .iter()
+                .map(|(left_expr, _)| Arc::clone(left_expr))
+                .collect::<Vec<_>>(),
+            JoinSide::Right => self
+                .on
+                .iter()
+                .map(|(_, right_expr)| Arc::clone(right_expr))
+                .collect::<Vec<_>>(),
+            JoinSide::None => Vec::new(),
+        };
+
         // Initialize bounds_accumulator lazily with runtime partition counts (only if enabled)
         let bounds_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
                     let filter = Arc::clone(&df.filter);
-                    let on_right = self
-                        .on
-                        .iter()
-                        .map(|(_, right_expr)| Arc::clone(right_expr))
-                        .collect::<Vec<_>>();
+                    let on = dynamic_filter_on.clone();
                     Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
                         Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
                             filter,
-                            on_right,
+                            on,
                         ))
                     })))
                 })
@@ -1025,6 +1037,7 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             vec![],
             self.right.output_ordering().is_some(),
+            dynamic_filter_on,
             bounds_accumulator,
         )))
     }
