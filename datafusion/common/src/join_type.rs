@@ -345,10 +345,9 @@ mod tests {
             assert_eq!(jt.dynamic_filter_side(), Left);
         }
 
-        for jt in [JoinType::Full] {
-            assert!(jt.preserves_left());
-            assert!(jt.preserves_right());
-            assert_eq!(jt.dynamic_filter_side(), None);
-        }
+        let jt = JoinType::Full;
+        assert!(jt.preserves_left());
+        assert!(jt.preserves_right());
+        assert_eq!(jt.dynamic_filter_side(), None);
     }
 }
