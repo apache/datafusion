@@ -204,13 +204,7 @@ fn find_most_restrictive_predicate(
 
             if let Some(scalar) = scalar_value {
                 if let Some(current_best) = best_value {
-                    // Only compare if the scalar values have compatible types
-                    // If they don't have compatible types, we can't determine which is more restrictive
-                    let Ok(comparison) = scalar.try_cmp(current_best) else {
-                        // Can't compare - types are incompatible, so we can't simplify
-                        // Return None to indicate we can't find the most restrictive
-                        return Ok(None);
-                    };
+                    let comparison = scalar.try_cmp(current_best)?;
                     let is_better = if find_greater {
                         comparison == std::cmp::Ordering::Greater
                     } else {
@@ -261,18 +255,18 @@ mod tests {
         // a < 5 AND CAST(a AS varchar) < 'abc' AND a < 6
         // Should simplify to:
         // a < 5 AND CAST(a AS varchar) < 'abc'
-        
+
         let predicates = vec![
             col("a").lt(lit(5i32)),
             cast(col("a"), DataType::Utf8).lt(lit("abc")),
             col("a").lt(lit(6i32)),
         ];
-        
+
         let result = simplify_predicates(predicates).unwrap();
-        
+
         // Should have 2 predicates: a < 5 and CAST(a AS varchar) < 'abc'
         assert_eq!(result.len(), 2);
-        
+
         // Check that the cast predicate is preserved
         let has_cast_predicate = result.iter().any(|p| {
             matches!(p, Expr::BinaryExpr(BinaryExpr { 
@@ -282,7 +276,7 @@ mod tests {
             }) if matches!(left.as_ref(), Expr::Cast(_)) && right == &Box::new(lit("abc")))
         });
         assert!(has_cast_predicate, "Cast predicate should be preserved");
-        
+
         // Check that we have the more restrictive column predicate (a < 5)
         let has_column_predicate = result.iter().any(|p| {
             matches!(p, Expr::BinaryExpr(BinaryExpr { 
@@ -299,7 +293,7 @@ mod tests {
         // Test that extract_column_from_expr does not extract columns from cast expressions
         let cast_expr = cast(col("a"), DataType::Utf8);
         assert_eq!(extract_column_from_expr(&cast_expr), None);
-        
+
         // Test that it still extracts from direct column references
         let col_expr = col("a");
         assert_eq!(extract_column_from_expr(&col_expr), Some(Column::from("a")));
@@ -314,12 +308,12 @@ mod tests {
             col("b").gt(lit(10i32)),
             col("b").gt(lit(20i32)),
         ];
-        
+
         let result = simplify_predicates(predicates).unwrap();
-        
+
         // Should have 2 predicates: a < 3 and b > 20 (most restrictive for each column)
         assert_eq!(result.len(), 2);
-        
+
         // Check for a < 3
         let has_a_predicate = result.iter().any(|p| {
             matches!(p, Expr::BinaryExpr(BinaryExpr { 
@@ -329,7 +323,7 @@ mod tests {
             }) if left == &Box::new(col("a")) && right == &Box::new(lit(3i32)))
         });
         assert!(has_a_predicate, "Should have a < 3 predicate");
-        
+
         // Check for b > 20
         let has_b_predicate = result.iter().any(|p| {
             matches!(p, Expr::BinaryExpr(BinaryExpr { 
