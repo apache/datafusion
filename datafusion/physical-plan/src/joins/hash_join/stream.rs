@@ -205,8 +205,6 @@ pub(super) struct HashJoinStream {
     hashes_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
-    /// Join expressions for the side receiving dynamic filters
-    _dynamic_filter_on: Vec<PhysicalExprRef>,
     /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
     bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
     /// Optional future to signal when bounds have been reported by all partitions
@@ -313,7 +311,6 @@ impl HashJoinStream {
         batch_size: usize,
         hashes_buffer: Vec<u64>,
         right_side_ordered: bool,
-        _dynamic_filter_on: Vec<PhysicalExprRef>,
         bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
     ) -> Self {
         Self {
@@ -332,7 +329,6 @@ impl HashJoinStream {
             batch_size,
             hashes_buffer,
             right_side_ordered,
-            _dynamic_filter_on,
             bounds_accumulator,
             bounds_waiter: None,
         }

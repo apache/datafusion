@@ -1037,7 +1037,6 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             vec![],
             self.right.output_ordering().is_some(),
-            dynamic_filter_on,
             bounds_accumulator,
         )))
     }
