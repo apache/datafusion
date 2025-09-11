@@ -76,20 +76,22 @@ in the ticket, or [posting to the mailing list or Discord](communication.md).
 ### Sponsoring Maintainers
 
 We have found that most successful epics have one or more "sponsoring
-maintainers", a committer ([see here for current list]) who take the lead on reviewing and committing PRs, help with design,
-and coordinate and communicate with the community. Without a sponsoring
-maintainer, good PRs have remained unreviewed for a very long time.
+maintainers", a committer ([see here for current list]) who take the lead on
+reviewing and committing PRs, helps with design, and coordinates and
+communicates with the community. If you want to ship a large feature, we
+recommend finding a sponsoring maintainer upfront; otherwise, your PRs might
+remain unreviewed for a very long time.
 
-While sponsoring maintainer is not an official designated role, it is a helpful
-concept to understand how features (especially major ones) are implemented in
-DataFusion. Helping complete an epic is a significant time commitment, so
-maintainers are more likely to sponsor features they are particularly interested
-in or align with their use of DataFusion.
+There is currently no formal process for appointing a sponsoring maintainer or
+for tracking who has that role for a given epic. Instead, we rely on the
+discussion on the ticket or PR. Helping complete an epic is a significant time
+commitment, so maintainers are more likely to sponsor features they are
+particularly interested in or align with their own project's use of DataFusion.
 
 If you are willing to be a sponsoring maintainer for a feature, please say so
-explicitly in the ticket or PR, as it can be hard to tell whether someone is
-simply participating and giving general feedback. If you are unsure, we suggest
-asking directly who is willing to take the role.
+explicitly. If you are unsure, we suggest asking directly who is willing to take
+the role, as it can be hard to tell sometimes whether a committer is simply
+participating and giving general feedback.
 
 [see here for current list]: governance.md
 
