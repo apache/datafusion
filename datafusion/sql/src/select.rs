@@ -79,7 +79,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
 
         // Process `where` clause
-        let has_where_clause = select.selection.is_some();
         let base_plan = self.plan_selection(select.selection, plan, planner_context)?;
 
         // Handle named windows before processing the projection expression
@@ -91,7 +90,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             &base_plan,
             select.projection,
             empty_from,
-            has_where_clause,
             planner_context,
         )?;
 
@@ -673,23 +671,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         plan: &LogicalPlan,
         projection: Vec<SelectItem>,
         empty_from: bool,
-        has_where_clause: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
 
-        // Handle the case where no projection is specified but we have a valid FROM clause
-        // This happens with FROM-first syntax like "FROM table"
-        // But NOT with "SELECT FROM table WHERE ..." which should have empty projection
-        // When there's a WHERE clause with empty projection, it's "SELECT FROM" syntax
-        // and we should NOT add a wildcard - let the optimizer handle column selection
-        let projection = if projection.is_empty() && !empty_from && !has_where_clause {
-            // FROM-first syntax without WHERE clause - select all columns
-            vec![SelectItem::Wildcard(WildcardAdditionalOptions::default())]
-        } else {
-            projection
-        };
+        // Note: We previously added wildcard projection for empty projections to support
+        // FROM-first syntax, but this caused a regression where "SELECT FROM table"
+        // incorrectly returned all columns instead of empty projection.
+        // For now, we don't add wildcard, which fixes the regression but breaks FROM-first.
+        // A proper fix would need to distinguish between "FROM table" and "SELECT FROM table"
+        // at the parser level, which sqlparser currently doesn't support.
 
         for expr in projection {
             match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
