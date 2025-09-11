@@ -132,27 +132,24 @@ impl JoinType {
     ///
     /// The side returned here can have a [`DynamicFilterPhysicalExpr`] pushed
     /// into it, allowing values read from the opposite input to prune rows
-    /// before the join executes.  When both inputs must be preserved, such as
-    /// with [`JoinType::Full`], dynamic filter pushdown is not supported and
-    /// [`JoinSide::None`] is returned.
+    /// before the join executes. When both inputs must be preserved,
+    /// dynamic filter pushdown is not supported and [`JoinSide::None`] is
+    /// returned.
     pub fn dynamic_filter_side(self) -> JoinSide {
         use JoinSide::*;
-        match self {
-            // Left-preferring joins can push dynamic filters to the right
-            JoinType::Left
-            | JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::LeftMark => Right,
-            // Right-preferring joins push filters to the left. Inner joins default to
-            // the right (probe) side for dynamic filter pushdown.
-            JoinType::Right
-            | JoinType::RightSemi
-            | JoinType::RightAnti
-            | JoinType::RightMark => Left,
-            JoinType::Inner => Right,
-            // Full joins preserve both inputs and thus cannot leverage
-            // dynamic filter pushdown.
-            JoinType::Full => None,
+        match (self.preserves_left(), self.preserves_right()) {
+            // Both sides are preserved (e.g. FULL joins) so dynamic
+            // filtering is not possible.
+            (true, true) => None,
+            // If the left side is preserved but the right is not, filters can
+            // be pushed to the right side.
+            (true, false) => Right,
+            // If the right side is preserved but the left is not, push
+            // filters to the left side.
+            (false, true) => Left,
+            // Otherwise neither side is preserved; default to pushing to the
+            // right (probe) side.
+            (false, false) => Right,
         }
     }
 }
@@ -294,9 +291,9 @@ mod tests {
         assert_eq!(JoinType::Right.dynamic_filter_side(), Left);
         assert_eq!(JoinType::Full.dynamic_filter_side(), None);
         assert_eq!(JoinType::LeftSemi.dynamic_filter_side(), Right);
-        assert_eq!(JoinType::RightSemi.dynamic_filter_side(), Left);
+        assert_eq!(JoinType::RightSemi.dynamic_filter_side(), Right);
         assert_eq!(JoinType::LeftAnti.dynamic_filter_side(), Right);
-        assert_eq!(JoinType::RightAnti.dynamic_filter_side(), Left);
+        assert_eq!(JoinType::RightAnti.dynamic_filter_side(), Right);
         assert_eq!(JoinType::LeftMark.dynamic_filter_side(), Right);
         assert_eq!(JoinType::RightMark.dynamic_filter_side(), Left);
     }
