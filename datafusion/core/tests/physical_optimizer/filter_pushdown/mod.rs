@@ -18,9 +18,8 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
-    array::record_batch,
+    array::{record_batch, Int32Array, RecordBatch},
     datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use arrow_schema::SortOptions;
@@ -1069,7 +1068,7 @@ fn build_int32_scan(values: &[i32]) -> Arc<dyn ExecutionPlan> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(arrow::array::Int32Array::from(values.to_vec()))],
+        vec![Arc::new(Int32Array::from(values.to_vec()))],
     )
     .unwrap();
     let batches = vec![batch];
