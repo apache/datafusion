@@ -352,15 +352,11 @@ async fn test_select_no_projection() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let ctx = create_ctx_with_partition(&tmp_dir, 1).await?;
 
-    let results = ctx
-        .sql("SELECT FROM test")
-        .await?
-        .collect()
-        .await?;
+    let results = ctx.sql("SELECT FROM test").await?.collect().await?;
     // We should get all of the rows, just without any columns
     let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 10);  // `create_ctx_with_partition` creates 10 rows per partition and we chose 1 partition
-    // Check that none of the batches have any columns
+    assert_eq!(total_rows, 10); // `create_ctx_with_partition` creates 10 rows per partition and we chose 1 partition
+                                // Check that none of the batches have any columns
     for batch in &results {
         assert_eq!(batch.num_columns(), 0);
     }
