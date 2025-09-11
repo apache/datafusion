@@ -4459,6 +4459,18 @@ mod tests {
         Ok(())
     }
 
+    // This test verifies that when a HashJoinExec is created with a dynamic filter
+    // targeting the left side, the join build phase collects min/max bounds from
+    // the build-side input and reports them back into the dynamic filter for the
+    // other side. Concretely:
+    // - Left input has values [1, 3, 5]
+    // - Right (build) input has values [2, 4, 6]
+    // - JoinType::Right is used so that the right side acts as the build side
+    //   and the dynamic filter is attached to the left side expression.
+    // - After fully executing the join, the dynamic filter should be updated
+    //   with the observed bounds `a@0 >= 2 AND a@0 <= 6` (min=2, max=6).
+    // The test asserts that HashJoinExec correctly accumulates and reports these
+    // bounds so downstream consumers can use the dynamic predicate for pruning.
     #[tokio::test]
     async fn reports_bounds_when_dynamic_filter_side_left() -> Result<()> {
         use datafusion_physical_expr::expressions::col;
