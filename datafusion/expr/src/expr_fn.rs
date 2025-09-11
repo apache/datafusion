@@ -71,8 +71,9 @@ pub fn col(ident: impl Into<Column>) -> Expr {
 /// outside of the current plan.
 pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
     // Construct a synthetic field (no metadata). Prefer using `out_ref_field` when possible
-    let field: FieldRef = Arc::new(Field::new("", dt, true));
-    Expr::OuterReferenceColumn(field, ident.into())
+    let column = ident.into();
+    let field: FieldRef = Arc::new(Field::new(column.name(), dt, true));
+    Expr::OuterReferenceColumn(field, column)
 }
 
 /// Create an out reference column from an existing field (preserving metadata)

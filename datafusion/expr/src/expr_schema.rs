@@ -777,7 +777,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, lit};
+    use crate::{col, lit, out_ref_field};
 
     use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
 
@@ -911,6 +911,15 @@ mod tests {
 
         // verify to_field method populates metadata
         assert_eq!(meta, expr.metadata(&schema).unwrap());
+
+        // outer ref should be metadata-preserving
+        let outer_ref = out_ref_field(
+            Arc::new(
+                Field::new("foo", DataType::Int32, true).with_metadata(meta.to_hashmap()),
+            ),
+            Column::from_name("foo"),
+        );
+        assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
     }
 
     #[derive(Debug)]
