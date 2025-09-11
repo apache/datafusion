@@ -48,7 +48,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, JoinSide, JoinType, NullEquality, Result,
 };
 use datafusion_expr::Accumulator;
-use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
