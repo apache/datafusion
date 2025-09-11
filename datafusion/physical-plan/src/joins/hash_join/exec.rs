@@ -471,7 +471,7 @@ impl HashJoinExec {
         let keys: Vec<_> = match side {
             JoinSide::Left => on.iter().map(|(l, _)| Arc::clone(l)).collect(),
             JoinSide::Right => on.iter().map(|(_, r)| Arc::clone(r)).collect(),
-            JoinSide::None => Vec::new(),
+            JoinSide::None => unreachable!("dynamic filter side must be specified"),
         };
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
         Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true)))
@@ -1140,18 +1140,18 @@ impl ExecutionPlan for HashJoinExec {
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_dynamic_filter_pushdown
         {
-            let df_side = self.join_type.dynamic_filter_side();
-            if df_side != JoinSide::None {
-                let dynamic_filter = Self::create_dynamic_filter(&self.on, df_side);
-                match df_side {
-                    JoinSide::Left => {
-                        left_child = left_child.with_self_filter(dynamic_filter);
-                    }
-                    JoinSide::Right => {
-                        right_child = right_child.with_self_filter(dynamic_filter);
-                    }
-                    JoinSide::None => {}
+            match self.join_type.dynamic_filter_side() {
+                JoinSide::Left => {
+                    let dynamic_filter =
+                        Self::create_dynamic_filter(&self.on, JoinSide::Left);
+                    left_child = left_child.with_self_filter(dynamic_filter);
                 }
+                JoinSide::Right => {
+                    let dynamic_filter =
+                        Self::create_dynamic_filter(&self.on, JoinSide::Right);
+                    right_child = right_child.with_self_filter(dynamic_filter);
+                }
+                JoinSide::None => {}
             }
         }
 
