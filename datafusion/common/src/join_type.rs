@@ -150,6 +150,14 @@ impl JoinType {
     /// before the join executes. When both inputs must be preserved,
     /// dynamic filter pushdown is not supported and [`JoinSide::None`] is
     /// returned.
+    ///
+    /// If neither input is preserving (for example with [`JoinType::Inner`],
+    /// [`JoinType::LeftSemi`], [`JoinType::RightSemi`],
+    /// [`JoinType::LeftAnti`], or [`JoinType::RightAnti`]), either side could
+    /// in principle receive the pushed filter. DataFusion favours the right
+    /// input in this situation as joins typically treat the right as the probe
+    /// side, and filtering the probe side usually yields the greatest
+    /// reduction in work.
     pub fn dynamic_filter_side(self) -> JoinSide {
         use JoinSide::*;
         match (self.preserves(Left), self.preserves(Right)) {
