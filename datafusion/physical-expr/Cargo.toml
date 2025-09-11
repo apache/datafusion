@@ -53,6 +53,7 @@ log = { workspace = true }
 parking_lot = { workspace = true }
 paste = "^1.0"
 petgraph = "0.8.2"
+rand = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
