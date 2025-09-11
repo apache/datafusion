@@ -579,7 +579,6 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
-
         check_aws_envs().await?;
 
         let location = "s3://bucket/path/FAKE/file.parquet";
@@ -869,11 +868,7 @@ mod tests {
     }
 
     async fn check_aws_envs() -> Result<()> {
-        let aws_envs = [
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_REGION",
-        ];
+        let aws_envs = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"];
         for aws_env in aws_envs {
             if std::env::var(aws_env).is_err() {
                 eprint!("aws envs not set, skipping s3 test");
