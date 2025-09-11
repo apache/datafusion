@@ -63,7 +63,8 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality, Result,
+    internal_datafusion_err, internal_err, plan_err, project_schema, JoinSide, JoinType,
+    NullEquality, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -474,15 +475,14 @@ impl HashJoinExec {
     fn create_dynamic_filter(
         on: &JoinOn,
         side: JoinSide,
-    ) -> Arc<DynamicFilterPhysicalExpr> {
-        assert!(
-            side != JoinSide::None,
-            "dynamic filter side must be specified"
-        );
+    ) -> Result<Arc<DynamicFilterPhysicalExpr>> {
+        if side == JoinSide::None {
+            return internal_err!("dynamic filter side must be specified");
+        }
         // Extract the join key expressions from the side that will receive the dynamic filter
         let keys = Self::join_exprs_for_side(on, side);
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
-        Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true)))
+        Ok(Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true))))
     }
 
     /// left (build) side which gets hashed
@@ -1166,12 +1166,12 @@ impl HashJoinExec {
             match df_side {
                 JoinSide::Left => {
                     let dynamic_filter =
-                        Self::create_dynamic_filter(&self.on, JoinSide::Left);
+                        Self::create_dynamic_filter(&self.on, JoinSide::Left)?;
                     left_child = left_child.with_self_filter(dynamic_filter);
                 }
                 JoinSide::Right => {
                     let dynamic_filter =
-                        Self::create_dynamic_filter(&self.on, JoinSide::Right);
+                        Self::create_dynamic_filter(&self.on, JoinSide::Right)?;
                     right_child = right_child.with_self_filter(dynamic_filter);
                 }
                 JoinSide::None => {}
@@ -1214,32 +1214,32 @@ impl HashJoinExec {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
-            if let Ok(dynamic_filter) =
-                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
-            {
-                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let new_node = Arc::new(HashJoinExec {
-                    left: Arc::clone(&self.left),
-                    right: Arc::clone(&self.right),
-                    on: self.on.clone(),
-                    filter: self.filter.clone(),
-                    join_type: self.join_type,
-                    join_schema: Arc::clone(&self.join_schema),
-                    left_fut: Arc::clone(&self.left_fut),
-                    random_state: self.random_state.clone(),
-                    mode: self.mode,
-                    metrics: ExecutionPlanMetricsSet::new(),
-                    projection: self.projection.clone(),
-                    column_indices: self.column_indices.clone(),
-                    null_equality: self.null_equality,
-                    cache: self.cache.clone(),
-                    dynamic_filter: Some(HashJoinExecDynamicFilter {
-                        filter: dynamic_filter,
-                        bounds_accumulator: OnceLock::new(),
-                    }),
-                });
-                result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
-            }
+            let dynamic_filter = Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
+                .map_err(|_| {
+                    internal_datafusion_err!("expected DynamicFilterPhysicalExpr")
+                })?;
+            // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
+            let new_node = Arc::new(HashJoinExec {
+                left: Arc::clone(&self.left),
+                right: Arc::clone(&self.right),
+                on: self.on.clone(),
+                filter: self.filter.clone(),
+                join_type: self.join_type,
+                join_schema: Arc::clone(&self.join_schema),
+                left_fut: Arc::clone(&self.left_fut),
+                random_state: self.random_state.clone(),
+                mode: self.mode,
+                metrics: ExecutionPlanMetricsSet::new(),
+                projection: self.projection.clone(),
+                column_indices: self.column_indices.clone(),
+                null_equality: self.null_equality,
+                cache: self.cache.clone(),
+                dynamic_filter: Some(HashJoinExecDynamicFilter {
+                    filter: dynamic_filter,
+                    bounds_accumulator: OnceLock::new(),
+                }),
+            });
+            result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
         }
         Ok(result)
     }
@@ -1629,6 +1629,13 @@ mod tests {
             PartitionMode::CollectLeft,
             null_equality,
         )
+    }
+
+    #[test]
+    fn create_dynamic_filter_none_side_returns_error() {
+        let on: JoinOn = vec![];
+        let err = HashJoinExec::create_dynamic_filter(&on, JoinSide::None).unwrap_err();
+        assert_contains!(err.to_string(), "dynamic filter side must be specified");
     }
 
     async fn join_collect(
