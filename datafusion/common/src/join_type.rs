@@ -154,25 +154,30 @@ impl JoinType {
     /// If neither input is preserving (for example with [`JoinType::Inner`],
     /// [`JoinType::LeftSemi`], [`JoinType::RightSemi`],
     /// [`JoinType::LeftAnti`], or [`JoinType::RightAnti`]), either side could
-    /// in principle receive the pushed filter. DataFusion favours the right
-    /// input in this situation as joins typically treat the right as the probe
-    /// side, and filtering the probe side usually yields the greatest
-    /// reduction in work.
+    /// in principle receive the pushed filter. DataFusion selects the probe
+    /// side: for [`JoinType::LeftSemi`] and [`JoinType::LeftAnti`] this is the
+    /// left input, for [`JoinType::RightSemi`] and [`JoinType::RightAnti`] it
+    /// is the right input, and for other joins the right input is used by
+    /// default as joins typically treat the right as the probe side.
     pub fn dynamic_filter_side(self) -> JoinSide {
         use JoinSide::*;
-        match (self.preserves(Left), self.preserves(Right)) {
-            // Both sides are preserved (e.g. FULL joins) so dynamic
-            // filtering is not possible.
-            (true, true) => None,
+        match self {
+            // Both sides preserved (e.g. FULL joins) so dynamic filtering is
+            // not possible.
+            JoinType::Full => None,
             // If the left side is preserved but the right is not, filters can
             // be pushed to the right side.
-            (true, false) => Right,
+            JoinType::Left | JoinType::LeftMark => Right,
             // If the right side is preserved but the left is not, push
             // filters to the left side.
-            (false, true) => Left,
-            // Otherwise neither side is preserved; default to pushing to the
+            JoinType::Right | JoinType::RightMark => Left,
+            // For LeftSemi and LeftAnti joins the left is the probe side.
+            JoinType::LeftSemi | JoinType::LeftAnti => Left,
+            // For RightSemi and RightAnti joins the right is the probe side.
+            JoinType::RightSemi | JoinType::RightAnti => Right,
+            // Inner joins and any other non-preserving joins default to the
             // right (probe) side.
-            (false, false) => Right,
+            JoinType::Inner => Right,
         }
     }
 }
@@ -320,9 +325,9 @@ mod tests {
         assert_eq!(JoinType::Left.dynamic_filter_side(), Right);
         assert_eq!(JoinType::Right.dynamic_filter_side(), Left);
         assert_eq!(JoinType::Full.dynamic_filter_side(), None);
-        assert_eq!(JoinType::LeftSemi.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::LeftSemi.dynamic_filter_side(), Left);
         assert_eq!(JoinType::RightSemi.dynamic_filter_side(), Right);
-        assert_eq!(JoinType::LeftAnti.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::LeftAnti.dynamic_filter_side(), Left);
         assert_eq!(JoinType::RightAnti.dynamic_filter_side(), Right);
         assert_eq!(JoinType::LeftMark.dynamic_filter_side(), Right);
         assert_eq!(JoinType::RightMark.dynamic_filter_side(), Left);
