@@ -362,10 +362,8 @@ pub struct HashJoinExec {
 
 #[derive(Clone)]
 struct HashJoinExecDynamicFilter {
-    /// Dynamic filter that we'll update with the results of the opposite side once that is done.
+    /// Dynamic filter that we'll update with the results of the build side once that is done.
     filter: Arc<DynamicFilterPhysicalExpr>,
-    /// The side of the join that received this dynamic filter.
-    side: JoinSide,
     /// Bounds accumulator to keep track of the min/max bounds on the join keys for each partition.
     /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
     bounds_accumulator: OnceLock<Arc<SharedBoundsAccumulator>>,
@@ -465,12 +463,18 @@ impl HashJoinExec {
         })
     }
 
-    fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
-        // Extract the right-side keys (probe side keys) from the `on` clauses
-        // Dynamic filter will be created from build side values (left side) and applied to probe side (right side)
-        let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
+    fn create_dynamic_filter(
+        on: &JoinOn,
+        side: JoinSide,
+    ) -> Arc<DynamicFilterPhysicalExpr> {
+        // Extract the join key expressions from the side that will receive the dynamic filter
+        let keys: Vec<_> = match side {
+            JoinSide::Left => on.iter().map(|(l, _)| Arc::clone(l)).collect(),
+            JoinSide::Right => on.iter().map(|(_, r)| Arc::clone(r)).collect(),
+            JoinSide::None => Vec::new(),
+        };
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
-        Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
+        Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true)))
     }
 
     /// left (build) side which gets hashed
@@ -914,11 +918,6 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
-        let df_side = self
-            .dynamic_filter
-            .as_ref()
-            .map(|df| df.side)
-            .unwrap_or(JoinSide::None);
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
@@ -936,7 +935,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                    enable_dynamic_filter_pushdown && df_side == JoinSide::Right,
+                    enable_dynamic_filter_pushdown,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -954,7 +953,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                    enable_dynamic_filter_pushdown && df_side == JoinSide::Right,
+                    enable_dynamic_filter_pushdown,
                 ))
             }
             PartitionMode::Auto => {
@@ -967,21 +966,29 @@ impl ExecutionPlan for HashJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // Initialize bounds accumulator and optional probe-side pre-scan for dynamic filter pushdown
-        let bounds_accumulator = if enable_dynamic_filter_pushdown {
-            let df = self.dynamic_filter.as_ref().unwrap();
-            let filter = Arc::clone(&df.filter);
-            Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
-                Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
-                    self.mode,
-                    self.left.as_ref(),
-                    self.right.as_ref(),
-                    filter,
-                ))
-            })))
-        } else {
-            None
-        };
+        // Initialize bounds_accumulator lazily with runtime partition counts (only if enabled)
+        let bounds_accumulator = enable_dynamic_filter_pushdown
+            .then(|| {
+                self.dynamic_filter.as_ref().map(|df| {
+                    let filter = Arc::clone(&df.filter);
+                    let on_right = self
+                        .on
+                        .iter()
+                        .map(|(_, right_expr)| Arc::clone(right_expr))
+                        .collect::<Vec<_>>();
+                    Some(Arc::clone(df.bounds_accumulator.get_or_init(|| {
+                        Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
+                            self.mode,
+                            self.left.as_ref(),
+                            self.right.as_ref(),
+                            filter,
+                            on_right,
+                        ))
+                    })))
+                })
+            })
+            .flatten()
+            .flatten();
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -1107,7 +1114,7 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         // Get basic filter descriptions for both children
-        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+        let mut left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
             &parent_filters,
             self.left(),
         )?;
@@ -1120,9 +1127,19 @@ impl ExecutionPlan for HashJoinExec {
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_dynamic_filter_pushdown
         {
-            // Add actual dynamic filter to right side (probe side)
-            let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+            let df_side = self.join_type.dynamic_filter_side();
+            if df_side != JoinSide::None {
+                let dynamic_filter = Self::create_dynamic_filter(&self.on, df_side);
+                match df_side {
+                    JoinSide::Left => {
+                        left_child = left_child.with_self_filter(dynamic_filter);
+                    }
+                    JoinSide::Right => {
+                        right_child = right_child.with_self_filter(dynamic_filter);
+                    }
+                    JoinSide::None => {}
+                }
+            }
         }
 
         Ok(FilterDescription::new()
@@ -1149,25 +1166,11 @@ impl ExecutionPlan for HashJoinExec {
             ));
         }
 
-        let df_side = self
-            .dynamic_filter
-            .as_ref()
-            .map(|df| df.side)
-            .unwrap_or(JoinSide::None);
-
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
-
-        // For dynamic filter pushdown, we default to pushing to the right side (probe side)
-        // when no existing dynamic filter is present
-        let child_index = match df_side {
-            JoinSide::Left => 0,
-            JoinSide::Right => 1,
-            JoinSide::None => 1, // Default to right side for new dynamic filters
-        };
-
-        let child_self_filters = &child_pushdown_result.self_filters[child_index];
-        if let Some(filter) = child_self_filters.first() {
+        let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
+                                                                               // We expect 0 or 1 self filters
+        if let Some(filter) = right_child_self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
@@ -1175,11 +1178,6 @@ impl ExecutionPlan for HashJoinExec {
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {
                 // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let actual_df_side = match df_side {
-                    JoinSide::Left => JoinSide::Left,
-                    JoinSide::Right => JoinSide::Right,
-                    JoinSide::None => JoinSide::Right, // Default to right side for new dynamic filters
-                };
                 let new_node = Arc::new(HashJoinExec {
                     left: Arc::clone(&self.left),
                     right: Arc::clone(&self.right),
@@ -1197,7 +1195,6 @@ impl ExecutionPlan for HashJoinExec {
                     cache: self.cache.clone(),
                     dynamic_filter: Some(HashJoinExecDynamicFilter {
                         filter: dynamic_filter,
-                        side: actual_df_side,
                         bounds_accumulator: OnceLock::new(),
                     }),
                 });
@@ -1208,7 +1205,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
-/// Accumulator for collecting min/max bounds from input data during hash join.
+/// Accumulator for collecting min/max bounds from build-side data during hash join.
 ///
 /// This struct encapsulates the logic for progressively computing column bounds
 /// (minimum and maximum values) for a specific join key expression as batches
@@ -1217,7 +1214,7 @@ impl ExecutionPlan for HashJoinExec {
 /// The bounds are used for dynamic filter pushdown optimization, where filters
 /// based on the actual data ranges can be pushed down to the probe side to
 /// eliminate unnecessary data early.
-struct ColumnBoundsAccumulator {
+struct CollectLeftAccumulator {
     /// The physical expression to evaluate for each batch
     expr: Arc<dyn PhysicalExpr>,
     /// Accumulator for tracking the minimum value across all batches
@@ -1226,7 +1223,7 @@ struct ColumnBoundsAccumulator {
     max: MaxAccumulator,
 }
 
-impl ColumnBoundsAccumulator {
+impl CollectLeftAccumulator {
     /// Creates a new accumulator for tracking bounds of a join key expression.
     ///
     /// # Arguments
@@ -1234,7 +1231,7 @@ impl ColumnBoundsAccumulator {
     /// * `schema` - The schema of the input data
     ///
     /// # Returns
-    /// A new `ColumnBoundsAccumulator` instance configured for the expression's data type
+    /// A new `CollectLeftAccumulator` instance configured for the expression's data type
     fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Result<Self> {
         /// Recursively unwraps dictionary types to get the underlying value type.
         fn dictionary_value_type(data_type: &DataType) -> DataType {
@@ -1294,7 +1291,7 @@ struct BuildSideState {
     num_rows: usize,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
-    bounds_accumulators: Option<Vec<ColumnBoundsAccumulator>>,
+    bounds_accumulators: Option<Vec<CollectLeftAccumulator>>,
 }
 
 impl BuildSideState {
@@ -1316,7 +1313,7 @@ impl BuildSideState {
                     on_left
                         .iter()
                         .map(|expr| {
-                            ColumnBoundsAccumulator::try_new(Arc::clone(expr), schema)
+                            CollectLeftAccumulator::try_new(Arc::clone(expr), schema)
                         })
                         .collect::<Result<Vec<_>>>()
                 })
@@ -1481,7 +1478,7 @@ async fn collect_left_input(
         Some(accumulators) if num_rows > 0 => {
             let bounds = accumulators
                 .into_iter()
-                .map(ColumnBoundsAccumulator::evaluate)
+                .map(CollectLeftAccumulator::evaluate)
                 .collect::<Result<Vec<_>>>()?;
             Some(bounds)
         }
