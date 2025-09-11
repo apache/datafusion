@@ -61,7 +61,10 @@ use datafusion_physical_plan::{
 
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};
-use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
+use util::{
+    build_hash_join, build_topk, format_plan_for_test, sort_expr, OptimizationTest,
+    TestNode, TestScanBuilder,
+};
 
 mod util;
 
@@ -169,7 +172,7 @@ fn test_pushdown_into_scan_with_config_options() {
 
 #[tokio::test]
 async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion_physical_plan::joins::PartitionMode;
 
     // Create build side with limited values
     let build_batches = vec![record_batch!(
@@ -178,15 +181,6 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
         ("c", Float64, [1.0, 2.0])
     )
     .unwrap()];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8View, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
 
     // Create probe side with more values
     let probe_batches = vec![record_batch!(
@@ -195,44 +189,19 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
         ("f", Float64, [1.0, 2.0, 3.0, 4.0])
     )
     .unwrap()];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("d", DataType::Utf8, false),
-        Field::new("e", DataType::Utf8View, false),
-        Field::new("f", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
 
     // Create HashJoinExec
-    let on = vec![(
-        col("a", &build_side_schema).unwrap(),
-        col("d", &probe_side_schema).unwrap(),
-    )];
-    let join = Arc::new(
-        HashJoinExec::try_new(
-            build_scan,
-            probe_scan,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-        )
-        .unwrap(),
+    let join = build_hash_join(
+        build_batches,
+        probe_batches,
+        vec![("a", "d")],
+        JoinType::Inner,
+        PartitionMode::Partitioned,
     );
 
-    let join_schema = join.schema();
-
     // Finally let's add a SortExec on the outside to test pushdown of dynamic filters
-    let sort_expr =
-        PhysicalSortExpr::new(col("e", &join_schema).unwrap(), SortOptions::default());
-    let plan = Arc::new(
-        SortExec::new(LexOrdering::new(vec![sort_expr]).unwrap(), join)
-            .with_fetch(Some(2)),
-    ) as Arc<dyn ExecutionPlan>;
+    let sort_expr = sort_expr("e", &join.schema(), SortOptions::default());
+    let plan = build_topk(join, vec![sort_expr], 2);
 
     let mut config = ConfigOptions::default();
     config.optimizer.enable_dynamic_filter_pushdown = true;
@@ -286,6 +255,17 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
 async fn test_static_filter_pushdown_through_hash_join() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8View, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("d", DataType::Utf8, false),
+        Field::new("e", DataType::Utf8View, false),
+        Field::new("f", DataType::Float64, false),
+    ]));
+
     // Create build side with limited values
     let build_batches = vec![record_batch!(
         ("a", Utf8, ["aa", "ab"]),
@@ -293,15 +273,6 @@ async fn test_static_filter_pushdown_through_hash_join() {
         ("c", Float64, [1.0, 2.0])
     )
     .unwrap()];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8View, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
 
     // Create probe side with more values
     let probe_batches = vec![record_batch!(
@@ -310,33 +281,14 @@ async fn test_static_filter_pushdown_through_hash_join() {
         ("f", Float64, [1.0, 2.0, 3.0, 4.0])
     )
     .unwrap()];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("d", DataType::Utf8, false),
-        Field::new("e", DataType::Utf8View, false),
-        Field::new("f", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
 
     // Create HashJoinExec
-    let on = vec![(
-        col("a", &build_side_schema).unwrap(),
-        col("d", &probe_side_schema).unwrap(),
-    )];
-    let join = Arc::new(
-        HashJoinExec::try_new(
-            build_scan,
-            probe_scan,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-        )
-        .unwrap(),
+    let join = build_hash_join(
+        build_batches,
+        probe_batches,
+        vec![("a", "d")],
+        JoinType::Inner,
+        PartitionMode::Partitioned,
     );
 
     // Create filters that can be pushed down to different sides
@@ -354,8 +306,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
         col("d", &join_schema).unwrap(),
     )) as Arc<dyn PhysicalExpr>;
 
-    let filter =
-        Arc::new(FilterExec::try_new(left_filter, Arc::clone(&join) as _).unwrap());
+    let filter = Arc::new(FilterExec::try_new(left_filter, Arc::clone(&join)).unwrap());
     let filter = Arc::new(FilterExec::try_new(right_filter, filter).unwrap());
     let plan = Arc::new(FilterExec::try_new(cross_filter, filter).unwrap())
         as Arc<dyn ExecutionPlan>;
@@ -837,7 +788,7 @@ async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown() {
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion_physical_plan::joins::PartitionMode;
 
     // Create build side with limited values
     let build_batches = vec![record_batch!(
@@ -846,15 +797,6 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
         ("c", Float64, [1.0, 2.0]) // Extra column not used in join
     )
     .unwrap()];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
 
     // Create probe side with more values
     let probe_batches = vec![record_batch!(
@@ -863,40 +805,15 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
         ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
     )
     .unwrap()];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
 
     // Create HashJoinExec with dynamic filter
-    let on = vec![
-        (
-            col("a", &build_side_schema).unwrap(),
-            col("a", &probe_side_schema).unwrap(),
-        ),
-        (
-            col("b", &build_side_schema).unwrap(),
-            col("b", &probe_side_schema).unwrap(),
-        ),
-    ];
-    let plan = Arc::new(
-        HashJoinExec::try_new(
-            build_scan,
-            probe_scan,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            datafusion_common::NullEquality::NullEqualsNothing,
-        )
-        .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    let plan = build_hash_join(
+        build_batches,
+        probe_batches,
+        vec![("a", "a"), ("b", "b")],
+        JoinType::Inner,
+        PartitionMode::CollectLeft,
+    );
 
     // expect the predicate to be pushed down into the probe side DataSource
     insta::assert_snapshot!(
