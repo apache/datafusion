@@ -1110,6 +1110,34 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
+        let df_side = self.join_type.dynamic_filter_side();
+        self.gather_filters_for_pushdown_with_side(phase, parent_filters, config, df_side)
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        let df_side = self.join_type.dynamic_filter_side();
+        self.handle_child_pushdown_result_with_side(
+            _phase,
+            child_pushdown_result,
+            _config,
+            df_side,
+        )
+    }
+}
+
+impl HashJoinExec {
+    fn gather_filters_for_pushdown_with_side(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+        df_side: JoinSide,
+    ) -> Result<FilterDescription> {
         // Other types of joins can support *some* filters, but restrictions are complex and error prone.
         // For now we don't support them.
         // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
@@ -1135,7 +1163,7 @@ impl ExecutionPlan for HashJoinExec {
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_dynamic_filter_pushdown
         {
-            match self.join_type.dynamic_filter_side() {
+            match df_side {
                 JoinSide::Left => {
                     let dynamic_filter =
                         Self::create_dynamic_filter(&self.on, JoinSide::Left);
@@ -1155,17 +1183,18 @@ impl ExecutionPlan for HashJoinExec {
             .with_child(right_child))
     }
 
-    fn handle_child_pushdown_result(
+    fn handle_child_pushdown_result_with_side(
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
+        df_side: JoinSide,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
         // non-inner joins in `gather_filters_for_pushdown`.
         // However it's a cheap check and serves to inform future devs touching this function that they need to be really
         // careful pushing down filters through non-inner joins.
-        if self.join_type.dynamic_filter_side() == JoinSide::None {
+        if df_side == JoinSide::None {
             // Joins that preserve both sides (e.g. FULL) cannot leverage dynamic filters.
             return Ok(FilterPushdownPropagation::all_unsupported(
                 child_pushdown_result,
@@ -1174,7 +1203,7 @@ impl ExecutionPlan for HashJoinExec {
 
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
-        let filter_child_idx = match self.join_type.dynamic_filter_side() {
+        let filter_child_idx = match df_side {
             JoinSide::Left => 0,
             JoinSide::Right => 1,
             JoinSide::None => return Ok(result),
