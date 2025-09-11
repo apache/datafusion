@@ -463,16 +463,24 @@ impl HashJoinExec {
         })
     }
 
+    fn join_exprs_for_side(on: &JoinOn, side: JoinSide) -> Vec<PhysicalExprRef> {
+        match side {
+            JoinSide::Left => on.iter().map(|(l, _)| Arc::clone(l)).collect(),
+            JoinSide::Right => on.iter().map(|(_, r)| Arc::clone(r)).collect(),
+            JoinSide::None => Vec::new(),
+        }
+    }
+
     fn create_dynamic_filter(
         on: &JoinOn,
         side: JoinSide,
     ) -> Arc<DynamicFilterPhysicalExpr> {
+        assert!(
+            side != JoinSide::None,
+            "dynamic filter side must be specified"
+        );
         // Extract the join key expressions from the side that will receive the dynamic filter
-        let keys: Vec<_> = match side {
-            JoinSide::Left => on.iter().map(|(l, _)| Arc::clone(l)).collect(),
-            JoinSide::Right => on.iter().map(|(_, r)| Arc::clone(r)).collect(),
-            JoinSide::None => unreachable!("dynamic filter side must be specified"),
-        };
+        let keys = Self::join_exprs_for_side(on, side);
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
         Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true)))
     }
@@ -968,19 +976,7 @@ impl ExecutionPlan for HashJoinExec {
         let batch_size = context.session_config().batch_size();
 
         // Select join expressions for dynamic filter side
-        let dynamic_filter_on = match df_side {
-            JoinSide::Left => self
-                .on
-                .iter()
-                .map(|(left_expr, _)| Arc::clone(left_expr))
-                .collect::<Vec<_>>(),
-            JoinSide::Right => self
-                .on
-                .iter()
-                .map(|(_, right_expr)| Arc::clone(right_expr))
-                .collect::<Vec<_>>(),
-            JoinSide::None => Vec::new(),
-        };
+        let dynamic_filter_on = Self::join_exprs_for_side(&self.on, df_side);
 
         // Initialize bounds_accumulator lazily with runtime partition counts (only if enabled)
         let bounds_accumulator = enable_dynamic_filter_pushdown
