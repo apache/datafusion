@@ -145,7 +145,8 @@ impl JoinType {
 
     /// Returns the input side eligible for dynamic filter pushdown.
     ///
-    /// The side returned here can have a [`DynamicFilterPhysicalExpr`] pushed
+    /// The side returned here can have a
+    /// [`datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr`] pushed
     /// into it, allowing values read from the opposite input to prune rows
     /// before the join executes. When both inputs must be preserved,
     /// dynamic filter pushdown is not supported and [`JoinSide::None`] is
