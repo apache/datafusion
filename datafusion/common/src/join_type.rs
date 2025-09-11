@@ -297,6 +297,11 @@ mod tests {
         assert!(JoinType::Full.preserves(Right));
         assert!(JoinType::RightMark.preserves(Right));
         assert!(!JoinType::RightSemi.preserves(Right));
+
+        assert!(!JoinType::LeftAnti.preserves(Left));
+        assert!(!JoinType::LeftAnti.preserves(Right));
+        assert!(!JoinType::RightAnti.preserves(Left));
+        assert!(!JoinType::RightAnti.preserves(Right));
     }
 
     #[test]
