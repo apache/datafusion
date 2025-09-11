@@ -42,7 +42,10 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::{
     aggregate::AggregateExprBuilder, Partitioning, ScalarFunctionExpr,
 };
-use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{
+    expressions::{col, lit, DynamicFilterPhysicalExpr},
+    LexOrdering, PhysicalSortExpr,
+};
 use datafusion_physical_optimizer::{
     filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
 };
@@ -1034,6 +1037,69 @@ async fn test_hashjoin_dynamic_filter_pushdown_inner_join() {
     +---+---+
     "
     );
+}
+
+#[test]
+fn test_hashjoin_handle_child_pushdown_result_dynamic_filter_left() {
+    use datafusion_common::{JoinSide, NullEquality};
+    use datafusion_physical_plan::filter_pushdown::{
+        ChildPushdownResult, FilterPushdownPhase, PushedDownPredicate,
+    };
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Schemas for left and right inputs
+    let left_schema =
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let right_schema =
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+    // Create dummy scans
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(true)
+        .build();
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(true)
+        .build();
+
+    let on = vec![(
+        col("a", &left_schema).unwrap(),
+        col("a", &right_schema).unwrap(),
+    )];
+
+    let join = HashJoinExec::try_new(
+        Arc::clone(&left_scan),
+        Arc::clone(&right_scan),
+        on.clone(),
+        None,
+        &JoinType::Right,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+    )
+    .unwrap();
+
+    assert_eq!(join.join_type.dynamic_filter_side(), JoinSide::Left);
+
+    let keys: Vec<_> = on.iter().map(|(l, _)| l.clone()).collect();
+    let df_expr = Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true)));
+
+    let child_pushdown_result = ChildPushdownResult {
+        parent_filters: vec![],
+        self_filters: vec![
+            vec![PushedDownPredicate::unsupported(df_expr.clone())],
+            vec![],
+        ],
+    };
+
+    let propagation = join
+        .handle_child_pushdown_result(
+            FilterPushdownPhase::Post,
+            child_pushdown_result,
+            &ConfigOptions::default(),
+        )
+        .unwrap();
+
+    assert!(propagation.updated_node.is_some());
 }
 
 async fn full_join_dynamic_filter_test() -> (

@@ -1157,10 +1157,8 @@ impl ExecutionPlan for HashJoinExec {
         // non-inner joins in `gather_filters_for_pushdown`.
         // However it's a cheap check and serves to inform future devs touching this function that they need to be really
         // careful pushing down filters through non-inner joins.
-        if self.join_type != JoinType::Inner {
-            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-            // For now we don't support them.
-            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+        if self.join_type.dynamic_filter_side() == JoinSide::None {
+            // Joins that preserve both sides (e.g. FULL) cannot leverage dynamic filters.
             return Ok(FilterPushdownPropagation::all_unsupported(
                 child_pushdown_result,
             ));
@@ -1168,9 +1166,14 @@ impl ExecutionPlan for HashJoinExec {
 
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
-        let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
-                                                                               // We expect 0 or 1 self filters
-        if let Some(filter) = right_child_self_filters.first() {
+        let filter_child_idx = match self.join_type.dynamic_filter_side() {
+            JoinSide::Left => 0,
+            JoinSide::Right => 1,
+            JoinSide::None => return Ok(result),
+        };
+        // We expect 0 or 1 self filters
+        let child_self_filters = &child_pushdown_result.self_filters[filter_child_idx];
+        if let Some(filter) = child_self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
