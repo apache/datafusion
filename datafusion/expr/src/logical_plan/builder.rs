@@ -2163,7 +2163,10 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
+    use crate::lit_with_metadata;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
@@ -2808,6 +2811,22 @@ mod tests {
             &HashMap::from([("key".to_string(), "right".to_string())])
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_values_metadata() -> Result<()> {
+        let metadata: HashMap<String, String> =
+            [("ARROW:extension:metadata".to_string(), "test".to_string())]
+                .into_iter()
+                .collect();
+        let metadata = FieldMetadata::from(metadata);
+        let values = LogicalPlanBuilder::values(vec![
+            vec![lit_with_metadata(1, Some(metadata.clone()))],
+            vec![lit_with_metadata(2, Some(metadata.clone()))],
+        ])?
+        .build()?;
+        assert_eq!(*values.schema().field(0).metadata(), metadata.to_hashmap());
         Ok(())
     }
 }

@@ -1832,3 +1832,84 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
 
     Ok(())
 }
+
+/// https://github.com/apache/datafusion/issues/17425
+#[tokio::test]
+async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct MakeExtension {
+        signature: Signature,
+    }
+
+    impl Default for MakeExtension {
+        fn default() -> Self {
+            Self {
+                signature: Signature::user_defined(Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for MakeExtension {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "make_extension"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            Ok(arg_types.to_vec())
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!("This shouldn't have been called")
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            Ok(args.arg_fields[0]
+                .as_ref()
+                .clone()
+                .with_metadata(HashMap::from([(
+                    "ARROW:extension:metadata".to_string(),
+                    "foofy.foofy".to_string(),
+                )]))
+                .into())
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let ctx = SessionContext::new();
+    ctx.register_udf(MakeExtension::default().into());
+
+    let batches = ctx
+        .sql(
+            "
+SELECT extension FROM (VALUES
+    ('one', make_extension('foofy one')),
+    ('two', make_extension('foofy two')),
+    ('three', make_extension('foofy three')))
+AS t(string, extension)
+        ",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(
+        batches[0]
+            .schema()
+            .field(0)
+            .metadata()
+            .get("ARROW:extension:metadata"),
+        Some(&"foofy.foofy".into())
+    );
+    Ok(())
+}
