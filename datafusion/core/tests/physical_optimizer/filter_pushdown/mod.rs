@@ -951,8 +951,61 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
 }
 
 #[tokio::test]
-async fn test_hashjoin_dynamic_filter_pushdown_partitioned_mode() {
+async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
+    use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Rough sketch of the MRE we're trying to recreate:
+    // COPY (select i as k from generate_series(1, 10000000) as t(i))
+    // TO 'test_files/scratch/push_down_filter/t1.parquet'
+    // STORED AS PARQUET;
+    // COPY (select i as k, i as v from generate_series(1, 10000000) as t(i))
+    // TO 'test_files/scratch/push_down_filter/t2.parquet'
+    // STORED AS PARQUET;
+    // create external table t1 stored as parquet location 'test_files/scratch/push_down_filter/t1.parquet';
+    // create external table t2 stored as parquet location 'test_files/scratch/push_down_filter/t2.parquet';
+    // explain
+    // select *
+    // from t1
+    // join t2 on t1.k = t2.k;
+    // +---------------+------------------------------------------------------------+
+    // | plan_type     | plan                                                       |
+    // +---------------+------------------------------------------------------------+
+    // | physical_plan | ┌───────────────────────────┐                              |
+    // |               | │    CoalesceBatchesExec    │                              |
+    // |               | │    --------------------   │                              |
+    // |               | │     target_batch_size:    │                              |
+    // |               | │            8192           │                              |
+    // |               | └─────────────┬─────────────┘                              |
+    // |               | ┌─────────────┴─────────────┐                              |
+    // |               | │        HashJoinExec       │                              |
+    // |               | │    --------------------   ├──────────────┐               |
+    // |               | │        on: (k = k)        │              │               |
+    // |               | └─────────────┬─────────────┘              │               |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │    CoalesceBatchesExec    ││    CoalesceBatchesExec    │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │     target_batch_size:    ││     target_batch_size:    │ |
+    // |               | │            8192           ││            8192           │ |
+    // |               | └─────────────┬─────────────┘└─────────────┬─────────────┘ |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │      RepartitionExec      ││      RepartitionExec      │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │ partition_count(in->out): ││ partition_count(in->out): │ |
+    // |               | │          12 -> 12         ││          12 -> 12         │ |
+    // |               | │                           ││                           │ |
+    // |               | │    partitioning_scheme:   ││    partitioning_scheme:   │ |
+    // |               | │      Hash([k@0], 12)      ││      Hash([k@0], 12)      │ |
+    // |               | └─────────────┬─────────────┘└─────────────┬─────────────┘ |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │       DataSourceExec      ││       DataSourceExec      │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │         files: 12         ││         files: 12         │ |
+    // |               | │      format: parquet      ││      format: parquet      │ |
+    // |               | │                           ││      predicate: true      │ |
+    // |               | └───────────────────────────┘└───────────────────────────┘ |
+    // |               |                                                            |
+    // +---------------+------------------------------------------------------------+
 
     // Create build side with limited values
     let build_batches = vec![record_batch!(
@@ -988,42 +1041,38 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned_mode() {
         .with_batches(probe_batches)
         .build();
 
-    // Repartition both sides on join keys and coalesce batches
+    // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
-    let build_input = Arc::new(CoalesceBatchesExec::new(
-        Arc::new(
-            RepartitionExec::try_new(
-                build_scan,
-                Partitioning::Hash(
-                    vec![
-                        col("a", &build_side_schema).unwrap(),
-                        col("b", &build_side_schema).unwrap(),
-                    ],
-                    partition_count,
-                ),
-            )
-            .unwrap(),
-        ),
-        8192,
-    ));
-    let probe_input = Arc::new(CoalesceBatchesExec::new(
-        Arc::new(
-            RepartitionExec::try_new(
-                Arc::clone(&probe_scan),
-                Partitioning::Hash(
-                    vec![
-                        col("a", &probe_side_schema).unwrap(),
-                        col("b", &probe_side_schema).unwrap(),
-                    ],
-                    partition_count,
-                ),
-            )
-            .unwrap(),
-        ),
-        8192,
-    ));
 
-    // Create HashJoinExec with dynamic filter
+    // Build side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    let build_hash_exprs = vec![
+        col("a", &build_side_schema).unwrap(),
+        col("b", &build_side_schema).unwrap(),
+    ];
+    let build_repartition = Arc::new(
+        RepartitionExec::try_new(
+            build_scan,
+            Partitioning::Hash(build_hash_exprs, partition_count),
+        )
+        .unwrap(),
+    );
+    let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
+
+    // Probe side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    let probe_hash_exprs = vec![
+        col("a", &probe_side_schema).unwrap(),
+        col("b", &probe_side_schema).unwrap(),
+    ];
+    let probe_repartition = Arc::new(
+        RepartitionExec::try_new(
+            Arc::clone(&probe_scan),
+            Partitioning::Hash(probe_hash_exprs, partition_count),
+        )
+        .unwrap(),
+    );
+    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
+
+    // Create HashJoinExec with partitioned inputs
     let on = vec![
         (
             col("a", &build_side_schema).unwrap(),
@@ -1036,8 +1085,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned_mode() {
     ];
     let hash_join = Arc::new(
         HashJoinExec::try_new(
-            build_input,
-            probe_input,
+            build_coalesce,
+            probe_coalesce,
             on,
             None,
             &JoinType::Inner,
@@ -1048,16 +1097,19 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned_mode() {
         .unwrap(),
     );
 
-    // Coalesce partitions and sort for deterministic output
+    // Top-level CoalesceBatchesExec
+    let cb =
+        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
+    // Top-level CoalescePartitionsExec
+    let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
+    // Add a sort for determistic output
     let plan = Arc::new(SortExec::new(
         LexOrdering::new(vec![PhysicalSortExpr::new(
             col("a", &probe_side_schema).unwrap(),
-            SortOptions::new(true, false),
+            SortOptions::new(true, false), // descending, nulls_first
         )])
         .unwrap(),
-        Arc::new(CoalescePartitionsExec::new(Arc::new(CoalesceBatchesExec::new(
-            hash_join, 8192,
-        )))),
+        cp,
     )) as Arc<dyn ExecutionPlan>;
 
     // expect the predicate to be pushed down into the probe side DataSource
@@ -1106,7 +1158,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned_mode() {
     );
     let state = session_ctx.state();
     let task_ctx = state.task_ctx();
-    let _batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
         .await
         .unwrap();
 
@@ -1143,6 +1195,27 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned_mode() {
     -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
     "
+    );
+
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    let probe_scan_metrics = probe_scan.metrics().unwrap();
+
+    // The probe side had 4 rows, but after applying the dynamic filter only 2 rows should remain.
+    // The number of output rows from the probe side scan should stay consistent across executions.
+    // Issue: https://github.com/apache/datafusion/issues/17451
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
+
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    +----+----+-----+----+----+-----+
+    ",
     );
 }
 
