@@ -676,13 +676,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
 
-        // Note: We previously added wildcard projection for empty projections to support
-        // FROM-first syntax, but this caused a regression where "SELECT FROM table"
-        // incorrectly returned all columns instead of empty projection.
-        // For now, we don't add wildcard, which fixes the regression but breaks FROM-first.
-        // A proper fix would need to distinguish between "FROM table" and "SELECT FROM table"
-        // at the parser level, which sqlparser currently doesn't support.
-
         for expr in projection {
             match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
                 Ok(expr) => prepared_select_exprs.push(expr),
