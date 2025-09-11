@@ -79,9 +79,13 @@ impl ParseUrl {
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
         Url::parse(value)
             .map_err(|e| exec_datafusion_err!("{e:?}"))
-            .map(|url| match part.to_uppercase().as_str() {
+            .map(|url| match part {
                 "HOST" => url.host_str().map(String::from),
-                "PATH" => Some(url.path().to_string()),
+                "PATH" => {
+                    let path: String = url.path().to_string();
+                    let path: String = if path == "/" { "".to_string() } else { path };
+                    Some(path)
+                }
                 "QUERY" => match key {
                     None => url.query().map(String::from),
                     Some(key) => url
@@ -98,7 +102,13 @@ impl ParseUrl {
                         None => Some(path.to_string()),
                     }
                 }
-                "AUTHORITY" => Some(url.authority().to_string()),
+                "AUTHORITY" => {
+                    let authority: String = url.authority().to_string();
+                    match (url.port(), url.port_or_known_default()) {
+                        (None, Some(port)) => Some(format!("{authority}:{port}")),
+                        _ => Some(authority),
+                    }
+                },
                 "USERINFO" => {
                     let username = url.username();
                     if username.is_empty() {
@@ -559,4 +569,178 @@ where
         })
         .collect::<Result<T>>()
         .map(|array| Arc::new(array) as ArrayRef)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{
+        ArrayRef, Int32Array, LargeStringArray, StringArray,
+    };
+    use arrow::datatypes::DataType;
+    use datafusion_common::Result;
+    use std::sync::Arc;
+
+    fn sa(vals: &[Option<&str>]) -> ArrayRef {
+        Arc::new(StringArray::from(vals.to_vec())) as ArrayRef
+    }
+    fn lsa(vals: &[Option<&str>]) -> ArrayRef {
+        Arc::new(LargeStringArray::from(vals.to_vec())) as ArrayRef
+    }
+
+    #[test]
+    fn test_parse_host() -> Result<()> {
+        let got = ParseUrl::parse("https://example.com/a?x=1", "HOST", None)?;
+        assert_eq!(got, Some("example.com".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_query_no_key_vs_with_key() -> Result<()> {
+        let got_all = ParseUrl::parse("https://ex.com/p?a=1&b=2", "QUERY", None)?;
+        assert_eq!(got_all, Some("a=1&b=2".to_string()));
+
+        let got_a = ParseUrl::parse("https://ex.com/p?a=1&b=2", "QUERY", Some("a"))?;
+        assert_eq!(got_a, Some("1".to_string()));
+
+        let got_c = ParseUrl::parse("https://ex.com/p?a=1&b=2", "QUERY", Some("c"))?;
+        assert_eq!(got_c, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ref_protocol_userinfo_file_authority() -> Result<()> {
+        let url = "ftp://user:pwd@ftp.example.com:21/files?x=1#frag";
+        assert_eq!(ParseUrl::parse(url, "REF", None)?, Some("frag".to_string()));
+        assert_eq!(ParseUrl::parse(url, "PROTOCOL", None)?, Some("ftp".to_string()));
+        assert_eq!(ParseUrl::parse(url, "USERINFO", None)?, Some("user:pwd".to_string()));
+        assert_eq!(ParseUrl::parse(url, "FILE", None)?, Some("/files?x=1".to_string()));
+        assert_eq!(ParseUrl::parse(url, "AUTHORITY", None)?, Some("user:pwd@ftp.example.com:21".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_path_root_is_empty_string() -> Result<()> {
+        let got = ParseUrl::parse("https://example.com/", "PATH", None)?;
+        assert_eq!(got, Some("".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_malformed_url_returns_error() {
+        let err = ParseUrl::parse("notaurl", "HOST", None).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("DataFusion") || msg.contains("error"), "msg was: {msg}");
+    }
+
+    #[test]
+    fn test_spark_utf8_two_args() -> Result<()> {
+        let urls = sa(&[Some("https://example.com/a?x=1"), Some("https://ex.com/")]);
+        let parts = sa(&[Some("HOST"), Some("PATH")]);
+
+        let out = spark_handled_parse_url(&[urls, parts], |x| x)?;
+        let out_sa = out.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(out_sa.len(), 2);
+        assert_eq!(out_sa.value(0), "example.com");
+        assert_eq!(out_sa.value(1), "");
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_utf8_three_args_query_key() -> Result<()> {
+        let urls = sa(&[Some("https://example.com/a?x=1&y=2"), Some("https://ex.com/?a=1")]);
+        let parts = sa(&[Some("QUERY"), Some("QUERY")]);
+        let keys  = sa(&[Some("y"), Some("b")]);
+
+        let out = spark_handled_parse_url(&[urls, parts, keys], |x| x)?;
+        let out_sa = out.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(out_sa.len(), 2);
+        assert_eq!(out_sa.value(0), "2");
+        assert!(out_sa.is_null(1));
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_largeutf8_propagation() -> Result<()> {
+        let urls = lsa(&[Some("http://[2001:db8::2]:8080/index.html?ok=1")]);
+        let parts = sa(&[Some("HOST")]);
+        let out = spark_handled_parse_url(&[urls, parts], |x| x)?;
+        assert!(out.as_any().downcast_ref::<LargeStringArray>().is_some());
+
+        let lsa_out = out.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(lsa_out.value(0), "[2001:db8::2]");
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_userinfo_and_nulls() -> Result<()> {
+        let urls = sa(&[
+            Some("ftp://user:pwd@ftp.example.com:21/files"),
+            Some("https://example.com"),
+            None,
+        ]);
+        let parts = sa(&[Some("USERINFO"), Some("USERINFO"), Some("USERINFO")]);
+
+        let out = spark_handled_parse_url(&[urls, parts], |x| x)?;
+        let out_sa = out.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(out_sa.len(), 3);
+        assert_eq!(out_sa.value(0), "user:pwd");
+        assert!(out_sa.is_null(1));
+        assert!(out_sa.is_null(2));
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_arg_count() {
+        let urls = sa(&[Some("https://example.com")]);
+        let err = spark_handled_parse_url(&[urls.clone()], |x| x).unwrap_err();
+        assert!(format!("{err}").contains("expects 2 or 3 arguments"));
+
+        let parts = sa(&[Some("HOST")]);
+        let keys  = sa(&[Some("x")]);
+        let err = spark_handled_parse_url(&[urls, parts, keys, sa(&[Some("extra")])], |x| x).unwrap_err();
+        assert!(format!("{err}").contains("expects 2 or 3 arguments"));
+    }
+
+    #[test]
+    fn test_non_string_types_error() {
+        let urls = sa(&[Some("https://example.com")]);
+        let bad_part = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+
+        let err = spark_handled_parse_url(&[urls, bad_part], |x| x).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("expects STRING arguments"));
+    }
+
+    #[test]
+    fn test_return_type_and_coercion() -> Result<()> {
+        let udf = ParseUrl::new();
+
+        let rt = udf.return_type(&[DataType::Utf8, DataType::Utf8])?;
+        assert_eq!(rt, DataType::Utf8);
+
+        let rt = udf.return_type(&[DataType::LargeUtf8, DataType::Utf8])?;
+        assert_eq!(rt, DataType::LargeUtf8);
+
+        let rt = udf.return_type(&[DataType::Utf8, DataType::Utf8, DataType::LargeUtf8])?;
+        assert_eq!(rt, DataType::LargeUtf8);
+
+        let err = udf.return_type(&[DataType::Int32, DataType::Utf8]).unwrap_err();
+        assert!(format!("{err}").contains("expects STRING arguments"));
+
+        let err = udf.return_type(&[DataType::Utf8]).unwrap_err();
+        assert!(format!("{err}").contains("expects 2 or 3 arguments"));
+
+        let ok = udf.coerce_types(&[DataType::Utf8, DataType::LargeUtf8])?;
+        assert_eq!(ok, vec![DataType::Utf8, DataType::LargeUtf8]);
+
+        let err = udf.coerce_types(&[DataType::Utf8]).unwrap_err();
+        assert!(format!("{err}").contains("expects 2 or 3 arguments"));
+
+        Ok(())
+    }
 }
