@@ -1183,18 +1183,24 @@ impl HashJoinExec {
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_dynamic_filter_pushdown
         {
+            if df_side == JoinSide::None {
+                // A join type that preserves both sides (e.g. FULL) cannot
+                // leverage dynamic filters. Return early before attempting to
+                // create one.
+                return Ok(FilterDescription::new()
+                    .with_child(left_child)
+                    .with_child(right_child));
+            }
+
+            let dynamic_filter = Self::create_dynamic_filter(&self.on, df_side)?;
             match df_side {
                 JoinSide::Left => {
-                    let dynamic_filter =
-                        Self::create_dynamic_filter(&self.on, JoinSide::Left)?;
                     left_child = left_child.with_self_filter(dynamic_filter);
                 }
                 JoinSide::Right => {
-                    let dynamic_filter =
-                        Self::create_dynamic_filter(&self.on, JoinSide::Right)?;
                     right_child = right_child.with_self_filter(dynamic_filter);
                 }
-                JoinSide::None => {}
+                JoinSide::None => unreachable!(),
             }
         }
 
@@ -1656,6 +1662,41 @@ mod tests {
         let on: JoinOn = vec![];
         let err = HashJoinExec::create_dynamic_filter(&on, JoinSide::None).unwrap_err();
         assert_contains!(err.to_string(), "dynamic filter side must be specified");
+    }
+
+    #[test]
+    fn full_join_skips_dynamic_filter_creation() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_physical_expr::expressions::col;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )?;
+        let left = TestMemoryExec::try_new(&[vec![batch.clone()]], schema.clone(), None)?;
+        let right = TestMemoryExec::try_new(&[vec![batch]], schema.clone(), None)?;
+
+        let on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
+        let join = HashJoinExec::try_new(
+            Arc::new(left),
+            Arc::new(right),
+            on,
+            None,
+            &JoinType::Full,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+        )?;
+
+        let mut config = ConfigOptions::default();
+        config.optimizer.enable_dynamic_filter_pushdown = true;
+
+        let desc =
+            join.gather_filters_for_pushdown(FilterPushdownPhase::Post, vec![], &config)?;
+        assert!(desc.self_filters().iter().all(|f| f.is_empty()));
+        Ok(())
     }
 
     async fn join_collect(
