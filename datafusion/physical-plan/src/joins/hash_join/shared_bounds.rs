@@ -305,6 +305,13 @@ mod tests {
     use datafusion_physical_expr::expressions::{col, lit, DynamicFilterPhysicalExpr};
     use tokio::task;
 
+    // This test verifies the synchronization behavior of `SharedBoundsAccumulator`.
+    // It ensures that the dynamic filter is not updated until all expected
+    // partitions have reported their build-side bounds. One partition reports
+    // in a spawned task while the test reports another; the dynamic filter
+    // should remain the default until the final partition arrives, at which
+    // point the accumulated bounds are combined and the dynamic filter is
+    // updated exactly once with range predicates (>= and <=) for the join key.
     #[tokio::test]
     async fn waits_for_all_partitions_before_updating() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
