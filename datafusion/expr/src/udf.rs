@@ -233,12 +233,13 @@ impl ScalarUDF {
     ///
     /// See [`ScalarUDFImpl::invoke_with_args`] for details.
     pub fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        #[cfg(feature = "integration-tests")]
+        #[cfg(debug_assertions)]
         let return_field = Arc::clone(&args.return_field);
         match self.inner.invoke_with_args(args) {
             Ok(value) => {
                 // Maybe this could be enabled always?
-                #[cfg(feature = "integration-tests")]
+                // This doesn't use debug_assert!, but it's meant to run anywhere except on production, so it's same in spirit, so conditioning on debug_assertions.
+                #[cfg(debug_assertions)]
                 if &value.data_type() != return_field.data_type() {
                     return datafusion_common::exec_err!("Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
                         self.name(),
