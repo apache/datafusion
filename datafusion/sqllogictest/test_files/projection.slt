@@ -253,7 +253,8 @@ physical_plan
 statement ok
 drop table t;
 
-# Regression test for 17513
+# Regression test for 
+# https://github.com/apache/datafusion/issues/17513
 
 query I
 COPY (select 1 as a, 2 as b)
