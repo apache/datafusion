@@ -1381,6 +1381,13 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     );
 }
 
+// Verify dynamic filter pushdown for an INNER hash join.
+//
+// This test constructs a HashJoinExec where the right side is used to build a
+// dynamic filter that should prune rows on the left side. It executes the
+// plan with small test scans, enables dynamic filter pushdown, and asserts
+// that the resulting plan contains a `DynamicFilterPhysicalExpr` on the probe
+// (left) side and that the left scan's metrics reflect the pruning.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_inner_join() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -1456,6 +1463,16 @@ async fn test_hashjoin_dynamic_filter_pushdown_inner_join() {
     );
 }
 
+// Verify handling of a child pushdown result that carries a dynamic filter
+// from the left child when the join expects dynamic filters from the left side.
+//
+// The test constructs a HashJoinExec with TestScanBuilders for left/right, builds a
+// DynamicFilterPhysicalExpr over the left-side join keys and wraps it as an
+// unsupported pushed predicate inside a `ChildPushdownResult` for the left child.
+// It then calls `handle_child_pushdown_result(...)` and asserts that the returned
+// propagation indicates the join node was updated. This ensures dynamic filter
+// results reported by children are correctly processed and linked into the join
+// operator when applicable.
 #[test]
 fn test_hashjoin_handle_child_pushdown_result_dynamic_filter_left() {
     use datafusion_common::{JoinSide, NullEquality};
@@ -1519,6 +1536,15 @@ fn test_hashjoin_handle_child_pushdown_result_dynamic_filter_left() {
     assert!(propagation.updated_node.is_some());
 }
 
+// Helper that builds and executes a FULL join used to validate dynamic filter
+// behavior for `JoinType::Full`.
+//
+// The function constructs small left/right scans where the right side contains
+// a subset of values present on the left. It enables dynamic filter pushdown
+// and executes the plan to collect batches. Tests that call this helper assert
+// that dynamic filters for FULL joins are applied appropriately and that
+// scan metrics reflect the expected number of output rows (i.e., no incorrect
+// pruning that would violate FULL join semantics).
 async fn full_join_dynamic_filter_test() -> (
     Arc<dyn ExecutionPlan>,
     Arc<dyn ExecutionPlan>,
@@ -1576,6 +1602,13 @@ async fn full_join_dynamic_filter_test() -> (
     (plan, left_scan, right_scan, batches)
 }
 
+// Verify dynamic filter behavior for a FULL hash join.
+//
+// This test uses the `full_join_dynamic_filter_test` helper to build and run
+// a FULL join where the right side contains a subset of the left values. It
+// asserts that dynamic filter pushdown does not incorrectly prune rows that
+// must be preserved by FULL join semantics and that scan metrics/reporting
+// reflect the expected output row counts.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_full_join() {
     let (plan, left_scan, right_scan, batches) = full_join_dynamic_filter_test().await;
