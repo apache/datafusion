@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::joins::hash_join::exec::JoinLeftData;
-use crate::joins::hash_join::shared_bounds::SharedBoundsAccumulator;
+use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBoundsAccumulator};
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
 };
@@ -42,11 +42,13 @@ use crate::{
 };
 
 use arrow::array::{ArrayRef, UInt32Array, UInt64Array};
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     internal_datafusion_err, internal_err, JoinSide, JoinType, NullEquality, Result,
 };
+use datafusion_expr::Accumulator;
+use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
@@ -98,6 +100,56 @@ impl BuildSide {
             BuildSide::Ready(state) => Ok(state),
             _ => internal_err!("Expected build side in ready state"),
         }
+    }
+}
+
+/// Accumulates probe-side column bounds for dynamic filter pushdown.
+///
+/// This mirrors the build-side accumulator used when collecting bounds from
+/// the left (build) side. Each accumulator tracks the minimum and maximum
+/// values for a single join key expression.
+pub(super) struct ProbeSideBoundsAccumulator {
+    expr: PhysicalExprRef,
+    min: MinAccumulator,
+    max: MaxAccumulator,
+}
+
+impl ProbeSideBoundsAccumulator {
+    /// Creates a new accumulator for the given join key expression.
+    pub(super) fn try_new(expr: PhysicalExprRef, schema: &SchemaRef) -> Result<Self> {
+        fn dictionary_value_type(data_type: &DataType) -> DataType {
+            match data_type {
+                DataType::Dictionary(_, value_type) => {
+                    dictionary_value_type(value_type.as_ref())
+                }
+                _ => data_type.clone(),
+            }
+        }
+
+        let data_type = expr
+            .data_type(schema)
+            .map(|dt| dictionary_value_type(&dt))?;
+        Ok(Self {
+            expr,
+            min: MinAccumulator::try_new(&data_type)?,
+            max: MaxAccumulator::try_new(&data_type)?,
+        })
+    }
+
+    /// Updates bounds using values from the provided batch.
+    fn update_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
+        self.min.update_batch(std::slice::from_ref(&array))?;
+        self.max.update_batch(std::slice::from_ref(&array))?;
+        Ok(())
+    }
+
+    /// Returns the final column bounds.
+    fn evaluate(mut self) -> Result<ColumnBounds> {
+        Ok(ColumnBounds::new(
+            self.min.evaluate()?,
+            self.max.evaluate()?,
+        ))
     }
 }
 
@@ -210,6 +262,10 @@ pub(super) struct HashJoinStream {
     /// Optional future to signal when bounds have been reported by all partitions
     /// and the dynamic filter has been updated
     bounds_waiter: Option<OnceFut<()>>,
+    /// Accumulators for probe-side bounds when filtering the left side
+    probe_bounds_accumulators: Option<Vec<ProbeSideBoundsAccumulator>>,
+    /// Total number of probe-side rows processed (for bounds reporting)
+    probe_side_row_count: usize,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -312,6 +368,7 @@ impl HashJoinStream {
         hashes_buffer: Vec<u64>,
         right_side_ordered: bool,
         bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
+        probe_bounds_accumulators: Option<Vec<ProbeSideBoundsAccumulator>>,
     ) -> Self {
         Self {
             partition,
@@ -331,6 +388,8 @@ impl HashJoinStream {
             right_side_ordered,
             bounds_accumulator,
             bounds_waiter: None,
+            probe_bounds_accumulators,
+            probe_side_row_count: 0,
         }
     }
 
@@ -437,7 +496,35 @@ impl HashJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
-                self.state = HashJoinStreamState::ExhaustedProbeSide;
+                if let Some(ref bounds_accumulator) = self.bounds_accumulator {
+                    if self.join_type.dynamic_filter_side() == JoinSide::Left {
+                        if let Some(accs) = self.probe_bounds_accumulators.take() {
+                            let right_bounds = if self.probe_side_row_count > 0 {
+                                Some(
+                                    accs.into_iter()
+                                        .map(|acc| acc.evaluate())
+                                        .collect::<Result<Vec<_>>>()?,
+                                )
+                            } else {
+                                None
+                            };
+                            let bounds_accumulator = Arc::clone(bounds_accumulator);
+                            let partition = self.partition;
+                            self.bounds_waiter = Some(OnceFut::new(async move {
+                                bounds_accumulator
+                                    .report_partition_bounds(partition, right_bounds)
+                                    .await
+                            }));
+                            self.state = HashJoinStreamState::WaitPartitionBoundsReport;
+                        } else {
+                            self.state = HashJoinStreamState::ExhaustedProbeSide;
+                        }
+                    } else {
+                        self.state = HashJoinStreamState::ExhaustedProbeSide;
+                    }
+                } else {
+                    self.state = HashJoinStreamState::ExhaustedProbeSide;
+                }
             }
             Some(Ok(batch)) => {
                 // Precalculate hash values for fetched batch
@@ -446,6 +533,13 @@ impl HashJoinStream {
                     .iter()
                     .map(|c| c.evaluate(&batch)?.into_array(batch.num_rows()))
                     .collect::<Result<Vec<_>>>()?;
+
+                if let Some(accumulators) = self.probe_bounds_accumulators.as_mut() {
+                    for acc in accumulators.iter_mut() {
+                        acc.update_batch(&batch)?;
+                    }
+                    self.probe_side_row_count += batch.num_rows();
+                }
 
                 self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);

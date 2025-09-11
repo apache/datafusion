@@ -29,6 +29,7 @@ use crate::filter_pushdown::{
 use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBoundsAccumulator};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
+    ProbeSideBoundsAccumulator,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
@@ -998,9 +999,10 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
-        // we have the batches and the hash map with their keys. We can how create a stream
+        // we have the batches and the hash map with their keys. We can now create a stream
         // over the right that uses this information to issue new batches.
         let right_stream = self.right.execute(partition, context)?;
+        let right_schema = right_stream.schema();
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match &self.projection {
@@ -1016,6 +1018,23 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
+
+        let probe_bounds_accumulators =
+            if enable_dynamic_filter_pushdown && df_side == JoinSide::Left {
+                Some(
+                    on_right
+                        .iter()
+                        .map(|expr| {
+                            ProbeSideBoundsAccumulator::try_new(
+                                Arc::clone(expr),
+                                &right_schema,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                )
+            } else {
+                None
+            };
 
         Ok(Box::pin(HashJoinStream::new(
             partition,
@@ -1034,6 +1053,7 @@ impl ExecutionPlan for HashJoinExec {
             vec![],
             self.right.output_ordering().is_some(),
             bounds_accumulator,
+            probe_bounds_accumulators,
         )))
     }
 
@@ -4435,6 +4455,59 @@ mod tests {
                 "Failed to allocate additional 120.0 B for HashJoinInput[1]"
             );
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reports_bounds_when_dynamic_filter_side_left() -> Result<()> {
+        use datafusion_physical_expr::expressions::col;
+
+        let task_ctx = Arc::new(TaskContext::default());
+
+        let left_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let left_batch = RecordBatch::try_new(
+            Arc::clone(&left_schema),
+            vec![Arc::new(Int32Array::from(vec![1, 3, 5]))],
+        )?;
+        let left = TestMemoryExec::try_new(&[vec![left_batch]], left_schema, None)?;
+
+        let right_schema =
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+        let right_batch = RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![Arc::new(Int32Array::from(vec![2, 4, 6]))],
+        )?;
+        let right = TestMemoryExec::try_new(&[vec![right_batch]], right_schema, None)?;
+
+        let on = vec![(col("a", &left.schema())?, col("b", &right.schema())?)];
+
+        let mut join = HashJoinExec::try_new(
+            Arc::new(left),
+            Arc::new(right),
+            on,
+            None,
+            &JoinType::Right,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+        )?;
+
+        let dynamic_filter =
+            HashJoinExec::create_dynamic_filter(&join.on, JoinSide::Left)?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            bounds_accumulator: OnceLock::new(),
+        });
+
+        let stream = join.execute(0, task_ctx)?;
+        let _batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        assert_eq!(
+            format!("{}", dynamic_filter.current().unwrap()),
+            "a@0 >= 2 AND a@0 <= 6"
+        );
 
         Ok(())
     }
