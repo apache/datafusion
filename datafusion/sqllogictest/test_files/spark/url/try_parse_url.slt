@@ -26,8 +26,16 @@ SELECT try_parse_url('https://example.com/a?x=1', 'QUERY', 'x');
 ----
 1
 
+SELECT try_parse_url('https://example.com/a?x=1', 'query', 'X');
+----
+1
+
 query T
 SELECT try_parse_url('www.example.com/path?x=1', 'HOST');
+----
+NULL
+
+SELECT try_parse_url('www.example.com/path?x=1', 'host');
 ----
 NULL
 
@@ -36,8 +44,16 @@ SELECT try_parse_url('https://example.com/?a=1', 'QUERY', 'b');
 ----
 NULL
 
+SELECT try_parse_url('https://example.com/?a=1', 'Query', 'b');
+----
+NULL
+
 query T
 SELECT try_parse_url('https://example.com/path#frag', 'REF');
+----
+frag
+
+SELECT try_parse_url('https://example.com/path#frag', 'ref');
 ----
 frag
 
@@ -46,8 +62,16 @@ SELECT try_parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO');
 ----
 user:pwd
 
+SELECT try_parse_url('ftp://user:pwd@ftp.example.com:21/files', 'userinfo');
+----
+user:pwd
+
 query T
 SELECT try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST');
+----
+[2001:db8::2]
+
+SELECT try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'Host');
 ----
 [2001:db8::2]
 
@@ -56,8 +80,16 @@ SELECT try_parse_url('notaurl', 'HOST');
 ----
 NULL
 
+SELECT try_parse_url('notaurl', 'host');
+----
+NULL
+
 query T
 SELECT try_parse_url('https://example.com', 'PATH');
+----
+/
+
+SELECT try_parse_url('https://example.com', 'path');
 ----
 /
 
@@ -66,7 +98,16 @@ SELECT try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL');
 ----
 https
 
+SELECT try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'Protocol');
+----
+https
+
 query T
 SELECT try_parse_url('https://ex.com/?Tag=ok', 'QUERY', 'tag');
 ----
 NULL
+
+SELECT try_parse_url('https://ex.com/?Tag=ok', 'query', 'tag');
+----
+NULL
+

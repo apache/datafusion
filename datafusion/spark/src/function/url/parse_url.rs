@@ -79,7 +79,7 @@ impl ParseUrl {
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
         Url::parse(value)
             .map_err(|e| exec_datafusion_err!("{e:?}"))
-            .map(|url| match part {
+            .map(|url| match part.to_uppercase().as_str() {
                 "HOST" => url.host_str().map(String::from),
                 "PATH" => Some(url.path().to_string()),
                 "QUERY" => match key {
@@ -128,13 +128,6 @@ impl ScalarUDFImpl for ParseUrl {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 3 {
-            return plan_err!(
-                "{} expects 2 or 3 arguments, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        }
         // The return type should match the largest size datatype
         match arg_types.len() {
             2 | 3 if arg_types.iter().all(is_string_type) => {
