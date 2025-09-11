@@ -124,17 +124,24 @@ impl<'a> BinaryTypeCoercer<'a> {
 
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
+        // Special handling for arithmetic operations with both `lhs` and `rhs` NULL:
+        // When both operands are NULL, we are providing a concrete numeric type (Int64)
+        // to allow the arithmetic operation to proceed. This ensures NULL `op` NULL returns NULL
+        // instead of failing during planning.
+        if matches!((self.lhs, self.rhs), (DataType::Null, DataType::Null))
+            && self.op.is_numerical_operators()
+        {
+            return Ok(Signature::uniform(DataType::Int64));
+        }
+
         if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
-            use Operator::*;
             // Special handling for arithmetic + null coercion:
             // For arithmetic operators on non-temporal types, we must handle the result type here using Arrow's numeric kernel.
             // This is because Arrow expects concrete numeric types, and this ensures the correct result type (e.g., for NULL + Int32, result is Int32).
             // For all other cases (including temporal arithmetic and non-arithmetic operators),
             // we can delegate to signature_inner(&coerced, &coerced), which handles the necessary logic for those operators.
             // In those cases, signature_inner is designed to work with the coerced type, even if it originated from a NULL.
-            if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
-                && !coerced.is_temporal()
-            {
+            if self.op.is_numerical_operators() && !coerced.is_temporal() {
                 let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for arithmetic operation {coerced} {} {coerced}: {e}",
@@ -1528,8 +1535,8 @@ fn timeunit_coercion(lhs_unit: &TimeUnit, rhs_unit: &TimeUnit) -> TimeUnit {
     }
 }
 
-/// Coercion rules from NULL type. Since NULL can be casted to any other type in arrow,
-/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
+/// Coercion rules from NULL type. Since NULL can be cast to any other type in arrow,
+/// either lhs or rhs is NULL, if NULL can be cast to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
         (DataType::Null, other_type) | (other_type, DataType::Null) => {
