@@ -951,27 +951,26 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     );
 }
 
+fn build_int32_scan(values: &[i32]) -> Arc<dyn ExecutionPlan> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let batches = vec![record_batch!(("a", Int32, values)).unwrap()];
+    TestScanBuilder::new(schema)
+        .with_support(true)
+        .with_batches(batches)
+        .build()
+}
+
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_inner_join() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Left side with extra values that should be pruned by the dynamic filter
-    let left_batches = vec![record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap()];
-    let left_schema =
-        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
-        .with_support(true)
-        .with_batches(left_batches)
-        .build();
+    let left_scan = build_int32_scan(&[1, 2, 3, 4]);
+    let left_schema = left_scan.schema();
 
     // Right side with limited values used to build the dynamic filter
-    let right_batches = vec![record_batch!(("a", Int32, [1, 2])).unwrap()];
-    let right_schema =
-        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
-        .with_support(true)
-        .with_batches(right_batches)
-        .build();
+    let right_scan = build_int32_scan(&[1, 2]);
+    let right_schema = right_scan.schema();
 
     let on = vec![(
         col("a", &left_schema).unwrap(),
@@ -1108,22 +1107,12 @@ async fn full_join_dynamic_filter_test() -> (
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Left side with extra values that would be pruned if dynamic filters applied
-    let left_batches = vec![record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap()];
-    let left_schema =
-        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
-        .with_support(true)
-        .with_batches(left_batches)
-        .build();
+    let left_scan = build_int32_scan(&[1, 2, 3, 4]);
+    let left_schema = left_scan.schema();
 
     // Right side with limited values used for filter construction
-    let right_batches = vec![record_batch!(("a", Int32, [1, 2])).unwrap()];
-    let right_schema =
-        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
-        .with_support(true)
-        .with_batches(right_batches)
-        .build();
+    let right_scan = build_int32_scan(&[1, 2]);
+    let right_schema = right_scan.schema();
 
     let on = vec![(
         col("a", &left_schema).unwrap(),
