@@ -161,23 +161,18 @@ impl JoinType {
     /// default as joins typically treat the right as the probe side.
     pub fn dynamic_filter_side(self) -> JoinSide {
         use JoinSide::*;
-        match self {
-            // Both sides preserved (e.g. FULL joins) so dynamic filtering is
-            // not possible.
-            JoinType::Full => None,
-            // If the left side is preserved but the right is not, filters can
-            // be pushed to the right side.
-            JoinType::Left | JoinType::LeftMark => Right,
-            // If the right side is preserved but the left is not, push
-            // filters to the left side.
-            JoinType::Right | JoinType::RightMark => Left,
-            // For LeftSemi and LeftAnti joins the left is the probe side.
-            JoinType::LeftSemi | JoinType::LeftAnti => Left,
-            // For RightSemi and RightAnti joins the right is the probe side.
-            JoinType::RightSemi | JoinType::RightAnti => Right,
-            // Inner joins and any other non-preserving joins default to the
-            // right (probe) side.
-            JoinType::Inner => Right,
+        let preserves_left = self.preserves_left();
+        let preserves_right = self.preserves_right();
+
+        match (preserves_left, preserves_right) {
+            (true, true) => None,
+            (true, false) => Right,
+            (false, true) => Left,
+            (false, false) => match self {
+                JoinType::LeftSemi | JoinType::LeftAnti => Left,
+                JoinType::RightSemi | JoinType::RightAnti => Right,
+                _ => Right,
+            },
         }
     }
 }
@@ -331,5 +326,28 @@ mod tests {
         assert_eq!(JoinType::RightAnti.dynamic_filter_side(), Right);
         assert_eq!(JoinType::LeftMark.dynamic_filter_side(), Right);
         assert_eq!(JoinType::RightMark.dynamic_filter_side(), Left);
+    }
+
+    #[test]
+    fn test_dynamic_filter_side_preservation_logic() {
+        use JoinSide::*;
+
+        for jt in [JoinType::Left, JoinType::LeftMark] {
+            assert!(jt.preserves_left());
+            assert!(!jt.preserves_right());
+            assert_eq!(jt.dynamic_filter_side(), Right);
+        }
+
+        for jt in [JoinType::Right, JoinType::RightMark] {
+            assert!(!jt.preserves_left());
+            assert!(jt.preserves_right());
+            assert_eq!(jt.dynamic_filter_side(), Left);
+        }
+
+        for jt in [JoinType::Full] {
+            assert!(jt.preserves_left());
+            assert!(jt.preserves_right());
+            assert_eq!(jt.dynamic_filter_side(), None);
+        }
     }
 }
