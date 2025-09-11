@@ -69,8 +69,6 @@ impl LogFunc {
                 vec![
                     Numeric(1),
                     Numeric(2),
-                    Exact(vec![DataType::Float32]),
-                    Exact(vec![DataType::Float64]),
                     Exact(vec![DataType::Float32, DataType::Float32]),
                     Exact(vec![DataType::Float64, DataType::Float64]),
                     Exact(vec![
