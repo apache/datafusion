@@ -85,8 +85,10 @@ impl ScalarUDFImpl for SparkArray {
             expr_type = DataType::Int32;
         }
 
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            expr_type, true,
+        Ok(DataType::List(Arc::new(Field::new(
+            ARRAY_FIELD_DEFAULT_NAME,
+            expr_type,
+            true,
         ))))
     }
 
@@ -99,7 +101,7 @@ impl ScalarUDFImpl for SparkArray {
             .collect::<Vec<_>>();
         let return_type = self.return_type(&data_types)?;
         Ok(Arc::new(Field::new(
-            ARRAY_FIELD_DEFAULT_NAME,
+            "this_field_name_is_irrelevant",
             return_type,
             false,
         )))
@@ -160,6 +162,7 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(
                 SingleRowListArrayBuilder::new(array)
                     .with_nullable(true)
+                    .with_field_name(Some(ARRAY_FIELD_DEFAULT_NAME.to_string()))
                     .build_list_array(),
             ))
         }
