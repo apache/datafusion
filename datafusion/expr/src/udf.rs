@@ -233,7 +233,24 @@ impl ScalarUDF {
     ///
     /// See [`ScalarUDFImpl::invoke_with_args`] for details.
     pub fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        self.inner.invoke_with_args(args)
+        #[cfg(feature = "integration-tests")]
+        let return_field = Arc::clone(&args.return_field);
+        match self.inner.invoke_with_args(args) {
+            Ok(value) => {
+                // Maybe this could be enabled always?
+                #[cfg(feature = "integration-tests")]
+                if &value.data_type() != return_field.data_type() {
+                    return datafusion_common::exec_err!("Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
+                        self.name(),
+                        value.data_type(),
+                        return_field.data_type()
+                    );
+                }
+                // TODO verify return data is non-null when it was promised to be?
+                Ok(value)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Get the circuits of inner implementation
