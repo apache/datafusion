@@ -1981,6 +1981,39 @@ impl Expr {
         .map(|data| (data, has_placeholder))
     }
 
+    /// Only applicable to composite expr, return whether the null values of the
+    /// children expr should be propagated to the current expr
+    /// Example: is_null,count(*) function should not propagate null values
+    /// while sum,min,max aggregate functions, and other binary operator can
+    pub fn propagate_null_values(&self) -> Result<bool> {
+        match self {
+            Expr::IsNotNull(_) | Expr::IsNull(_) | Expr::Case(_) => {
+                return Ok(false);
+            }
+            Expr::AggregateFunction(fun) => return Ok(fun.func.is_nullable()),
+            Expr::BinaryExpr(BinaryExpr {
+                op:
+                    Operator::And
+                    | Operator::Or
+                    | Operator::IsDistinctFrom
+                    | Operator::IsNotDistinctFrom,
+                ..
+            }) => {
+                return Ok(false);
+            }
+            _ => {}
+        };
+        let mut propagate_null_values = true;
+        self.apply_children(|e| {
+            if !e.propagate_null_values()? {
+                propagate_null_values = false;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(propagate_null_values)
+    }
+
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered
     pub fn short_circuits(&self) -> bool {
