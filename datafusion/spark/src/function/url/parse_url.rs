@@ -108,7 +108,7 @@ impl ParseUrl {
                         (None, Some(port)) => Some(format!("{authority}:{port}")),
                         _ => Some(authority),
                     }
-                },
+                }
                 "USERINFO" => {
                     let username = url.username();
                     if username.is_empty() {
@@ -571,13 +571,10 @@ where
         .map(|array| Arc::new(array) as ArrayRef)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{
-        ArrayRef, Int32Array, LargeStringArray, StringArray,
-    };
+    use arrow::array::{ArrayRef, Int32Array, LargeStringArray, StringArray};
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use std::sync::Arc;
@@ -613,10 +610,22 @@ mod tests {
     fn test_parse_ref_protocol_userinfo_file_authority() -> Result<()> {
         let url = "ftp://user:pwd@ftp.example.com:21/files?x=1#frag";
         assert_eq!(ParseUrl::parse(url, "REF", None)?, Some("frag".to_string()));
-        assert_eq!(ParseUrl::parse(url, "PROTOCOL", None)?, Some("ftp".to_string()));
-        assert_eq!(ParseUrl::parse(url, "USERINFO", None)?, Some("user:pwd".to_string()));
-        assert_eq!(ParseUrl::parse(url, "FILE", None)?, Some("/files?x=1".to_string()));
-        assert_eq!(ParseUrl::parse(url, "AUTHORITY", None)?, Some("user:pwd@ftp.example.com:21".to_string()));
+        assert_eq!(
+            ParseUrl::parse(url, "PROTOCOL", None)?,
+            Some("ftp".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse(url, "USERINFO", None)?,
+            Some("user:pwd".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse(url, "FILE", None)?,
+            Some("/files?x=1".to_string())
+        );
+        assert_eq!(
+            ParseUrl::parse(url, "AUTHORITY", None)?,
+            Some("user:pwd@ftp.example.com:21".to_string())
+        );
         Ok(())
     }
 
@@ -631,7 +640,10 @@ mod tests {
     fn test_parse_malformed_url_returns_error() {
         let err = ParseUrl::parse("notaurl", "HOST", None).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("DataFusion") || msg.contains("error"), "msg was: {msg}");
+        assert!(
+            msg.contains("DataFusion") || msg.contains("error"),
+            "msg was: {msg}"
+        );
     }
 
     #[test]
@@ -650,9 +662,12 @@ mod tests {
 
     #[test]
     fn test_spark_utf8_three_args_query_key() -> Result<()> {
-        let urls = sa(&[Some("https://example.com/a?x=1&y=2"), Some("https://ex.com/?a=1")]);
+        let urls = sa(&[
+            Some("https://example.com/a?x=1&y=2"),
+            Some("https://ex.com/?a=1"),
+        ]);
         let parts = sa(&[Some("QUERY"), Some("QUERY")]);
-        let keys  = sa(&[Some("y"), Some("b")]);
+        let keys = sa(&[Some("y"), Some("b")]);
 
         let out = spark_handled_parse_url(&[urls, parts, keys], |x| x)?;
         let out_sa = out.as_any().downcast_ref::<StringArray>().unwrap();
@@ -701,8 +716,10 @@ mod tests {
         assert!(format!("{err}").contains("expects 2 or 3 arguments"));
 
         let parts = sa(&[Some("HOST")]);
-        let keys  = sa(&[Some("x")]);
-        let err = spark_handled_parse_url(&[urls, parts, keys, sa(&[Some("extra")])], |x| x).unwrap_err();
+        let keys = sa(&[Some("x")]);
+        let err =
+            spark_handled_parse_url(&[urls, parts, keys, sa(&[Some("extra")])], |x| x)
+                .unwrap_err();
         assert!(format!("{err}").contains("expects 2 or 3 arguments"));
     }
 
@@ -726,10 +743,13 @@ mod tests {
         let rt = udf.return_type(&[DataType::LargeUtf8, DataType::Utf8])?;
         assert_eq!(rt, DataType::LargeUtf8);
 
-        let rt = udf.return_type(&[DataType::Utf8, DataType::Utf8, DataType::LargeUtf8])?;
+        let rt =
+            udf.return_type(&[DataType::Utf8, DataType::Utf8, DataType::LargeUtf8])?;
         assert_eq!(rt, DataType::LargeUtf8);
 
-        let err = udf.return_type(&[DataType::Int32, DataType::Utf8]).unwrap_err();
+        let err = udf
+            .return_type(&[DataType::Int32, DataType::Utf8])
+            .unwrap_err();
         assert!(format!("{err}").contains("expects STRING arguments"));
 
         let err = udf.return_type(&[DataType::Utf8]).unwrap_err();

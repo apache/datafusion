@@ -26,15 +26,17 @@ SELECT try_parse_url('https://example.com/a?x=1', 'QUERY', 'x');
 ----
 1
 
-SELECT try_parse_url('https://example.com/a?x=1', 'query', 'X');
+query T
+SELECT try_parse_url('https://example.com/a?x=1', 'query', 'x');
 ----
-1
+NULL
 
 query T
 SELECT try_parse_url('www.example.com/path?x=1', 'HOST');
 ----
 NULL
 
+query T
 SELECT try_parse_url('www.example.com/path?x=1', 'host');
 ----
 NULL
@@ -44,7 +46,8 @@ SELECT try_parse_url('https://example.com/?a=1', 'QUERY', 'b');
 ----
 NULL
 
-SELECT try_parse_url('https://example.com/?a=1', 'Query', 'b');
+query T
+SELECT try_parse_url('https://example.com/?a=1', 'query', 'b');
 ----
 NULL
 
@@ -53,33 +56,37 @@ SELECT try_parse_url('https://example.com/path#frag', 'REF');
 ----
 frag
 
+query T
 SELECT try_parse_url('https://example.com/path#frag', 'ref');
 ----
-frag
+NULL
 
 query T
 SELECT try_parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO');
 ----
 user:pwd
 
+query T
 SELECT try_parse_url('ftp://user:pwd@ftp.example.com:21/files', 'userinfo');
 ----
-user:pwd
+NULL
 
 query T
 SELECT try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST');
 ----
 [2001:db8::2]
 
-SELECT try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'Host');
+query T
+SELECT try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'host');
 ----
-[2001:db8::2]
+NULL
 
 query T
 SELECT try_parse_url('notaurl', 'HOST');
 ----
 NULL
 
+query T
 SELECT try_parse_url('notaurl', 'host');
 ----
 NULL
@@ -87,27 +94,29 @@ NULL
 query T
 SELECT try_parse_url('https://example.com', 'PATH');
 ----
-/
+(empty)
 
+query T
 SELECT try_parse_url('https://example.com', 'path');
 ----
-/
+NULL
 
 query T
 SELECT try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL');
 ----
 https
 
-SELECT try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'Protocol');
+query T
+SELECT try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'protocol');
 ----
-https
+NULL
 
 query T
 SELECT try_parse_url('https://ex.com/?Tag=ok', 'QUERY', 'tag');
 ----
 NULL
 
+query T
 SELECT try_parse_url('https://ex.com/?Tag=ok', 'query', 'tag');
 ----
 NULL
-
