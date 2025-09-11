@@ -1136,15 +1136,15 @@ impl ExecutionPlan for HashJoinExec {
 
     fn handle_child_pushdown_result(
         &self,
-        _phase: FilterPushdownPhase,
+        phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         let df_side = self.join_type.dynamic_filter_side();
         self.handle_child_pushdown_result_with_side(
-            _phase,
+            phase,
             child_pushdown_result,
-            _config,
+            config,
             df_side,
         )
     }
@@ -1675,8 +1675,9 @@ mod tests {
             Arc::clone(&schema),
             vec![Arc::new(Int32Array::from(vec![1]))],
         )?;
-        let left = TestMemoryExec::try_new(&[vec![batch.clone()]], schema.clone(), None)?;
-        let right = TestMemoryExec::try_new(&[vec![batch]], schema.clone(), None)?;
+        let left =
+            TestMemoryExec::try_new(&[vec![batch.clone()]], Arc::clone(&schema), None)?;
+        let right = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?;
 
         let on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
         let join = HashJoinExec::try_new(

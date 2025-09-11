@@ -302,6 +302,7 @@ mod tests {
     use super::*;
     use crate::empty::EmptyExec;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_physical_expr::expressions::{col, lit, DynamicFilterPhysicalExpr};
     use tokio::task;
 
@@ -315,11 +316,11 @@ mod tests {
     #[tokio::test]
     async fn waits_for_all_partitions_before_updating() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let left = EmptyExec::new(schema.clone()).with_partitions(2);
-        let right = EmptyExec::new(schema.clone()).with_partitions(2);
+        let left = EmptyExec::new(Arc::clone(&schema)).with_partitions(2);
+        let right = EmptyExec::new(Arc::clone(&schema)).with_partitions(2);
         let col_expr = col("a", &schema).unwrap();
         let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![col_expr.clone()],
+            vec![Arc::clone(&col_expr)],
             lit(true),
         ));
         let acc = Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
@@ -327,13 +328,13 @@ mod tests {
             &left,
             &right,
             Arc::clone(&dynamic),
-            vec![col_expr.clone()],
+            vec![Arc::clone(&col_expr)],
         ));
 
         assert_eq!(format!("{}", dynamic.current().unwrap()), "true");
 
         let acc0 = Arc::clone(&acc);
-        let handle = task::spawn(async move {
+        let handle = SpawnedTask::spawn(async move {
             acc0.report_partition_bounds(
                 0,
                 Some(vec![ColumnBounds::new(
