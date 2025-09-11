@@ -112,12 +112,25 @@ impl JoinType {
         )
     }
 
+    /// Returns true if this join type preserves all rows from the specified `side`.
+    pub fn preserves(self, side: JoinSide) -> bool {
+        match side {
+            JoinSide::Left => {
+                matches!(self, JoinType::Left | JoinType::Full | JoinType::LeftMark)
+            }
+            JoinSide::Right => {
+                matches!(self, JoinType::Right | JoinType::Full | JoinType::RightMark)
+            }
+            JoinSide::None => false,
+        }
+    }
+
     /// Returns true if this join type preserves all rows from its left input.
     ///
     /// For [`JoinType::Left`], [`JoinType::Full`], and [`JoinType::LeftMark`] joins
     /// every row from the left side will appear in the output at least once.
     pub fn preserves_left(self) -> bool {
-        matches!(self, JoinType::Left | JoinType::Full | JoinType::LeftMark)
+        self.preserves(JoinSide::Left)
     }
 
     /// Returns true if this join type preserves all rows from its right input.
@@ -125,7 +138,7 @@ impl JoinType {
     /// For [`JoinType::Right`], [`JoinType::Full`], and [`JoinType::RightMark`] joins
     /// every row from the right side will appear in the output at least once.
     pub fn preserves_right(self) -> bool {
-        matches!(self, JoinType::Right | JoinType::Full | JoinType::RightMark)
+        self.preserves(JoinSide::Right)
     }
 
     /// Returns the input side eligible for dynamic filter pushdown.
@@ -137,7 +150,7 @@ impl JoinType {
     /// returned.
     pub fn dynamic_filter_side(self) -> JoinSide {
         use JoinSide::*;
-        match (self.preserves_left(), self.preserves_right()) {
+        match (self.preserves(Left), self.preserves(Right)) {
             // Both sides are preserved (e.g. FULL joins) so dynamic
             // filtering is not possible.
             (true, true) => None,
@@ -271,15 +284,17 @@ mod tests {
 
     #[test]
     fn test_preserves_sides() {
-        assert!(JoinType::Left.preserves_left());
-        assert!(JoinType::Full.preserves_left());
-        assert!(JoinType::LeftMark.preserves_left());
-        assert!(!JoinType::LeftSemi.preserves_left());
+        use JoinSide::*;
 
-        assert!(JoinType::Right.preserves_right());
-        assert!(JoinType::Full.preserves_right());
-        assert!(JoinType::RightMark.preserves_right());
-        assert!(!JoinType::RightSemi.preserves_right());
+        assert!(JoinType::Left.preserves(Left));
+        assert!(JoinType::Full.preserves(Left));
+        assert!(JoinType::LeftMark.preserves(Left));
+        assert!(!JoinType::LeftSemi.preserves(Left));
+
+        assert!(JoinType::Right.preserves(Right));
+        assert!(JoinType::Full.preserves(Right));
+        assert!(JoinType::RightMark.preserves(Right));
+        assert!(!JoinType::RightSemi.preserves(Right));
     }
 
     #[test]
