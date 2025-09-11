@@ -170,7 +170,6 @@ fn test_pushdown_into_scan_with_config_options() {
 
 #[tokio::test]
 async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
-    use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
@@ -286,7 +285,6 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
 // Dynamic filters arise in cases such as nested inner joins or TopK -> HashJoinExec -> Scan setups.
 #[tokio::test]
 async fn test_static_filter_pushdown_through_hash_join() {
-    use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
@@ -840,7 +838,6 @@ async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown() {
-    use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
@@ -1200,7 +1197,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_full_join() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
-    use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Rough sketch of the MRE we're trying to recreate:
@@ -1469,7 +1465,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
 
 #[tokio::test]
 async fn test_nested_hashjoin_dynamic_filter_pushdown() {
-    use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create test data for three tables: t1, t2, t3
@@ -1617,7 +1612,6 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
 
 #[tokio::test]
 async fn test_hashjoin_parent_filter_pushdown() {
-    use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
