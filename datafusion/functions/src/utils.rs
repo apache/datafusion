@@ -333,6 +333,7 @@ pub mod test {
             (123000, 3, Some(123)),
             (1, 0, Some(1)),
             (123, -3, None),
+            (123, i8::MAX, None),
             (i128::MAX, 0, Some(i128::MAX)),
             (i128::MAX, 3, Some(i128::MAX / 1000)),
         ];
@@ -342,7 +343,9 @@ pub mod test {
                 Ok(actual) => {
                     assert_eq!(
                         actual,
-                        expected.expect("Expecting i128"),
+                        expected.expect(
+                            format!("Returned {actual} but none expected").as_str()
+                        ),
                         "{value} and {scale} vs {expected:?}"
                     );
                 }
