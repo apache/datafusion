@@ -74,6 +74,12 @@ pub enum JoinType {
     RightMark,
 }
 
+const LEFT_PRESERVING: &[JoinType] =
+    &[JoinType::Left, JoinType::Full, JoinType::LeftMark];
+
+const RIGHT_PRESERVING: &[JoinType] =
+    &[JoinType::Right, JoinType::Full, JoinType::RightMark];
+
 impl JoinType {
     pub fn is_outer(self) -> bool {
         self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
@@ -115,12 +121,8 @@ impl JoinType {
     /// Returns true if this join type preserves all rows from the specified `side`.
     pub fn preserves(self, side: JoinSide) -> bool {
         match side {
-            JoinSide::Left => {
-                matches!(self, JoinType::Left | JoinType::Full | JoinType::LeftMark)
-            }
-            JoinSide::Right => {
-                matches!(self, JoinType::Right | JoinType::Full | JoinType::RightMark)
-            }
+            JoinSide::Left => LEFT_PRESERVING.contains(&self),
+            JoinSide::Right => RIGHT_PRESERVING.contains(&self),
             JoinSide::None => false,
         }
     }
