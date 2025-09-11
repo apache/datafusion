@@ -70,7 +70,7 @@ use datafusion_common::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
-use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
