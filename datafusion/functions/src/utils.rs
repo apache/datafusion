@@ -343,9 +343,7 @@ pub mod test {
                 Ok(actual) => {
                     assert_eq!(
                         actual,
-                        expected.expect(
-                            format!("Returned {actual} but none expected").as_str()
-                        ),
+                        expected.expect("Got value but expected none"),
                         "{value} and {scale} vs {expected:?}"
                     );
                 }
