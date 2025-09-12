@@ -237,7 +237,7 @@ impl ScalarUDF {
         let return_field = Arc::clone(&args.return_field);
         let result = self.inner.invoke_with_args(args)?;
         // Maybe this could be enabled always?
-        // This doesn't use debug_assert!, but it's meant to run anywhere except on production. Ot's same in spirit, thus conditioning on debug_assertions.
+        // This doesn't use debug_assert!, but it's meant to run anywhere except on production. It's same in spirit, thus conditioning on debug_assertions.
         #[cfg(debug_assertions)]
         {
             if &result.data_type() != return_field.data_type() {
