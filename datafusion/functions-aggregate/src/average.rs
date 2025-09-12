@@ -24,9 +24,10 @@ use arrow::array::{
 
 use arrow::compute::sum;
 use arrow::datatypes::{
-    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType,
-    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type,
+    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
+    Decimal64Type, DecimalType, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Field, FieldRef, Float64Type, TimeUnit,
+    UInt64Type,
 };
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
@@ -129,6 +130,28 @@ impl AggregateUDFImpl for Avg {
             match (&data_type, acc_args.return_field.data_type()) {
                 (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
                 (
+                    Decimal32(sum_precision, sum_scale),
+                    Decimal32(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal32Type> {
+                    sum: None,
+                    count: 0,
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
+                (
+                    Decimal64(sum_precision, sum_scale),
+                    Decimal64(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal64Type> {
+                    sum: None,
+                    count: 0,
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
+                (
                     Decimal128(sum_precision, sum_scale),
                     Decimal128(target_precision, target_scale),
                 ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type> {
@@ -202,7 +225,11 @@ impl AggregateUDFImpl for Avg {
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         matches!(
             args.return_field.data_type(),
-            DataType::Float64 | DataType::Decimal128(_, _) | DataType::Duration(_)
+            DataType::Float64
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Duration(_)
         ) && !args.is_distinct
     }
 
@@ -220,6 +247,44 @@ impl AggregateUDFImpl for Avg {
                     &data_type,
                     args.return_field.data_type(),
                     |sum: f64, count: u64| Ok(sum / count as f64),
+                )))
+            }
+            (
+                Decimal32(_sum_precision, sum_scale),
+                Decimal32(target_precision, target_scale),
+            ) => {
+                let decimal_averager = DecimalAverager::<Decimal32Type>::try_new(
+                    *sum_scale,
+                    *target_precision,
+                    *target_scale,
+                )?;
+
+                let avg_fn =
+                    move |sum: i32, count: u64| decimal_averager.avg(sum, count as i32);
+
+                Ok(Box::new(AvgGroupsAccumulator::<Decimal32Type, _>::new(
+                    &data_type,
+                    args.return_field.data_type(),
+                    avg_fn,
+                )))
+            }
+            (
+                Decimal64(_sum_precision, sum_scale),
+                Decimal64(target_precision, target_scale),
+            ) => {
+                let decimal_averager = DecimalAverager::<Decimal64Type>::try_new(
+                    *sum_scale,
+                    *target_precision,
+                    *target_scale,
+                )?;
+
+                let avg_fn =
+                    move |sum: i64, count: u64| decimal_averager.avg(sum, count as i64);
+
+                Ok(Box::new(AvgGroupsAccumulator::<Decimal64Type, _>::new(
+                    &data_type,
+                    args.return_field.data_type(),
+                    avg_fn,
                 )))
             }
             (
