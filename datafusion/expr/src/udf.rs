@@ -241,7 +241,7 @@ impl ScalarUDF {
         #[cfg(debug_assertions)]
         {
             if &result.data_type() != return_field.data_type() {
-                return datafusion_common::exec_err!("Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
+                return datafusion_common::internal_err!("Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
                         self.name(),
                         result.data_type(),
                         return_field.data_type()
