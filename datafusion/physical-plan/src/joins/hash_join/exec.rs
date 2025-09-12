@@ -1675,9 +1675,8 @@ mod tests {
             Arc::clone(&schema),
             vec![Arc::new(Int32Array::from(vec![1]))],
         )?;
-        let left =
-            TestMemoryExec::try_new(&[vec![batch.clone()]], Arc::clone(&schema), None)?;
-        let right = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?;
+        let left = TestMemoryExec::try_new(&[vec![batch.clone()]], schema.clone(), None)?;
+        let right = TestMemoryExec::try_new(&[vec![batch]], schema.clone(), None)?;
 
         let on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
         let join = HashJoinExec::try_new(
