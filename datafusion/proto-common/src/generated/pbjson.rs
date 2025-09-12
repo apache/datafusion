@@ -1663,6 +1663,9 @@ impl serde::Serialize for CsvOptions {
         if !self.terminator.is_empty() {
             len += 1;
         }
+        if !self.truncated_rows.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1735,6 +1738,11 @@ impl serde::Serialize for CsvOptions {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&self.terminator).as_str())?;
         }
+        if !self.truncated_rows.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("truncatedRows", pbjson::private::base64::encode(&self.truncated_rows).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1773,6 +1781,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "newlines_in_values",
             "newlinesInValues",
             "terminator",
+            "truncated_rows",
+            "truncatedRows",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1794,6 +1804,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             DoubleQuote,
             NewlinesInValues,
             Terminator,
+            TruncatedRows,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1832,6 +1843,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
                             "terminator" => Ok(GeneratedField::Terminator),
+                            "truncatedRows" | "truncated_rows" => Ok(GeneratedField::TruncatedRows),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1868,6 +1880,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut double_quote__ = None;
                 let mut newlines_in_values__ = None;
                 let mut terminator__ = None;
+                let mut truncated_rows__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -1990,6 +2003,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::TruncatedRows => {
+                            if truncated_rows__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("truncatedRows"));
+                            }
+                            truncated_rows__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2010,6 +2031,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     double_quote: double_quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
                     terminator: terminator__.unwrap_or_default(),
+                    truncated_rows: truncated_rows__.unwrap_or_default(),
                 })
             }
         }
