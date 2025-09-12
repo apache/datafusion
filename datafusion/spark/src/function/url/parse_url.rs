@@ -27,9 +27,7 @@ use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
-use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 use url::Url;
 
@@ -47,7 +45,13 @@ impl Default for ParseUrl {
 impl ParseUrl {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::String(2),
+                    TypeSignature::String(3),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
     /// Parses a URL and extracts the specified component.
@@ -164,22 +168,6 @@ impl ScalarUDFImpl for ParseUrl {
         }
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        match arg_types.len() {
-            2 | 3 if arg_types.iter().all(is_string_type) => Ok(arg_types.to_vec()),
-            2 | 3 => plan_err!(
-                "`{}` expects STRING arguments, got {:?}",
-                &self.name(),
-                arg_types
-            ),
-            _ => plan_err!(
-                "`{}` expects 2 or 3 arguments, got {}",
-                &self.name(),
-                arg_types.len()
-            ),
-        }
-    }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_parse_url, vec![])(&args)
@@ -232,9 +220,6 @@ pub fn spark_handled_parse_url(
         // In this case, the 'key' argument is passed
         let key = &args[2];
 
-        // Cover all 27 possible cases: 3 arguments, each of which can take 3 different data types.
-        // If any argument is of type LargeUtf8, the resulting data type will be LargeStringArray.
-        // Otherwise, the result will be a StringArray.
         match (url.data_type(), part.data_type(), key.data_type()) {
             (DataType::Utf8, DataType::Utf8, DataType::Utf8) => {
                 process_parse_url::<_, _, _, StringArray>(
@@ -244,210 +229,18 @@ pub fn spark_handled_parse_url(
                     handler_err,
                 )
             }
-            (DataType::Utf8, DataType::Utf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_array(url)?,
-                    as_string_array(part)?,
-                    as_string_view_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8, DataType::Utf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_string_array(part)?,
-                    as_large_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8, DataType::Utf8View, DataType::Utf8) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8, DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_view_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_large_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8, DataType::LargeUtf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_view_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_large_string_array(part)?,
-                    as_large_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_view_array(url)?,
-                    as_string_array(part)?,
-                    as_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_view_array(url)?,
-                    as_string_array(part)?,
-                    as_string_view_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_string_array(part)?,
-                    as_large_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8View, DataType::Utf8) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_view_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_array(key)?,
-                    handler_err,
-                )
-            }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringViewArray>(
-                    as_string_view_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_view_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8View, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_string_view_array(part)?,
-                    as_large_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_view_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::LargeUtf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_large_string_array(part)?,
-                    as_large_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
+                process_parse_url::<_, _, _, StringArray>(
+                    as_string_array(url)?,
                     as_string_array(part)?,
-                    as_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_array(part)?,
-                    as_string_view_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_array(part)?,
-                    as_large_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8View, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_view_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8View, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_large_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::LargeUtf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_array(key)?,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::LargeUtf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_large_string_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
                 process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_large_string_array(part)?,
+                    as_string_array(url)?,
+                    as_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
                 )
@@ -463,9 +256,6 @@ pub fn spark_handled_parse_url(
         }
         let key = builder.finish();
 
-        // Handle 9 combinations - 2 arguments, each argument can have 3 different data types
-        // The result data type would be LargeStringArray if there is any argument with LargeUtf8 data type
-        // Else the StringArray would be returned
         match (url.data_type(), part.data_type()) {
             (DataType::Utf8, DataType::Utf8) => {
                 process_parse_url::<_, _, _, StringArray>(
@@ -475,57 +265,9 @@ pub fn spark_handled_parse_url(
                     handler_err,
                 )
             }
-            (DataType::Utf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_array(url)?,
-                    as_string_view_array(part)?,
-                    &key,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_large_string_array(part)?,
-                    &key,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_view_array(url)?,
-                    as_string_array(part)?,
-                    &key,
-                    handler_err,
-                )
-            }
             (DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringViewArray>(
-                    as_string_view_array(url)?,
-                    as_string_view_array(part)?,
-                    &key,
-                    handler_err,
-                )
-            }
-            (DataType::Utf8View, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_large_string_array(part)?,
-                    &key,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_array(part)?,
-                    &key,
-                    handler_err,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
+                process_parse_url::<_, _, _, StringArray>(
+                    as_string_array(url)?,
                     as_string_view_array(part)?,
                     &key,
                     handler_err,
@@ -533,7 +275,7 @@ pub fn spark_handled_parse_url(
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
                 process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
+                    as_string_view_array(url)?,
                     as_large_string_array(part)?,
                     &key,
                     handler_err,
