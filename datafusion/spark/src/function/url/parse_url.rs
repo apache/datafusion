@@ -19,7 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, GenericStringBuilder, LargeStringArray, StringArray, StringArrayType,
+    Array, ArrayRef, GenericStringBuilder, LargeStringArray, StringArray,
+    StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{
@@ -340,7 +341,7 @@ pub fn spark_handled_parse_url(
                 )
             }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
+                process_parse_url::<_, _, _, StringViewArray>(
                     as_string_view_array(url)?,
                     as_string_view_array(part)?,
                     as_string_view_array(key)?,
@@ -499,7 +500,7 @@ pub fn spark_handled_parse_url(
                 )
             }
             (DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
+                process_parse_url::<_, _, _, StringViewArray>(
                     as_string_view_array(url)?,
                     as_string_view_array(part)?,
                     &key,
