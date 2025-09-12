@@ -27,9 +27,14 @@ on:
   merge_group:
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
+  #
+  # Note, we use merge queue for this repo. If you'd like to add a new "required" check, that should be checked before
+  # the PR is merged, you should add your step to `rust-required-checks`
   workflow_dispatch:
 
 jobs:
+  # This job checks if heavy-weight jobs can be skipped, because only doc or non-code files were changed
+  # More on this: https://github.com/orgs/community/discussions/45899
   pre-job:
     runs-on: ubuntu-latest
     outputs:
