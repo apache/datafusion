@@ -72,6 +72,13 @@ pub struct ParquetFileMetrics {
     pub page_index_eval_time: Time,
     /// Total time spent reading and parsing metadata from the footer
     pub metadata_load_time: Time,
+    /// Predicate Cache: number of records read directly from the inner reader.
+    /// This is the number of rows decoded while evaluating predicates
+    pub predicate_cache_inner_records: Count,
+    /// Predicate Cache: number of records read from the cache. This is the
+    /// number of rows that were stored in the cache after evaluating predicates
+    /// reused for the output.
+    pub predicate_cache_records: Count,
 }
 
 impl ParquetFileMetrics {
@@ -140,6 +147,14 @@ impl ParquetFileMetrics {
         let files_ranges_pruned_statistics = MetricBuilder::new(metrics)
             .counter("files_ranges_pruned_statistics", partition);
 
+        let predicate_cache_inner_records = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("predicate_cache_inner_records", partition);
+
+        let predicate_cache_records = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("predicate_cache_records", partition);
+
         Self {
             files_ranges_pruned_statistics,
             predicate_evaluation_errors,
@@ -157,6 +172,8 @@ impl ParquetFileMetrics {
             bloom_filter_eval_time,
             page_index_eval_time,
             metadata_load_time,
+            predicate_cache_inner_records,
+            predicate_cache_records,
         }
     }
 }
