@@ -676,14 +676,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
 
-        // Handle the case where no projection is specified but we have a valid FROM clause
-        // In this case, implicitly add a wildcard projection (SELECT *)
-        let projection = if projection.is_empty() && !empty_from {
-            vec![SelectItem::Wildcard(WildcardAdditionalOptions::default())]
-        } else {
-            projection
-        };
-
         for expr in projection {
             match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
                 Ok(expr) => prepared_select_exprs.push(expr),

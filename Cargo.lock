@@ -1998,7 +1998,6 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-ipc",
- "base64 0.22.1",
  "chrono",
  "half",
  "hashbrown 0.14.5",

@@ -17,7 +17,6 @@
 
 //! Options related to how parquet files should be written
 
-use base64::Engine;
 use std::sync::Arc;
 
 use crate::{
@@ -26,6 +25,7 @@ use crate::{
 };
 
 use arrow::datatypes::Schema;
+use parquet::arrow::encode_arrow_schema;
 // TODO: handle once deprecated
 #[allow(deprecated)]
 use parquet::{
@@ -164,31 +164,6 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
 
         Ok(builder)
     }
-}
-
-/// Encodes the Arrow schema into the IPC format, and base64 encodes it
-///
-/// TODO: use extern parquet's private method, once publicly available.
-/// Refer to <https://github.com/apache/arrow-rs/pull/6916>
-fn encode_arrow_schema(schema: &Arc<Schema>) -> String {
-    let options = arrow_ipc::writer::IpcWriteOptions::default();
-    let mut dictionary_tracker = arrow_ipc::writer::DictionaryTracker::new(true);
-    let data_gen = arrow_ipc::writer::IpcDataGenerator::default();
-    let mut serialized_schema = data_gen.schema_to_bytes_with_dictionary_tracker(
-        schema,
-        &mut dictionary_tracker,
-        &options,
-    );
-
-    // manually prepending the length to the schema as arrow uses the legacy IPC format
-    // TODO: change after addressing ARROW-9777
-    let schema_len = serialized_schema.ipc_message.len();
-    let mut len_prefix_schema = Vec::with_capacity(schema_len + 8);
-    len_prefix_schema.append(&mut vec![255u8, 255, 255, 255]);
-    len_prefix_schema.append((schema_len as u32).to_le_bytes().to_vec().as_mut());
-    len_prefix_schema.append(&mut serialized_schema.ipc_message);
-
-    base64::prelude::BASE64_STANDARD.encode(&len_prefix_schema)
 }
 
 impl ParquetOptions {
