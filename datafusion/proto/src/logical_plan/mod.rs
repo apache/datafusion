@@ -271,6 +271,7 @@ fn from_table_source(
         projected_schema,
         filters: vec![],
         fetch: None,
+        ordering: None,
     });
 
     LogicalPlanNode::try_from_logical_plan(&r, extension_codec)
