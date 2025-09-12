@@ -52,17 +52,16 @@ pub fn map_type_from_key_value_types(
 /// Logic is close to `datafusion_functions_nested::map::make_map_array_internal`<br>
 /// But there are some core differences:
 /// 1. Input arrays are not [`ListArrays`](arrow::array::ListArray) itself, but their flattened [`values`](arrow::array::ListArray::values)<br>
-/// So the inputs can be [`ListArray`](`arrow::array::ListArray`)/[`LargeListArray`](`arrow::array::LargeListArray`)/[`FixedSizeListArray`](`arrow::array::FixedSizeListArray`)<br>
-/// To preserve the row info, [`offsets`](arrow::array::ListArray::offsets) and [`nulls`](arrow::array::ListArray::nulls) need to be provided<br>
-/// The function will fail if key and value arrays have different offsets so one offset array is ok<br>
-/// [`FixedSizeListArray`](`arrow::array::FixedSizeListArray`) has no `offsets`, so they can be generated as a cumulative sum of it's `Size`
+///    So the inputs can be [`ListArray`](`arrow::array::ListArray`)/[`LargeListArray`](`arrow::array::LargeListArray`)/[`FixedSizeListArray`](`arrow::array::FixedSizeListArray`)<br>
+///    To preserve the row info, [`offsets`](arrow::array::ListArray::offsets) and [`nulls`](arrow::array::ListArray::nulls) for both keys and values need to be provided<br>
+///    [`FixedSizeListArray`](`arrow::array::FixedSizeListArray`) has no `offsets`, so they can be generated as a cumulative sum of it's `Size`
 /// 2. Spark provides [spark.sql.mapKeyDedupPolicy](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961)
-/// to handle duplicate keys<br>
-/// For now, configurable functions are not supported by Datafusion<br>
-/// So more permissive `LAST_WIN` option is used in this implementation (instead of `EXCEPTION`)<br>
-/// `EXCEPTION` behaviour can still be achieved externally in cost of performance:<br>
-/// `when(array_length(array_distinct(keys)) == array_length(keys), constructed_map)`<br>
-/// `.otherwise(raise_error("duplicate keys occurred during map construction"))`
+///    to handle duplicate keys<br>
+///    For now, configurable functions are not supported by Datafusion<br>
+///    So more permissive `LAST_WIN` option is used in this implementation (instead of `EXCEPTION`)<br>
+///    `EXCEPTION` behaviour can still be achieved externally in cost of performance:<br>
+///    `when(array_length(array_distinct(keys)) == array_length(keys), constructed_map)`<br>
+///    `.otherwise(raise_error("duplicate keys occurred during map construction"))`
 pub fn map_from_keys_values_offsets_nulls(
     flat_keys: &ArrayRef,
     flat_values: &ArrayRef,
