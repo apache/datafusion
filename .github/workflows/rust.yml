@@ -281,8 +281,8 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
         with:
-         save-if: ${{ github.ref_name == 'main' }}
-         shared-key: "amd-ci"
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
@@ -792,3 +792,36 @@ jobs:
         with:
           persist-credentials: false
       - uses: crate-ci/typos@v1
+
+  rust-required-checks:
+    name: Validate Rust Required Checks
+    needs: [ linux-rustdoc,
+             linux-wasm-pack,
+             linux-build-lib,
+             macos-aarch64,
+             vendor,
+             check-fmt,
+             msrv,
+             linux-datafusion-common-features,
+             linux-datafusion-substrait-features,
+             linux-datafusion-proto-features,
+             linux-cargo-check-datafusion,
+             linux-cargo-check-datafusion-functions,
+             linux-test,
+             linux-test-example,
+             linux-test-doc,
+             verify-benchmark-results,
+             sqllogictest-postgres,
+             sqllogictest-substrait,
+             test-datafusion-pyarrow,
+             clippy,
+             cargo-toml-formatting-checks,
+             linux-test-datafusion-cli,
+             config-docs-check
+    ]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - run: echo '${{ toJSON(needs) }}' | jq -e 'all(.[]; .result == "success" or .result == "skipped")'
+
