@@ -1170,18 +1170,20 @@ impl TableProvider for ListingTable {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let options = ScanArgs::default()
-            .with_projection(projection.cloned())
-            .with_filters(Some(filters.to_vec()))
+            .with_projection(projection.map(|p| p.as_slice()))
+            .with_filters(Some(filters))
             .with_limit(limit);
-        Ok(self.scan_with_args(state, options).await?.plan())
+        Ok(Arc::clone(
+            self.scan_with_args(state, options).await?.plan(),
+        ))
     }
 
-    async fn scan_with_args(
+    async fn scan_with_args<'a>(
         &self,
         state: &dyn Session,
-        args: ScanArgs,
+        args: ScanArgs<'a>,
     ) -> Result<ScanResult> {
-        let projection = args.projection();
+        let projection = args.projection().map(|p| p.to_vec());
         let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
         let limit = args.limit();
 

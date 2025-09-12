@@ -460,12 +460,13 @@ impl DefaultPhysicalPlanner {
                 // doesn't know (nor should care) how the relation was
                 // referred to in the query
                 let filters = unnormalize_cols(filters.iter().cloned());
+                let filters_vec = filters.into_iter().collect::<Vec<_>>();
                 let opts = ScanArgs::default()
-                    .with_projection(projection.clone())
-                    .with_filters(Some(filters))
+                    .with_projection(projection.as_deref())
+                    .with_filters(Some(&filters_vec))
                     .with_limit(*fetch);
                 let res = source.scan_with_args(session_state, opts).await?;
-                res.plan()
+                Arc::clone(res.plan())
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exec_schema = schema.as_ref().to_owned().into();

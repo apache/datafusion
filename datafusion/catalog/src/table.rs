@@ -189,21 +189,18 @@ pub trait TableProvider: Debug + Sync + Send {
     /// A [`ScanResult`] containing the [`ExecutionPlan`] for scanning the table
     ///
     /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
-    async fn scan_with_args(
+    async fn scan_with_args<'a>(
         &self,
         state: &dyn Session,
-        args: ScanArgs,
+        args: ScanArgs<'a>,
     ) -> Result<ScanResult> {
-        let ScanArgs {
-            filters,
-            projection,
-            limit,
-        } = args;
-        let filters = filters.unwrap_or_default();
+        let filters = args.filters().unwrap_or(&[]);
+        let projection = args.projection().map(|p| p.to_vec());
+        let limit = args.limit();
         let plan = self
-            .scan(state, projection.as_ref(), &filters, limit)
+            .scan(state, projection.as_ref(), filters, limit)
             .await?;
-        Ok(ScanResult::new(plan))
+        Ok(plan.into())
     }
 
     /// Specify if DataFusion should provide filter expressions to the
@@ -335,46 +332,32 @@ pub trait TableProvider: Debug + Sync + Send {
 }
 
 /// Arguments for scanning a table with [`TableProvider::scan_with_args`].
-///
-/// `ScanArgs` provides a structured way to pass scan parameters to table providers,
-/// replacing the multiple individual parameters used by [`TableProvider::scan`].
-/// This struct uses the builder pattern for convenient construction.
-///
-/// # Examples
-///
-/// ```
-/// # use datafusion_catalog::ScanArgs;
-/// # use datafusion_expr::Expr;
-/// let args = ScanArgs::default()
-///     .with_projection(Some(vec![0, 2, 4]))
-///     .with_limit(Some(1000));
-/// ```
 #[derive(Debug, Clone, Default)]
-pub struct ScanArgs {
-    filters: Option<Vec<Expr>>,
-    projection: Option<Vec<usize>>,
+pub struct ScanArgs<'a> {
+    filters: Option<&'a [Expr]>,
+    projection: Option<&'a [usize]>,
     limit: Option<usize>,
 }
 
-impl ScanArgs {
+impl<'a> ScanArgs<'a> {
     /// Set the column projection for the scan.
     ///
     /// The projection is a list of column indices from [`TableProvider::schema`]
     /// that should be included in the scan results. If `None`, all columns are included.
     ///
     /// # Arguments
-    /// * `projection` - Optional list of column indices to project
-    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+    /// * `projection` - Optional slice of column indices to project
+    pub fn with_projection(mut self, projection: Option<&'a [usize]>) -> Self {
         self.projection = projection;
         self
     }
 
     /// Get the column projection for the scan.
     ///
-    /// Returns a cloned copy of the projection column indices, or `None` if
+    /// Returns a reference to the projection column indices, or `None` if
     /// no projection was specified (meaning all columns should be included).
-    pub fn projection(&self) -> Option<Vec<usize>> {
-        self.projection.clone()
+    pub fn projection(&self) -> Option<&'a [usize]> {
+        self.projection
     }
 
     /// Set the filter expressions for the scan.
@@ -384,8 +367,8 @@ impl ScanArgs {
     /// Whether filters are actually pushed down depends on [`TableProvider::supports_filters_pushdown`].
     ///
     /// # Arguments
-    /// * `filters` - Optional list of filter expressions
-    pub fn with_filters(mut self, filters: Option<Vec<Expr>>) -> Self {
+    /// * `filters` - Optional slice of filter expressions
+    pub fn with_filters(mut self, filters: Option<&'a [Expr]>) -> Self {
         self.filters = filters;
         self
     }
@@ -393,8 +376,8 @@ impl ScanArgs {
     /// Get the filter expressions for the scan.
     ///
     /// Returns a reference to the filter expressions, or `None` if no filters were specified.
-    pub fn filters(&self) -> Option<&[Expr]> {
-        self.filters.as_deref()
+    pub fn filters(&self) -> Option<&'a [Expr]> {
+        self.filters
     }
 
     /// Set the maximum number of rows to return from the scan.
@@ -418,11 +401,6 @@ impl ScanArgs {
 }
 
 /// Result of a table scan operation from [`TableProvider::scan_with_args`].
-///
-/// `ScanResult` encapsulates the [`ExecutionPlan`] produced by a table scan,
-/// providing a typed return value instead of returning the plan directly.
-/// This allows for future extensibility of scan results without breaking
-/// the API.
 #[derive(Debug, Clone)]
 pub struct ScanResult {
     /// The ExecutionPlan to run.
@@ -438,12 +416,26 @@ impl ScanResult {
         Self { plan }
     }
 
-    /// Get the execution plan for this scan result.
+    /// Get a reference to the execution plan for this scan result.
     ///
-    /// Returns a cloned reference to the [`ExecutionPlan`] that will perform
+    /// Returns a reference to the [`ExecutionPlan`] that will perform
     /// the actual table scanning and data retrieval.
-    pub fn plan(&self) -> Arc<dyn ExecutionPlan> {
-        Arc::clone(&self.plan)
+    pub fn plan(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.plan
+    }
+
+    /// Consume this ScanResult and return the execution plan.
+    ///
+    /// Returns the owned [`ExecutionPlan`] that will perform
+    /// the actual table scanning and data retrieval.
+    pub fn into_inner(self) -> Arc<dyn ExecutionPlan> {
+        self.plan
+    }
+}
+
+impl From<Arc<dyn ExecutionPlan>> for ScanResult {
+    fn from(plan: Arc<dyn ExecutionPlan>) -> Self {
+        Self::new(plan)
     }
 }
 
