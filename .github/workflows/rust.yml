@@ -729,7 +729,7 @@ jobs:
 
   config-docs-check:
     name: check configs.md and ***_functions.md is up-to-date
-    needs: [linux-build-lib, pre-job]
+    needs: [linux-build-lib]
     if: needs.pre-job.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
