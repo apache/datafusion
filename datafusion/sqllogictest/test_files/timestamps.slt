@@ -3236,6 +3236,11 @@ select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brus
 ----
 2024-04-01T00:00:20
 
+query P
+select to_local_time(NULL);
+----
+NULL
+
 query PTPT
 select
   time,
@@ -3263,6 +3268,7 @@ select date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestam
 statement ok
 create table t AS
 VALUES
+  (NULL),
   ('2024-01-01T00:00:01Z'),
   ('2024-02-01T00:00:01Z'),
   ('2024-03-01T00:00:01Z'),
@@ -3290,6 +3296,7 @@ from t;
 query PPT
 select column1, to_local_time(column1::timestamp), arrow_typeof(to_local_time(column1::timestamp)) from t_utc;
 ----
+NULL NULL Timestamp(Nanosecond, None)
 2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
 2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
 2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
@@ -3306,6 +3313,7 @@ select column1, to_local_time(column1::timestamp), arrow_typeof(to_local_time(co
 query PPT
 select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) from t_utc;
 ----
+NULL NULL Timestamp(Nanosecond, None)
 2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
 2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
 2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
@@ -3322,6 +3330,7 @@ select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) fro
 query PPT
 select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) from t_timezone;
 ----
+NULL NULL Timestamp(Nanosecond, None)
 2024-01-01T00:00:01+01:00 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
 2024-02-01T00:00:01+01:00 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
 2024-03-01T00:00:01+01:00 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
@@ -3339,6 +3348,7 @@ select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) fro
 query P
 select date_bin(interval '1 day', to_local_time(column1)) AT TIME ZONE 'Europe/Brussels' as date_bin from t_utc;
 ----
+NULL
 2024-01-01T00:00:00+01:00
 2024-02-01T00:00:00+01:00
 2024-03-01T00:00:00+01:00
@@ -3355,6 +3365,7 @@ select date_bin(interval '1 day', to_local_time(column1)) AT TIME ZONE 'Europe/B
 query P
 select date_bin(interval '1 day', to_local_time(column1)) AT TIME ZONE 'Europe/Brussels' as date_bin from t_timezone;
 ----
+NULL
 2024-01-01T00:00:00+01:00
 2024-02-01T00:00:00+01:00
 2024-03-01T00:00:00+01:00

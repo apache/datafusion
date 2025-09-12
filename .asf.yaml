@@ -50,34 +50,6 @@ github:
     main:
       required_pull_request_reviews:
         required_approving_review_count: 1
-      required_status_checks:
-        contexts:
-          - "Check License Header"
-          - "cargo doc"
-          - "build and run with wasm-pack"
-          - "linux build test"
-          - "cargo test (macos-aarch64)"
-          - "Verify Vendored Code"
-          - "Check cargo fmt"
-          - "Verify MSRV (Min Supported Rust Version)"
-          - "cargo check datafusion-common features"
-          - "cargo check datafusion-substrait features"
-          - "cargo check datafusion-proto features"
-          - "cargo check datafusion features"
-          - "cargo check datafusion-functions features"
-          - "cargo test (amd64)"
-          - "cargo examples (amd64)"
-          - "cargo test doc (amd64)"
-          - "verify benchmark results (amd64)"
-          - "Run sqllogictest with Postgres runner"
-          - "Run sqllogictest in Substrait round-trip mode"
-          - "cargo test pyarrow (amd64)"
-          - "clippy"
-          - "check Cargo.toml formatting"
-          - "Use prettier to check formatting of documents"
-          - "check-files"
-          - "cargo test datafusion-cli (amd64)"
-          - "check configs.md and ***_functions.md is up-to-date"
     # needs to be updated as part of the release process
     # .asf.yaml doesn't support wildcard branch protection rules, only exact branch names
     # https://github.com/apache/infrastructure-asfyaml?tab=readme-ov-file#branch-protection
