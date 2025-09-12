@@ -39,7 +39,6 @@ name = "datafusion_expr"
 
 [features]
 recursive_protection = ["dep:recursive"]
-integration-tests = []
 
 [dependencies]
 arrow = { workspace = true }
