@@ -177,7 +177,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// and returns a [`ScanResult`] containing the execution plan. 
     ///
     /// Table providers can override this method to take advantage of additional
-    /// parameters like `preferred_ordering` that may not be available through
+    /// parameters like the upcoming `preferred_ordering` that may not be available through
     /// other scan methods.
     ///
     /// # Arguments
