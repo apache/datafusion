@@ -36,6 +36,32 @@ SELECT map_from_arrays(cast(array() as array<int>), cast(array() as array<string
 ----
 {}
 
+# Tests with DataType:Null input arrays
+query ?
+SELECT map_from_arrays(NULL, NULL);
+----
+NULL
+
+query ?
+SELECT map_from_arrays(array(1), NULL);
+----
+NULL
+
+query ?
+SELECT map_from_arrays(NULL, array(1));
+----
+NULL
+
+# Tests with different inner lists lengths
+query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
+SELECT map_from_arrays(array(1, 2, 3), array('a', 'b'));
+
+query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
+SELECT map_from_arrays(array(), array('a', 'b'));
+
+query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
+SELECT map_from_arrays(array(1, 2, 3), array());
+
 # Test with complex types
 query ?
 SELECT map_from_arrays(array(array('a', 'b'), array('c', 'd')), array(struct(1, 2, 3), struct(4, 5, 6)));

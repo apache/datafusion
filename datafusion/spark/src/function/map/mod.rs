@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod map_from_arrays;
+mod utils;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;

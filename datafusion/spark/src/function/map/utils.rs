@@ -1,0 +1,162 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use arrow::array::{Array, ArrayRef, BooleanBuilder, MapArray, StructArray};
+use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::compute::filter;
+use arrow::datatypes::{DataType, Field, Fields};
+use datafusion_common::{exec_err, Result, ScalarValue};
+
+/// Helper function to construct [`MapType<K, V>`](arrow::datatypes::DataType::Map) given K and V DataTypes for keys and values
+/// - Map keys are unsorted
+/// - Map keys are non-nullable
+/// - Map entries are non-nullable
+/// - Map values can be null
+pub fn map_type_from_key_value_types(
+    key_type: &DataType,
+    value_type: &DataType,
+) -> DataType {
+    DataType::Map(
+        Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                // the key must not be nullable
+                Field::new("key", key_type.clone(), false),
+                Field::new("value", value_type.clone(), true),
+            ])),
+            false, // the entry is not nullable
+        )),
+        false, // the keys are not sorted
+    )
+}
+
+/// Helper function to construct MapArray from flattened ListArrays and OffsetBuffer
+///
+/// Logic is close to `datafusion_functions_nested::map::make_map_array_internal`<br>
+/// But there are some core differences:
+/// 1. Input arrays are not [`ListArrays`](arrow::array::ListArray) itself, but their flattened [`values`](arrow::array::ListArray::values)<br>
+/// So the inputs can be [`ListArray`](`arrow::array::ListArray`)/[`LargeListArray`](`arrow::array::LargeListArray`)/[`FixedSizeListArray`](`arrow::array::FixedSizeListArray`)<br>
+/// To preserve the row info, [`offsets`](arrow::array::ListArray::offsets) and [`nulls`](arrow::array::ListArray::nulls) need to be provided<br>
+/// The function will fail if key and value arrays have different offsets so one offset array is ok<br>
+/// [`FixedSizeListArray`](`arrow::array::FixedSizeListArray`) has no `offsets`, so they can be generated as a cumulative sum of it's `Size`
+/// 2. Spark provides [spark.sql.mapKeyDedupPolicy](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961)
+/// to handle duplicate keys<br>
+/// For now, configurable functions are not supported by Datafusion<br>
+/// So more permissive `LAST_WIN` option is used in this implementation (instead of `EXCEPTION`)<br>
+/// `EXCEPTION` behaviour can still be achieved externally in cost of performance:<br>
+/// `when(array_length(array_distinct(keys)) == array_length(keys), constructed_map)`<br>
+/// `.otherwise(raise_error("duplicate keys occured during map construction"))`
+pub fn map_from_keys_values_offsets_nulls(
+    flat_keys: &ArrayRef,
+    flat_values: &ArrayRef,
+    keys_offsets: &[i32],
+    values_offsets: &[i32],
+    keys_nulls: Option<&NullBuffer>,
+    values_nulls: Option<&NullBuffer>,
+) -> Result<ArrayRef> {
+    let (keys, values, offsets) = map_deduplicate_keys(
+        flat_keys,
+        flat_values,
+        keys_offsets,
+        values_offsets,
+        keys_nulls,
+        values_nulls,
+    )?;
+    let nulls = NullBuffer::union(keys_nulls, values_nulls);
+
+    let fields = Fields::from(vec![
+        Field::new("key", flat_keys.data_type().clone(), false),
+        Field::new("value", flat_values.data_type().clone(), true),
+    ]);
+    let entries = StructArray::try_new(fields.clone(), vec![keys, values], None)?;
+    let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+    Ok(Arc::new(MapArray::try_new(
+        field, offsets, entries, nulls, false,
+    )?))
+}
+
+fn map_deduplicate_keys(
+    flat_keys: &ArrayRef,
+    flat_values: &ArrayRef,
+    keys_offsets: &[i32],
+    values_offsets: &[i32],
+    keys_nulls: Option<&NullBuffer>,
+    values_nulls: Option<&NullBuffer>,
+) -> Result<(ArrayRef, ArrayRef, OffsetBuffer<i32>)> {
+    let offsets_len = keys_offsets.len();
+    let mut new_offsets = Vec::with_capacity(offsets_len);
+
+    let mut cur_keys_offset = 0;
+    let mut cur_values_offset = 0;
+    let mut new_last_offset = 0;
+    new_offsets.push(new_last_offset);
+
+    let mut keys_mask_builder = BooleanBuilder::new();
+    let mut values_mask_builder = BooleanBuilder::new();
+    for (row_idx, (next_keys_offset, next_values_offset)) in keys_offsets
+        .iter()
+        .zip(values_offsets.iter())
+        .skip(1)
+        .enumerate()
+    {
+        let num_keys_entries = *next_keys_offset as usize - cur_keys_offset;
+        let num_values_entries = *next_values_offset as usize - cur_values_offset;
+
+        let mut keys_mask_one = [false].repeat(num_keys_entries);
+        let mut values_mask_one = [false].repeat(num_values_entries);
+
+        if (num_values_entries != num_keys_entries)
+            && keys_nulls.is_none_or(|buf| buf.is_valid(row_idx))
+            && values_nulls.is_none_or(|buf| buf.is_valid(row_idx))
+        {
+            return exec_err!("map_deduplicate_keys: keys and values lists in the same row must have equal lengths");
+        }
+
+        let mut seen_keys = HashSet::new();
+
+        for cur_entry_idx in (0..num_keys_entries).rev() {
+            let key =
+                ScalarValue::try_from_array(&flat_keys, cur_keys_offset + cur_entry_idx)?
+                    .compacted();
+            if seen_keys.contains(&key) {
+                // TODO: implement configuration and logic for spark.sql.mapKeyDedupPolicy=EXCEPTION (this is default spark-config)
+                // exec_err!("invalid argument: duplicate keys in map")
+                // https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961
+            } else {
+                // This code implements deduplication logic for spark.sql.mapKeyDedupPolicy=LAST_WIN (this is NOT default spark-config)
+                keys_mask_one[cur_entry_idx] = true;
+                values_mask_one[cur_entry_idx] = true;
+                seen_keys.insert(key);
+                new_last_offset += 1;
+            }
+        }
+        keys_mask_builder.append_array(&keys_mask_one.into());
+        values_mask_builder.append_array(&values_mask_one.into());
+        new_offsets.push(new_last_offset);
+        cur_keys_offset += num_keys_entries;
+        cur_values_offset += num_values_entries;
+    }
+    let keys_mask = keys_mask_builder.finish();
+    let values_mask = values_mask_builder.finish();
+    let needed_keys = filter(&flat_keys, &keys_mask)?;
+    let needed_values = filter(&flat_values, &values_mask)?;
+    let offsets = OffsetBuffer::new(new_offsets.into());
+    Ok((needed_keys, needed_values, offsets))
+}
