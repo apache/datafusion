@@ -143,23 +143,29 @@ impl ScalarUDFImpl for ParseUrl {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // The return type should match the largest size datatype
+        if arg_types.len() < 2 || arg_types.len() > 3 {
+            return plan_err!(
+                "{} expects 2 or 3 arguments, but got {}",
+                self.name(),
+                arg_types.len()
+            );
+        }
         match arg_types.len() {
-            2 | 3 if arg_types.iter().all(is_string_type) => {
+            2 | 3 => {
                 if arg_types
                     .iter()
                     .any(|arg| matches!(arg, DataType::LargeUtf8))
                 {
                     Ok(DataType::LargeUtf8)
+                } else if arg_types
+                    .iter()
+                    .any(|arg| matches!(arg, DataType::Utf8View))
+                {
+                    Ok(DataType::Utf8View)
                 } else {
                     Ok(DataType::Utf8)
                 }
             }
-            2 | 3 => plan_err!(
-                "`{}` expects STRING arguments, got {:?}",
-                &self.name(),
-                arg_types
-            ),
             _ => plan_err!(
                 "`{}` expects 2 or 3 arguments, got {}",
                 &self.name(),
@@ -172,13 +178,6 @@ impl ScalarUDFImpl for ParseUrl {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_parse_url, vec![])(&args)
     }
-}
-
-fn is_string_type(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
-    )
 }
 
 /// Core implementation of URL parsing function.
