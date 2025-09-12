@@ -28,8 +28,8 @@ make_udf_function!(try_parse_url::TryParseUrl, try_parse_url);
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
-    export_functions!((parse_url, "Extracts a part from a URL.", args));
-    export_functions!((try_parse_url, "This is a special version of parse_url that performs the same operation, but returns a NULL value instead of raising an error if the parsing cannot be performed.", args));
+    export_functions!((parse_url, "Extracts a part from a URL, throwing an error if an invalid URL is provided.", args));
+    export_functions!((try_parse_url, "Same as parse_url but returns NULL if an invalid URL is provided.", args));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
