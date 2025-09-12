@@ -174,8 +174,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// Create an [`ExecutionPlan`] for scanning the table using structured arguments.
     ///
     /// This method uses [`ScanArgs`] to pass scan parameters in a structured way
-    /// and returns a [`ScanResult`] containing the execution plan. This approach
-    /// allows for extensible parameter passing and result handling.
+    /// and returns a [`ScanResult`] containing the execution plan. 
     ///
     /// Table providers can override this method to take advantage of additional
     /// parameters like `preferred_ordering` that may not be available through
