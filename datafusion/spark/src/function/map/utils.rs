@@ -62,7 +62,7 @@ pub fn map_type_from_key_value_types(
 /// So more permissive `LAST_WIN` option is used in this implementation (instead of `EXCEPTION`)<br>
 /// `EXCEPTION` behaviour can still be achieved externally in cost of performance:<br>
 /// `when(array_length(array_distinct(keys)) == array_length(keys), constructed_map)`<br>
-/// `.otherwise(raise_error("duplicate keys occured during map construction"))`
+/// `.otherwise(raise_error("duplicate keys occurred during map construction"))`
 pub fn map_from_keys_values_offsets_nulls(
     flat_keys: &ArrayRef,
     flat_values: &ArrayRef,
