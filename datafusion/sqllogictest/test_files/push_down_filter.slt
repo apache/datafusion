@@ -395,3 +395,28 @@ order by t1.k, t2.v;
 ----
 1 1 1
 10000000 10000000 10000000
+
+# Regression test for https://github.com/apache/datafusion/issues/17512
+
+query I
+COPY (
+    SELECT arrow_cast('2025-01-01T00:00:00Z'::timestamptz, 'Timestamp(Microsecond, Some("UTC"))') AS start_timestamp
+)
+TO 'test_files/scratch/push_down_filter/17512.parquet'
+STORED AS PARQUET;
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE records STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter/17512.parquet';
+
+query I
+SELECT 1
+FROM (
+    SELECT start_timestamp
+    FROM records
+    WHERE start_timestamp <= '2025-01-01T00:00:00Z'::timestamptz
+) AS t
+WHERE t.start_timestamp::time < '00:00:01'::time;
+----
+1

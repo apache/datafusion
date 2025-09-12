@@ -73,26 +73,23 @@ impl ScalarUDFImpl for SparkArray {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.len() {
-            0 => Ok(empty_array_type()),
-            _ => {
-                let mut expr_type = DataType::Null;
-                for arg_type in arg_types {
-                    if !arg_type.equals_datatype(&DataType::Null) {
-                        expr_type = arg_type.clone();
-                        break;
-                    }
-                }
-
-                if expr_type.is_null() {
-                    expr_type = DataType::Int32;
-                }
-
-                Ok(DataType::List(Arc::new(Field::new_list_field(
-                    expr_type, true,
-                ))))
+        let mut expr_type = DataType::Null;
+        for arg_type in arg_types {
+            if !arg_type.equals_datatype(&DataType::Null) {
+                expr_type = arg_type.clone();
+                break;
             }
         }
+
+        if expr_type.is_null() {
+            expr_type = DataType::Int32;
+        }
+
+        Ok(DataType::List(Arc::new(Field::new(
+            ARRAY_FIELD_DEFAULT_NAME,
+            expr_type,
+            true,
+        ))))
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -104,7 +101,7 @@ impl ScalarUDFImpl for SparkArray {
             .collect::<Vec<_>>();
         let return_type = self.return_type(&data_types)?;
         Ok(Arc::new(Field::new(
-            ARRAY_FIELD_DEFAULT_NAME,
+            "this_field_name_is_irrelevant",
             return_type,
             false,
         )))
@@ -143,15 +140,6 @@ impl ScalarUDFImpl for SparkArray {
     }
 }
 
-// Empty array is a special case that is useful for many other array functions
-pub(super) fn empty_array_type() -> DataType {
-    DataType::List(Arc::new(Field::new(
-        ARRAY_FIELD_DEFAULT_NAME,
-        DataType::Int32,
-        true,
-    )))
-}
-
 /// `make_array_inner` is the implementation of the `make_array` function.
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
@@ -174,6 +162,7 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(
                 SingleRowListArrayBuilder::new(array)
                     .with_nullable(true)
+                    .with_field_name(Some(ARRAY_FIELD_DEFAULT_NAME.to_string()))
                     .build_list_array(),
             ))
         }

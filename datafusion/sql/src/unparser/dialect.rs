@@ -487,6 +487,14 @@ impl Dialect for SqliteDialect {
         false
     }
 
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Text
+    }
+
     fn scalar_function_to_sql_overrides(
         &self,
         unparser: &Unparser,
