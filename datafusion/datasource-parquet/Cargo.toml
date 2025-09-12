@@ -36,7 +36,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store", "parquet"] }
 datafusion-common-runtime = { workspace = true }
-datafusion-datasource = { workspace = true, features = ["parquet"] }
+datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
