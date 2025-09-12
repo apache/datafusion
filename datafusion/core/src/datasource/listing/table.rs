@@ -1173,9 +1173,7 @@ impl TableProvider for ListingTable {
             .with_projection(projection.map(|p| p.as_slice()))
             .with_filters(Some(filters))
             .with_limit(limit);
-        Ok(Arc::clone(
-            self.scan_with_args(state, options).await?.plan(),
-        ))
+        Ok(self.scan_with_args(state, options).await?.into_inner())
     }
 
     async fn scan_with_args<'a>(
