@@ -39,7 +39,7 @@ use datafusion::{
 };
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
 use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
@@ -140,6 +140,9 @@ pub struct FFI_AggregateUDF {
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(udaf: &mut Self),
+
+    /// Hash value for the UDAF used for equality comparison.
+    pub hash_value: u64,
 
     /// Internal data. This is only to be accessed by the provider of the udaf.
     /// A [`ForeignAggregateUDF`] should never attempt to access this data.
@@ -341,6 +344,10 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
         let is_nullable = udaf.is_nullable();
         let volatility = udaf.signature().volatility.into();
 
+        let mut hasher = DefaultHasher::new();
+        udaf.hash(&mut hasher);
+        let hash_value = hasher.finish();
+
         let private_data = Box::new(AggregateUDFPrivateData { udaf });
 
         Self {
@@ -359,6 +366,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
+            hash_value,
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
@@ -388,14 +396,20 @@ unsafe impl Sync for ForeignAggregateUDF {}
 
 impl PartialEq for ForeignAggregateUDF {
     fn eq(&self, other: &Self) -> bool {
-        // FFI_AggregateUDF cannot be compared, so identity equality is the best we can do.
-        std::ptr::eq(self, other)
+        let Self {
+            signature,
+            aliases,
+            udaf,
+        } = self;
+        signature == &other.signature
+            && aliases == &other.aliases
+            && udaf.hash_value == other.udaf.hash_value
     }
 }
 impl Eq for ForeignAggregateUDF {}
 impl Hash for ForeignAggregateUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        std::ptr::hash(self, state)
+        self.udaf.hash_value.hash(state);
     }
 }
 
@@ -811,5 +825,21 @@ mod tests {
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::HardRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::SoftRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Beneficial);
+    }
+
+    #[test]
+    fn test_eq() -> Result<()> {
+        // Test that identical UDAFs are equal
+        let sum_udaf1 = create_test_foreign_udaf(Sum::new())?;
+        let sum_udaf2 = create_test_foreign_udaf(Sum::new())?;
+        assert_eq!(sum_udaf1, sum_udaf2);
+
+        // Test that different UDAFs are not equal
+        let count_udaf = create_test_foreign_udaf(
+            datafusion::functions_aggregate::count::Count::new(),
+        )?;
+        assert_ne!(sum_udaf1, count_udaf);
+
+        Ok(())
     }
 }
