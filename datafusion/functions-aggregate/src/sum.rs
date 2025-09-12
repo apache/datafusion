@@ -19,6 +19,7 @@
 
 use ahash::RandomState;
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::Expr;
 use std::any::Any;
 use std::mem::size_of_val;
 
@@ -52,6 +53,17 @@ make_udaf_expr_and_func!(
     "Returns the sum of a group of values.",
     sum_udaf
 );
+
+pub fn sum_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        sum_udaf(),
+        vec![expr],
+        true,
+        None,
+        vec![],
+        None,
+    ))
+}
 
 /// Sum only supports a subset of numeric types, instead relying on type coercion
 ///
