@@ -84,7 +84,8 @@ pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::signature::{
     ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature, TypeSignature,
-    TypeSignatureClass, Volatility, TIMEZONE_WILDCARD,
+    TypeSignatureClass, Volatility, FIXED_SIZE_BINARY_WILDCARD, FIXED_SIZE_LIST_WILDCARD,
+    TIMEZONE_WILDCARD,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
