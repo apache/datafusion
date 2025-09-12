@@ -1,0 +1,282 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file contains tests for xxhash64 function in Spark compatibility mode
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
+# Test xxhash64 function with simple strings
+query I
+SELECT xxhash64('Spark');
+----
+-4294468057691064905
+
+# Test xxhash64 with multiple values
+query I
+SELECT xxhash64(expr) FROM VALUES ('foo'), ('bar'), ('baz') AS t(expr);
+----
+-3075308222547705278
+-1798770879548125814
+-7971906754264201004
+
+# Test xxhash64 with empty string
+query I
+SELECT xxhash64('');
+----
+-7444071767201028348
+
+# Test xxhash64 with NULL values
+query I
+SELECT xxhash64(NULL);
+----
+42
+
+# Test xxhash64 with binary data
+query I
+SELECT xxhash64(X'48656c6c6f');  -- 'Hello' in hex
+----
+6777584228807376986
+
+query I
+SELECT xxhash64(X'537061726b');  -- 'Spark' in hex
+----
+-4294468057691064905
+
+# Test xxhash64 with integer types
+query I
+SELECT xxhash64(arrow_cast(42, 'Int8'));
+----
+-387659249110444264
+
+query I
+SELECT xxhash64(arrow_cast(42, 'UInt8'));
+----
+-387659249110444264
+
+query I
+SELECT xxhash64(arrow_cast(42, 'Int16'));
+----
+-387659249110444264
+
+query I
+SELECT xxhash64(arrow_cast(42, 'UInt16'));
+----
+-387659249110444264
+
+query I
+SELECT xxhash64(arrow_cast(42, 'Int32'));
+----
+-387659249110444264
+
+query I
+SELECT xxhash64(arrow_cast(42, 'UInt32'));
+----
+-387659249110444264
+
+query I
+SELECT xxhash64(arrow_cast(42, 'Int64'));
+----
+-6876166290308861218
+
+query I
+SELECT xxhash64(arrow_cast(42, 'UInt64'));
+----
+-6876166290308861218
+
+# Test xxhash64 with float types
+query I
+SELECT xxhash64(arrow_cast(3.14, 'Float32'));
+----
+-7283597122065597797
+
+query I
+SELECT xxhash64(arrow_cast(3.14, 'Float64'));
+----
+-4595706691642582856
+
+query I
+SELECT xxhash64(arrow_cast(0.0, 'Float32'));
+----
+3614696996920510707
+
+query I
+SELECT xxhash64(arrow_cast(-0.0, 'Float32'));
+----
+3614696996920510707
+
+# Test xxhash64 with boolean types
+query I
+SELECT xxhash64(true);
+----
+-6698625589789238999
+
+query I
+SELECT xxhash64(false);
+----
+3614696996920510707
+
+# Test xxhash64 with decimal types
+query I
+SELECT xxhash64(arrow_cast(123.45, 'Decimal128(10,2)'));
+----
+8791244235932249694
+
+query I
+SELECT xxhash64(arrow_cast(123456789012345678901234567890, 'Decimal256(30,0)'));
+----
+4944037401260857918
+
+# Test xxhash64 with timestamp types
+query I
+SELECT xxhash64(TIMESTAMP '2023-01-01 12:00:00');
+----
+-1407378931393080602
+
+query I
+SELECT xxhash64(TIMESTAMP '2023-01-01 12:00:00.123');
+----
+5398060225209591112
+
+query I
+SELECT xxhash64(TIMESTAMP '2023-01-01 12:00:00.123456');
+----
+-1165170176447128531
+
+query I
+SELECT xxhash64(TIMESTAMP '2023-01-01 12:00:00.123456789');
+----
+-6763638591191357453
+
+# Test xxhash64 with date types
+query I
+SELECT xxhash64(arrow_cast('2023-01-01', 'Date32'));
+----
+-6043813029439407350
+
+query I
+SELECT xxhash64(arrow_cast('2023-01-01', 'Date64'));
+----
+-2921948568039682661
+
+# Test xxhash64 with time types
+query I
+SELECT xxhash64(arrow_cast('12:00:00', 'Time32(Second)'));
+----
+-8977157097864536298
+
+query I
+SELECT xxhash64(arrow_cast('12:00:00.123', 'Time32(Millisecond)'));
+----
+-9067238489088955330
+
+query I
+SELECT xxhash64(arrow_cast('12:00:00.123456', 'Time64(Microsecond)'));
+----
+-8151313266931874180
+
+query I
+SELECT xxhash64(arrow_cast('12:00:00.123456789', 'Time64(Nanosecond)'));
+----
+1133172798740045464
+
+# Test xxhash64 with interval types
+query I
+SELECT xxhash64(INTERVAL '1 day');
+----
+7906059383252910675
+
+query I
+SELECT xxhash64(INTERVAL '1 month 1 day 1 nanosecond');
+----
+8958388478287045343
+
+query I
+SELECT xxhash64(INTERVAL '1 year 1 month');
+----
+5298753258255735493
+
+# Test xxhash64 with duration types
+query I
+SELECT xxhash64(arrow_cast(INTERVAL '1 second', 'Duration(Second)'));
+----
+-7001672635703045582
+
+query I
+SELECT xxhash64(arrow_cast(INTERVAL '1 millisecond', 'Duration(Millisecond)'));
+----
+-7001672635703045582
+
+query I
+SELECT xxhash64(arrow_cast(INTERVAL '1 microsecond', 'Duration(Microsecond)'));
+----
+-7001672635703045582
+
+query I
+SELECT xxhash64(arrow_cast(INTERVAL '1 nanosecond', 'Duration(Nanosecond)'));
+----
+-7001672635703045582
+
+# Test xxhash64 with fixed size binary
+query I
+SELECT xxhash64(arrow_cast(X'0102030405', 'FixedSizeBinary(5)'));
+----
+8668608334415110682
+
+# Test xxhash64 with list types
+query I
+SELECT xxhash64(arrow_cast([1, 2, 3], 'List(Int32)'));
+----
+8592097078962733837
+
+query I
+SELECT xxhash64(arrow_cast(['a', 'b', 'c'], 'List(Utf8)'));
+----
+-8775012835737190202
+
+# Test xxhash64 with struct types
+query I
+SELECT xxhash64(named_struct('a', 1, 'b', 'test'));
+----
+-8935072733071425019
+
+# Test xxhash64 with map types
+query I
+SELECT xxhash64({'key1': 'value1', 'key2': 'value2'});
+----
+7222145071341353886
+
+# Test xxhash64 with dictionary types
+query I
+SELECT xxhash64(arrow_cast('test', 'Dictionary(Int32, Utf8)'));
+----
+-3577179998404463756
+
+query I
+SELECT xxhash64('foo', 42);
+----
+7795082500386061179
+
+# Test xxhash64 with multiple columns
+query I
+SELECT xxhash64(col1, col2) FROM VALUES 
+    ('foo', 42), 
+    ('bar', 123), 
+    ('baz', 456) AS t(col1, col2);
+----
+7795082500386061179
+2320365627537839193
+2643631156015080397
