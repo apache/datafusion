@@ -827,7 +827,7 @@ config_namespace! {
         /// will choose one based on heuristics.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         ///
-        /// Note: if `join_method_priority` is set, this configuration will be overriden
+        /// Note: if `join_method_priority` is set, this configuration will be overridden
         #[deprecated(since = "51.0.0", note = "Please use configuration option `join_method_priority` instead")]
         pub prefer_hash_join: bool, default = true
 
@@ -842,6 +842,8 @@ config_namespace! {
         /// applicable to the current join and enabled via the corresponding
         /// `enable_*_join` flags. If none match, a default heuristic order
         /// is used as a fallback.
+        /// The default join method selection policy is, for equi-joins, Hash Join is
+        /// used; for non equi-joins, Nested Loop Join is used.
         ///
         /// Examples:
         /// - `hj, nlj`: prefer Hash Join; if not applicable, try Nested Loop Join next.
