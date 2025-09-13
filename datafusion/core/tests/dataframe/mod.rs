@@ -2274,7 +2274,8 @@ async fn verify_join_output_partitioning() -> Result<()> {
             JoinType::Left
             | JoinType::LeftSemi
             | JoinType::LeftAnti
-            | JoinType::LeftMark => {
+            | JoinType::LeftMark
+            | JoinType::LeftSingle => {
                 let left_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
                     Arc::new(Column::new_with_schema("c1", &join_schema)?),
                     Arc::new(Column::new_with_schema("c2", &join_schema)?),

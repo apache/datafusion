@@ -4516,7 +4516,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, _) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
