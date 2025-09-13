@@ -15,16 +15,71 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BooleanBuilder, MapArray, StructArray};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanBuilder, MapArray, StructArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::filter;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result, ScalarValue};
 
-/// Helper function to construct [`MapType<K, V>`](arrow::datatypes::DataType::Map) given K and V DataTypes for keys and values
+/// Helper function to get element [`DataType`]
+/// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
+/// [`Null`](DataType::Null) can be coerced to `ListType`([`Null`](DataType::Null)), so [`Null`](DataType::Null) is returned<br>
+/// For all other types [`exec_err`](exec_err) is raised
+pub fn get_element_type(data_type: &DataType) -> Result<&DataType> {
+    match data_type {
+        DataType::Null => Ok(data_type),
+        DataType::List(element)
+        | DataType::LargeList(element)
+        | DataType::FixedSizeList(element, _) => Ok(element.data_type()),
+        _ => exec_err!(
+            "get_element_type expects List/LargeList/FixedSizeList/Null as argument, got {data_type:?}"
+        ),
+    }
+}
+
+/// Helper function to get [`values`](arrow::array::ListArray::values)
+/// from [`ListArray`](arrow::array::ListArray)/[`LargeListArray`](arrow::array::LargeListArray)/[`FixedSizeListArray`](arrow::array::FixedSizeListArray)<br>
+/// [`NullArray`](arrow::array::NullArray) can be coerced to `ListType`([`Null`](DataType::Null)), so [`NullArray`](arrow::array::NullArray) is returned<br>
+/// For all other types [`exec_err`](exec_err) is raised
+pub fn get_list_values(array: &ArrayRef) -> Result<&ArrayRef> {
+    match array.data_type() {
+        DataType::Null => Ok(array),
+        DataType::List(_) => Ok(array.as_list::<i32>().values()),
+        DataType::LargeList(_) => Ok(array.as_list::<i64>().values()),
+        DataType::FixedSizeList(..) => Ok(array.as_fixed_size_list().values()),
+        wrong_type => exec_err!(
+            "get_list_values expects List/LargeList/FixedSizeList/Null as argument, got {wrong_type:?}"
+        ),
+    }
+}
+
+/// Helper function to get [`offsets`](arrow::array::ListArray::offsets)
+/// from [`ListArray`](arrow::array::ListArray)/[`LargeListArray`](arrow::array::LargeListArray)/[`FixedSizeListArray`](arrow::array::FixedSizeListArray)<br>
+/// For all other types [`exec_err`](exec_err) is raised
+pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
+    match array.data_type() {
+        DataType::List(_) => Ok(Cow::Borrowed(array.as_list::<i32>().offsets().as_ref())),
+        DataType::LargeList(_) => Ok(Cow::Owned(
+            array.as_list::<i64>()
+                .offsets()
+                .iter()
+                .map(|i| *i as i32)
+                .collect::<Vec<_>>(),
+        )),
+        DataType::FixedSizeList(_, size) => Ok(Cow::Owned(
+             (0..=array.len() as i32).map(|i| size * i).collect()
+        )),
+        wrong_type => exec_err!(
+            "get_list_offsets expects List/LargeList/FixedSizeList as argument, got {wrong_type:?}"
+        ),
+    }
+}
+
+/// Helper function to construct [`MapType<K, V>`](DataType::Map) given K and V DataTypes for keys and values
 /// - Map keys are unsorted
 /// - Map keys are non-nullable
 /// - Map entries are non-nullable

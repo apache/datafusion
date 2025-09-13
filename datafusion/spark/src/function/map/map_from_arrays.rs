@@ -16,16 +16,16 @@
 // under the License.
 
 use std::any::Any;
-use std::borrow::Cow;
 
 use crate::function::map::utils::{
+    get_element_type, get_list_offsets, get_list_values,
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
 };
-use arrow::array::{Array, ArrayRef, AsArray, NullArray};
+use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
@@ -76,49 +76,6 @@ impl ScalarUDFImpl for MapFromArrays {
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         make_scalar_function(map_from_arrays_inner, vec![])(&args.args)
-    }
-}
-
-fn get_element_type(data_type: &DataType) -> Result<&DataType> {
-    match data_type {
-        DataType::Null => Ok(data_type),
-        DataType::List(element)
-        | DataType::LargeList(element)
-        | DataType::FixedSizeList(element, _) => Ok(element.data_type()),
-        _ => exec_err!(
-            "map_from_arrays expects 2 listarrays for keys and values as arguments, got {data_type:?}"
-        ),
-    }
-}
-
-fn get_list_values(array: &ArrayRef) -> Result<&ArrayRef> {
-    match array.data_type() {
-        DataType::Null => Ok(array),
-        DataType::List(_) => Ok(array.as_list::<i32>().values()),
-        DataType::LargeList(_) => Ok(array.as_list::<i64>().values()),
-        DataType::FixedSizeList(..) => Ok(array.as_fixed_size_list().values()),
-        wrong_type => internal_err!(
-            "get_list_values expects List/LargeList/FixedSizeList as argument, got {wrong_type:?}"
-        ),
-    }
-}
-
-fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
-    match array.data_type() {
-        DataType::List(_) => Ok(Cow::Borrowed(array.as_list::<i32>().offsets().as_ref())),
-        DataType::LargeList(_) => Ok(Cow::Owned(
-            array.as_list::<i64>()
-                .offsets()
-                .iter()
-                .map(|i| *i as i32)
-                .collect::<Vec<_>>(),
-        )),
-        DataType::FixedSizeList(_, size) => Ok(Cow::Owned(
-             (0..=array.len() as i32).map(|i| size * i).collect()
-        )),
-        wrong_type => internal_err!(
-            "map_from_arrays expects List/LargeList/FixedSizeList as first argument, got {wrong_type:?}"
-        ),
     }
 }
 
