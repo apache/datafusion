@@ -155,9 +155,7 @@ To get started, see
    contributor-guide/governance
    contributor-guide/inviting
    contributor-guide/specification/index
-   contributor-guide/gsoc_application_guidelines
-   contributor-guide/gsoc_project_ideas
-
+   
 .. _toc.subprojects:
 
 .. toctree::
