@@ -146,6 +146,87 @@ const NLJ_QUERIES: &[&str] = &[
         FULL JOIN range(30000) AS t2
         ON (t1.value > t2.value);
     "#,
+    // Q13: SEMI JOIN 10K x 10K | LOW 0.1%
+    r#"
+        SELECT *
+        FROM range(10000) AS t1
+        WHERE EXISTS (
+            SELECT 1
+            FROM range(10000) AS t2
+            WHERE t1.id = t2.id AND t2.id % 10000 = 0
+        )
+    "#,
+    // Q14: SEMI JOIN 10K x 10K |  Medium 20%
+    r#"
+        SELECT *
+        FROM range(10000) AS t1
+        WHERE EXISTS (
+            SELECT 1
+            FROM range(10000) AS t2
+            WHERE t1.id = t2.id AND t2.id % 5 = 0
+        )
+    "#,
+    // Q15: SEMI JOIN 10K x 10K |  High 90%
+    r#"
+        SELECT *
+        FROM range(10000) AS t1
+        WHERE EXISTS (
+            SELECT 1
+            FROM range(10000) AS t2
+            WHERE t1.id = t2.id AND t2.id % 10 <> 0
+        )
+    "#,
+    // Q16: ANTI JOIN 10K * 10K | LOW 0.1%
+    r#"
+        SELECT *
+        FROM range(10000) AS t1
+        WHERE NOT EXISTS (
+            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id
+        )
+    "#,
+    // Q17: ANTI JOIN 10K * 10K | MEDIUM 20%
+    r#"
+        SELECT *
+        FROM range(10000) AS t1
+        WHERE NOT EXISTS (
+            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id AND t2.id % 5 = 0
+        )
+    "#,
+    // Q18: ANTI JOIN 10K * 10K | HIGH 90%
+    r#"
+        SELECT *
+        FROM range(10000) AS t1
+        WHERE NOT EXISTS (
+            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id AND t2.id % 10 = 0
+        )
+    "#,
+    // Q19: Mark joins 10K * 10K | LOW 0.1%
+    r#"
+        SELECT
+        t1.id,
+        EXISTS (
+            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id
+        ) AS has_match
+        FROM range(10000) AS t1
+    "#,
+    // Q20: Mark joins 10K * 10K | MEDIUM 20%
+    r#"
+        SELECT
+        t1.id,
+        EXISTS (
+            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id AND t2.id % 5 = 0
+        ) AS has_match
+        FROM range(10000) AS t1
+    "#,
+    // Q21: Mark joins 10K * 10K | HIGH 90%
+    r#"
+        SELECT
+        t1.id,
+        EXISTS (
+            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id AND t2.id % 10 != 0
+        ) AS has_match
+        FROM range(10000) AS t1
+    "#
 ];
 
 impl RunOpt {
