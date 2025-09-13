@@ -217,7 +217,8 @@ impl SortMergeJoinExec {
             | JoinType::Full
             | JoinType::LeftAnti
             | JoinType::LeftSemi
-            | JoinType::LeftMark => JoinSide::Left,
+            | JoinType::LeftMark
+            | JoinType::LeftSingle => JoinSide::Left,
         }
     }
 

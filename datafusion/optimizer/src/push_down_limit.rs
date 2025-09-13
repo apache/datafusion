@@ -849,7 +849,7 @@ mod test {
             plan,
             @r"
         Limit: skip=10, fetch=1000
-          Inner Join: test.a = test2.a
+          Inner Join(ComparisonJoin): test.a = test2.a
             TableScan: test
             TableScan: test2
         "
@@ -876,7 +876,7 @@ mod test {
             plan,
             @r"
         Limit: skip=10, fetch=1000
-          Inner Join: test.a = test2.a
+          Inner Join(ComparisonJoin): test.a = test2.a
             TableScan: test
             TableScan: test2
         "
@@ -967,7 +967,7 @@ mod test {
             plan,
             @r"
         Limit: skip=10, fetch=1000
-          Left Join: test.a = test2.a
+          Left Join(ComparisonJoin): test.a = test2.a
             Limit: skip=0, fetch=1010
               TableScan: test, fetch=1010
             TableScan: test2
@@ -995,7 +995,7 @@ mod test {
             plan,
             @r"
         Limit: skip=0, fetch=1000
-          Right Join: test.a = test2.a
+          Right Join(ComparisonJoin): test.a = test2.a
             TableScan: test
             Limit: skip=0, fetch=1000
               TableScan: test2, fetch=1000
@@ -1023,7 +1023,7 @@ mod test {
             plan,
             @r"
         Limit: skip=10, fetch=1000
-          Right Join: test.a = test2.a
+          Right Join(ComparisonJoin): test.a = test2.a
             TableScan: test
             Limit: skip=0, fetch=1010
               TableScan: test2, fetch=1010
@@ -1045,7 +1045,7 @@ mod test {
             plan,
             @r"
         Limit: skip=0, fetch=1000
-          Cross Join: 
+          Cross Join(ComparisonJoin): 
             Limit: skip=0, fetch=1000
               TableScan: test, fetch=1000
             Limit: skip=0, fetch=1000
@@ -1068,7 +1068,7 @@ mod test {
             plan,
             @r"
         Limit: skip=1000, fetch=1000
-          Cross Join: 
+          Cross Join(ComparisonJoin): 
             Limit: skip=0, fetch=2000
               TableScan: test, fetch=2000
             Limit: skip=0, fetch=2000

@@ -33,8 +33,9 @@ use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
+use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
-use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+// use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -52,7 +53,7 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
-use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
+//use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::utils::log_plan;
@@ -227,8 +228,9 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
-            Arc::new(DecorrelatePredicateSubquery::new()),
-            Arc::new(ScalarSubqueryToJoin::new()),
+            Arc::new(DecorrelateDependentJoin::new()), // TODO
+            // Arc::new(DecorrelatePredicateSubquery::new()),
+            // Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(DecorrelateLateralJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
