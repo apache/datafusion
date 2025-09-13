@@ -297,6 +297,20 @@ impl DFSchema {
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
     /// duplicate fields.
+    ///
+    /// ## Merge Precedence
+    ///
+    /// **Schema-level metadata**: Metadata from both schemas is merged.
+    /// If both schemas have the same metadata key, the value from the `other_schema` parameter takes precedence.
+    ///
+    /// **Field-level merging**: Only non-duplicate fields are added. This means that the
+    /// `self` fields will always take precedence over the `other_schema` fields.
+    /// Duplicate field detection is based on:
+    /// - For qualified fields: both qualifier and field name must match
+    /// - For unqualified fields: only field name needs to match
+    ///
+    /// Take note how the precedence for fields & metadata merging differs;
+    /// merging prefers fields from `self` but prefers metadata from `other_schema`.
     pub fn merge(&mut self, other_schema: &DFSchema) {
         if other_schema.inner.fields.is_empty() {
             return;
@@ -848,6 +862,208 @@ impl DFSchema {
             .iter()
             .zip(self.inner.fields().iter())
             .map(|(qualifier, field)| (qualifier.as_ref(), field))
+    }
+    /// Print schema in tree format
+    ///
+    /// This method formats the schema
+    /// with a tree-like structure showing field names, types, and nullability.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use datafusion_common::DFSchema;
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use std::collections::HashMap;
+    ///
+    /// let schema = DFSchema::from_unqualified_fields(
+    ///     vec![
+    ///         Field::new("id", DataType::Int32, false),
+    ///         Field::new("name", DataType::Utf8, true),
+    ///     ].into(),
+    ///     HashMap::new()
+    /// ).unwrap();
+    ///
+    /// assert_eq!(schema.print_schema_tree().to_string(),
+    /// r#"root
+    ///  |-- id: int32 (nullable = false)
+    ///  |-- name: utf8 (nullable = true)"#);
+    /// ```
+    pub fn print_schema_tree(&self) -> impl Display + '_ {
+        let mut result = String::from("root\n");
+
+        for (qualifier, field) in self.iter() {
+            let field_name = match qualifier {
+                Some(q) => format!("{}.{}", q, field.name()),
+                None => field.name().to_string(),
+            };
+
+            format_field_with_indent(
+                &mut result,
+                &field_name,
+                field.data_type(),
+                field.is_nullable(),
+                " ",
+            );
+        }
+
+        // Remove the trailing newline
+        if result.ends_with('\n') {
+            result.pop();
+        }
+
+        result
+    }
+}
+
+/// Format field with proper nested indentation for complex types
+fn format_field_with_indent(
+    result: &mut String,
+    field_name: &str,
+    data_type: &DataType,
+    nullable: bool,
+    indent: &str,
+) {
+    let nullable_str = nullable.to_string().to_lowercase();
+    let child_indent = format!("{indent}|    ");
+
+    match data_type {
+        DataType::List(field) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: list (nullable = {nullable_str})\n"
+            ));
+            format_field_with_indent(
+                result,
+                field.name(),
+                field.data_type(),
+                field.is_nullable(),
+                &child_indent,
+            );
+        }
+        DataType::LargeList(field) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: large list (nullable = {nullable_str})\n"
+            ));
+            format_field_with_indent(
+                result,
+                field.name(),
+                field.data_type(),
+                field.is_nullable(),
+                &child_indent,
+            );
+        }
+        DataType::FixedSizeList(field, _size) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: fixed size list (nullable = {nullable_str})\n"
+            ));
+            format_field_with_indent(
+                result,
+                field.name(),
+                field.data_type(),
+                field.is_nullable(),
+                &child_indent,
+            );
+        }
+        DataType::Map(field, _) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: map (nullable = {nullable_str})\n"
+            ));
+            if let DataType::Struct(inner_fields) = field.data_type() {
+                if inner_fields.len() == 2 {
+                    format_field_with_indent(
+                        result,
+                        "key",
+                        inner_fields[0].data_type(),
+                        inner_fields[0].is_nullable(),
+                        &child_indent,
+                    );
+                    let value_contains_null =
+                        field.is_nullable().to_string().to_lowercase();
+                    // Handle complex value types properly
+                    match inner_fields[1].data_type() {
+                        DataType::Struct(_)
+                        | DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::Map(_, _) => {
+                            format_field_with_indent(
+                                result,
+                                "value",
+                                inner_fields[1].data_type(),
+                                inner_fields[1].is_nullable(),
+                                &child_indent,
+                            );
+                        }
+                        _ => {
+                            result.push_str(&format!("{child_indent}|-- value: {} (nullable = {value_contains_null})\n",
+                                format_simple_data_type(inner_fields[1].data_type())));
+                        }
+                    }
+                }
+            }
+        }
+        DataType::Struct(fields) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: struct (nullable = {nullable_str})\n"
+            ));
+            for struct_field in fields {
+                format_field_with_indent(
+                    result,
+                    struct_field.name(),
+                    struct_field.data_type(),
+                    struct_field.is_nullable(),
+                    &child_indent,
+                );
+            }
+        }
+        _ => {
+            let type_str = format_simple_data_type(data_type);
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: {type_str} (nullable = {nullable_str})\n"
+            ));
+        }
+    }
+}
+
+/// Format simple DataType in lowercase format (for leaf nodes)
+fn format_simple_data_type(data_type: &DataType) -> String {
+    match data_type {
+        DataType::Boolean => "boolean".to_string(),
+        DataType::Int8 => "int8".to_string(),
+        DataType::Int16 => "int16".to_string(),
+        DataType::Int32 => "int32".to_string(),
+        DataType::Int64 => "int64".to_string(),
+        DataType::UInt8 => "uint8".to_string(),
+        DataType::UInt16 => "uint16".to_string(),
+        DataType::UInt32 => "uint32".to_string(),
+        DataType::UInt64 => "uint64".to_string(),
+        DataType::Float16 => "float16".to_string(),
+        DataType::Float32 => "float32".to_string(),
+        DataType::Float64 => "float64".to_string(),
+        DataType::Utf8 => "utf8".to_string(),
+        DataType::LargeUtf8 => "large_utf8".to_string(),
+        DataType::Binary => "binary".to_string(),
+        DataType::LargeBinary => "large_binary".to_string(),
+        DataType::FixedSizeBinary(_) => "fixed_size_binary".to_string(),
+        DataType::Date32 => "date32".to_string(),
+        DataType::Date64 => "date64".to_string(),
+        DataType::Time32(_) => "time32".to_string(),
+        DataType::Time64(_) => "time64".to_string(),
+        DataType::Timestamp(_, tz) => match tz {
+            Some(tz_str) => format!("timestamp ({tz_str})"),
+            None => "timestamp".to_string(),
+        },
+        DataType::Interval(_) => "interval".to_string(),
+        DataType::Dictionary(_, value_type) => {
+            format_simple_data_type(value_type.as_ref())
+        }
+        DataType::Decimal128(precision, scale) => {
+            format!("decimal128({precision}, {scale})")
+        }
+        DataType::Decimal256(precision, scale) => {
+            format!("decimal256({precision}, {scale})")
+        }
+        DataType::Null => "null".to_string(),
+        _ => format!("{data_type:?}").to_lowercase(),
     }
 }
 
@@ -1719,5 +1935,485 @@ mod tests {
 
     fn test_metadata_n(n: usize) -> HashMap<String, String> {
         (0..n).map(|i| (format!("k{i}"), format!("v{i}"))).collect()
+    }
+
+    #[test]
+    fn test_print_schema_unqualified() {
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("age", DataType::Int64, true),
+                Field::new("active", DataType::Boolean, false),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.print_schema_tree();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- id: int32 (nullable = false)
+         |-- name: utf8 (nullable = true)
+         |-- age: int64 (nullable = true)
+         |-- active: boolean (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_qualified() {
+        let schema = DFSchema::try_from_qualified_schema(
+            "table1",
+            &Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, true),
+            ]),
+        )
+        .unwrap();
+
+        let output = schema.print_schema_tree();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- table1.id: int32 (nullable = false)
+         |-- table1.name: utf8 (nullable = true)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_complex_types() {
+        let struct_field = Field::new(
+            "address",
+            DataType::Struct(Fields::from(vec![
+                Field::new("street", DataType::Utf8, true),
+                Field::new("city", DataType::Utf8, true),
+            ])),
+            true,
+        );
+
+        let list_field = Field::new(
+            "tags",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("id", DataType::Int32, false),
+                struct_field,
+                list_field,
+                Field::new("score", DataType::Decimal128(10, 2), true),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.print_schema_tree();
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- id: int32 (nullable = false)
+         |-- address: struct (nullable = true)
+         |    |-- street: utf8 (nullable = true)
+         |    |-- city: utf8 (nullable = true)
+         |-- tags: list (nullable = true)
+         |    |-- item: utf8 (nullable = true)
+         |-- score: decimal128(10, 2) (nullable = true)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_empty() {
+        let schema = DFSchema::empty();
+        let output = schema.print_schema_tree();
+        insta::assert_snapshot!(output, @r###"root"###);
+    }
+
+    #[test]
+    fn test_print_schema_deeply_nested_types() {
+        // Create a deeply nested structure to test indentation and complex type formatting
+        let inner_struct = Field::new(
+            "inner",
+            DataType::Struct(Fields::from(vec![
+                Field::new("level1", DataType::Utf8, true),
+                Field::new("level2", DataType::Int32, false),
+            ])),
+            true,
+        );
+
+        let nested_list = Field::new(
+            "nested_list",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("value", DataType::Float64, true),
+                ])),
+                true,
+            ))),
+            true,
+        );
+
+        let map_field = Field::new(
+            "map_data",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new(
+                            "value",
+                            DataType::List(Arc::new(Field::new(
+                                "item",
+                                DataType::Int32,
+                                true,
+                            ))),
+                            true,
+                        ),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("simple_field", DataType::Utf8, true),
+                inner_struct,
+                nested_list,
+                map_field,
+                Field::new(
+                    "timestamp_field",
+                    DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Microsecond,
+                        Some("UTC".into()),
+                    ),
+                    false,
+                ),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.print_schema_tree();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- simple_field: utf8 (nullable = true)
+         |-- inner: struct (nullable = true)
+         |    |-- level1: utf8 (nullable = true)
+         |    |-- level2: int32 (nullable = false)
+         |-- nested_list: list (nullable = true)
+         |    |-- item: struct (nullable = true)
+         |    |    |-- id: int64 (nullable = false)
+         |    |    |-- value: float64 (nullable = true)
+         |-- map_data: map (nullable = true)
+         |    |-- key: utf8 (nullable = false)
+         |    |-- value: list (nullable = true)
+         |    |    |-- item: int32 (nullable = true)
+         |-- timestamp_field: timestamp (UTC) (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_mixed_qualified_unqualified() {
+        // Test a schema with mixed qualified and unqualified fields
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some("table1".into()),
+                    Arc::new(Field::new("id", DataType::Int32, false)),
+                ),
+                (None, Arc::new(Field::new("name", DataType::Utf8, true))),
+                (
+                    Some("table2".into()),
+                    Arc::new(Field::new("score", DataType::Float64, true)),
+                ),
+                (
+                    None,
+                    Arc::new(Field::new("active", DataType::Boolean, false)),
+                ),
+            ],
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.print_schema_tree();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- table1.id: int32 (nullable = false)
+         |-- name: utf8 (nullable = true)
+         |-- table2.score: float64 (nullable = true)
+         |-- active: boolean (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_array_of_map() {
+        // Test the specific example from user feedback: array of map
+        let map_field = Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, false),
+            ])),
+            false,
+        );
+
+        let array_of_map_field = Field::new(
+            "array_map_field",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Map(Arc::new(map_field), false),
+                false,
+            ))),
+            false,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![array_of_map_field].into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.print_schema_tree();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- array_map_field: list (nullable = false)
+         |    |-- item: map (nullable = false)
+         |    |    |-- key: utf8 (nullable = false)
+         |    |    |-- value: utf8 (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_complex_type_combinations() {
+        // Test various combinations of list, struct, and map types
+
+        // List of structs
+        let list_of_structs = Field::new(
+            "list_of_structs",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("name", DataType::Utf8, true),
+                    Field::new("score", DataType::Float64, true),
+                ])),
+                true,
+            ))),
+            true,
+        );
+
+        // Struct containing lists
+        let struct_with_lists = Field::new(
+            "struct_with_lists",
+            DataType::Struct(Fields::from(vec![
+                Field::new(
+                    "tags",
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    true,
+                ),
+                Field::new(
+                    "scores",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                    false,
+                ),
+                Field::new("metadata", DataType::Utf8, true),
+            ])),
+            false,
+        );
+
+        // Map with struct values
+        let map_with_struct_values = Field::new(
+            "map_with_struct_values",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new(
+                            "value",
+                            DataType::Struct(Fields::from(vec![
+                                Field::new("count", DataType::Int64, false),
+                                Field::new("active", DataType::Boolean, true),
+                            ])),
+                            true,
+                        ),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        );
+
+        // List of maps
+        let list_of_maps = Field::new(
+            "list_of_maps",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Int32, true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            ))),
+            true,
+        );
+
+        // Deeply nested: struct containing list of structs containing maps
+        let deeply_nested = Field::new(
+            "deeply_nested",
+            DataType::Struct(Fields::from(vec![
+                Field::new("level1", DataType::Utf8, true),
+                Field::new(
+                    "level2",
+                    DataType::List(Arc::new(Field::new(
+                        "item",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("id", DataType::Int32, false),
+                            Field::new(
+                                "properties",
+                                DataType::Map(
+                                    Arc::new(Field::new(
+                                        "entries",
+                                        DataType::Struct(Fields::from(vec![
+                                            Field::new("key", DataType::Utf8, false),
+                                            Field::new("value", DataType::Float64, true),
+                                        ])),
+                                        false,
+                                    )),
+                                    false,
+                                ),
+                                true,
+                            ),
+                        ])),
+                        true,
+                    ))),
+                    false,
+                ),
+            ])),
+            true,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                list_of_structs,
+                struct_with_lists,
+                map_with_struct_values,
+                list_of_maps,
+                deeply_nested,
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.print_schema_tree();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- list_of_structs: list (nullable = true)
+         |    |-- item: struct (nullable = true)
+         |    |    |-- id: int32 (nullable = false)
+         |    |    |-- name: utf8 (nullable = true)
+         |    |    |-- score: float64 (nullable = true)
+         |-- struct_with_lists: struct (nullable = false)
+         |    |-- tags: list (nullable = true)
+         |    |    |-- item: utf8 (nullable = true)
+         |    |-- scores: list (nullable = false)
+         |    |    |-- item: int32 (nullable = true)
+         |    |-- metadata: utf8 (nullable = true)
+         |-- map_with_struct_values: map (nullable = true)
+         |    |-- key: utf8 (nullable = false)
+         |    |-- value: struct (nullable = true)
+         |    |    |-- count: int64 (nullable = false)
+         |    |    |-- active: boolean (nullable = true)
+         |-- list_of_maps: list (nullable = true)
+         |    |-- item: map (nullable = true)
+         |    |    |-- key: utf8 (nullable = false)
+         |    |    |-- value: int32 (nullable = false)
+         |-- deeply_nested: struct (nullable = true)
+         |    |-- level1: utf8 (nullable = true)
+         |    |-- level2: list (nullable = false)
+         |    |    |-- item: struct (nullable = true)
+         |    |    |    |-- id: int32 (nullable = false)
+         |    |    |    |-- properties: map (nullable = true)
+         |    |    |    |    |-- key: utf8 (nullable = false)
+         |    |    |    |    |-- value: float64 (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_edge_case_types() {
+        // Test edge cases and special types
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("null_field", DataType::Null, true),
+                Field::new("binary_field", DataType::Binary, false),
+                Field::new("large_binary", DataType::LargeBinary, true),
+                Field::new("large_utf8", DataType::LargeUtf8, false),
+                Field::new("fixed_size_binary", DataType::FixedSizeBinary(16), true),
+                Field::new(
+                    "fixed_size_list",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Int32, true)),
+                        5,
+                    ),
+                    false,
+                ),
+                Field::new("decimal128", DataType::Decimal128(18, 4), true),
+                Field::new("decimal256", DataType::Decimal256(38, 10), false),
+                Field::new("date32", DataType::Date32, true),
+                Field::new("date64", DataType::Date64, false),
+                Field::new(
+                    "time32_seconds",
+                    DataType::Time32(arrow::datatypes::TimeUnit::Second),
+                    true,
+                ),
+                Field::new(
+                    "time64_nanoseconds",
+                    DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+                    false,
+                ),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.print_schema_tree();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- null_field: null (nullable = true)
+         |-- binary_field: binary (nullable = false)
+         |-- large_binary: large_binary (nullable = true)
+         |-- large_utf8: large_utf8 (nullable = false)
+         |-- fixed_size_binary: fixed_size_binary (nullable = true)
+         |-- fixed_size_list: fixed size list (nullable = false)
+         |    |-- item: int32 (nullable = true)
+         |-- decimal128: decimal128(18, 4) (nullable = true)
+         |-- decimal256: decimal256(38, 10) (nullable = false)
+         |-- date32: date32 (nullable = true)
+         |-- date64: date64 (nullable = false)
+         |-- time32_seconds: time32 (nullable = true)
+         |-- time64_nanoseconds: time64 (nullable = false)
+        ");
     }
 }

@@ -933,6 +933,8 @@ mod tests {
                 Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
                 cmp => cmp,
             }
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -1020,6 +1022,8 @@ mod tests {
                 }
                 cmp => cmp,
             }
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 

@@ -8062,7 +8062,19 @@ select arrow_typeof(a) from fixed_size_col_table;
 FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
 FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
 
-statement error
+query ? rowsort
+SELECT DISTINCT a FROM fixed_size_col_table
+----
+[1, 2, 3]
+[4, 5, 6]
+
+query ?I rowsort
+SELECT a, count(*) FROM fixed_size_col_table GROUP BY a
+----
+[1, 2, 3] 1
+[4, 5, 6] 1
+
+statement error Cast error: Cannot cast to FixedSizeList\(3\): value at index 0 has length 2
 create table varying_fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5]);
 
 # https://github.com/apache/datafusion/issues/16187
@@ -8070,6 +8082,18 @@ create table varying_fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5]
 query ?
 select [named_struct('a', 1, 'b', null)][-2];
 ----
+NULL
+
+statement ok
+COPY (select [[true, false], [false, true]] a, [false, true] b union select [[null, null]], null) to 'test_files/scratch/array/array_has/single_file.parquet' stored as parquet;
+
+statement ok
+CREATE EXTERNAL TABLE array_has STORED AS PARQUET location 'test_files/scratch/array/array_has/single_file.parquet';
+
+query B
+select array_contains(a, b) from array_has order by 1 nulls last;
+----
+true
 NULL
 
 ### Delete tables
@@ -8250,3 +8274,6 @@ drop table values_all_empty;
 
 statement ok
 drop table fixed_size_col_table;
+
+statement ok
+drop table array_has;

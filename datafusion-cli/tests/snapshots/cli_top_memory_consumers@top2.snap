@@ -17,8 +17,8 @@ exit_code: 1
 Error: Not enough memory to continue external sort. Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes
 caused by
 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-  Consumer(can spill: bool) consumed XB,
-  Consumer(can spill: bool) consumed XB.
+  Consumer(can spill: bool) consumed XB, peak XB,
+  Consumer(can spill: bool) consumed XB, peak XB.
 Error: Failed to allocate 
 
 ----- stderr -----

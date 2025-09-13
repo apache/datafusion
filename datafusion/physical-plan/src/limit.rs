@@ -194,12 +194,9 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input.partition_statistics(partition)?.with_fetch(
-            self.schema(),
-            self.fetch,
-            self.skip,
-            1,
-        )
+        self.input
+            .partition_statistics(partition)?
+            .with_fetch(self.fetch, self.skip, 1)
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -338,12 +335,9 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input.partition_statistics(partition)?.with_fetch(
-            self.schema(),
-            Some(self.fetch),
-            0,
-            1,
-        )
+        self.input
+            .partition_statistics(partition)?
+            .with_fetch(Some(self.fetch), 0, 1)
     }
 
     fn fetch(&self) -> Option<usize> {

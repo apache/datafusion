@@ -1105,7 +1105,7 @@ mod tests {
         ])])?;
 
         // without compaction, the size is 17112
-        assert_eq!(acc.size(), 2112);
+        assert_eq!(acc.size(), 2184);
 
         Ok(())
     }
