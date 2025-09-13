@@ -101,7 +101,7 @@ use tokio::sync::Mutex;
 
 // Submodules
 mod join_planner;
-use self::join_planner::plan_join_exec;
+use self::join_planner::plan_initial_join_exec;
 
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
@@ -1165,7 +1165,7 @@ impl DefaultPhysicalPlanner {
                     _ => None,
                 };
 
-                let join: Arc<dyn ExecutionPlan> = plan_join_exec(
+                let join: Arc<dyn ExecutionPlan> = plan_initial_join_exec(
                     session_state,
                     physical_left,
                     physical_right,

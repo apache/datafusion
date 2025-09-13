@@ -47,7 +47,7 @@ use datafusion_expr::JoinType;
 ///   by checking if they're enabled by options like `datafusion.optimizer.enable_hash_join`
 /// - Step 3: Choose one according to the built-in heuristics and also the preference
 ///   in the configuration `datafusion.optimizer.join_method_priority`
-pub(super) fn plan_join_exec(
+pub(super) fn plan_initial_join_exec(
     session_state: &SessionState,
     physical_left: Arc<dyn ExecutionPlan>,
     physical_right: Arc<dyn ExecutionPlan>,
