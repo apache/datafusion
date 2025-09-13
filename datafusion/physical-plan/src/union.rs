@@ -101,23 +101,49 @@ pub struct UnionExec {
 
 impl UnionExec {
     /// Create a new UnionExec
-    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
-        if inputs.is_empty() {
-            return exec_err!("UnionExec requires at least one input");
-        }
-        
-        let schema = union_schema(&inputs)?;
+    #[deprecated(since = "44.0.0", note = "Use UnionExec::try_new instead")]
+    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+        let schema = union_schema(&inputs).expect("UnionExec::new called with empty inputs");
         // The schema of the inputs and the union schema is consistent when:
         // - They have the same number of fields, and
         // - Their fields have same types at the same indices.
         // Here, we know that schemas are consistent and the call below can
         // not return an error.
         let cache = Self::compute_properties(&inputs, schema).unwrap();
-        Ok(UnionExec {
+        UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        })
+        }
+    }
+
+    /// Try to create a new UnionExec. 
+    /// 
+    /// # Errors
+    /// Returns an error if:
+    /// - `inputs` is empty
+    /// 
+    /// # Optimization
+    /// If there is only one input, returns that input directly rather than wrapping it in a UnionExec
+    pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Arc<dyn ExecutionPlan>> {
+        match inputs.len() {
+            0 => exec_err!("UnionExec requires at least one input"),
+            1 => Ok(inputs.into_iter().next().unwrap()),
+            _ => {
+                let schema = union_schema(&inputs)?;
+                // The schema of the inputs and the union schema is consistent when:
+                // - They have the same number of fields, and
+                // - Their fields have same types at the same indices.
+                // Here, we know that schemas are consistent and the call below can
+                // not return an error.
+                let cache = Self::compute_properties(&inputs, schema).unwrap();
+                Ok(Arc::new(UnionExec {
+                    inputs,
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    cache,
+                }))
+            }
+        }
     }
 
     /// Get inputs of the execution plan
@@ -224,7 +250,7 @@ impl ExecutionPlan for UnionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(UnionExec::new(children)?))
+        UnionExec::try_new(children)
     }
 
     fn execute(
@@ -323,7 +349,8 @@ impl ExecutionPlan for UnionExec {
             .map(|child| make_with_child(projection, child))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Some(Arc::new(UnionExec::new(new_children)?)))
+        #[allow(deprecated)]
+        Ok(Some(Arc::new(UnionExec::new(new_children))))
     }
 }
 
@@ -718,7 +745,8 @@ mod tests {
         let csv = test::scan_partitioned(4);
         let csv2 = test::scan_partitioned(5);
 
-        let union_exec = Arc::new(UnionExec::new(vec![csv, csv2])?);
+        #[allow(deprecated)]
+        let union_exec = Arc::new(UnionExec::new(vec![csv, csv2]));
 
         // Should have 9 partitions and 9 output batches
         assert_eq!(
@@ -900,7 +928,8 @@ mod tests {
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_orderings(union_expected_orderings);
 
-            let union = UnionExec::new(vec![child1, child2])?;
+            #[allow(deprecated)]
+            let union = UnionExec::new(vec![child1, child2]);
             let union_eq_properties = union.properties().equivalence_properties();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
@@ -927,9 +956,8 @@ mod tests {
 
     #[test]
     fn test_union_empty_inputs() {
-        // Test that UnionExec::new fails with empty inputs
-        let result = UnionExec::new(vec![]);
-        assert!(result.is_err());
+        // Test that UnionExec::try_new fails with empty inputs
+        let result = UnionExec::try_new(vec![]);
         assert!(result
             .unwrap_err()
             .to_string()
@@ -940,7 +968,6 @@ mod tests {
     fn test_union_schema_empty_inputs() {
         // Test that union_schema fails with empty inputs
         let result = union_schema(&[]);
-        assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .to_string()
@@ -949,25 +976,34 @@ mod tests {
 
     #[test]
     fn test_union_single_input() -> Result<()> {
-        // Test that UnionExec works with a single input
+        // Test that UnionExec::try_new returns the single input directly
         let schema = create_test_schema()?;
-        let memory_exec = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
-        let union = UnionExec::new(vec![memory_exec])?;
+        let memory_exec: Arc<dyn ExecutionPlan> = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
+        let memory_exec_clone = Arc::clone(&memory_exec);
+        let result = UnionExec::try_new(vec![memory_exec])?;
         
-        // Check that schema is correct
-        assert_eq!(union.schema(), schema);
+        // Check that the result is the same as the input (no UnionExec wrapper)
+        assert_eq!(result.schema(), schema);
+        // Verify it's the same execution plan
+        assert!(Arc::ptr_eq(&result, &memory_exec_clone));
         
         Ok(())
     }
 
     #[test]
-    fn test_union_multiple_inputs_still_works() -> Result<()> {
+    fn test_union_schema_multiple_inputs() -> Result<()> {
         // Test that existing functionality with multiple inputs still works
         let schema = create_test_schema()?;
         let memory_exec1 = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
         let memory_exec2 = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
         
-        let union = UnionExec::new(vec![memory_exec1, memory_exec2])?;
+        let union_plan = UnionExec::try_new(vec![memory_exec1, memory_exec2])?;
+        
+        // Downcast to verify it's a UnionExec
+        let union = union_plan
+            .as_any()
+            .downcast_ref::<UnionExec>()
+            .expect("Expected UnionExec");
         
         // Check that schema is correct
         assert_eq!(union.schema(), schema);

@@ -1783,7 +1783,8 @@ fn union_to_interleave() -> Result<()> {
     );
 
     //  Union
-    let plan = Arc::new(UnionExec::new(vec![left, right])?);
+    #[allow(deprecated)]
+    let plan = Arc::new(UnionExec::new(vec![left, right]));
 
     // final agg
     let plan =
@@ -1827,7 +1828,8 @@ fn union_not_to_interleave() -> Result<()> {
     );
 
     //  Union
-    let plan = Arc::new(UnionExec::new(vec![left, right])?);
+    #[allow(deprecated)]
+    let plan = Arc::new(UnionExec::new(vec![left, right]));
 
     // final agg
     let plan =
