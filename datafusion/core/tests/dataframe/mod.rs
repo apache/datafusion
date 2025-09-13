@@ -129,7 +129,6 @@ async fn assert_logical_expr_schema_eq_physical_expr_schema(df: DataFrame) -> Re
 #[tokio::test]
 async fn test_array_agg_ord_schema() -> Result<()> {
     let ctx = SessionContext::new();
-    let ctx = SessionContext::new_with_config(cfg);
 
     let create_table_query = r#"
             CREATE TABLE test_table (
