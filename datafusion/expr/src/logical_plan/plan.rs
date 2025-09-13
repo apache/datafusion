@@ -2198,8 +2198,8 @@ impl Projection {
 /// # Metadata Handling
 ///
 /// - **Schema-level metadata**: Passed through unchanged from the input schema
-/// - **Field-level metadata**: Determined by each expression via `exprlist_to_fields`, which
-///   calls `Expr::to_field` to handle expression-specific metadata (literals, aliases, etc.)
+/// - **Field-level metadata**: Determined by each expression via [`exprlist_to_fields`], which
+///   calls [`Expr::to_field`] to handle expression-specific metadata (literals, aliases, etc.)
 ///
 /// # Returns
 ///

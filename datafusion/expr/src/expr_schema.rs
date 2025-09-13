@@ -404,9 +404,9 @@ impl ExprSchemable for Expr {
     /// - **Binary expressions**: field metadata is empty
     /// - **Boolean expressions**: field metadata is empty
     /// - **Cast expressions**: determined by the input expression's field metadata handling
-    /// - **Scalar functions**: Generate metadata via function's `return_field_from_args` method,
+    /// - **Scalar functions**: Generate metadata via function's [`return_field_from_args`] method,
     ///   with the default implementation returning empty field metadata
-    /// - **Aggregate functions**: Generate metadata via function's `return_field` method,
+    /// - **Aggregate functions**: Generate metadata via function's [`return_field`] method,
     ///   with the default implementation returning empty field metadata
     /// - **Window functions**: field metadata is empty
     ///
@@ -416,6 +416,9 @@ impl ExprSchemable for Expr {
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
+    ///
+    /// [`return_field_from_args`]: crate::ScalarUDF::return_field_from_args
+    /// [`return_field`]: crate::AggregateUDF::return_field
     fn to_field(
         &self,
         schema: &dyn ExprSchema,

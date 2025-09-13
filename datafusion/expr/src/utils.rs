@@ -699,7 +699,7 @@ where
 /// - **Metadata**: Computed based on expression type (preserving, merging, or generating new metadata)
 /// - **Table reference scoping**: Establishing proper qualified field references
 ///
-/// Each expression is converted to a field by calling `Expr::to_field`, which performs
+/// Each expression is converted to a field by calling [`Expr::to_field`], which performs
 /// the complete field resolution process for all field properties.
 ///
 /// # Returns
