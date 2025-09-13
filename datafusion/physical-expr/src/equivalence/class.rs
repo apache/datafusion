@@ -909,7 +909,19 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::Operator;
+
+    /// Helper function for tests that provides default ExecutionProps for binary function calls
+    fn binary_test(
+        lhs: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        rhs: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let execution_props = ExecutionProps::new();
+        binary(lhs, op, rhs, schema, &execution_props)
+    }
 
     #[test]
     fn test_bridge_groups() -> Result<()> {
@@ -1200,7 +1212,7 @@ mod tests {
 
         let mapping = [
             (
-                binary(
+                binary_test(
                     col("a", &schema)?,
                     Operator::Plus,
                     col("c", &schema)?,
@@ -1209,7 +1221,7 @@ mod tests {
                 vec![(col("a+c", &projected_schema)?, 0)].into(),
             ),
             (
-                binary(
+                binary_test(
                     col("b", &schema)?,
                     Operator::Plus,
                     col("c", &schema)?,

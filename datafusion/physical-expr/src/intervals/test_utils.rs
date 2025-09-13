@@ -22,8 +22,20 @@ use std::sync::Arc;
 use crate::expressions::{binary, BinaryExpr, Literal};
 use crate::PhysicalExpr;
 use arrow::datatypes::Schema;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::Operator;
+
+/// Helper function for tests that provides default ExecutionProps for binary function calls
+fn binary_test(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let execution_props = ExecutionProps::new();
+    binary(lhs, op, rhs, schema, &execution_props)
+}
 
 #[allow(clippy::too_many_arguments)]
 /// This test function generates a conjunctive statement with two numeric
@@ -78,20 +90,20 @@ pub fn gen_conjunctive_temporal_expr(
     d: ScalarValue,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-    let left_and_1 = binary(
+    let left_and_1 = binary_test(
         Arc::clone(&left_col),
         op_1,
         Arc::new(Literal::new(a)),
         schema,
     )?;
-    let left_and_2 = binary(
+    let left_and_2 = binary_test(
         Arc::clone(&right_col),
         op_2,
         Arc::new(Literal::new(b)),
         schema,
     )?;
-    let right_and_1 = binary(left_col, op_3, Arc::new(Literal::new(c)), schema)?;
-    let right_and_2 = binary(right_col, op_4, Arc::new(Literal::new(d)), schema)?;
+    let right_and_1 = binary_test(left_col, op_3, Arc::new(Literal::new(c)), schema)?;
+    let right_and_2 = binary_test(right_col, op_4, Arc::new(Literal::new(d)), schema)?;
     let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
     let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
     Ok(Arc::new(BinaryExpr::new(

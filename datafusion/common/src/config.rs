@@ -501,6 +501,11 @@ config_namespace! {
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+
+        /// When set to true, arithmetic operations will return an error on overflow
+        /// (e.g. integer overflow). When set to false, overflow will wrap around.
+        /// Defaults to true (error on overflow) to follow SQL standard behavior.
+        pub fail_on_overflow: bool, default = true
     }
 }
 

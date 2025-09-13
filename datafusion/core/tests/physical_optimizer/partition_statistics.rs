@@ -30,9 +30,10 @@ mod test {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
     use datafusion_expr_common::operator::Operator;
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::{binary, col, lit, Column};
+    use datafusion_physical_expr::expressions::{self, col, lit, Column};
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -57,6 +58,16 @@ mod test {
     };
 
     use futures::TryStreamExt;
+
+    fn binary_test(
+        lhs: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        rhs: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let exec_props = ExecutionProps::new();
+        expressions::binary(lhs, op, rhs, schema, &exec_props)
+    }
 
     /// Creates a test table with statistics from the test data directory.
     ///
@@ -313,7 +324,7 @@ mod test {
     async fn test_statistics_by_partition_of_filter() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
-        let predicate = binary(
+        let predicate = binary_test(
             Arc::new(Column::new("id", 0)),
             Operator::Lt,
             lit(1i32),
@@ -533,7 +544,7 @@ mod test {
         let group_by = PhysicalGroupBy::new_single(vec![
             (col("id", &scan_schema)?, "id".to_string()),
             (
-                binary(
+                binary_test(
                     lit(1),
                     Operator::Plus,
                     col("id", &scan_schema)?,

@@ -276,12 +276,24 @@ pub(crate) mod tests {
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
     };
 
     use petgraph::visit::Bfs;
+
+    /// Helper function for tests that provides default ExecutionProps for binary function calls
+    fn binary_test(
+        lhs: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        rhs: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let execution_props = ExecutionProps::new();
+        binary(lhs, op, rhs, schema, &execution_props)
+    }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub struct TestScalarUDF {
@@ -419,9 +431,9 @@ pub(crate) mod tests {
             Field::new("1", DataType::Int32, true),
             Field::new("2", DataType::Int32, true),
         ]);
-        let expr = binary(
+        let expr = binary_test(
             cast(
-                binary(
+                binary_test(
                     col("0", &schema)?,
                     Operator::Plus,
                     col("1", &schema)?,
@@ -431,7 +443,7 @@ pub(crate) mod tests {
                 DataType::Int64,
             )?,
             Operator::Gt,
-            binary(
+            binary_test(
                 cast(col("2", &schema)?, &schema, DataType::Int64)?,
                 Operator::Plus,
                 lit(ScalarValue::Int64(Some(10))),

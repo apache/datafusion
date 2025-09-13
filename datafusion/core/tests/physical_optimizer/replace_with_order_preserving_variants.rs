@@ -35,7 +35,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::expressions::{self, col, Column};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{
     plan_with_order_breaking_variants, plan_with_order_preserving_variants, replace_with_order_preserving_variants, OrderPreservationContext
@@ -1144,7 +1146,7 @@ fn repartition_exec_hash(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan
 
 fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let input_schema = input.schema();
-    let predicate = expressions::binary(
+    let predicate = binary_test(
         col("c", &input_schema).unwrap(),
         Operator::Gt,
         expressions::lit(3i32),
@@ -1152,6 +1154,16 @@ fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     )
     .unwrap();
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
+}
+
+fn binary_test(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let exec_props = ExecutionProps::new();
+    expressions::binary(lhs, op, rhs, schema, &exec_props)
 }
 
 fn hash_join_exec(
