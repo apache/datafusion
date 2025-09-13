@@ -57,12 +57,12 @@ impl MinMaxStatistics {
 
     /// Min value at index
     #[allow(unused)]
-    pub fn min(&self, idx: usize) -> Row {
+    pub fn min(&'_ self, idx: usize) -> Row<'_> {
         self.min_by_sort_order.row(idx)
     }
 
     /// Max value at index
-    pub fn max(&self, idx: usize) -> Row {
+    pub fn max(&'_ self, idx: usize) -> Row<'_> {
         self.max_by_sort_order.row(idx)
     }
 
@@ -230,14 +230,7 @@ impl MinMaxStatistics {
                 .zip(sort_columns.iter().copied())
                 .map(|(sort_expr, column)| {
                     let schema = values.schema();
-
                     let idx = schema.index_of(column.name())?;
-                    let field = schema.field(idx);
-
-                    // check that sort columns are non-nullable
-                    if field.is_nullable() {
-                        return plan_err!("cannot sort by nullable column");
-                    }
 
                     Ok(SortColumn {
                         values: Arc::clone(values.column(idx)),

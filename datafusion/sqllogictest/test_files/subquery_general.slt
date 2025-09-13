@@ -368,12 +368,12 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[t1_id@0 as t1_id, CASE WHEN max(t2.t2_id) > Int64(1) THEN Utf8("a") ELSE Utf8("b") END@1 as x]
 02)--NestedLoopJoinExec: join_type=LeftSingle, filter=t1_int@0 IS NOT DISTINCT FROM t1_t1_int@1, projection=[t1_id@0, CASE WHEN max(t2.t2_id) > Int64(1) THEN Utf8("a") ELSE Utf8("b") END@2]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
 04)----ProjectionExec: expr=[CASE WHEN max(t2.t2_id)@1 > 1 THEN a ELSE b END as CASE WHEN max(t2.t2_id) > Int64(1) THEN Utf8("a") ELSE Utf8("b") END, t1_t1_int@0 as t1_t1_int]
 05)------NestedLoopJoinExec: join_type=Left, filter=t1_t1_int@1 IS NOT DISTINCT FROM t1_t1_int@0, projection=[t1_t1_int@0, max(t2.t2_id)@1]
 06)--------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
 07)----------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------------DataSourceExec: partitions=1, partition_sizes=[2]
 09)--------ProjectionExec: expr=[max(t2.t2_id)@1 as max(t2.t2_id), t1_t1_int@0 as t1_t1_int]
 10)----------AggregateExec: mode=FinalPartitioned, gby=[t1_t1_int@0 as t1_t1_int], aggr=[max(t2.t2_id)]
 11)------------CoalesceBatchesExec: target_batch_size=2
@@ -384,9 +384,9 @@ physical_plan
 16)----------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_t1_int@0, t2_int@1)], projection=[t1_t1_int@0, t2_id@1]
 17)------------------------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
 18)--------------------------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
-19)----------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+19)----------------------------DataSourceExec: partitions=1, partition_sizes=[2]
 20)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-21)--------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+21)--------------------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 
 query IT rowsort
@@ -419,12 +419,12 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[t1_id@0 as t1_id, max(t2.t2_id) IS NULL@1 as x]
 02)--NestedLoopJoinExec: join_type=LeftSingle, filter=t1_int@0 IS NOT DISTINCT FROM t1_t1_int@1, projection=[t1_id@0, max(t2.t2_id) IS NULL@2]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
 04)----ProjectionExec: expr=[max(t2.t2_id)@1 IS NULL as max(t2.t2_id) IS NULL, t1_t1_int@0 as t1_t1_int]
 05)------NestedLoopJoinExec: join_type=Left, filter=t1_t1_int@1 IS NOT DISTINCT FROM t1_t1_int@0, projection=[t1_t1_int@0, max(t2.t2_id)@1]
 06)--------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
 07)----------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------------DataSourceExec: partitions=1, partition_sizes=[2]
 09)--------ProjectionExec: expr=[max(t2.t2_id)@1 as max(t2.t2_id), t1_t1_int@0 as t1_t1_int]
 10)----------AggregateExec: mode=FinalPartitioned, gby=[t1_t1_int@0 as t1_t1_int], aggr=[max(t2.t2_id)]
 11)------------CoalesceBatchesExec: target_batch_size=2
@@ -435,9 +435,9 @@ physical_plan
 16)----------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_t1_int@0, t2_int@1)], projection=[t1_t1_int@0, t2_id@1]
 17)------------------------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
 18)--------------------------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
-19)----------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+19)----------------------------DataSourceExec: partitions=1, partition_sizes=[2]
 20)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-21)--------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+21)--------------------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 
 

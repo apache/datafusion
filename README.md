@@ -60,8 +60,6 @@ See [use cases] for examples. The following related subprojects target end users
 
 - [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
   queries.
-- [DataFusion Ray](https://github.com/apache/datafusion-ray/) provides a distributed version of DataFusion that scales
-  out on Ray clusters.
 - [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
   DataFusion.
 
@@ -129,11 +127,13 @@ Optional features:
 
 - `avro`: support for reading the [Apache Avro] format
 - `backtrace`: include backtrace information in error messages
+- `parquet_encryption`: support for using [Parquet Modular Encryption]
 - `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
+[parquet modular encryption]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
 
 ## DataFusion API Evolution and Deprecation Guidelines
 
@@ -141,7 +141,7 @@ Public methods in Apache DataFusion evolve over time: while we try to maintain a
 stable API, we also improve the API over time. As a result, we typically
 deprecate methods before removing them, according to the [deprecation guidelines].
 
-[deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html
+[deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html
 
 ## Dependencies and `Cargo.lock`
 

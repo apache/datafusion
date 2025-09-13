@@ -72,6 +72,7 @@ impl CsvOptionsProto {
                 newlines_in_values: options
                     .newlines_in_values
                     .map_or(vec![], |v| vec![v as u8]),
+                truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
             }
         } else {
             CsvOptionsProto::default()
@@ -156,6 +157,11 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 None
             } else {
                 Some(proto.newlines_in_values[0] != 0)
+            },
+            truncated_rows: if proto.truncated_rows.is_empty() {
+                None
+            } else {
+                Some(proto.truncated_rows[0] != 0)
             },
         }
     }
@@ -382,9 +388,6 @@ impl TableParquetOptionsProto {
                 statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
                     parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
                 }),
-                max_statistics_size_opt: global_options.global.max_statistics_size.map(|size| {
-                    parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size as u64)
-                }),
                 max_row_group_size: global_options.global.max_row_group_size as u64,
                 created_by: global_options.global.created_by.clone(),
                 column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
@@ -440,9 +443,6 @@ impl TableParquetOptionsProto {
                         bloom_filter_ndv_opt: options.bloom_filter_ndv.map(|ndv| {
                             parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
                         }),
-                        max_statistics_size_opt: options.max_statistics_size.map(|size| {
-                            parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size as u32)
-                        }),
                     })
                 }
             }).collect(),
@@ -480,9 +480,6 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             dictionary_page_size_limit: proto.dictionary_page_size_limit as usize,
             statistics_enabled: proto.statistics_enabled_opt.as_ref().map(|opt| match opt {
                 parquet_options::StatisticsEnabledOpt::StatisticsEnabled(statistics) => statistics.clone(),
-            }),
-            max_statistics_size: proto.max_statistics_size_opt.as_ref().map(|opt| match opt {
-                parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size) => *size as usize,
             }),
             max_row_group_size: proto.max_row_group_size as usize,
             created_by: proto.created_by.clone(),
@@ -542,11 +539,6 @@ impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
             bloom_filter_ndv: proto
                 .bloom_filter_ndv_opt
                 .map(|parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v)| v),
-            max_statistics_size: proto.max_statistics_size_opt.map(
-                |parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v)| {
-                    v as usize
-                },
-            ),
         }
     }
 }

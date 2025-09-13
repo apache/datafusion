@@ -171,14 +171,18 @@ impl ExecutionPlan for PlaceholderRowExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
-        let batch = self
+        let batches = self
             .data()
             .expect("Create single row placeholder RecordBatch should not fail");
+
+        let batches = match partition {
+            Some(_) => vec![batches],
+            // entire plan
+            None => vec![batches; self.partitions],
+        };
+
         Ok(common::compute_record_batch_statistics(
-            &[batch],
+            &batches,
             &self.schema,
             None,
         ))

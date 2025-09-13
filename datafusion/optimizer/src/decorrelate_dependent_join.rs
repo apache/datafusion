@@ -1110,7 +1110,9 @@ impl DependentJoinDecorrelator {
                         partition_by,
                         order_by,
                         window_frame: WindowFrame::new(Some(false)),
+                        filter: None,
                         null_treatment: None,
+                        distinct: false,
                     },
                 }))
                 .alias("row_number");
@@ -1488,11 +1490,11 @@ impl OptimizerRule for DecorrelateDependentJoin {
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
 
         if rewrite_result.transformed {
-            println!("{}", rewrite_result.data.display_indent_schema());
+            // println!("{}", rewrite_result.data.display_indent_schema());
             let mut decorrelator = DependentJoinDecorrelator::new_root();
             let ret = decorrelator.decorrelate(&rewrite_result.data, true, 0)?;
 
-            println!("{}", ret.display_indent_schema());
+            // println!("{}", ret.display_indent_schema());
             return Ok(Transformed::yes(ret));
             // return Ok(Transformed::yes(decorrelator.decorrelate(
             //     &rewrite_result.data,
@@ -2044,19 +2046,19 @@ mod tests {
                       Projection: t2.a, t2.b, t2.c, t1_dscan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N]
                         Filter: t2.a = t1_dscan_5.t1_a AND __scalar_sq_1 > Int32(300000) [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, __scalar_sq_1:UInt32;N]
                           Projection: t2.a, t2.b, t2.c, t1_dscan_1.t1_a, t2_dscan_4.t2_b, t1_dscan_5.t1_a, sum(t3.a), t1_dscan_3.t1_a, t2_dscan_2.t2_b, t2_dscan_4.t2_b AS __scalar_sq_1 [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, __scalar_sq_1:UInt32;N]
-                            LeftSingle Join(ComparisonJoin):  Filter: t2.b IS NOT DISTINCT FROM t2_dscan_4.t2_b AND t1.a IS NOT DISTINCT FROM t1_dscan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
+                            LeftSingle Join(ComparisonJoin):  Filter: t2.b IS NOT DISTINCT FROM t2_dscan_4.t2_b AND t1.a IS NOT DISTINCT FROM t1_dscan_5.t1_a AND t1.a IS NOT DISTINCT FROM t1_dscan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
                               Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N]
                                 TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
                                 Projection: t1.a AS t1_dscan_1.t1_a [t1_a:UInt32;N]
                                   DelimGet: t1.a [a:UInt32;N]
-                              Left Join(DelimJoin):  Filter: t2_dscan_2.t2_b IS NOT DISTINCT FROM t2_dscan_4.t2_b AND t1_dscan_3.t1_a IS NOT DISTINCT FROM t1_dscan_5.t1_a [t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
+                              Left Join(DelimJoin):  Filter: t2_dscan_2.t2_b IS NOT DISTINCT FROM t2_dscan_4.t2_b AND t1_dscan_3.t1_a IS NOT DISTINCT FROM t1_dscan_5.t1_a AND t1_dscan_3.t1_a IS NOT DISTINCT FROM t1_dscan_5.t1_a [t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
                                 Cross Join(ComparisonJoin):  [t2_b:UInt32;N, t1_a:UInt32;N]
                                   Projection: t2.b AS t2_dscan_4.t2_b [t2_b:UInt32;N]
                                     DelimGet: t2.b [b:UInt32;N]
                                   Projection: t1.a AS t1_dscan_5.t1_a [t1_a:UInt32;N]
                                     DelimGet: t1.a [a:UInt32;N]
                                 Projection: sum(t3.a), t1_dscan_3.t1_a, t2_dscan_2.t2_b [sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
-                                  Aggregate: groupBy=[[t2_dscan_2.t2_b, t1_dscan_3.t1_a]], aggr=[[sum(t3.a)]] [t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N]
+                                  Aggregate: groupBy=[[t2_dscan_2.t2_b, t1_dscan_3.t1_a, t1_dscan_3.t1_a]], aggr=[[sum(t3.a)]] [t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N]
                                     Filter: t3.b = t2_dscan_2.t2_b AND t3.a = t1_dscan_3.t1_a [a:UInt32, b:UInt32, c:UInt32, t2_b:UInt32;N, t1_a:UInt32;N]
                                       Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, t2_b:UInt32;N, t1_a:UInt32;N]
                                         TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
@@ -2205,7 +2207,9 @@ mod tests {
                 partition_by: vec![col("inner_table.b")],
                 order_by: vec![col("inner_table.c").sort(false, true)],
                 window_frame: WindowFrame::new(Some(false)),
+                filter: None,
                 null_treatment: None,
+                distinct: false,
             },
         }))
         .alias("row_num");

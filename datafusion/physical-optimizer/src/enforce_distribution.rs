@@ -50,7 +50,7 @@ use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -408,7 +408,11 @@ pub fn adjust_input_keys_ordering(
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
         // Construct a mapping from new name to the original Column
-        let new_required = map_columns_before_projection(&requirements.data, expr);
+        let proj_exprs: Vec<_> = expr
+            .iter()
+            .map(|p| (Arc::clone(&p.expr), p.alias.clone()))
+            .collect();
+        let new_required = map_columns_before_projection(&requirements.data, &proj_exprs);
         if new_required.len() == requirements.data.len() {
             requirements.children[0].data = new_required;
         } else {
@@ -545,7 +549,10 @@ pub fn reorder_aggregate_keys(
                         .map(|col| {
                             let name = col.name();
                             let index = agg_schema.index_of(name)?;
-                            Ok((Arc::new(Column::new(name, index)) as _, name.to_owned()))
+                            Ok(ProjectionExpr {
+                                expr: Arc::new(Column::new(name, index)) as _,
+                                alias: name.to_owned(),
+                            })
                         })
                         .collect::<Result<Vec<_>>>()?;
                     let agg_fields = agg_schema.fields();
@@ -554,7 +561,10 @@ pub fn reorder_aggregate_keys(
                     {
                         let name = field.name();
                         let plan = Arc::new(Column::new(name, idx)) as _;
-                        proj_exprs.push((plan, name.clone()))
+                        proj_exprs.push(ProjectionExpr {
+                            expr: plan,
+                            alias: name.clone(),
+                        })
                     }
                     return ProjectionExec::try_new(proj_exprs, new_final_agg).map(|p| {
                         PlanWithKeyRequirements::new(Arc::new(p), vec![], vec![agg_node])
@@ -926,19 +936,20 @@ fn add_hash_on_top(
     Ok(input)
 }
 
-/// Adds a [`SortPreservingMergeExec`] operator on top of input executor
-/// to satisfy single distribution requirement.
+/// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
+/// on top of the given plan node to satisfy a single partition requirement
+/// while preserving ordering constraints.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `input`: Current node.
 ///
 /// # Returns
 ///
-/// Updated node with an execution plan, where desired single
-/// distribution is satisfied by adding [`SortPreservingMergeExec`].
-fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
-    // Add SortPreservingMerge only when partition count is larger than 1.
+/// Updated node with an execution plan, where the desired single distribution
+/// requirement is satisfied.
+fn add_merge_on_top(input: DistributionContext) -> DistributionContext {
+    // Apply only when the partition count is larger than one.
     if input.plan.output_partitioning().partition_count() > 1 {
         // When there is an existing ordering, we preserve ordering
         // when decreasing partitions. This will be un-done in the future
@@ -946,12 +957,13 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
         // (determined by flag `config.optimizer.prefer_existing_sort`)
-        let new_plan = if let Some(ordering) = input.plan.output_ordering() {
+        let new_plan = if let Some(req) = input.plan.output_ordering() {
             Arc::new(SortPreservingMergeExec::new(
-                ordering.clone(),
+                req.clone(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
+            // If there is no input order, we can simply coalesce partitions:
             Arc::new(CoalescePartitionsExec::new(Arc::clone(&input.plan))) as _
         };
 
@@ -1260,7 +1272,7 @@ pub fn ensure_distribution(
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
-                    child = add_spm_on_top(child);
+                    child = add_merge_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
                     if add_roundrobin {

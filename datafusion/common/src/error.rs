@@ -276,7 +276,7 @@ impl From<io::Error> for DataFusionError {
 
 impl From<ArrowError> for DataFusionError {
     fn from(e: ArrowError) -> Self {
-        DataFusionError::ArrowError(Box::new(e), None)
+        DataFusionError::ArrowError(Box::new(e), Some(DataFusionError::get_back_trace()))
     }
 }
 
@@ -523,7 +523,7 @@ impl DataFusionError {
         }
     }
 
-    pub fn message(&self) -> Cow<str> {
+    pub fn message(&self) -> Cow<'_, str> {
         match *self {
             DataFusionError::ArrowError(ref desc, ref backtrace) => {
                 let backtrace = backtrace.clone().unwrap_or_else(|| "".to_owned());
@@ -542,8 +542,9 @@ impl DataFusionError {
             DataFusionError::Configuration(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::NotImplemented(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Internal(ref desc) => Cow::Owned(format!(
-                "{desc}.\nThis was likely caused by a bug in DataFusion's \
-            code and we would welcome that you file an bug report in our issue tracker"
+                "{desc}.\nThis issue was likely caused by a bug in DataFusion's code. \
+                Please help us to resolve this by filing a bug report in our issue tracker: \
+                https://github.com/apache/datafusion/issues"
             )),
             DataFusionError::Plan(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SchemaError(ref desc, ref backtrace) => {

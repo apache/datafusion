@@ -28,6 +28,7 @@ use datafusion::logical_expr::{
     ColumnarValue, CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
 };
+use std::hash::Hash;
 use std::result::Result as RResult;
 use std::sync::Arc;
 
@@ -106,7 +107,7 @@ impl FunctionFactory for CustomFunctionFactory {
 }
 
 /// this function represents the newly created execution engine.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct ScalarFunctionWrapper {
     /// The text of the function body, `$1 + f1($2)` in our example
     name: String,

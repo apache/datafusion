@@ -2506,12 +2506,16 @@ TUR [100.0, 75.0] 175
 # test_ordering_sensitive_aggregation3
 # When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
 # test below should raise Plan Error.
-statement error DataFusion error: This feature is not implemented: Conflicting ordering requirements in aggregate functions is not supported
+query ??? rowsort
 SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2,
     ARRAY_AGG(s.amount ORDER BY s.sn ASC) AS amounts3
   FROM sales_global AS s
   GROUP BY s.country
+----
+[100.0, 75.0] [75.0, 100.0] [75.0, 100.0]
+[200.0, 50.0] [50.0, 200.0] [50.0, 200.0]
+[80.0, 30.0] [30.0, 80.0] [30.0, 80.0]
 
 # test_ordering_sensitive_aggregation4
 # If aggregators can work with bounded memory (Sorted or PartiallySorted mode), we should append requirement to
@@ -3425,7 +3429,7 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 07)------------AggregateExec: mode=Partial, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query IRI
 SELECT s.sn, s.amount, 2*s.sn
@@ -3494,9 +3498,9 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 07)------------AggregateExec: mode=Partial, gby=[sn@1 as sn, amount@2 as amount], aggr=[sum(l.amount)]
 08)--------------NestedLoopJoinExec: join_type=Inner, filter=sn@0 >= sn@1, projection=[amount@1, sn@2, amount@3]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[2]
 10)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-11)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)------------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query IRR
 SELECT r.sn, SUM(l.amount), r.amount
@@ -3643,7 +3647,7 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 09)----------------ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@6 as sum_amount]
 10)------------------BoundedWindowAggExec: wdw=[sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { name: "sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
-11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 
 query ITIPTRR
@@ -4535,19 +4539,20 @@ LIMIT 5
 query ITIPTR rowsort
 SELECT r.*
 FROM sales_global_with_pk as l, sales_global_with_pk as r
+ORDER BY 1, 2, 3, 4, 5, 6
 LIMIT 5
 ----
 0 GRC 0 2022-01-01T06:00:00 EUR 30
-1 FRA 1 2022-01-01T08:00:00 EUR 50
-1 FRA 3 2022-01-02T12:00:00 EUR 200
-1 TUR 2 2022-01-01T11:30:00 TRY 75
-1 TUR 4 2022-01-03T10:00:00 TRY 100
+0 GRC 0 2022-01-01T06:00:00 EUR 30
+0 GRC 0 2022-01-01T06:00:00 EUR 30
+0 GRC 0 2022-01-01T06:00:00 EUR 30
+0 GRC 0 2022-01-01T06:00:00 EUR 30
 
 # Create a table with timestamp data
 statement ok
 CREATE TABLE src_table (
-	t1 TIMESTAMP,
-	c2 INT
+  t1 TIMESTAMP,
+  c2 INT
 ) AS VALUES
 ('2020-12-10T00:00:00.00Z', 0),
 ('2020-12-11T00:00:00.00Z', 1),
@@ -4592,8 +4597,8 @@ STORED AS CSV;
 # Create a table from the generated CSV files:
 statement ok
 CREATE EXTERNAL TABLE timestamp_table (
-	t1 TIMESTAMP,
-	c2 INT,
+  t1 TIMESTAMP,
+  c2 INT,
 )
 STORED AS CSV
 LOCATION 'test_files/scratch/group_by/timestamp_table'
@@ -5176,8 +5181,8 @@ physical_plan
 02)--AggregateExec: mode=Single, gby=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }, ts@0, 946684800000000000) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01"))], aggr=[count(keywords_stream.keyword)]
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(keyword@0, keyword@1)]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[3]
+06)--------DataSourceExec: partitions=1, partition_sizes=[3]
 
 query PI
 SELECT
@@ -5219,17 +5224,17 @@ statement ok
 create table t(a int, b bytea) as values (1, 0xa), (1, 0xa), (2, null), (null, 0xb), (null, 0xb);
 
 query I?I
-select a, b, count(*) from t group by grouping sets ((a, b), (a), (b));
+select a, b, count(*) from t group by grouping sets ((a, b), (a), (b)) order by a, b;
 ----
 1 0a 2
-2 NULL 1
-NULL 0b 2
 1 NULL 2
 2 NULL 1
-NULL NULL 2
+2 NULL 1
 NULL 0a 2
-NULL NULL 1
 NULL 0b 2
+NULL 0b 2
+NULL NULL 2
+NULL NULL 1
 
 statement ok
 drop table t;
@@ -5239,13 +5244,13 @@ statement ok
 create table t(a int, b bytea) as values (1, 0xa), (1, 0xa), (2, 0xb), (3, 0xb), (3, 0xb);
 
 query I?I
-select a, b, count(*) from t group by grouping sets ((a, b), (a), (b));
+select a, b, count(*) from t group by grouping sets ((a, b), (a), (b)) order by a, b;
 ----
 1 0a 2
-2 0b 1
-3 0b 2
 1 NULL 2
+2 0b 1
 2 NULL 1
+3 0b 2
 3 NULL 2
 NULL 0a 2
 NULL 0b 3

@@ -477,12 +477,18 @@ impl JoinFuzzTestCase {
     fn left_right(&self) -> (Arc<DataSourceExec>, Arc<DataSourceExec>) {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
-        let left =
-            MemorySourceConfig::try_new_exec(&[self.input1.clone()], schema1, None)
-                .unwrap();
-        let right =
-            MemorySourceConfig::try_new_exec(&[self.input2.clone()], schema2, None)
-                .unwrap();
+        let left = MemorySourceConfig::try_new_exec(
+            std::slice::from_ref(&self.input1),
+            schema1,
+            None,
+        )
+        .unwrap();
+        let right = MemorySourceConfig::try_new_exec(
+            std::slice::from_ref(&self.input2),
+            schema2,
+            None,
+        )
+        .unwrap();
         (left, right)
     }
 

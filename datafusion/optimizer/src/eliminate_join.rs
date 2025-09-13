@@ -108,6 +108,6 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @"EmptyRelation")
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 }

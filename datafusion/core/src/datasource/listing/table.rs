@@ -48,6 +48,7 @@ use datafusion_execution::{
 use datafusion_expr::{
     dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
@@ -99,6 +100,8 @@ pub struct ListingTableConfig {
     schema_source: SchemaSource,
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
+    expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl ListingTableConfig {
@@ -212,16 +215,16 @@ impl ListingTableConfig {
     ) -> Result<(String, Option<String>)> {
         let mut exts = path.rsplit('.');
 
-        let splitted = exts.next().unwrap_or("");
+        let split = exts.next().unwrap_or("");
 
-        let file_compression_type = FileCompressionType::from_str(splitted)
+        let file_compression_type = FileCompressionType::from_str(split)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
         if file_compression_type.is_compressed() {
-            let splitted2 = exts.next().unwrap_or("");
-            Ok((splitted2.to_string(), Some(splitted.to_string())))
+            let split2 = exts.next().unwrap_or("");
+            Ok((split2.to_string(), Some(split.to_string())))
         } else {
-            Ok((splitted.to_string(), None))
+            Ok((split.to_string(), None))
         }
     }
 
@@ -281,6 +284,7 @@ impl ListingTableConfig {
             options: Some(listing_options),
             schema_source: self.schema_source,
             schema_adapter_factory: self.schema_adapter_factory,
+            expr_adapter_factory: self.expr_adapter_factory,
         })
     }
 
@@ -300,6 +304,7 @@ impl ListingTableConfig {
                     options: _,
                     schema_source,
                     schema_adapter_factory,
+                    expr_adapter_factory: physical_expr_adapter_factory,
                 } = self;
 
                 let (schema, new_schema_source) = match file_schema {
@@ -322,6 +327,7 @@ impl ListingTableConfig {
                     options: Some(options),
                     schema_source: new_schema_source,
                     schema_adapter_factory,
+                    expr_adapter_factory: physical_expr_adapter_factory,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -364,6 +370,7 @@ impl ListingTableConfig {
                     options: Some(options),
                     schema_source: self.schema_source,
                     schema_adapter_factory: self.schema_adapter_factory,
+                    expr_adapter_factory: self.expr_adapter_factory,
                 })
             }
             None => config_err!("No `ListingOptions` set for inferring schema"),
@@ -414,6 +421,26 @@ impl ListingTableConfig {
     /// Get the [`SchemaAdapterFactory`] for this configuration
     pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.as_ref()
+    }
+
+    /// Set the [`PhysicalExprAdapterFactory`] for the [`ListingTable`]
+    ///
+    /// The expression adapter factory is used to create physical expression adapters that can
+    /// handle schema evolution and type conversions when evaluating expressions
+    /// with different schemas than the table schema.
+    ///
+    /// If not provided, a default physical expression adapter factory will be used unless a custom
+    /// `SchemaAdapterFactory` is set, in which case only the `SchemaAdapterFactory` will be used.
+    ///
+    /// See <https://github.com/apache/datafusion/issues/16800> for details on this transition.
+    pub fn with_expr_adapter_factory(
+        self,
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+    ) -> Self {
+        Self {
+            expr_adapter_factory: Some(expr_adapter_factory),
+            ..self
+        }
     }
 }
 
@@ -475,7 +502,7 @@ impl ListingOptions {
     ///
     /// Currently this sets `target_partitions` and `collect_stat`
     /// but if more options are added in the future that need to be coordinated
-    /// they will be synchronized thorugh this method.
+    /// they will be synchronized through this method.
     pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
         self = self.with_target_partitions(config.target_partitions());
         self = self.with_collect_stat(config.collect_statistics());
@@ -775,6 +802,9 @@ impl ListingOptions {
                     .rev()
                     .skip(1) // get parents only; skip the file itself
                     .rev()
+                    // Partitions are expected to follow the format "column_name=value", so we
+                    // should ignore any path part that cannot be parsed into the expected format
+                    .filter(|s| s.contains('='))
                     .map(|s| s.split('=').take(1).collect())
                     .collect_vec()
             })
@@ -792,13 +822,26 @@ impl ListingOptions {
     }
 }
 
-/// Reads data from one or more files as a single table.
+/// Built in [`TableProvider`] that reads data from one or more files as a single table.
 ///
-/// Implements [`TableProvider`], a DataFusion data source. The files are read
-/// using an  [`ObjectStore`] instance, for example from local files or objects
-/// from AWS S3.
+/// The files are read using an  [`ObjectStore`] instance, for example from
+/// local files or objects from AWS S3.
 ///
-/// # Reading Directories
+/// # Features:
+/// * Reading multiple files as a single table
+/// * Hive style partitioning (e.g., directories named `date=2024-06-01`)
+/// * Merges schemas from files with compatible but not identical schemas (see [`ListingTableConfig::file_schema`])
+/// * `limit`, `filter` and `projection` pushdown for formats that support it (e.g.,
+///   Parquet)
+/// * Statistics collection and pruning based on file metadata
+/// * Pre-existing sort order (see [`ListingOptions::file_sort_order`])
+/// * Metadata caching to speed up repeated queries (see [`FileMetadataCache`])
+/// * Statistics caching (see [`FileStatisticsCache`])
+///
+/// [`FileMetadataCache`]: datafusion_execution::cache::cache_manager::FileMetadataCache
+///
+/// # Reading Directories and Hive Style Partitioning
+///
 /// For example, given the `table1` directory (or object store prefix)
 ///
 /// ```text
@@ -834,15 +877,22 @@ impl ListingOptions {
 /// If the query has a predicate like `WHERE date = '2024-06-01'`
 /// only the corresponding directory will be read.
 ///
-/// `ListingTable` also supports limit, filter and projection pushdown for formats that
-/// support it as such as Parquet.
-///
 /// # See Also
 ///
 /// 1. [`ListingTableConfig`]: Configuration options
 /// 1. [`DataSourceExec`]: `ExecutionPlan` used by `ListingTable`
 ///
 /// [`DataSourceExec`]: crate::datasource::source::DataSourceExec
+///
+/// # Caching Metadata
+///
+/// Some formats, such as Parquet, use the `FileMetadataCache` to cache file
+/// metadata that is needed to execute but expensive to read, such as row
+/// groups and statistics. The cache is scoped to the [`SessionContext`] and can
+/// be configured via the [runtime config options].
+///
+/// [`SessionContext`]: crate::prelude::SessionContext
+/// [runtime config options]: https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings
 ///
 /// # Example: Read a directory of parquet files using a [`ListingTable`]
 ///
@@ -904,13 +954,21 @@ pub struct ListingTable {
     table_schema: SchemaRef,
     /// Indicates how the schema was derived (inferred or explicitly specified)
     schema_source: SchemaSource,
+    /// Options used to configure the listing table such as the file format
+    /// and partitioning information
     options: ListingOptions,
+    /// The SQL definition for this table, if any
     definition: Option<String>,
+    /// Cache for collected file statistics
     collected_statistics: FileStatisticsCache,
+    /// Constraints applied to this table
     constraints: Constraints,
+    /// Column default expressions for columns that are not physically present in the data files
     column_defaults: HashMap<String, Expr>,
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
+    expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl ListingTable {
@@ -952,6 +1010,7 @@ impl ListingTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             schema_adapter_factory: config.schema_adapter_factory,
+            expr_adapter_factory: config.expr_adapter_factory,
         };
 
         Ok(table)
@@ -1076,8 +1135,8 @@ impl ListingTable {
 }
 
 // Expressions can be used for parttion pruning if they can be evaluated using
-// only the partiton columns and there are partition columns.
-fn can_be_evaluted_for_partition_pruning(
+// only the partition columns and there are partition columns.
+fn can_be_evaluated_for_partition_pruning(
     partition_column_names: &[&str],
     expr: &Expr,
 ) -> bool {
@@ -1126,7 +1185,7 @@ impl TableProvider for ListingTable {
         // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
         let (partition_filters, filters): (Vec<_>, Vec<_>) =
             filters.iter().cloned().partition(|filter| {
-                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+                can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });
 
         // We should not limit the number of partitioned files to scan if there are filters and limit
@@ -1196,6 +1255,7 @@ impl TableProvider for ListingTable {
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
+                .with_expr_adapter(self.expr_adapter_factory.clone())
                 .build(),
             )
             .await
@@ -1214,7 +1274,7 @@ impl TableProvider for ListingTable {
         filters
             .iter()
             .map(|filter| {
-                if can_be_evaluted_for_partition_pruning(&partition_column_names, filter)
+                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
                 {
                     // if filter can be handled by partition pruning, it is exact
                     return Ok(TableProviderFilterPushDown::Exact);
@@ -1995,7 +2055,6 @@ mod tests {
     #[tokio::test]
     async fn test_insert_into_append_new_parquet_files_session_overrides() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
-        config_map.insert("datafusion.execution.batch_size".into(), "10".into());
         config_map.insert(
             "datafusion.execution.soft_max_rows_per_output_file".into(),
             "10".into(),
@@ -2060,7 +2119,7 @@ mod tests {
             "datafusion.execution.parquet.write_batch_size".into(),
             "5".into(),
         );
-        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
+        config_map.insert("datafusion.execution.batch_size".into(), "10".into());
         helper_test_append_new_files_to_table(
             ParquetFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,

@@ -681,7 +681,7 @@ select col2, col4 from t1 full outer join t2 on col1 = col3
 query TT
 explain select * from t1 join t2 on false;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
 # Make batch size smaller than table row number. to introduce parallelism to the plan.
@@ -853,47 +853,47 @@ physical_plan
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
-query ITT
+query ITT rowsort
 SELECT e.emp_id, e.name, d.dept_name
 FROM employees AS e
 LEFT JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
-1 Alice HR
 1 Alice Engineering
+1 Alice HR
 1 Alice Sales
-2 Bob HR
 2 Bob Engineering
+2 Bob HR
 2 Bob Sales
 3 Carol NULL
 
 # neither RIGHT OUTER JOIN
-query ITT
+query ITT rowsort
 SELECT e.emp_id, e.name, d.dept_name
 FROM department AS d
 RIGHT JOIN employees AS e
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
-1 Alice HR
 1 Alice Engineering
+1 Alice HR
 1 Alice Sales
-2 Bob HR
 2 Bob Engineering
+2 Bob HR
 2 Bob Sales
 3 Carol NULL
 
 # neither FULL OUTER JOIN
-query ITT
+query ITT rowsort
 SELECT e.emp_id, e.name, d.dept_name
 FROM department AS d
 FULL JOIN employees AS e
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
-1 Alice HR
 1 Alice Engineering
+1 Alice HR
 1 Alice Sales
-2 Bob HR
 2 Bob Engineering
+2 Bob HR
 2 Bob Sales
 3 Carol NULL
 

@@ -17,6 +17,7 @@
 
 //! Join related functionality used both on logical and physical plans
 
+use std::cmp::min;
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
@@ -27,7 +28,7 @@ use std::task::{Context, Poll};
 
 use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::projection::ProjectionExec;
+use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
@@ -36,22 +37,29 @@ pub use super::join_filter::JoinFilter;
 pub use super::join_hash_map::JoinHashMapType;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
+use ahash::RandomState;
 use arrow::array::{
     builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
     BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
     UInt32Array, UInt32Builder, UInt64Array,
 };
-use arrow::buffer::NullBuffer;
-use arrow::compute;
+use arrow::array::{ArrayRef, BooleanArray};
+use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::compute::kernels::cmp::eq;
+use arrow::compute::{self, and, take, FilterBuilder};
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
+use arrow_ord::cmp::not_distinct;
+use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
+    plan_err, DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
@@ -59,6 +67,7 @@ use datafusion_physical_expr::{
     PhysicalExprRef,
 };
 
+use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -780,6 +789,23 @@ impl<T: 'static> OnceFut<T> {
     }
 }
 
+/// Should we use a bitmap to track each incoming right batch's each row's
+/// 'joined' status.
+///
+/// For example in right joins, we have to use a bit map to track matched
+/// right side rows, and later enter a `EmitRightUnmatched` stage to emit
+/// unmatched right rows.
+pub(crate) fn need_produce_right_in_final(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::Full
+            | JoinType::Right
+            | JoinType::RightAnti
+            | JoinType::RightMark
+            | JoinType::RightSemi
+    )
+}
+
 /// Some type `join_type` of join need to maintain the matched indices bit map for the left side, and
 /// use the bit map to generate the part of result of the join.
 ///
@@ -852,24 +878,56 @@ pub(crate) fn apply_join_filter_to_indices(
     probe_indices: UInt32Array,
     filter: &JoinFilter,
     build_side: JoinSide,
+    max_intermediate_size: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     if build_indices.is_empty() && probe_indices.is_empty() {
         return Ok((build_indices, probe_indices));
     };
 
-    let intermediate_batch = build_batch_from_indices(
-        filter.schema(),
-        build_input_buffer,
-        probe_batch,
-        &build_indices,
-        &probe_indices,
-        filter.column_indices(),
-        build_side,
-    )?;
-    let filter_result = filter
-        .expression()
-        .evaluate(&intermediate_batch)?
-        .into_array(intermediate_batch.num_rows())?;
+    let filter_result = if let Some(max_size) = max_intermediate_size {
+        let mut filter_results =
+            Vec::with_capacity(build_indices.len().div_ceil(max_size));
+
+        for i in (0..build_indices.len()).step_by(max_size) {
+            let end = min(build_indices.len(), i + max_size);
+            let len = end - i;
+            let intermediate_batch = build_batch_from_indices(
+                filter.schema(),
+                build_input_buffer,
+                probe_batch,
+                &build_indices.slice(i, len),
+                &probe_indices.slice(i, len),
+                filter.column_indices(),
+                build_side,
+            )?;
+            let filter_result = filter
+                .expression()
+                .evaluate(&intermediate_batch)?
+                .into_array(intermediate_batch.num_rows())?;
+            filter_results.push(filter_result);
+        }
+
+        let filter_refs: Vec<&dyn Array> =
+            filter_results.iter().map(|a| a.as_ref()).collect();
+
+        compute::concat(&filter_refs)?
+    } else {
+        let intermediate_batch = build_batch_from_indices(
+            filter.schema(),
+            build_input_buffer,
+            probe_batch,
+            &build_indices,
+            &probe_indices,
+            filter.column_indices(),
+            build_side,
+        )?;
+
+        filter
+            .expression()
+            .evaluate(&intermediate_batch)?
+            .into_array(intermediate_batch.num_rows())?
+    };
+
     let mask = as_boolean_array(&filter_result)?;
 
     let left_filtered = compute::filter(&build_indices, mask)?;
@@ -921,7 +979,7 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(build_indices.null_count(), build_indices.len());
                 new_null_array(array.data_type(), build_indices.len())
             } else {
-                compute::take(array.as_ref(), build_indices, None)?
+                take(array.as_ref(), build_indices, None)?
             }
         } else {
             let array = probe_batch.column(column_index.index);
@@ -929,12 +987,63 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(probe_indices.null_count(), probe_indices.len());
                 new_null_array(array.data_type(), probe_indices.len())
             } else {
-                compute::take(array.as_ref(), probe_indices, None)?
+                take(array.as_ref(), probe_indices, None)?
             }
         };
+
         columns.push(array);
     }
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+}
+
+/// Returns a new [RecordBatch] resulting of a join where the build/left side is empty.
+/// The resulting batch has [Schema] `schema`.
+pub(crate) fn build_batch_empty_build_side(
+    schema: &Schema,
+    build_batch: &RecordBatch,
+    probe_batch: &RecordBatch,
+    column_indices: &[ColumnIndex],
+    join_type: JoinType,
+) -> Result<RecordBatch> {
+    match join_type {
+        // these join types only return data if the left side is not empty, so we return an
+        // empty RecordBatch
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::LeftSemi
+        | JoinType::RightSemi
+        | JoinType::LeftAnti
+        | JoinType::LeftMark
+        | JoinType::LeftSingle => Ok(RecordBatch::new_empty(Arc::new(schema.clone()))),
+
+        // the remaining joins will return data for the right columns and null for the left ones
+        JoinType::Right | JoinType::Full | JoinType::RightAnti | JoinType::RightMark => {
+            let num_rows = probe_batch.num_rows();
+            let mut columns: Vec<Arc<dyn Array>> =
+                Vec::with_capacity(schema.fields().len());
+
+            for column_index in column_indices {
+                let array = match column_index.side {
+                    // left -> null array
+                    JoinSide::Left => new_null_array(
+                        build_batch.column(column_index.index).data_type(),
+                        num_rows,
+                    ),
+                    // right -> respective right array
+                    JoinSide::Right => Arc::clone(probe_batch.column(column_index.index)),
+                    // right mark -> unset boolean array as there are no matches on the left side
+                    JoinSide::None => Arc::new(BooleanArray::new(
+                        BooleanBuffer::new_unset(num_rows),
+                        None,
+                    )),
+                };
+
+                columns.push(array);
+            }
+
+            Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+        }
+    }
 }
 
 /// The input is the matched indices for left and right and
@@ -1473,7 +1582,7 @@ impl BatchTransformer for BatchSplitter {
 /// Joins output columns from their left input followed by their right input.
 /// Thus if the inputs are reordered, the output columns must be reordered to
 /// match the original order.
-pub(crate) fn reorder_output_after_swap(
+pub fn reorder_output_after_swap(
     plan: Arc<dyn ExecutionPlan>,
     left_schema: &Schema,
     right_schema: &Schema,
@@ -1493,26 +1602,33 @@ pub(crate) fn reorder_output_after_swap(
 fn swap_reverting_projection(
     left_schema: &Schema,
     right_schema: &Schema,
-) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    let right_cols = right_schema.fields().iter().enumerate().map(|(i, f)| {
-        (
-            Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
-            f.name().to_owned(),
-        )
-    });
+) -> Vec<ProjectionExpr> {
+    let right_cols =
+        right_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| ProjectionExpr {
+                expr: Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
+                alias: f.name().to_owned(),
+            });
     let right_len = right_cols.len();
-    let left_cols = left_schema.fields().iter().enumerate().map(|(i, f)| {
-        (
-            Arc::new(Column::new(f.name(), right_len + i)) as Arc<dyn PhysicalExpr>,
-            f.name().to_owned(),
-        )
-    });
+    let left_cols =
+        left_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| ProjectionExpr {
+                expr: Arc::new(Column::new(f.name(), right_len + i))
+                    as Arc<dyn PhysicalExpr>,
+                alias: f.name().to_owned(),
+            });
 
     left_cols.chain(right_cols).collect()
 }
 
 /// This function swaps the given join's projection.
-pub(super) fn swap_join_projection(
+pub fn swap_join_projection(
     left_schema_len: usize,
     right_schema_len: usize,
     projection: Option<&Vec<usize>>,
@@ -1541,6 +1657,112 @@ pub(super) fn swap_join_projection(
                 })
                 .collect()
         }),
+    }
+}
+
+/// Updates `hash_map` with new entries from `batch` evaluated against the expressions `on`
+/// using `offset` as a start value for `batch` row indices.
+///
+/// `fifo_hashmap` sets the order of iteration over `batch` rows while updating hashmap,
+/// which allows to keep either first (if set to true) or last (if set to false) row index
+/// as a chain head for rows with equal hash values.
+#[allow(clippy::too_many_arguments)]
+pub fn update_hash(
+    on: &[PhysicalExprRef],
+    batch: &RecordBatch,
+    hash_map: &mut dyn JoinHashMapType,
+    offset: usize,
+    random_state: &RandomState,
+    hashes_buffer: &mut Vec<u64>,
+    deleted_offset: usize,
+    fifo_hashmap: bool,
+) -> Result<()> {
+    // evaluate the keys
+    let keys_values = on
+        .iter()
+        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
+        .collect::<Result<Vec<_>>>()?;
+
+    // calculate the hash values
+    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+
+    // For usual JoinHashmap, the implementation is void.
+    hash_map.extend_zero(batch.num_rows());
+
+    // Updating JoinHashMap from hash values iterator
+    let hash_values_iter = hash_values
+        .iter()
+        .enumerate()
+        .map(|(i, val)| (i + offset, val));
+
+    if fifo_hashmap {
+        hash_map.update_from_iter(Box::new(hash_values_iter.rev()), deleted_offset);
+    } else {
+        hash_map.update_from_iter(Box::new(hash_values_iter), deleted_offset);
+    }
+
+    Ok(())
+}
+
+pub(super) fn equal_rows_arr(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Result<(UInt64Array, UInt32Array)> {
+    let mut iter = left_arrays.iter().zip(right_arrays.iter());
+
+    let Some((first_left, first_right)) = iter.next() else {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    };
+
+    let arr_left = take(first_left.as_ref(), indices_left, None)?;
+    let arr_right = take(first_right.as_ref(), indices_right, None)?;
+
+    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
+
+    // Use map and try_fold to iterate over the remaining pairs of arrays.
+    // In each iteration, take is used on the pair of arrays and their equality is determined.
+    // The results are then folded (combined) using the and function to get a final equality result.
+    equal = iter
+        .map(|(left, right)| {
+            let arr_left = take(left.as_ref(), indices_left, None)?;
+            let arr_right = take(right.as_ref(), indices_right, None)?;
+            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)
+        })
+        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
+
+    let filter_builder = FilterBuilder::new(&equal).optimize().build();
+
+    let left_filtered = filter_builder.filter(indices_left)?;
+    let right_filtered = filter_builder.filter(indices_right)?;
+
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
+}
+
+// version of eq_dyn supporting equality on null arrays
+fn eq_dyn_null(
+    left: &dyn Array,
+    right: &dyn Array,
+    null_equality: NullEquality,
+) -> Result<BooleanArray, ArrowError> {
+    // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
+    // implementation
+    // <https://github.com/apache/datafusion/issues/10749>
+    if left.data_type().is_nested() {
+        let op = match null_equality {
+            NullEquality::NullEqualsNothing => Operator::Eq,
+            NullEquality::NullEqualsNull => Operator::IsNotDistinctFrom,
+        };
+        return Ok(compare_op_for_nested(op, &left, &right)?);
+    }
+    match null_equality {
+        NullEquality::NullEqualsNothing => eq(&left, &right),
+        NullEquality::NullEqualsNull => not_distinct(&left, &right),
     }
 }
 
@@ -2474,17 +2696,17 @@ mod tests {
 
         assert_eq!(proj.len(), 3);
 
-        let (col, name) = &proj[0];
-        assert_eq!(name, "a");
-        assert_col_expr(col, "a", 1);
+        let proj_expr = &proj[0];
+        assert_eq!(proj_expr.alias, "a");
+        assert_col_expr(&proj_expr.expr, "a", 1);
 
-        let (col, name) = &proj[1];
-        assert_eq!(name, "b");
-        assert_col_expr(col, "b", 2);
+        let proj_expr = &proj[1];
+        assert_eq!(proj_expr.alias, "b");
+        assert_col_expr(&proj_expr.expr, "b", 2);
 
-        let (col, name) = &proj[2];
-        assert_eq!(name, "c");
-        assert_col_expr(col, "c", 0);
+        let proj_expr = &proj[2];
+        assert_eq!(proj_expr.alias, "c");
+        assert_col_expr(&proj_expr.expr, "c", 0);
     }
 
     fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {

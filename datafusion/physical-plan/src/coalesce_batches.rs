@@ -202,12 +202,9 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input.partition_statistics(partition)?.with_fetch(
-            self.schema(),
-            self.fetch,
-            0,
-            1,
-        )
+        self.input
+            .partition_statistics(partition)?
+            .with_fetch(self.fetch, 0, 1)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -243,9 +240,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::transparent(
-            child_pushdown_result,
-        ))
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 }
 

@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
@@ -26,21 +25,21 @@ use datafusion_datasource::{
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
-use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPhase;
+use datafusion_physical_plan::filter::batch_filter;
+use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
     displayable,
     filter::FilterExec,
     filter_pushdown::{
         ChildFilterDescription, ChildPushdownResult, FilterDescription,
-        FilterPushdownPropagation, PredicateSupport,
+        FilterPushdownPropagation,
     },
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
-use futures::stream::BoxStream;
+use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
 use std::{
@@ -55,6 +54,7 @@ pub struct TestOpener {
     batch_size: Option<usize>,
     schema: Option<SchemaRef>,
     projection: Option<Vec<usize>>,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl FileOpener for TestOpener {
@@ -79,6 +79,12 @@ impl FileOpener for TestOpener {
             let (mapper, projection) = factory.map_schema(&batches[0].schema()).unwrap();
             let mut new_batches = Vec::new();
             for batch in batches {
+                let batch = if let Some(predicate) = &self.predicate {
+                    batch_filter(&batch, predicate)?
+                } else {
+                    batch
+                };
+
                 let batch = batch.project(&projection).unwrap();
                 let batch = mapper.map_batch(batch).unwrap();
                 new_batches.push(batch);
@@ -94,12 +100,7 @@ impl FileOpener for TestOpener {
 
         let stream = TestStream::new(batches);
 
-        Ok((async {
-            let stream: BoxStream<'static, Result<RecordBatch, ArrowError>> =
-                Box::pin(stream);
-            Ok(stream)
-        })
-        .boxed())
+        Ok((async { Ok(stream.boxed()) }).boxed())
     }
 }
 
@@ -140,7 +141,12 @@ impl FileSource for TestSource {
             batch_size: self.batch_size,
             schema: self.schema.clone(),
             projection: self.projection.clone(),
+            predicate: self.predicate.clone(),
         })
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.predicate.clone()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -224,22 +230,18 @@ impl FileSource for TestSource {
                 filters.push(Arc::clone(internal));
             }
             let new_node = Arc::new(TestSource {
-                predicate: Some(conjunction(filters.clone())),
+                predicate: datafusion_physical_expr::utils::conjunction_opt(
+                    filters.clone(),
+                ),
                 ..self.clone()
             });
-            Ok(FilterPushdownPropagation {
-                filters: filters
-                    .into_iter()
-                    .map(PredicateSupport::Supported)
-                    .collect(),
-                updated_node: Some(new_node),
-            })
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::Yes; filters.len()],
+            )
+            .with_updated_node(new_node))
         } else {
-            Ok(FilterPushdownPropagation::with_filters(
-                filters
-                    .into_iter()
-                    .map(PredicateSupport::Unsupported)
-                    .collect(),
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
             ))
         }
     }
@@ -345,7 +347,7 @@ impl TestStream {
 }
 
 impl Stream for TestStream {
-    type Item = Result<RecordBatch, ArrowError>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let next_batch = self.index.value();
@@ -547,26 +549,29 @@ impl ExecutionPlan for TestNode {
             assert_eq!(self_pushdown_result.len(), 1);
             let self_pushdown_result: Vec<_> = self_pushdown_result.into_iter().collect();
 
-            match &self_pushdown_result[0] {
-                PredicateSupport::Unsupported(filter) => {
+            let first_pushdown_result = self_pushdown_result[0].clone();
+
+            match &first_pushdown_result.discriminant {
+                PushedDown::No => {
                     // We have a filter to push down
-                    let new_child =
-                        FilterExec::try_new(Arc::clone(filter), Arc::clone(&self.input))?;
+                    let new_child = FilterExec::try_new(
+                        Arc::clone(&first_pushdown_result.predicate),
+                        Arc::clone(&self.input),
+                    )?;
                     let new_self =
                         TestNode::new(false, Arc::new(new_child), self.predicate.clone());
                     let mut res =
-                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                        FilterPushdownPropagation::if_all(child_pushdown_result);
                     res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
                     Ok(res)
                 }
-                PredicateSupport::Supported(_) => {
-                    let res =
-                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                PushedDown::Yes => {
+                    let res = FilterPushdownPropagation::if_all(child_pushdown_result);
                     Ok(res)
                 }
             }
         } else {
-            let res = FilterPushdownPropagation::transparent(child_pushdown_result);
+            let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
     }

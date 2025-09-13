@@ -23,5 +23,95 @@
 
 ## Original Query: SELECT rint(12.3456);
 ## PySpark 3.5.5 Result: {'rint(12.3456)': 12.0, 'typeof(rint(12.3456))': 'double', 'typeof(12.3456)': 'decimal(6,4)'}
-#query
-#SELECT rint(12.3456::decimal(6,4));
+query R
+SELECT rint(12.3456);
+----
+12
+
+## Test additional cases
+query R
+SELECT rint(-12.3456);
+----
+-12
+
+query R
+SELECT rint(arrow_cast(-12.3456, 'Float32'));
+----
+-12
+
+## Test int
+query R
+SELECT rint(arrow_cast(12, 'UInt8'));
+----
+12
+
+query R
+SELECT rint(arrow_cast(-12, 'Int8'));
+----
+-12
+
+query R
+SELECT rint(arrow_cast(12, 'UInt16'));
+----
+12
+
+query R
+SELECT rint(arrow_cast(-12, 'Int16'));
+----
+-12
+
+query R
+SELECT rint(arrow_cast(12, 'UInt32'));
+----
+12
+
+query R
+SELECT rint(arrow_cast(-12, 'Int32'));
+----
+-12
+
+query R
+SELECT rint(arrow_cast(12, 'UInt64'));
+----
+12
+
+query R
+SELECT rint(arrow_cast(-12, 'Int64'));
+----
+-12
+
+query R
+SELECT rint(2.5);
+----
+2
+
+query R
+SELECT rint(3.5);
+----
+4
+
+query R
+SELECT rint(-2.5);
+----
+-2
+
+query R
+SELECT rint(-3.5);
+----
+-4
+
+query R
+SELECT rint(0.0);
+----
+0
+
+query R
+SELECT rint(42);
+----
+42
+
+## Test with null
+query R
+SELECT rint(NULL);
+----
+NULL

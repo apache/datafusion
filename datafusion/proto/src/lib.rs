@@ -130,8 +130,9 @@ pub mod protobuf {
     pub use crate::generated::datafusion::*;
     pub use datafusion_proto_common::common::proto_error;
     pub use datafusion_proto_common::protobuf_common::{
-        ArrowOptions, ArrowType, AvroFormat, AvroOptions, CsvFormat, DfSchema,
-        EmptyMessage, Field, JoinSide, NdJsonFormat, ParquetFormat, ScalarValue, Schema,
+        ArrowFormat, ArrowOptions, ArrowType, AvroFormat, AvroOptions, CsvFormat,
+        DfSchema, EmptyMessage, Field, JoinSide, NdJsonFormat, ParquetFormat,
+        ScalarValue, Schema,
     };
     pub use datafusion_proto_common::{FromProtoError, ToProtoError};
 }

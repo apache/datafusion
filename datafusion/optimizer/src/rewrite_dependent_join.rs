@@ -512,7 +512,7 @@ impl DependentJoinRewriter {
 
 #[derive(Debug, Clone)]
 struct Node {
-    plan: LogicalPlan,
+    // plan: LogicalPlan,
 
     // This field is only meaningful if the node is dependent join node.
     // It tracks which descendent nodes still accessing the outer columns provided by its
@@ -755,7 +755,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     self.nodes.insert(
                         new_id,
                         Node {
-                            plan: node.clone(),
+                            // plan: node.clone(),
                             is_dependent_join_node: true,
                             subquery_types: VecDeque::new(),
                             columns_accesses_by_subquery_id: IndexMap::new(),
@@ -849,7 +849,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         self.nodes.insert(
             new_id,
             Node {
-                plan: node.clone(),
+                // plan: node.clone(),
                 is_dependent_join_node,
                 columns_accesses_by_subquery_id: IndexMap::new(),
                 subquery_types,
@@ -1099,7 +1099,7 @@ mod tests {
             let mut index = DependentJoinRewriter::new(Arc::new(AliasGenerator::new()));
             let transformed =
                 index.rewrite_subqueries_into_dependent_joins($plan.clone());
-            if let Err(err) = transformed {
+            if let Err(_) = transformed {
                 // assert_snapshot!(
                 //     err,
                 //     @ $expected,
