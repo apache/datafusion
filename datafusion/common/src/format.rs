@@ -185,7 +185,13 @@ impl FromStr for ExplainFormat {
 
 impl Display for ExplainFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
+        let s = match self {
+            ExplainFormat::Indent => "indent",
+            ExplainFormat::Tree => "tree",
+            ExplainFormat::PostgresJSON => "pgjson",
+            ExplainFormat::Graphviz => "graphviz",
+        };
+        write!(f, "{s}")
     }
 }
 
