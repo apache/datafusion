@@ -300,6 +300,7 @@ impl RunOpt {
         Ok(())
     }
 
+    #[allow(deprecated)]
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let mut config = self
             .common
