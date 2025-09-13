@@ -74,7 +74,6 @@ parquet_encryption = [
     "parquet/encryption",
     "datafusion-common/parquet_encryption",
     "datafusion-datasource-parquet/parquet_encryption",
-    "dep:hex",
 ]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
@@ -136,7 +135,6 @@ datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.1.2", optional = true }
 futures = { workspace = true }
-hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }

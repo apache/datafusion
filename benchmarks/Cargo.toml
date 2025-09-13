@@ -52,7 +52,6 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { workspace = true }
 snmalloc-rs = { version = "0.3", optional = true }
 structopt = { version = "0.3", default-features = false }
-test-utils = { path = "../test-utils/", version = "0.1.0" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.16" }
 

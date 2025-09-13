@@ -13,7 +13,6 @@ workspace = true
 
 [dependencies]
 arrow = { workspace = true }
-arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-datasource = { workspace = true }
 datafusion-expr-common = { workspace = true, default-features = true }
