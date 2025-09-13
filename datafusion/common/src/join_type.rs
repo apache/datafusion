@@ -74,6 +74,12 @@ pub enum JoinType {
     RightMark,
 }
 
+const LEFT_PRESERVING: &[JoinType] =
+    &[JoinType::Left, JoinType::Full, JoinType::LeftMark];
+
+const RIGHT_PRESERVING: &[JoinType] =
+    &[JoinType::Right, JoinType::Full, JoinType::RightMark];
+
 impl JoinType {
     pub fn is_outer(self) -> bool {
         self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
@@ -110,6 +116,64 @@ impl JoinType {
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
         )
+    }
+
+    /// Returns true if this join type preserves all rows from the specified `side`.
+    pub fn preserves(self, side: JoinSide) -> bool {
+        match side {
+            JoinSide::Left => LEFT_PRESERVING.contains(&self),
+            JoinSide::Right => RIGHT_PRESERVING.contains(&self),
+            JoinSide::None => false,
+        }
+    }
+
+    /// Returns true if this join type preserves all rows from its left input.
+    ///
+    /// For [`JoinType::Left`], [`JoinType::Full`], and [`JoinType::LeftMark`] joins
+    /// every row from the left side will appear in the output at least once.
+    pub fn preserves_left(self) -> bool {
+        self.preserves(JoinSide::Left)
+    }
+
+    /// Returns true if this join type preserves all rows from its right input.
+    ///
+    /// For [`JoinType::Right`], [`JoinType::Full`], and [`JoinType::RightMark`] joins
+    /// every row from the right side will appear in the output at least once.
+    pub fn preserves_right(self) -> bool {
+        self.preserves(JoinSide::Right)
+    }
+
+    /// Returns the input side eligible for dynamic filter pushdown.
+    ///
+    /// The side returned here can have a `DynamicFilterPhysicalExpr` pushed
+    /// into it, allowing values read from the opposite input to prune rows
+    /// before the join executes. When both inputs must be preserved,
+    /// dynamic filter pushdown is not supported and [`JoinSide::None`] is
+    /// returned.
+    ///
+    /// If neither input is preserving (for example with [`JoinType::Inner`],
+    /// [`JoinType::LeftSemi`], [`JoinType::RightSemi`],
+    /// [`JoinType::LeftAnti`], or [`JoinType::RightAnti`]), either side could
+    /// in principle receive the pushed filter. DataFusion selects the probe
+    /// side: for [`JoinType::LeftSemi`] and [`JoinType::LeftAnti`] this is the
+    /// left input, for [`JoinType::RightSemi`] and [`JoinType::RightAnti`] it
+    /// is the right input, and for other joins the right input is used by
+    /// default as joins typically treat the right as the probe side.
+    pub fn dynamic_filter_side(self) -> JoinSide {
+        use JoinSide::*;
+        let preserves_left = self.preserves_left();
+        let preserves_right = self.preserves_right();
+
+        match (preserves_left, preserves_right) {
+            (true, true) => None,
+            (true, false) => Right,
+            (false, true) => Left,
+            (false, false) => match self {
+                JoinType::LeftSemi | JoinType::LeftAnti => Left,
+                JoinType::RightSemi | JoinType::RightAnti => Right,
+                _ => Right,
+            },
+        }
     }
 }
 
@@ -192,5 +256,97 @@ impl JoinSide {
             JoinSide::Right => JoinSide::Left,
             JoinSide::None => JoinSide::None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_join_type_swap() {
+        assert_eq!(JoinType::Inner.swap(), JoinType::Inner);
+        assert_eq!(JoinType::Left.swap(), JoinType::Right);
+        assert_eq!(JoinType::Right.swap(), JoinType::Left);
+        assert_eq!(JoinType::Full.swap(), JoinType::Full);
+        assert_eq!(JoinType::LeftSemi.swap(), JoinType::RightSemi);
+        assert_eq!(JoinType::RightSemi.swap(), JoinType::LeftSemi);
+        assert_eq!(JoinType::LeftAnti.swap(), JoinType::RightAnti);
+        assert_eq!(JoinType::RightAnti.swap(), JoinType::LeftAnti);
+        assert_eq!(JoinType::LeftMark.swap(), JoinType::RightMark);
+        assert_eq!(JoinType::RightMark.swap(), JoinType::LeftMark);
+    }
+
+    #[test]
+    fn test_join_type_supports_swap() {
+        use JoinType::*;
+        let supported = [
+            Inner, Left, Right, Full, LeftSemi, RightSemi, LeftAnti, RightAnti,
+        ];
+        for jt in supported {
+            assert!(jt.supports_swap(), "{jt:?} should support swap");
+        }
+        let not_supported = [LeftMark, RightMark];
+        for jt in not_supported {
+            assert!(!jt.supports_swap(), "{jt:?} should not support swap");
+        }
+    }
+
+    #[test]
+    fn test_preserves_sides() {
+        use JoinSide::*;
+
+        assert!(JoinType::Left.preserves(Left));
+        assert!(JoinType::Full.preserves(Left));
+        assert!(JoinType::LeftMark.preserves(Left));
+        assert!(!JoinType::LeftSemi.preserves(Left));
+
+        assert!(JoinType::Right.preserves(Right));
+        assert!(JoinType::Full.preserves(Right));
+        assert!(JoinType::RightMark.preserves(Right));
+        assert!(!JoinType::RightSemi.preserves(Right));
+
+        assert!(!JoinType::LeftAnti.preserves(Left));
+        assert!(!JoinType::LeftAnti.preserves(Right));
+        assert!(!JoinType::RightAnti.preserves(Left));
+        assert!(!JoinType::RightAnti.preserves(Right));
+    }
+
+    #[test]
+    fn test_dynamic_filter_side() {
+        use JoinSide::*;
+
+        assert_eq!(JoinType::Inner.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::Left.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::Right.dynamic_filter_side(), Left);
+        assert_eq!(JoinType::Full.dynamic_filter_side(), None);
+        assert_eq!(JoinType::LeftSemi.dynamic_filter_side(), Left);
+        assert_eq!(JoinType::RightSemi.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::LeftAnti.dynamic_filter_side(), Left);
+        assert_eq!(JoinType::RightAnti.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::LeftMark.dynamic_filter_side(), Right);
+        assert_eq!(JoinType::RightMark.dynamic_filter_side(), Left);
+    }
+
+    #[test]
+    fn test_dynamic_filter_side_preservation_logic() {
+        use JoinSide::*;
+
+        for jt in [JoinType::Left, JoinType::LeftMark] {
+            assert!(jt.preserves_left());
+            assert!(!jt.preserves_right());
+            assert_eq!(jt.dynamic_filter_side(), Right);
+        }
+
+        for jt in [JoinType::Right, JoinType::RightMark] {
+            assert!(!jt.preserves_left());
+            assert!(jt.preserves_right());
+            assert_eq!(jt.dynamic_filter_side(), Left);
+        }
+
+        let jt = JoinType::Full;
+        assert!(jt.preserves_left());
+        assert!(jt.preserves_right());
+        assert_eq!(jt.dynamic_filter_side(), None);
     }
 }
