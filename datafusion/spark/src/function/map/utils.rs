@@ -176,29 +176,35 @@ fn map_deduplicate_keys(
         let mut keys_mask_one = [false].repeat(num_keys_entries);
         let mut values_mask_one = [false].repeat(num_values_entries);
 
-        if (num_values_entries != num_keys_entries)
-            && keys_nulls.is_none_or(|buf| buf.is_valid(row_idx))
-            && values_nulls.is_none_or(|buf| buf.is_valid(row_idx))
-        {
-            return exec_err!("map_deduplicate_keys: keys and values lists in the same row must have equal lengths");
-        }
+        if num_keys_entries != num_values_entries {
+            let key_is_valid = keys_nulls.is_none_or(|buf| buf.is_valid(row_idx));
+            let value_is_valid = values_nulls.is_none_or(|buf| buf.is_valid(row_idx));
+            if key_is_valid && value_is_valid {
+                return exec_err!("map_deduplicate_keys: keys and values lists in the same row must have equal lengths");
+            }
+            // else the result entry is NULL
+            // both current row offsets are skipped
+            // keys or values in the current row are marked false in the masks
+        } else if num_keys_entries != 0 {
+            let mut seen_keys = HashSet::new();
 
-        let mut seen_keys = HashSet::new();
-
-        for cur_entry_idx in (0..num_keys_entries).rev() {
-            let key =
-                ScalarValue::try_from_array(&flat_keys, cur_keys_offset + cur_entry_idx)?
-                    .compacted();
-            if seen_keys.contains(&key) {
-                // TODO: implement configuration and logic for spark.sql.mapKeyDedupPolicy=EXCEPTION (this is default spark-config)
-                // exec_err!("invalid argument: duplicate keys in map")
-                // https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961
-            } else {
-                // This code implements deduplication logic for spark.sql.mapKeyDedupPolicy=LAST_WIN (this is NOT default spark-config)
-                keys_mask_one[cur_entry_idx] = true;
-                values_mask_one[cur_entry_idx] = true;
-                seen_keys.insert(key);
-                new_last_offset += 1;
+            for cur_entry_idx in (0..num_keys_entries).rev() {
+                let key = ScalarValue::try_from_array(
+                    &flat_keys,
+                    cur_keys_offset + cur_entry_idx,
+                )?
+                .compacted();
+                if seen_keys.contains(&key) {
+                    // TODO: implement configuration and logic for spark.sql.mapKeyDedupPolicy=EXCEPTION (this is default spark-config)
+                    // exec_err!("invalid argument: duplicate keys in map")
+                    // https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961
+                } else {
+                    // This code implements deduplication logic for spark.sql.mapKeyDedupPolicy=LAST_WIN (this is NOT default spark-config)
+                    keys_mask_one[cur_entry_idx] = true;
+                    values_mask_one[cur_entry_idx] = true;
+                    seen_keys.insert(key);
+                    new_last_offset += 1;
+                }
             }
         }
         keys_mask_builder.append_array(&keys_mask_one.into());
