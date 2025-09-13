@@ -4034,12 +4034,12 @@ logical_plan
 09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
 10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
 11)----------------EmptyRelation: rows=1
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
 
 
 # Test CROSS JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(UInt32, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
 select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
 
 
@@ -4059,12 +4059,12 @@ logical_plan
 09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))|depth=1] structs[]
 10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))
 11)----------------EmptyRelation: rows=1
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
 
 
 # Test INNER JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(UInt32, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
 select t1_id, t1_name, i from join_t1 t2 inner join lateral (select * from unnest(generate_series(1, t1_int))) as series(i) on(t1_id > i);
 
 # Test RIGHT JOIN LATERAL syntax (unsupported)
@@ -4669,7 +4669,7 @@ logical_plan
 05)------Subquery:
 06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
 07)----------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id), LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4
@@ -4685,7 +4685,7 @@ logical_plan
 08)----Subquery:
 09)------Filter: j3.j3_string = outer_ref(j2.j2_string)
 10)--------TableScan: j3 projection=[j3_string, j3_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Utf8View, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j2_string", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
 
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT * FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id = j2_id) as j2) as j2;
@@ -4701,7 +4701,7 @@ logical_plan
 08)----------Subquery:
 09)------------Filter: outer_ref(j1.j1_id) = j2.j2_id
 10)--------------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT j1_string, j2_string FROM j1 LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);
@@ -4714,7 +4714,7 @@ logical_plan
 05)------Subquery:
 06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
 07)----------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1, (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true));
@@ -4728,7 +4728,7 @@ logical_plan
 06)------Subquery:
 07)--------Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id
 08)----------TableScan: j3 projection=[j3_string, j3_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT 1) AS j2;
