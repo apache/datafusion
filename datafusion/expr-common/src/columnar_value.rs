@@ -247,8 +247,11 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
-
+    use arrow::{
+        array::{Int32Array, Int64Array, StructArray},
+        compute::CastOptions,
+        datatypes::{DataType, Field},
+    };
     #[test]
     fn values_to_arrays() {
         // (input, expected)
@@ -357,6 +360,66 @@ mod tests {
     /// Makes an array of length `len` with all elements set to `val`
     fn make_array(val: i32, len: usize) -> ArrayRef {
         Arc::new(Int32Array::from(vec![val; len]))
+    }
+
+    #[test]
+    fn cast_struct_respects_safe_cast_options() {
+        let int64_array = Arc::new(Int64Array::from(vec![i64::from(i32::MAX) + 1]));
+        let struct_array = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int64, true)),
+            int64_array as ArrayRef,
+        )]);
+        let value = ColumnarValue::Array(Arc::new(struct_array));
+
+        let target_type = DataType::Struct(
+            vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+        );
+
+        let cast_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let result = value
+            .cast_to(&target_type, Some(&cast_options))
+            .expect("cast should succeed");
+
+        let arr = match result {
+            ColumnarValue::Array(arr) => arr,
+            other => panic!("expected array, got {other:?}"),
+        };
+
+        let struct_array = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let int_array = struct_array
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        assert!(int_array.is_null(0));
+    }
+
+    #[test]
+    fn cast_struct_respects_unsafe_cast_options() {
+        let int64_array = Arc::new(Int64Array::from(vec![i64::from(i32::MAX) + 1]));
+        let struct_array = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int64, true)),
+            int64_array as ArrayRef,
+        )]);
+        let value = ColumnarValue::Array(Arc::new(struct_array));
+
+        let target_type = DataType::Struct(
+            vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+        );
+
+        let cast_options = CastOptions {
+            safe: false,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let result = value.cast_to(&target_type, Some(&cast_options));
+        assert!(result.is_err());
     }
 
     #[test]
