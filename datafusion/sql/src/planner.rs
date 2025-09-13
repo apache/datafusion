@@ -16,6 +16,7 @@
 // under the License.
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -399,6 +400,7 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
     pub(crate) ident_normalizer: IdentNormalizer,
+    pub(crate) warnings: RefCell<Vec<Diagnostic>>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -421,6 +423,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             context_provider,
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
+            warnings: RefCell::new(Vec::new()),
         }
     }
 
