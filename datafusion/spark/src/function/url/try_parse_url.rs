@@ -22,7 +22,8 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -42,7 +43,10 @@ impl Default for TryParseUrl {
 impl TryParseUrl {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::String(2), TypeSignature::String(3)],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -68,11 +72,6 @@ impl ScalarUDFImpl for TryParseUrl {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_try_parse_url, vec![])(&args)
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let parse_url: ParseUrl = ParseUrl::new();
-        parse_url.coerce_types(arg_types)
     }
 }
 

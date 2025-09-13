@@ -27,7 +27,10 @@ use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 use url::Url;
 
@@ -46,10 +49,7 @@ impl ParseUrl {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::String(2),
-                    TypeSignature::String(3),
-                ],
+                vec![TypeSignature::String(2), TypeSignature::String(3)],
                 Volatility::Immutable,
             ),
         }
