@@ -2218,7 +2218,7 @@ async fn roundtrip_logical_plan_sort_merge_join() -> Result<()> {
     )
     .await?;
 
-    ctx.sql("SET datafusion.optimizer.prefer_sort_merge_join = true")
+    ctx.sql("SET datafusion.optimizer.join_method_priority = 'smj'")
         .await?
         .show()
         .await?;

@@ -2558,7 +2558,7 @@ statement ok
 set datafusion.explain.logical_plan_only = false;
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+set datafusion.optimizer.join_method_priority = 'hj';
 
 # explain hash join on timestamp with timezone type
 query TT
@@ -2724,10 +2724,7 @@ statement ok
 set datafusion.explain.logical_plan_only = false;
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = false;
-
-statement ok
-set datafusion.optimizer.prefer_sort_merge_join = true;
+set datafusion.optimizer.join_method_priority = 'smj';
 
 statement ok
 set datafusion.execution.target_partitions = 2;
@@ -2806,7 +2803,7 @@ statement ok
 set datafusion.explain.logical_plan_only = true;
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+set datafusion.optimizer.join_method_priority = 'hj';
 
 statement ok
 set datafusion.execution.target_partitions = 2;
@@ -3154,10 +3151,7 @@ statement ok
 set datafusion.explain.logical_plan_only = false;
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = false;
-
-statement ok
-set datafusion.optimizer.prefer_sort_merge_join = true;
+set datafusion.optimizer.join_method_priority = 'smj';
 
 statement ok
 set datafusion.execution.target_partitions = 2;
@@ -3293,7 +3287,7 @@ physical_plan
 17)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+set datafusion.optimizer.join_method_priority = 'hj';
 
 # to preserve ordering until Hash join set target partition to 1.
 # Otherwise RepartitionExec s inserted may broke ordering.
@@ -3538,7 +3532,7 @@ statement ok
 set datafusion.explain.logical_plan_only = true;
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+set datafusion.optimizer.join_method_priority = 'hj';
 
 statement ok
 set datafusion.execution.target_partitions = 2;

@@ -22,9 +22,7 @@
 ## - datafusion.optimizer.enable_hash_join
 ## - datafusion.optimizer.enable_sort_merge_join
 ## - datafusion.optimizer.enable_nested_loop_join
-## - datafusion.optimizer.prefer_hash_join
-## - datafusion.optimizer.prefer_sort_merge_join
-## - datafusion.optimizer.prefer_nested_loop_join
+## - datafusion.optimizer.join_method_priority
 ##
 ## Strategy: set configs via SQL, then EXPLAIN a simple equi-join and
 ## assert which physical join operator is chosen.
@@ -66,13 +64,7 @@ statement ok
 set datafusion.optimizer.enable_hash_join = true;
 
 statement ok
-set datafusion.optimizer.prefer_nested_loop_join = false;
-
-statement ok
-set datafusion.optimizer.prefer_sort_merge_join = false;
-
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
+set datafusion.optimizer.join_method_priority = 'hj';
 
 query TT
 EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
@@ -95,13 +87,7 @@ statement ok
 set datafusion.optimizer.enable_hash_join = false;
 
 statement ok
-set datafusion.optimizer.prefer_nested_loop_join = false;
-
-statement ok
-set datafusion.optimizer.prefer_sort_merge_join = true;
-
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
+set datafusion.optimizer.join_method_priority = 'smj';
 
 query TT
 EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
@@ -126,13 +112,7 @@ statement ok
 set datafusion.optimizer.enable_hash_join = true;
 
 statement ok
-set datafusion.optimizer.prefer_nested_loop_join = false;
-
-statement ok
-set datafusion.optimizer.prefer_sort_merge_join = true;
-
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
+set datafusion.optimizer.join_method_priority = 'smj';
 
 query TT
 EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
@@ -157,13 +137,7 @@ statement ok
 set datafusion.optimizer.enable_hash_join = true;
 
 statement ok
-set datafusion.optimizer.prefer_nested_loop_join = false;
-
-statement ok
-set datafusion.optimizer.prefer_sort_merge_join = true;
-
-statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+set datafusion.optimizer.join_method_priority = 'hj';
 
 query TT
 EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
@@ -186,13 +160,7 @@ statement ok
 set datafusion.optimizer.enable_hash_join = true;
 
 statement ok
-set datafusion.optimizer.prefer_nested_loop_join = true;
-
-statement ok
-set datafusion.optimizer.prefer_sort_merge_join = false;
-
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
+set datafusion.optimizer.join_method_priority = 'nlj, hj';
 
 query TT
 EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
@@ -218,3 +186,124 @@ query TT
 EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
 ----
 physical_plan_error Error during planning: No enabled join algorithm is applicable for this join. Possible join types are [Hj, Smj]. Try to enable them through configurations like `datafusion.optimizer.enable_hash_join`
+
+##########
+## Config 7 -- Priority 'smj, hj' with both enabled -> expect SortMergeJoin
+##########
+statement ok
+set datafusion.optimizer.enable_nested_loop_join = true;
+
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.enable_hash_join = true;
+
+statement ok
+set datafusion.optimizer.join_method_priority = 'smj, hj';
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 8 -- Priority 'hj, smj' with both enabled -> expect HashJoin
+##########
+statement ok
+set datafusion.optimizer.join_method_priority = 'hj, smj';
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 9 -- Priority includes NLJ first, but NLJ is not applicable for equi-join -> expect SortMergeJoin
+##########
+statement ok
+set datafusion.optimizer.join_method_priority = 'nlj, smj';
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 10 -- Priority 'smj' but SMJ disabled -> expect HashJoin via fallback
+##########
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = false;
+
+statement ok
+set datafusion.optimizer.enable_hash_join = true;
+
+statement ok
+set datafusion.optimizer.join_method_priority = 'smj';
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 11 -- Long names 'sort_merge_join, hash_join' -> expect SortMergeJoin
+##########
+statement ok
+set datafusion.optimizer.enable_sort_merge_join = true;
+
+statement ok
+set datafusion.optimizer.join_method_priority = 'sort_merge_join, hash_join';
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 12 -- Case-insensitive priority tokens 'SMJ, HJ' -> expect SortMergeJoin
+##########
+statement ok
+set datafusion.optimizer.join_method_priority = 'SMJ, HJ';
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan
+01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Config 13 -- Typo in priority 'smj, hsj' -> expect configuration error listing valid values
+##########
+statement ok
+set datafusion.optimizer.join_method_priority = 'smj, hsj';
+
+query TT
+EXPLAIN SELECT * FROM jt1 JOIN jt2 ON jt1.a = jt2.a
+----
+physical_plan_error Invalid or Unsupported Configuration: Invalid join method(s) in datafusion.optimizer.join_method_priority: hsj. Valid values: hj/hash_join, smj/sort_merge_join, nlj/nested_loop_join

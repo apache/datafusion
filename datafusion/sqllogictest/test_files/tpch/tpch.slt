@@ -23,7 +23,7 @@ include ./answers/q*.slt.part
 
 # test answers with sort merge join
 statement ok
-set datafusion.optimizer.prefer_sort_merge_join = true;
+set datafusion.optimizer.join_method_priority = 'smj';
 
 include ./answers/q*.slt.part
 

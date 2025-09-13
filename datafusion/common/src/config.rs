@@ -826,18 +826,36 @@ config_namespace! {
         /// If there are multiple preferred and applicable join types, the optimizer
         /// will choose one based on heuristics.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
-        pub prefer_hash_join: bool, default = false
+        ///
+        /// Note: if `join_method_priority` is set, this configuration will be overriden
+        #[deprecated(since = "51.0.0", note = "Please use configuration option `join_method_priority` instead")]
+        pub prefer_hash_join: bool, default = true
 
-        /// When set to true, the physical plan optimizer will prefer SortMergeJoin when applicable.
-        /// If there are multiple preferred and applicable join types, the optimizer
-        /// will choose one according to heuristics.
-        pub prefer_sort_merge_join: bool, default = false
-
-        /// When set to true, the physical plan optimizer will prefer NestedLoopJoin
-        /// when applicable.
-        /// If there are multiple preferred and applicable join types, the optimizer
-        /// will choose one according to heuristics.
-        pub prefer_nested_loop_join: bool, default = false
+        /// Comma-separated priority list of join algorithms to try, in order.
+        ///
+        /// Supported join methods (case-insensitive):
+        /// - "hj", "hash_join"
+        /// - "smj", "sort_merge_join"
+        /// - "nlj", "nested_loop_join"
+        ///
+        /// The planner picks the first algorithm in this list that is both
+        /// applicable to the current join and enabled via the corresponding
+        /// `enable_*_join` flags. If none match, a default heuristic order
+        /// is used as a fallback.
+        ///
+        /// Examples:
+        /// - `hj, nlj`: prefer Hash Join; if not applicable, try Nested Loop Join next.
+        /// - `smj`: prefer Sort-Merge Join; if disabled or not applicable, fall back to
+        ///   the default heuristic order.
+        /// - `hj, nlj`: on an non-equi-join, Hash Join is not applicable, so Nested
+        ///   Loop Join is chosen if enabled.
+        ///
+        /// Notes:
+        /// - Tokens are case-insensitive; unknown tokens cause a validation error
+        /// - When set, this option supersedes legacy configuration `prefer_hash_join`
+        ///  , that is deprecated and ignored when `join_method_priority` is
+        /// provided(not empty string "").
+        pub join_method_priority: String, transform = str::to_lowercase, default = "".to_string()
 
         /// Enables planning HashJoin operators. If set to false, the optimizer will avoid
         /// producing HashJoin plans and consider other join strategies instead.

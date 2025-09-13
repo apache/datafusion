@@ -20,7 +20,7 @@
 ##########
 
 statement ok
-set datafusion.optimizer.prefer_sort_merge_join = true;
+set datafusion.optimizer.join_method_priority = 'smj';
 
 statement ok
 CREATE TABLE t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100), ('Bob', 1);
@@ -890,4 +890,4 @@ drop table t2;
 
 # return sql params back to default values
 statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+set datafusion.optimizer.join_method_priority = 'hj';

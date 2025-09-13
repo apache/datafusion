@@ -1295,7 +1295,7 @@ physical_plan
 
 # Query with sort merge join.
 statement ok
-set datafusion.optimizer.prefer_sort_merge_join = true;
+set datafusion.optimizer.join_method_priority = 'smj';
 
 query TT
 explain select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
@@ -1320,7 +1320,7 @@ physical_plan
 17)└───────────────────────────┘└───────────────────────────┘
 
 statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+set datafusion.optimizer.join_method_priority = 'hj';
 
 # cleanup
 statement ok

@@ -25,7 +25,7 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::ExecutionPlan;
 use arrow::compute::SortOptions;
-use datafusion_common::plan_err;
+use datafusion_common::{config_err, plan_err};
 use datafusion_expr::JoinType;
 
 /// Build the appropriate join `ExecutionPlan` for the given join type, filter, and
@@ -46,7 +46,7 @@ use datafusion_expr::JoinType;
 /// - Step 2: Filter the possible join types from step 1 according to the configuration
 ///   by checking if they're enabled by options like `datafusion.optimizer.enable_hash_join`
 /// - Step 3: Choose one according to the built-in heuristics and also the preference
-///   in the configuration, e.g. `datafusion.optimizer.prefer_hash_join`
+///   in the configuration `datafusion.optimizer.join_method_priority`
 pub(super) fn plan_join_exec(
     session_state: &SessionState,
     physical_left: Arc<dyn ExecutionPlan>,
@@ -107,48 +107,65 @@ pub(super) fn plan_join_exec(
         );
     }
 
-    // Step 3: Choose and plan the physical join type according to preference
-    // from the configuration, and also the built-in heuristics
+    // Step 3: Choose and plan the physical join type according to
+    // `join_method_priority` and built-in heuristics
     // ----------------------------------------------------------------------
 
-    // Collect preferred algorithms
-    let mut preferred: Vec<Algo> = Vec::new();
-    if cfg.prefer_hash_join {
-        preferred.push(Algo::Hj);
-    }
-    if cfg.prefer_sort_merge_join {
-        preferred.push(Algo::Smj);
-    }
-    if cfg.prefer_nested_loop_join {
-        preferred.push(Algo::Nlj);
-    }
-
-    // Helper to pick by priority HJ > SMJ > NLJ
-    let pick_by_priority = |candidates: &[Algo]| -> Algo {
-        if candidates.contains(&Algo::Hj) {
-            Algo::Hj
-        } else if candidates.contains(&Algo::Smj) {
-            Algo::Smj
-        } else {
-            Algo::Nlj
+    // Parse join method priority string into an ordered list of algorithms
+    let parse_priority = |s: &str| -> Result<Vec<Algo>> {
+        let mut out = Vec::new();
+        let mut unknown = Vec::new();
+        for token in s.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+            match token {
+                "hj" | "hash_join" => out.push(Algo::Hj),
+                "smj" | "sort_merge_join" => out.push(Algo::Smj),
+                "nlj" | "nested_loop_join" => out.push(Algo::Nlj),
+                other => unknown.push(other.to_string()),
+            }
         }
+        if !unknown.is_empty() {
+            let valid = "hj/hash_join, smj/sort_merge_join, nlj/nested_loop_join";
+            return config_err!(
+                "Invalid join method(s) in datafusion.optimizer.join_method_priority: {}. Valid values: {}",
+                unknown.join(", "),
+                valid
+            );
+        }
+        Ok(out)
     };
 
-    // If there is overlap with preferred, use that; otherwise use enabled list by priority
-    let chosen = if !preferred.is_empty() {
-        let overlaps: Vec<Algo> = enabled_and_possible
-            .iter()
-            .copied()
-            .filter(|a| preferred.contains(a))
-            .collect();
-        if !overlaps.is_empty() {
-            pick_by_priority(&overlaps)
+    // Backward compatibility:
+    // If `join_method_priority` is empty, honor legacy `prefer_hash_join` by
+    // setting the priority to a single entry accordingly. Otherwise, parse the
+    // provided priority string.
+    let priority = if cfg.join_method_priority.trim().is_empty() {
+        #[allow(deprecated)]
+        if cfg.prefer_hash_join {
+            vec![Algo::Hj]
         } else {
-            pick_by_priority(&enabled_and_possible)
+            vec![Algo::Smj]
         }
     } else {
-        pick_by_priority(&enabled_and_possible)
+        parse_priority(&cfg.join_method_priority)?
     };
+
+    // Default heuristic order if priority is empty or does not match any candidate
+    let default_order = [Algo::Hj, Algo::Smj, Algo::Nlj];
+
+    // Helper: pick the first algorithm in `order` that is in `candidates`
+    let pick_in_order = |candidates: &[Algo], order: &[Algo]| -> Option<Algo> {
+        for algo in order {
+            if candidates.contains(algo) {
+                return Some(*algo);
+            }
+        }
+        None
+    };
+
+    // Intersect enabled+possible with priority order first; otherwise fallback to default order
+    let chosen = pick_in_order(&enabled_and_possible, &priority)
+        .or_else(|| pick_in_order(&enabled_and_possible, &default_order))
+        .expect("enabled_and_possible is non-empty");
 
     match chosen {
         Algo::Nlj => Ok(Arc::new(NestedLoopJoinExec::try_new(
