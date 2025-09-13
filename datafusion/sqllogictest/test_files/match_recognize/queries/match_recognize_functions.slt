@@ -1,0 +1,657 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ../init_data.slt.part
+
+# FIRST/LAST on standard column with ALL ROWS PER MATCH
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(price) AS first_price,
+        LAST(price) AS last_price
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 125 125
+DDOG 2024-01-02 128 125 128
+DDOG 2024-01-03 132 125 132
+DDOG 2024-01-04 129 125 129
+DDOG 2024-01-05 135 125 135
+DDOG 2024-01-08 138 125 138
+DDOG 2024-01-09 141 125 141
+DDOG 2024-01-10 139 125 139
+DDOG 2024-01-11 143 125 143
+DDOG 2024-01-12 147 125 147
+
+# FIRST/LAST on standard column with ONE ROW PER MATCH
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(price) AS first_price,
+        LAST(price) AS last_price
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 185 199
+AMZN 150 164
+CRM 245 266
+DDOG 125 147
+GOOGL 140 154
+META 335 356
+MSFT 375 396
+NFLX 485 506
+NVDA 485 525
+TSLA 248 269
+
+# FIRST/LAST on symbol-qualified column with ALL ROWS PER MATCH
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(A.price) AS first_a_price,
+        LAST(A.price) AS last_a_price
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 125 125
+DDOG 2024-01-02 128 125 128
+DDOG 2024-01-03 132 125 132
+DDOG 2024-01-04 129 125 129
+DDOG 2024-01-05 135 125 135
+DDOG 2024-01-08 138 125 138
+DDOG 2024-01-09 141 125 141
+DDOG 2024-01-10 139 125 139
+DDOG 2024-01-11 143 125 143
+DDOG 2024-01-12 147 125 147
+
+# FIRST/LAST on symbol-qualified column with ONE ROW PER MATCH
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(A.price) AS first_a_price,
+        LAST(A.price) AS last_a_price
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 185 199
+AMZN 150 164
+CRM 245 266
+DDOG 125 147
+GOOGL 140 154
+META 335 356
+MSFT 375 396
+NFLX 485 506
+NVDA 485 525
+TSLA 248 269
+
+# Complex expressions with FIRST/LAST and ALL ROWS PER MATCH
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(price * 2) AS first_price_x2,
+        LAST(price - 10) AS last_price_minus_10
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 250 115
+DDOG 2024-01-02 128 250 118
+DDOG 2024-01-03 132 250 122
+DDOG 2024-01-04 129 250 119
+DDOG 2024-01-05 135 250 125
+DDOG 2024-01-08 138 250 128
+DDOG 2024-01-09 141 250 131
+DDOG 2024-01-10 139 250 129
+DDOG 2024-01-11 143 250 133
+DDOG 2024-01-12 147 250 137
+
+# Complex expressions with FIRST/LAST and ONE ROW PER MATCH
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        FIRST(price * 2) AS first_price_x2,
+        LAST(price - 10) AS last_price_minus_10
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 370 189
+AMZN 300 154
+CRM 490 256
+DDOG 250 137
+GOOGL 280 144
+META 670 346
+MSFT 750 386
+NFLX 970 496
+NVDA 970 515
+TSLA 496 259
+
+# CLASSIFIER(), MATCH_NUMBER(), MATCH_SEQUENCE_NUMBER() with ALL ROWS PER MATCH
+query TDITII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        CLASSIFIER() AS symbol_name,
+        MATCH_NUMBER() AS match_id,
+        MATCH_SEQUENCE_NUMBER() AS seq_num
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2, 3;
+----
+DDOG 2024-01-01 125 A 1 1
+DDOG 2024-01-02 128 A 1 2
+DDOG 2024-01-03 132 A 1 3
+DDOG 2024-01-04 129 A 1 4
+DDOG 2024-01-05 135 A 1 5
+DDOG 2024-01-08 138 A 1 6
+DDOG 2024-01-09 141 A 1 7
+DDOG 2024-01-10 139 A 1 8
+DDOG 2024-01-11 143 A 1 9
+DDOG 2024-01-12 147 A 1 10
+
+# CLASSIFIER(), MATCH_NUMBER(), MATCH_SEQUENCE_NUMBER() with ONE ROW PER MATCH
+query TTII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        CLASSIFIER() AS symbol_name,
+        MATCH_NUMBER() AS match_id,
+        MATCH_SEQUENCE_NUMBER() AS seq_num
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2, 3;
+----
+AAPL A 1 10
+AMZN A 1 10
+CRM A 1 10
+DDOG A 1 10
+GOOGL A 1 10
+META A 1 10
+MSFT A 1 10
+NFLX A 1 10
+NVDA A 1 10
+TSLA A 1 10
+
+# PREV/NEXT on standard column with ALL ROWS PER MATCH
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price) AS prev_price,
+        NEXT(price) AS next_price
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 NULL 128
+DDOG 2024-01-02 128 125 132
+DDOG 2024-01-03 132 128 129
+DDOG 2024-01-04 129 132 135
+DDOG 2024-01-05 135 129 138
+DDOG 2024-01-08 138 135 141
+DDOG 2024-01-09 141 138 139
+DDOG 2024-01-10 139 141 143
+DDOG 2024-01-11 143 139 147
+DDOG 2024-01-12 147 143 NULL
+
+# PREV/NEXT on standard column with ONE ROW PER MATCH
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price) AS prev_price,
+        NEXT(price) AS next_price
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 197 NULL
+AMZN 162 NULL
+CRM 263 NULL
+DDOG 143 NULL
+GOOGL 152 NULL
+META 353 NULL
+MSFT 393 NULL
+NFLX 503 NULL
+NVDA 518 NULL
+TSLA 266 NULL
+
+# Complex expressions with PREV/NEXT and ALL ROWS PER MATCH
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price * 2) AS prev_price_x2,
+        NEXT(price + 10) AS next_price_plus_10
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 NULL 138
+DDOG 2024-01-02 128 250 142
+DDOG 2024-01-03 132 256 139
+DDOG 2024-01-04 129 264 145
+DDOG 2024-01-05 135 258 148
+DDOG 2024-01-08 138 270 151
+DDOG 2024-01-09 141 276 149
+DDOG 2024-01-10 139 282 153
+DDOG 2024-01-11 143 278 157
+DDOG 2024-01-12 147 286 NULL
+
+# Complex expressions with PREV/NEXT and ONE ROW PER MATCH
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price * 2) AS prev_price_x2,
+        NEXT(price + 10) AS next_price_plus_10
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 394 NULL
+AMZN 324 NULL
+CRM 526 NULL
+DDOG 286 NULL
+GOOGL 304 NULL
+META 706 NULL
+MSFT 786 NULL
+NFLX 1006 NULL
+NVDA 1036 NULL
+TSLA 532 NULL
+
+# PREV/NEXT on symbol-qualified column with offset (ALL ROWS PER MATCH)
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(A.price, 2) AS prev_a_price_2,
+        NEXT(A.price, 2) AS next_a_price_2
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 NULL 132
+DDOG 2024-01-02 128 NULL 129
+DDOG 2024-01-03 132 125 135
+DDOG 2024-01-04 129 128 138
+DDOG 2024-01-05 135 132 141
+DDOG 2024-01-08 138 129 139
+DDOG 2024-01-09 141 135 143
+DDOG 2024-01-10 139 138 147
+DDOG 2024-01-11 143 141 NULL
+DDOG 2024-01-12 147 139 NULL
+
+# PREV/NEXT on symbol-qualified column with offset (ONE ROW PER MATCH)
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(A.price, 2) AS prev_a_price_2,
+        NEXT(A.price, 2) AS next_a_price_2
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 192 NULL
+AMZN 158 NULL
+CRM 259 NULL
+DDOG 139 NULL
+GOOGL 148 NULL
+META 349 NULL
+MSFT 389 NULL
+NFLX 499 NULL
+NVDA 512 NULL
+TSLA 262 NULL
+
+# PREV/NEXT on symbol-qualified column with offset and default (ALL ROWS PER MATCH)
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(A.price, 1, 0) AS prev_a_price_1_default_0,
+        NEXT(A.price, 2, 100) AS next_a_price_2_default_100
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 0 132
+DDOG 2024-01-02 128 125 129
+DDOG 2024-01-03 132 128 135
+DDOG 2024-01-04 129 132 138
+DDOG 2024-01-05 135 129 141
+DDOG 2024-01-08 138 135 139
+DDOG 2024-01-09 141 138 143
+DDOG 2024-01-10 139 141 147
+DDOG 2024-01-11 143 139 100
+DDOG 2024-01-12 147 143 100
+
+# PREV/NEXT on symbol-qualified column with offset and default (ONE ROW PER MATCH)
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(A.price, 1, 0) AS prev_a_price_1_default_0,
+        NEXT(A.price, 2, 100) AS next_a_price_2_default_100
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 197 100
+AMZN 162 100
+CRM 263 100
+DDOG 143 100
+GOOGL 152 100
+META 353 100
+MSFT 393 100
+NFLX 503 100
+NVDA 518 100
+TSLA 266 100
+
+# Complex expressions with PREV/NEXT and offset (ALL ROWS PER MATCH)
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price * 2, 2) AS prev_price_x2_2,
+        NEXT(price + 10, 2) AS next_price_p10_2
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 NULL 142
+DDOG 2024-01-02 128 NULL 139
+DDOG 2024-01-03 132 250 145
+DDOG 2024-01-04 129 256 148
+DDOG 2024-01-05 135 264 151
+DDOG 2024-01-08 138 258 149
+DDOG 2024-01-09 141 270 153
+DDOG 2024-01-10 139 276 157
+DDOG 2024-01-11 143 282 NULL
+DDOG 2024-01-12 147 278 NULL
+
+# Complex expressions with PREV/NEXT and offset (ONE ROW PER MATCH)
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price * 2, 2) AS prev_price_x2_2,
+        NEXT(price + 10, 2) AS next_price_p10_2
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 384 NULL
+AMZN 316 NULL
+CRM 518 NULL
+DDOG 278 NULL
+GOOGL 296 NULL
+META 698 NULL
+MSFT 778 NULL
+NFLX 998 NULL
+NVDA 1024 NULL
+TSLA 524 NULL
+
+# Complex expressions with PREV/NEXT and offset+default (ALL ROWS PER MATCH)
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price * 2, 1, 0) AS prev_price_x2_1_default_0,
+        NEXT(price + 10, 2, 100) AS next_price_p10_2_default_100
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 0 142
+DDOG 2024-01-02 128 250 139
+DDOG 2024-01-03 132 256 145
+DDOG 2024-01-04 129 264 148
+DDOG 2024-01-05 135 258 151
+DDOG 2024-01-08 138 270 149
+DDOG 2024-01-09 141 276 153
+DDOG 2024-01-10 139 282 157
+DDOG 2024-01-11 143 278 100
+DDOG 2024-01-12 147 286 100
+
+# Complex expressions with PREV/NEXT and offset+default (ONE ROW PER MATCH)
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price * 2, 1, 0) AS prev_price_x2_1_default_0,
+        NEXT(price + 10, 2, 100) AS next_price_p10_2_default_100
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 394 100
+AMZN 324 100
+CRM 526 100
+DDOG 286 100
+GOOGL 304 100
+META 706 100
+MSFT 786 100
+NFLX 1006 100
+NVDA 1036 100
+TSLA 532 100
+
+# PREV/NEXT with offset (ALL ROWS PER MATCH)
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price, 2) AS prev_price_2,
+        NEXT(price, 2) AS next_price_2
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 NULL 132
+DDOG 2024-01-02 128 NULL 129
+DDOG 2024-01-03 132 125 135
+DDOG 2024-01-04 129 128 138
+DDOG 2024-01-05 135 132 141
+DDOG 2024-01-08 138 129 139
+DDOG 2024-01-09 141 135 143
+DDOG 2024-01-10 139 138 147
+DDOG 2024-01-11 143 141 NULL
+DDOG 2024-01-12 147 139 NULL
+
+# PREV/NEXT with offset (ONE ROW PER MATCH)
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price, 2) AS prev_price_2,
+        NEXT(price, 2) AS next_price_2
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 192 NULL
+AMZN 158 NULL
+CRM 259 NULL
+DDOG 139 NULL
+GOOGL 148 NULL
+META 349 NULL
+MSFT 389 NULL
+NFLX 499 NULL
+NVDA 512 NULL
+TSLA 262 NULL
+
+# PREV/NEXT with offset and default (ALL ROWS PER MATCH)
+query TDIII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price, 1, 0) AS prev_price_1_default_0,
+        NEXT(price, 2, 100) AS next_price_2_default_100
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+WHERE company = 'DDOG'
+ORDER BY 1, 2;
+----
+DDOG 2024-01-01 125 0 132
+DDOG 2024-01-02 128 125 129
+DDOG 2024-01-03 132 128 135
+DDOG 2024-01-04 129 132 138
+DDOG 2024-01-05 135 129 141
+DDOG 2024-01-08 138 135 139
+DDOG 2024-01-09 141 138 143
+DDOG 2024-01-10 139 141 147
+DDOG 2024-01-11 143 139 100
+DDOG 2024-01-12 147 143 100
+
+# PREV/NEXT with offset and default (ONE ROW PER MATCH)
+query TII
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        PREV(price, 1, 0) AS prev_price_1_default_0,
+        NEXT(price, 2, 100) AS next_price_2_default_100
+    ONE ROW PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 50
+)
+ORDER BY 1, 2;
+----
+AAPL 197 100
+AMZN 162 100
+CRM 263 100
+DDOG 143 100
+GOOGL 152 100
+META 353 100
+MSFT 393 100
+NFLX 503 100
+NVDA 518 100
+TSLA 266 100

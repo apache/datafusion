@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
-pub(crate) fn get_signed_integer(value: ScalarValue) -> Result<i64> {
+pub fn get_signed_integer(value: ScalarValue) -> Result<i64> {
     if value.is_null() {
         return Ok(0);
     }
@@ -33,7 +36,7 @@ pub(crate) fn get_signed_integer(value: ScalarValue) -> Result<i64> {
     value.cast_to(&DataType::Int64)?.try_into()
 }
 
-pub(crate) fn get_scalar_value_from_args(
+pub fn get_scalar_value_from_args(
     args: &[Arc<dyn PhysicalExpr>],
     index: usize,
 ) -> Result<Option<ScalarValue>> {
@@ -52,7 +55,7 @@ pub(crate) fn get_scalar_value_from_args(
     })
 }
 
-pub(crate) fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
+pub fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
     if value.is_null() {
         return Ok(0);
     }
@@ -62,4 +65,38 @@ pub(crate) fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
     }
 
     value.cast_to(&DataType::UInt64)?.try_into()
+}
+
+/// Shift an `array` by `offset` and fill vacated slots with `default_value`.
+/// Positive `offset` shifts the array towards higher indices (prepends defaults),
+/// negative `offset` shifts towards lower indices (appends defaults).
+/// TODO: change the original arrow::compute::kernels::window::shift impl to support an optional default value
+pub fn shift_with_default_value(
+    array: &ArrayRef,
+    offset: i64,
+    default_value: &ScalarValue,
+) -> Result<ArrayRef> {
+    use datafusion_common::arrow::compute::concat;
+
+    let value_len = array.len() as i64;
+    if offset == 0 {
+        Ok(Arc::clone(array))
+    } else if offset == i64::MIN || offset.abs() >= value_len {
+        default_value.to_array_of_size(value_len as usize)
+    } else {
+        let slice_offset = (-offset).clamp(0, value_len) as usize;
+        let length = array.len() - offset.unsigned_abs() as usize;
+        let slice = array.slice(slice_offset, length);
+
+        let fill_len = offset.unsigned_abs() as usize;
+        let default_fill = default_value.to_array_of_size(fill_len)?;
+
+        if offset > 0 {
+            concat(&[default_fill.as_ref(), slice.as_ref()])
+                .map_err(|e| arrow_datafusion_err!(e))
+        } else {
+            concat(&[slice.as_ref(), default_fill.as_ref()])
+                .map_err(|e| arrow_datafusion_err!(e))
+        }
+    }
 }

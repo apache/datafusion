@@ -116,6 +116,40 @@ impl Unparser<'_> {
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let func_name = func.name();
 
+                // Render mr_symbol(x, 'S') as S.x to preserve MR-friendly formatting
+                if func_name == "mr_symbol" && args.len() == 2 {
+                    // Expect args[0] = value expr, args[1] = symbol literal
+                    let sym_ast = self.expr_to_sql_inner(&args[1])?;
+                    let val_ast = self.expr_to_sql_inner(&args[0])?;
+                    // sym_ast should be a string literal; but if not, just fall back to function form
+                    if let ast::Expr::Value(ValueWithSpan {
+                        value: SingleQuotedString(sym),
+                        ..
+                    }) = sym_ast
+                    {
+                        // If val_ast is a simple identifier, prefix it with symbol.
+                        // Otherwise, render as sym.(val)
+                        let val_ident = match val_ast {
+                            ast::Expr::Identifier(_)
+                            | ast::Expr::CompoundIdentifier(_) => val_ast,
+                            other => ast::Expr::Nested(Box::new(other)),
+                        };
+                        // Build compound identifier sym.val
+                        let mut idents: Vec<Ident> = vec![Ident::new(sym.to_uppercase())];
+                        match &val_ident {
+                            ast::Expr::Identifier(id) => idents.push(id.clone()),
+                            ast::Expr::CompoundIdentifier(list) => {
+                                idents.extend(list.clone());
+                            }
+                            _ => {
+                                // fallback to function form if can't neatly express
+                                return self.scalar_function_to_sql(func_name, args);
+                            }
+                        }
+                        return Ok(ast::Expr::CompoundIdentifier(idents));
+                    }
+                }
+
                 if let Some(expr) = self
                     .dialect
                     .scalar_function_to_sql_overrides(self, func_name, args)?
@@ -342,6 +376,16 @@ impl Unparser<'_> {
                     } else {
                         Vec::new()
                     };
+                let argument_clauses =
+                    if order_by.is_empty() || agg.func.is_ordered_set_aggregate() {
+                        vec![]
+                    } else {
+                        let order_by_exprs = order_by
+                            .iter()
+                            .map(|sort_expr| self.sort_to_sql(sort_expr))
+                            .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                        vec![ast::FunctionArgumentClause::OrderBy(order_by_exprs)]
+                    };
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName::from(vec![Ident {
                         value: func_name.to_string(),
@@ -352,7 +396,7 @@ impl Unparser<'_> {
                         duplicate_treatment: distinct
                             .then_some(DuplicateTreatment::Distinct),
                         args,
-                        clauses: vec![],
+                        clauses: argument_clauses,
                     }),
                     filter,
                     null_treatment: None,
