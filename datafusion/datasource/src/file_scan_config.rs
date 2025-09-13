@@ -590,7 +590,11 @@ impl DataSource for FileScanConfig {
             // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
             match reassign_predicate_columns(filter, &schema, true) {
                 Ok(filter) => {
-                    match Self::add_filter_equivalence_info(filter, &mut eq_properties) {
+                    match Self::add_filter_equivalence_info(
+                        filter,
+                        &mut eq_properties,
+                        &schema,
+                    ) {
                         Ok(()) => {}
                         Err(e) => {
                             warn!("Failed to add filter equivalence info: {e}");
@@ -758,9 +762,24 @@ impl FileScanConfig {
     fn add_filter_equivalence_info(
         filter: Arc<dyn PhysicalExpr>,
         eq_properties: &mut EquivalenceProperties,
+        schema: &Schema,
     ) -> Result<()> {
+        macro_rules! ignore_dangling_col {
+            ($col:expr) => {
+                if let Some(col) = $col.as_any().downcast_ref::<Column>() {
+                    if schema.index_of(col.name()).is_err() {
+                        continue;
+                    }
+                }
+            };
+        }
+
         let (equal_pairs, _) = collect_columns_from_predicate(&filter);
         for (lhs, rhs) in equal_pairs {
+            // Ignore any binary expressions that reference non-existent columns in the current schema
+            // (e.g. due to unnecessary projections being removed)
+            ignore_dangling_col!(lhs);
+            ignore_dangling_col!(rhs);
             eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
         }
         Ok(())
