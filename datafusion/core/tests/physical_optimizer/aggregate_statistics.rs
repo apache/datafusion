@@ -29,7 +29,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::expressions::{self, cast};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -40,6 +42,16 @@ use datafusion_physical_plan::common;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::ExecutionPlan;
+
+fn binary_test(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let exec_props = ExecutionProps::new();
+    expressions::binary(lhs, op, rhs, schema, &exec_props)
+}
 
 /// Mock data using a MemorySourceConfig which has an exact count statistic
 fn mock_data() -> Result<Arc<DataSourceExec>> {
@@ -237,7 +249,7 @@ async fn test_count_inexact_stat() -> Result<()> {
 
     // adding a filter makes the statistics inexact
     let filter = Arc::new(FilterExec::try_new(
-        expressions::binary(
+        binary_test(
             expressions::col("a", &schema)?,
             Operator::Gt,
             cast(expressions::lit(1u32), &schema, DataType::Int32)?,
@@ -281,7 +293,7 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
 
     // adding a filter makes the statistics inexact
     let filter = Arc::new(FilterExec::try_new(
-        expressions::binary(
+        binary_test(
             expressions::col("a", &schema)?,
             Operator::Gt,
             cast(expressions::lit(1u32), &schema, DataType::Int32)?,

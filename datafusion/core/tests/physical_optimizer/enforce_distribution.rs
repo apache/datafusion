@@ -43,7 +43,8 @@ use datafusion_common::ScalarValue;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::expressions::{binary, lit, BinaryExpr, Column, Literal};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_physical_expr::expressions::{self, lit, BinaryExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -69,6 +70,16 @@ use datafusion_physical_plan::{
     get_plan_string, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
     PlanProperties, Statistics,
 };
+
+fn binary_test(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let exec_props = ExecutionProps::new();
+    expressions::binary(lhs, op, rhs, schema, &exec_props)
+}
 
 /// Models operators like BoundedWindowExec that require an input
 /// ordering but is easy to construct
@@ -1023,7 +1034,7 @@ fn multi_hash_join_key_ordering() -> Result<()> {
         &JoinType::Inner,
     );
 
-    let predicate: Arc<dyn PhysicalExpr> = binary(
+    let predicate: Arc<dyn PhysicalExpr> = binary_test(
         col("c", top_join.schema().deref())?,
         Operator::Gt,
         lit(1i64),
