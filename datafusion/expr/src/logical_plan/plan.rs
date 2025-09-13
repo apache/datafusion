@@ -2996,7 +2996,6 @@ impl PartialOrd for DescribeTable {
     }
 }
 
-
 /// Options for EXPLAIN
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainOption {
