@@ -28,6 +28,7 @@ use crate::joins::hash_join::shared_bounds::SharedBoundsAccumulator;
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
 };
+use crate::joins::PartitionMode;
 use crate::{
     handle_state,
     hash_utils::create_hashes,
@@ -210,6 +211,9 @@ pub(super) struct HashJoinStream {
     /// Optional future to signal when bounds have been reported by all partitions
     /// and the dynamic filter has been updated
     bounds_waiter: Option<OnceFut<()>>,
+
+    /// Partitioning mode to use
+    mode: PartitionMode,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -312,6 +316,7 @@ impl HashJoinStream {
         hashes_buffer: Vec<u64>,
         right_side_ordered: bool,
         bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
+        mode: PartitionMode,
     ) -> Self {
         Self {
             partition,
@@ -331,6 +336,7 @@ impl HashJoinStream {
             right_side_ordered,
             bounds_accumulator,
             bounds_waiter: None,
+            mode,
         }
     }
 
@@ -406,11 +412,17 @@ impl HashJoinStream {
         // Report bounds to the accumulator which will handle synchronization and filter updates
         if let Some(ref bounds_accumulator) = self.bounds_accumulator {
             let bounds_accumulator = Arc::clone(bounds_accumulator);
-            let partition = self.partition;
+
+            let left_side_partition_id = match self.mode {
+                PartitionMode::Partitioned => self.partition,
+                PartitionMode::CollectLeft => 0,
+                PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
+            };
+
             let left_data_bounds = left_data.bounds.clone();
             self.bounds_waiter = Some(OnceFut::new(async move {
                 bounds_accumulator
-                    .report_partition_bounds(partition, left_data_bounds)
+                    .report_partition_bounds(left_side_partition_id, left_data_bounds)
                     .await
             }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;

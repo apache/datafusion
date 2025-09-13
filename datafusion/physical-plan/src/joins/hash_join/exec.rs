@@ -1020,6 +1020,7 @@ impl ExecutionPlan for HashJoinExec {
             vec![],
             self.right.output_ordering().is_some(),
             bounds_accumulator,
+            self.mode,
         )))
     }
 
