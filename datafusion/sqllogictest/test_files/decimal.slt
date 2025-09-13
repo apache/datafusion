@@ -775,3 +775,11 @@ SELECT
     arrow_cast(1.23,'Decimal128(3,2)') /  arrow_cast(123, 'Int64') as divison_int
 ----
 0.01 0.01
+
+query TR
+with tt as (
+    select arrow_cast(133333333333333333333333333333333333333333333.34, 'Decimal256(50, 2)') as v1
+) select arrow_typeof(v1 + 1.5), v1 + 1.5 from tt;
+----
+Float64 133333333333333330000000000000000000000000000
+
