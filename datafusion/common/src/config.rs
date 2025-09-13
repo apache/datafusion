@@ -829,32 +829,16 @@ config_namespace! {
         #[deprecated(since = "51.0.0", note = "Please use configuration option `join_method_priority` instead")]
         pub prefer_hash_join: bool, default = true
 
-        /// Comma-separated priority list of join algorithms to try, in order.
+        /// Comma-separated join priority (case-insensitive) selecting the first applicable and enabled (through configurations like `enable_hash_join`) join method.
         ///
-        /// Supported join methods (case-insensitive):
-        /// - "hj", "hash_join"
-        /// - "smj", "sort_merge_join"
-        /// - "nlj", "nested_loop_join"
+        /// Valid join methods are: hj/hash_join, smj/sort_merge_join, nlj/nested_loop_join.
         ///
-        /// The planner picks the first algorithm in this list that is both
-        /// applicable to the current join and enabled via the corresponding
-        /// `enable_*_join` flags. If none match, a default heuristic order
-        /// is used as a fallback.
-        /// The default join method selection policy is, for equi-joins, Hash Join is
-        /// used; for non equi-joins, Nested Loop Join is used.
+        /// It is allowed to specify any number of join methods in the configuration. If none of them is applicable, the default join planning heuristic will be used.
+        /// The default join planning policy is: for equi-joins Hash Join will be selected; for non equi-joins, Nested Loop Join will be chosen.
         ///
-        /// Examples:
-        /// - `hj, nlj`: prefer Hash Join; if not applicable, try Nested Loop Join next.
-        /// - `smj`: prefer Sort-Merge Join; if disabled or not applicable, fall back to
-        ///   the default heuristic order.
-        /// - `hj, nlj`: on an non-equi-join, Hash Join is not applicable, so Nested
-        ///   Loop Join is chosen if enabled.
+        /// Example usage: SET datafusion.optimizer.join_method_priority = 'hj, nlj'
         ///
-        /// Notes:
-        /// - Tokens are case-insensitive; unknown tokens cause a validation error
-        /// - When set, this option supersedes legacy configuration `prefer_hash_join`
-        ///  , that is deprecated and ignored when `join_method_priority` is
-        /// provided(not empty string "").
+        /// Note: If this option is not set (default empty string), the deprecated legacy option `prefer_hash_join` will be used.
         pub join_method_priority: String, transform = str::to_lowercase, default = "".to_string()
 
         /// Enables planning HashJoin operators. If set to false, the optimizer will avoid
