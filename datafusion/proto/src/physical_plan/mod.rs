@@ -1405,6 +1405,7 @@ impl protobuf::PhysicalPlanNode {
         for input in &union.inputs {
             inputs.push(input.try_into_physical_plan(ctx, runtime, extension_codec)?);
         }
+        #[allow(deprecated)]
         Ok(Arc::new(UnionExec::new(inputs)))
     }
 
