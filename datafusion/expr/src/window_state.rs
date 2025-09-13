@@ -90,7 +90,12 @@ impl WindowAggState {
         partition_batch_state: &PartitionBatchState,
     ) -> Result<()> {
         self.last_calculated_index += out_col.len();
-        self.out_col = concat(&[&self.out_col, &out_col])?;
+        // no need to use concat if the current `out_col` is empty
+        if self.out_col.is_empty() {
+            self.out_col = Arc::clone(out_col);
+        } else {
+            self.out_col = concat(&[&self.out_col, &out_col])?;
+        }
         self.n_row_result_missing =
             partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
         self.is_end = partition_batch_state.is_end;
@@ -259,6 +264,15 @@ impl PartitionBatchState {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             record_batch: RecordBatch::new_empty(schema),
+            most_recent_row: None,
+            is_end: false,
+            n_out_row: 0,
+        }
+    }
+
+    pub fn new_with_batch(batch: RecordBatch) -> Self {
+        Self {
+            record_batch: batch,
             most_recent_row: None,
             is_end: false,
             n_out_row: 0,
