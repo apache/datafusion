@@ -46,6 +46,7 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
+    ObjectStoreProfileMode(Option<String>),
 }
 
 pub enum OutputFormat {
@@ -124,6 +125,29 @@ impl Command {
             Self::OutputFormat(_) => exec_err!(
                 "Unexpected change output format, this should be handled outside"
             ),
+            Self::ObjectStoreProfileMode(mode) => {
+                if let Some(mode) = mode {
+                    print_options.object_store_profile_mode = mode
+                        .parse()
+                        .map_err(|_| DataFusionError::Execution(
+                                format!("Failed to parse input: {mode}. Valid options are disabled, summary, trace")
+                                ))?;
+                    print_options
+                        .instrumented_registry
+                        .set_instrument_mode(print_options.object_store_profile_mode);
+                    println!(
+                        "ObjectStore Profile mode set to {:?}",
+                        print_options.object_store_profile_mode
+                    );
+                } else {
+                    println!(
+                        "ObjectStore Profile mode is {:?}",
+                        print_options.object_store_profile_mode
+                    );
+                }
+
+                Ok(())
+            }
         }
     }
 
@@ -142,11 +166,15 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
+            Self::ObjectStoreProfileMode(_) => (
+                "\\object_store_profiling (disabled|summary|trace)",
+                "print or set object store profile mode",
+            ),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 9] = [
+const ALL_COMMANDS: [Command; 10] = [
     Command::ListTables,
     Command::DescribeTableStmt(String::new()),
     Command::Quit,
@@ -156,6 +184,7 @@ const ALL_COMMANDS: [Command; 9] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
+    Command::ObjectStoreProfileMode(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -206,6 +235,10 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
+            ("object_store_profiling", Some(mode)) => {
+                Self::ObjectStoreProfileMode(Some(mode.to_string()))
+            }
+            ("object_store_profiling", None) => Self::ObjectStoreProfileMode(None),
             _ => return Err(()),
         })
     }
