@@ -579,7 +579,11 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
-        check_aws_envs().await?;
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
+            // Skip test if AWS envs are not set
+            eprintln!("{e}");
+            return Ok(());
+        }
 
         let location = "s3://bucket/path/FAKE/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
@@ -735,8 +739,11 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_resolves_region_when_none_provided() -> Result<()> {
-        check_aws_envs().await?;
-
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
+            // Skip test if AWS envs are not set
+            eprintln!("{e}");
+            return Ok(());
+        }
         let expected_region = "eu-central-1";
         let location = "s3://test-bucket/path/file.parquet";
         // Set it to a non-existent file to avoid reading the default configuration file
@@ -763,7 +770,11 @@ mod tests {
     #[tokio::test]
     async fn s3_object_store_builder_overrides_region_when_resolve_region_enabled(
     ) -> Result<()> {
-        check_aws_envs().await?;
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
+            // Skip test if AWS envs are not set
+            eprintln!("{e}");
+            return Ok(());
+        }
 
         let original_region = "us-east-1";
         let expected_region = "eu-central-1"; // This should be the auto-detected region
@@ -868,12 +879,16 @@ mod tests {
     }
 
     async fn check_aws_envs() -> Result<()> {
-        let aws_envs = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"];
+        let aws_envs = [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION",
+            "AWS_ALLOW_HTTP",
+        ];
         for aws_env in aws_envs {
-            if std::env::var(aws_env).is_err() {
-                eprint!("aws envs not set, skipping s3 test");
-                return Ok(());
-            }
+            std::env::var(aws_env).map_err(|_| {
+                exec_datafusion_err!("aws envs not set, skipping s3 tests")
+            })?;
         }
         Ok(())
     }
