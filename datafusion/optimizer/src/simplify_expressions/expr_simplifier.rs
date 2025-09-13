@@ -1402,13 +1402,13 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // CASE WHEN true THEN A ... END --> A
             Expr::Case(Case {
                 expr: None,
-                when_then_expr,
+                mut when_then_expr,
                 else_expr: _,
             }) if !when_then_expr.is_empty()
-                && matches!(when_then_expr[0].0.as_ref(), 
-                    Expr::Literal(ScalarValue::Boolean(Some(true)), _)) =>
+                && is_true(when_then_expr[0].0.as_ref()) =>
             {
-                Transformed::yes((*when_then_expr[0].1).clone())
+                let (_, then_) = when_then_expr.swap_remove(0);
+                Transformed::yes(*then_)
             }
 
             // CASE
@@ -3617,6 +3617,30 @@ mod tests {
             ))),
             col("a")
         );
+
+        // Negative test: CASE WHEN a THEN 1 ELSE 2 END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("a")), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
+
+        // Negative test: CASE WHEN false THEN 1 ELSE 2 END should not use this rule
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(lit(false)), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_ne!(simplify(expr), lit(1));
+
+        // Negative test: CASE WHEN col("x") > 5 THEN 1 ELSE 2 END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("x").gt(lit(5))), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
