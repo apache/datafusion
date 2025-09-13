@@ -128,8 +128,7 @@ async fn assert_logical_expr_schema_eq_physical_expr_schema(df: DataFrame) -> Re
 
 #[tokio::test]
 async fn test_array_agg_ord_schema() -> Result<()> {
-    let cfg =
-        SessionConfig::new().set_str("datafusion.optimizer.join_method_priority", "hj");
+    let ctx = SessionContext::new();
     let ctx = SessionContext::new_with_config(cfg);
 
     let create_table_query = r#"
@@ -4742,9 +4741,7 @@ fn create_join_context() -> Result<SessionContext> {
         ],
     )?;
 
-    let config = SessionConfig::new()
-        .with_target_partitions(4)
-        .set_str("datafusion.optimizer.join_method_priority", "hj");
+    let config = SessionConfig::new().with_target_partitions(4);
     let ctx = SessionContext::new_with_config(config);
     // let ctx = SessionContext::new();
 

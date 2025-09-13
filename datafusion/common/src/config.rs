@@ -822,9 +822,7 @@ config_namespace! {
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true
 
-        /// When set to true, the physical plan optimizer will prefer HashJoin when applicable.
-        /// If there are multiple preferred and applicable join types, the optimizer
-        /// will choose one based on heuristics.
+        /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         ///
         /// Note: if `join_method_priority` is set, this configuration will be overridden
