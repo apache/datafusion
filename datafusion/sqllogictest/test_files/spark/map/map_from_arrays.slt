@@ -62,6 +62,35 @@ SELECT map_from_arrays(array(), array('a', 'b'));
 query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
 SELECT map_from_arrays(array(1, 2, 3), array());
 
+query error DataFusion error: Execution error: map_deduplicate_keys: keys and values lists in the same row must have equal lengths
+select map_from_arrays(a, b)
+from values 
+    (array[1], array[1]),
+    (array[2, 3, 4], array[2, 3]),
+    (array[5], array[4])
+as tab(a, b);
+
+#Test with multiple rows: good, empty and nullable
+query ?
+select map_from_arrays(a, b)
+from values 
+    (array[1], array['a']), 
+    (NULL, NULL),
+    (array[1,2,3], NULL),
+    (NULL, array['b', 'c']), 
+    (array[4, 5], array['d', 'e']), 
+    (array[], array[]),
+    (array[6, 7, 8], array['f', 'g', 'h']) 
+as tab(a, b);
+----
+{1: a}
+NULL
+NULL
+NULL
+{4: d, 5: e}
+{}
+{6: f, 7: g, 8: h}
+
 # Test with complex types
 query ?
 SELECT map_from_arrays(array(array('a', 'b'), array('c', 'd')), array(struct(1, 2, 3), struct(4, 5, 6)));
