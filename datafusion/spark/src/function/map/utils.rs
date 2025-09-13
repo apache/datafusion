@@ -28,7 +28,7 @@ use datafusion_common::{exec_err, Result, ScalarValue};
 /// Helper function to get element [`DataType`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
 /// [`Null`](DataType::Null) can be coerced to `ListType`([`Null`](DataType::Null)), so [`Null`](DataType::Null) is returned<br>
-/// For all other types [`exec_err`](exec_err) is raised
+/// For all other types [`exec_err`] is raised
 pub fn get_element_type(data_type: &DataType) -> Result<&DataType> {
     match data_type {
         DataType::Null => Ok(data_type),
@@ -44,7 +44,7 @@ pub fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// Helper function to get [`values`](arrow::array::ListArray::values)
 /// from [`ListArray`](arrow::array::ListArray)/[`LargeListArray`](arrow::array::LargeListArray)/[`FixedSizeListArray`](arrow::array::FixedSizeListArray)<br>
 /// [`NullArray`](arrow::array::NullArray) can be coerced to `ListType`([`Null`](DataType::Null)), so [`NullArray`](arrow::array::NullArray) is returned<br>
-/// For all other types [`exec_err`](exec_err) is raised
+/// For all other types [`exec_err`] is raised
 pub fn get_list_values(array: &ArrayRef) -> Result<&ArrayRef> {
     match array.data_type() {
         DataType::Null => Ok(array),
@@ -59,7 +59,7 @@ pub fn get_list_values(array: &ArrayRef) -> Result<&ArrayRef> {
 
 /// Helper function to get [`offsets`](arrow::array::ListArray::offsets)
 /// from [`ListArray`](arrow::array::ListArray)/[`LargeListArray`](arrow::array::LargeListArray)/[`FixedSizeListArray`](arrow::array::FixedSizeListArray)<br>
-/// For all other types [`exec_err`](exec_err) is raised
+/// For all other types [`exec_err`] is raised
 pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
     match array.data_type() {
         DataType::List(_) => Ok(Cow::Borrowed(array.as_list::<i32>().offsets().as_ref())),
