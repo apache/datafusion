@@ -7476,55 +7476,65 @@ FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
 
 # distinct average
 statement ok
-create table distinct_avg (a int, b double) as values
-  (3, null),
-  (2, null),
-  (5, 100.5),
-  (5, 1.0),
-  (5, 44.112),
-  (null, 1.0),
-  (5, 100.5),
-  (1, 4.09),
-  (5, 100.5),
-  (5, 100.5),
-  (4, null),
-  (null, null)
+create table distinct_avg (a int, b double, c decimal(10, 4), d decimal(50, 2)) as values
+  (3, null, 100.2562, 90251.21),
+  (2, null, 100.2562, null),
+  (5, 100.5, null, 10000000.11),
+  (5, 1.0, 100.2563, -1.0),
+  (5, 44.112, -132.12, null),
+  (null, 1.0, 100.2562, 90251.21),
+  (5, 100.5, -100.2562, -10000000.11),
+  (1, 4.09, 4222.124, 0.0),
+  (5, 100.5, null, 10000000.11),
+  (5, 100.5, 1.1, 1.0),
+  (4, null, 4222.124, null),
+  (null, null, null, null)
 ;
 
 # Need two columns to ensure single_distinct_to_group_by rule doesn't kick in, so we know our actual avg(distinct) code is being tested
-query RTRTRR
+query RTRTRTRTRRRR
 select
     avg(distinct a),
     arrow_typeof(avg(distinct a)),
     avg(distinct b),
     arrow_typeof(avg(distinct b)),
+    avg(distinct c),
+    arrow_typeof(avg(distinct c)),
+    avg(distinct d),
+    arrow_typeof(avg(distinct d)),
     avg(a),
-	avg(b)
+	avg(b),
+    avg(c),
+	avg(d)
 from distinct_avg;
 ----
-3 Float64 37.4255 Float64 4 56.52525
+3 Float64 37.4255 Float64 698.56005 Decimal128(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.11074444 1272562.81625
 
-query RR rowsort
+query RRRR rowsort
 select
     avg(distinct a),
-    avg(distinct b)
+    avg(distinct b),
+    avg(distinct c),
+    avg(distinct d)
 from distinct_avg
 group by b;
 ----
-1 4.09
-3 NULL
-5 1
-5 100.5
-5 44.112
+1 4.09 4222.124 0
+3 NULL 2161.1901 90251.21
+5 1 100.25625 45125.105
+5 100.5 -49.5781 0.333333
+5 44.112 -132.12 NULL
 
-query RR
+query RRRR
 select
     avg(distinct a),
-    avg(distinct b)
+    avg(distinct b),
+    avg(distinct c),
+    avg(distinct d)
 from distinct_avg
-where a is null and b is null;
+where a is null and b is null and c is null and d is null;
 ----
-NULL NULL
+NULL NULL NULL NULL
 
 statement ok
 drop table distinct_avg;
