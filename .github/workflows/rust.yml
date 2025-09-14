@@ -23,6 +23,8 @@ concurrency:
 
 on:
   push:
+    branches-ignore:
+      - 'gh-readonly-queue/**'
   pull_request:
   merge_group:
   # manual trigger
