@@ -103,7 +103,8 @@ impl UnionExec {
     /// Create a new UnionExec
     #[deprecated(since = "44.0.0", note = "Use UnionExec::try_new instead")]
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
-        let schema = union_schema(&inputs).expect("UnionExec::new called with empty inputs");
+        let schema =
+            union_schema(&inputs).expect("UnionExec::new called with empty inputs");
         // The schema of the inputs and the union schema is consistent when:
         // - They have the same number of fields, and
         // - Their fields have same types at the same indices.
@@ -117,15 +118,17 @@ impl UnionExec {
         }
     }
 
-    /// Try to create a new UnionExec. 
-    /// 
+    /// Try to create a new UnionExec.
+    ///
     /// # Errors
     /// Returns an error if:
     /// - `inputs` is empty
-    /// 
+    ///
     /// # Optimization
     /// If there is only one input, returns that input directly rather than wrapping it in a UnionExec
-    pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Arc<dyn ExecutionPlan>> {
+    pub fn try_new(
+        inputs: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         match inputs.len() {
             0 => exec_err!("UnionExec requires at least one input"),
             1 => Ok(inputs.into_iter().next().unwrap()),
@@ -573,7 +576,7 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
     if inputs.is_empty() {
         return exec_err!("Cannot create union schema from empty inputs");
     }
-    
+
     let first_schema = inputs[0].schema();
 
     let fields = (0..first_schema.fields().len())
@@ -616,7 +619,10 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
         .flat_map(|i| i.schema().metadata().clone().into_iter())
         .collect();
 
-    Ok(Arc::new(Schema::new_with_metadata(fields, all_metadata_merged)))
+    Ok(Arc::new(Schema::new_with_metadata(
+        fields,
+        all_metadata_merged,
+    )))
 }
 
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
@@ -978,15 +984,16 @@ mod tests {
     fn test_union_single_input() -> Result<()> {
         // Test that UnionExec::try_new returns the single input directly
         let schema = create_test_schema()?;
-        let memory_exec: Arc<dyn ExecutionPlan> = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
+        let memory_exec: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
         let memory_exec_clone = Arc::clone(&memory_exec);
         let result = UnionExec::try_new(vec![memory_exec])?;
-        
+
         // Check that the result is the same as the input (no UnionExec wrapper)
         assert_eq!(result.schema(), schema);
         // Verify it's the same execution plan
         assert!(Arc::ptr_eq(&result, &memory_exec_clone));
-        
+
         Ok(())
     }
 
@@ -996,20 +1003,20 @@ mod tests {
         let schema = create_test_schema()?;
         let memory_exec1 = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
         let memory_exec2 = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
-        
+
         let union_plan = UnionExec::try_new(vec![memory_exec1, memory_exec2])?;
-        
+
         // Downcast to verify it's a UnionExec
         let union = union_plan
             .as_any()
             .downcast_ref::<UnionExec>()
             .expect("Expected UnionExec");
-        
+
         // Check that schema is correct
         assert_eq!(union.schema(), schema);
         // Check that we have 2 inputs
         assert_eq!(union.inputs().len(), 2);
-        
+
         Ok(())
     }
 }
