@@ -132,49 +132,28 @@ mod tests {
 
     #[test]
     fn test_decimal128_distinct_avg_accumulator() -> Result<()> {
-        // (100.00), (125.00), (175.00), (200.00), (200.00), (300.00), (null), (null)
-        // with precision 10, scale 4
-        // As `single_distinct_to_groupby` will convert the input to a `GroupBy` plan,
-        // we need to test it with rust api
-        // See also `aggregate.slt`
         let precision = 10_u8;
         let scale = 4_i8;
         let array = Decimal128Array::from(vec![
-            Some(100_0000), // 100.0000
-            Some(125_0000), // 125.0000
-            Some(175_0000), // 175.0000
-            Some(200_0000), // 200.0000
-            Some(200_0000), // 200.0000 (duplicate)
-            Some(300_0000), // 300.0000
-            None,           // null
-            None,           // null
+            Some(100_0000),
+            Some(125_0000),
+            Some(175_0000),
+            Some(200_0000),
+            Some(200_0000),
+            Some(300_0000),
+            None,
+            None,
         ])
         .with_precision_and_scale(precision, scale)?;
 
-        // Expected result for avg(distinct) should be 180.0000 with precision 14, scale 8
-        let expected_result = ScalarValue::Decimal128(
-            Some(180_00000000), // 180.00000000
-            14,                 // target precision
-            8,                  // target scale
-        );
-
-        let arrays: Vec<ArrayRef> = vec![Arc::new(array)];
-
-        // Create accumulator with appropriate parameters
         let mut accumulator =
             DecimalDistinctAvgAccumulator::<Decimal128Type>::with_decimal_params(
-                scale, // input scale
-                14,    // target precision
-                8,     // target scale
+                scale, 14, 8,
             );
+        accumulator.update_batch(&[Arc::new(array)])?;
 
-        // Update the accumulator with input values
-        accumulator.update_batch(&arrays)?;
-
-        // Evaluate the result
         let result = accumulator.evaluate()?;
-
-        // Assert that the result matches the expected value
+        let expected_result = ScalarValue::Decimal128(Some(180_00000000), 14, 8);
         assert_eq!(result, expected_result);
 
         Ok(())
@@ -182,47 +161,30 @@ mod tests {
 
     #[test]
     fn test_decimal256_distinct_avg_accumulator() -> Result<()> {
-        // (100.00), (125.00), (175.00), (200.00), (200.00), (300.00), (null), (null)
-        // with precision 50, scale 2
         let precision = 50_u8;
         let scale = 2_i8;
 
         let array = Decimal256Array::from(vec![
-            Some(i256::from_i128(10_000)), // 100.00
-            Some(i256::from_i128(12_500)), // 125.00
-            Some(i256::from_i128(17_500)), // 175.00
-            Some(i256::from_i128(20_000)), // 200.00
-            Some(i256::from_i128(20_000)), // 200.00 (duplicate)
-            Some(i256::from_i128(30_000)), // 300.00
-            None,                          // null
-            None,                          // null
+            Some(i256::from_i128(10_000)),
+            Some(i256::from_i128(12_500)),
+            Some(i256::from_i128(17_500)),
+            Some(i256::from_i128(20_000)),
+            Some(i256::from_i128(20_000)),
+            Some(i256::from_i128(30_000)),
+            None,
+            None,
         ])
         .with_precision_and_scale(precision, scale)?;
 
-        // Expected result for avg(distinct) should be 180.000000 with precision 54, scale 6
-        let expected_result = ScalarValue::Decimal256(
-            Some(i256::from_i128(180_000000)), // 180.000000
-            54,                                // target precision
-            6,                                 // target scale
-        );
-
-        let arrays: Vec<ArrayRef> = vec![Arc::new(array)];
-
-        // Create accumulator with appropriate parameters
         let mut accumulator =
             DecimalDistinctAvgAccumulator::<Decimal256Type>::with_decimal_params(
-                scale, // input scale
-                54,    // target precision
-                6,     // target scale
+                scale, 54, 6,
             );
+        accumulator.update_batch(&[Arc::new(array)])?;
 
-        // Update the accumulator with input values
-        accumulator.update_batch(&arrays)?;
-
-        // Evaluate the result
         let result = accumulator.evaluate()?;
-
-        // Assert that the result matches the expected value
+        let expected_result =
+            ScalarValue::Decimal256(Some(i256::from_i128(180_000000)), 54, 6);
         assert_eq!(result, expected_result);
 
         Ok(())
