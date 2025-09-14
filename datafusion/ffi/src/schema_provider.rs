@@ -366,7 +366,7 @@ mod tests {
         assert!(returned_schema.is_some());
         assert_eq!(foreign_schema_provider.table_names().len(), 1);
 
-        // Retrieve non-existant table
+        // Retrieve non-existent table
         let returned_schema = foreign_schema_provider
             .table("prior_table")
             .await

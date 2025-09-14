@@ -881,8 +881,21 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     ))
 }
 
-/// Create a dictionary array representing all the values in values
-fn dict_from_values<K: ArrowDictionaryKeyType>(
+/// Create a `DictionaryArray` from the provided values array.
+///
+/// Each element gets a unique key (`0..N-1`), without deduplication.
+/// Useful for wrapping arrays in dictionary form.
+///
+/// # Input
+/// ["alice", "bob", "alice", null, "carol"]
+///
+/// # Output
+/// `DictionaryArray<Int32>`
+/// {
+///   keys:   [0, 1, 2, 3, 4],
+///   values: ["alice", "bob", "alice", null, "carol"]
+/// }
+pub fn dict_from_values<K: ArrowDictionaryKeyType>(
     values_array: ArrayRef,
 ) -> Result<ArrayRef> {
     // Create a key array with `size` elements of 0..array_len for all
@@ -1186,8 +1199,6 @@ impl ScalarValue {
 
     /// Returns a [`ScalarValue`] representing PI's upper bound
     pub fn new_pi_upper(datatype: &DataType) -> Result<ScalarValue> {
-        // TODO: replace the constants with next_up/next_down when
-        // they are stabilized: https://doc.rust-lang.org/std/primitive.f64.html#method.next_up
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),

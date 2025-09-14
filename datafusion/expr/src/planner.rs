@@ -307,13 +307,13 @@ pub struct RawWindowExpr {
     pub partition_by: Vec<Expr>,
     pub order_by: Vec<SortExpr>,
     pub window_frame: WindowFrame,
+    pub filter: Option<Box<Expr>>,
     pub null_treatment: Option<NullTreatment>,
     pub distinct: bool,
 }
 
 /// Result of planning a raw expr with [`ExprPlanner`]
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
 pub enum PlannerResult<T> {
     /// The raw expression was successfully planned as a new [`Expr`]
     Planned(Expr),

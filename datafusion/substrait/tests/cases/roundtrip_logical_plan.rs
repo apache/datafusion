@@ -92,6 +92,8 @@ impl PartialOrd for MockUserDefinedLogicalPlan {
             Some(Ordering::Equal) => self.inputs.partial_cmp(&other.inputs),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -112,11 +114,7 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         &self.empty_schema
     }
 
-    fn check_invariants(
-        &self,
-        _check: InvariantLevel,
-        _plan: &LogicalPlan,
-    ) -> Result<()> {
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
         Ok(())
     }
 
@@ -348,7 +346,7 @@ async fn decimal_literal() -> Result<()> {
 
 #[tokio::test]
 async fn null_decimal_literal() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE b = NULL").await
+    roundtrip("SELECT *, CAST(NULL AS decimal(10, 2)) FROM data").await
 }
 
 #[tokio::test]
@@ -426,7 +424,7 @@ async fn simple_scalar_function_substr() -> Result<()> {
     roundtrip("SELECT SUBSTR(f, 1, 3) FROM data").await
 }
 
-// Test that DataFusion functions gets correctly mapped to Substrait names (when the names are diferent)
+// Test that DataFusion functions gets correctly mapped to Substrait names (when the names are different)
 // Follows the same structure as existing roundtrip tests, but more explicitly tests for name mappings
 async fn test_substrait_to_df_name_mapping(
     substrait_name: &str,

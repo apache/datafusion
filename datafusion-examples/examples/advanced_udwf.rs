@@ -43,7 +43,7 @@ use datafusion::prelude::*;
 /// a function `partition_evaluator` that returns the `MyPartitionEvaluator` instance.
 ///
 /// To do so, we must implement the `WindowUDFImpl` trait.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SmoothItUdf {
     signature: Signature,
 }
@@ -149,7 +149,7 @@ impl PartitionEvaluator for MyPartitionEvaluator {
 }
 
 /// This UDWF will show how to use the WindowUDFImpl::simplify() API
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SimplifySmoothItUdf {
     signature: Signature,
 }
@@ -200,6 +200,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
                     window_frame: window_function.params.window_frame,
                     null_treatment: window_function.params.null_treatment,
                     distinct: window_function.params.distinct,
+                    filter: window_function.params.filter,
                 },
             }))
         };

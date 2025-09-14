@@ -15,23 +15,17 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query I
+SELECT CHAR_LENGTH('Spark SQL ');
+----
+10
 
-## Original Query: SELECT CHAR_LENGTH('Spark SQL ');
-## PySpark 3.5.5 Result: {'char_length(Spark SQL )': 10, 'typeof(char_length(Spark SQL ))': 'int', 'typeof(Spark SQL )': 'string'}
-#query
-#SELECT CHAR_LENGTH('Spark SQL '::string);
+query I
+SELECT char_length('Spark SQL ');
+----
+10
 
-## Original Query: SELECT char_length('Spark SQL ');
-## PySpark 3.5.5 Result: {'char_length(Spark SQL )': 10, 'typeof(char_length(Spark SQL ))': 'int', 'typeof(Spark SQL )': 'string'}
-#query
-#SELECT char_length('Spark SQL '::string);
-
-## Original Query: SELECT char_length(x'537061726b2053514c');
-## PySpark 3.5.5 Result: {"char_length(X'537061726B2053514C')": 9, "typeof(char_length(X'537061726B2053514C'))": 'int', "typeof(X'537061726B2053514C')": 'binary'}
-#query
-#SELECT char_length(X'537061726B2053514C'::binary);
+query I
+SELECT char_length(x'537061726b2053514c');
+----
+9
