@@ -827,7 +827,7 @@ config_namespace! {
         ///
         /// Note: if `join_method_priority` is set, this configuration will be overridden
         #[deprecated(since = "51.0.0", note = "Please use configuration option `join_method_priority` instead")]
-        pub prefer_hash_join: bool, default = true
+        pub prefer_hash_join: bool, transform = str::to_lowercase, default = true
 
         /// Comma-separated join priority (case-insensitive) selecting the first applicable and enabled (through configurations like `enable_hash_join`) join method.
         ///
