@@ -127,9 +127,18 @@ impl ScalarUDFImpl for FormatStringFunc {
                     result.push(formatted);
                 }
                 if is_scalar {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                        result.first().unwrap().clone(),
-                    ))))
+                    match fmt_type {
+                        DataType::Utf8 => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                            Some(result.first().unwrap().clone()),
+                        ))),
+                        DataType::LargeUtf8 => Ok(ColumnarValue::Scalar(
+                            ScalarValue::LargeUtf8(Some(result.first().unwrap().clone())),
+                        )),
+                        DataType::Utf8View => Ok(ColumnarValue::Scalar(
+                            ScalarValue::Utf8View(Some(result.first().unwrap().clone())),
+                        )),
+                        _ => unreachable!(),
+                    }
                 } else {
                     let array: ArrayRef = match fmt_type {
                         DataType::Utf8 => Arc::new(StringArray::from(result)),
