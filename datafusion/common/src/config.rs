@@ -827,7 +827,7 @@ config_namespace! {
         ///
         /// Note: if `join_method_priority` is set, this configuration will be overridden
         #[deprecated(since = "51.0.0", note = "Please use configuration option `join_method_priority` instead")]
-        pub prefer_hash_join: bool, transform = str::to_lowercase, default = true
+        pub prefer_hash_join: bool, default = true
 
         /// Comma-separated join priority (case-insensitive) selecting the first applicable and enabled (through configurations like `enable_hash_join`) join method.
         ///
@@ -839,7 +839,7 @@ config_namespace! {
         /// Example usage: SET datafusion.optimizer.join_method_priority = 'hj, nlj'
         ///
         /// Note: If this option is not set (default empty string), the deprecated legacy option `prefer_hash_join` will be used.
-        pub join_method_priority: String, default = "".to_string()
+        pub join_method_priority: String, transform = str::to_lowercase, default = "".to_string()
 
         /// Enables planning HashJoin operators. If set to false, the optimizer will avoid
         /// producing HashJoin plans and consider other join strategies instead.
