@@ -1295,14 +1295,28 @@ impl DefaultPhysicalPlanner {
                             right_df_schema,
                             session_state.execution_props(),
                         )?;
-
-                        Arc::new(PiecewiseMergeJoinExec::try_new(
-                            physical_left,
-                            physical_right,
-                            (on_left, on_right),
-                            op,
-                            *join_type,
-                        )?)
+                        if matches!(
+                            join_type,
+                            JoinType::RightAnti
+                                | JoinType::RightSemi
+                                | JoinType::RightMark
+                        ) {
+                            Arc::new(PiecewiseMergeJoinExec::try_new(
+                                physical_right,
+                                physical_left,
+                                (on_right, on_left),
+                                op,
+                                *join_type,
+                            )?)
+                        } else {
+                            Arc::new(PiecewiseMergeJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                (on_left, on_right),
+                                op,
+                                *join_type,
+                            )?)
+                        }
                     } else {
                         // there is no equal join condition, use the nested loop join
                         Arc::new(NestedLoopJoinExec::try_new(

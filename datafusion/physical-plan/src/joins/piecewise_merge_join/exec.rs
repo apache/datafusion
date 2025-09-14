@@ -59,17 +59,14 @@ use crate::{
 };
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 
-/// `PiecewiseMergeJoinExec` is a join execution plan that only evaluates single range filter.
+/// `PiecewiseMergeJoinExec` is a join execution plan that only evaluates single range filter and show much
+/// better performance for these workloads than `NestedLoopJoin`
 ///
-/// The physical planner will choose to evaluate this join when there is only one range predicate. This
+/// The physical planner will choose to evaluate this join when there is only one comparison filter. This
 /// is a binary expression which contains [`Operator::Lt`], [`Operator::LtEq`], [`Operator::Gt`], and
 /// [`Operator::GtEq`].:
 /// Examples:
 ///  - `col0` < `colb`, `col0` <= `colb`, `col0` > `colb`, `col0` >= `colb`
-///
-/// Since the join only support range predicates, equijoins are not supported in `PiecewiseMergeJoinExec`,
-/// however you can first evaluate another join and run `PiecewiseMergeJoinExec` if left with one range
-/// predicate.
 ///
 /// # Execution Plan Inputs
 /// For `PiecewiseMergeJoin` we label all right inputs as the `streamed' side and the left outputs as the
@@ -82,15 +79,19 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 /// Classic joins are processed differently compared to existence joins.
 ///
 /// ## Classic Joins (Inner, Full, Left, Right)
-/// For classic joins we buffer the right side (buffered), and incrementally process the left side (streamed).
-/// Every streamed batch is sorted so we can perform a sort merge algorithm. For the buffered side we want to
-/// have it already sorted either ascending or descending based on the operator as this allows us to emit all
-/// the rows from a given point to the end as matches. Sorting the streamed side allows us to start the pointer
-/// from the previous row's match on the buffered side.
+/// For classic joins we buffer the right side (the "build" side) and stream the left side (the "probe" side).
+/// Both sides are sorted so that we can iterate from index 0 to the end on each side.  This ordering ensures
+/// that when we find the first matching pair of rows, we can emit the current left row joined with all remaining
+/// right rows from the match position onward, without rescanning earlier right rows.
+///  
+/// For `<` and `<=` operators, both inputs are sorted in **descending** order, while for `>` and `>=` operators
+/// they are sorted in **ascending** order. This choice ensures that the pointer on the buffered side can advance
+/// monotonically as we stream new batches from the left side.
 ///
-/// For `Lt` (`<`) + `LtEq` (`<=`) operations both inputs are to be sorted in descending order and sorted in
-/// ascending order for `Gt` (`>`) + `GtEq` (`>=`) than (`>`) operations. `SortExec` is used to enforce sorting
-/// on the buffered side and streamed side is sorted in memory.
+/// The streamed (left) side may arrive unsorted, so this operator sorts each incoming batch in memory before
+/// processing. The buffered (right) side is required to be globally sorted; the plan declares this requirement
+/// in `requires_input_order`, which allows the optimizer to automatically insert a `SortExec` on that side if needed.
+/// By the time this operator runs, the right side is guaranteed to be in the proper order.
 ///
 /// The pseudocode for the algorithm looks like this:
 ///
@@ -103,8 +104,9 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 ///             continue
 /// ```
 ///
-/// The algorithm uses the streamed side to drive the loop. This is due to every row on the stream side iterating
-/// the buffered side to find every first match.
+/// The algorithm uses the streamed side (larger) to drive the loop. This is due to every row on the stream side iterating
+/// the buffered side to find every first match. By doing this, each match can output more result so that output
+/// handling can be better vectorized for performance.
 ///
 /// Here is an example:
 ///
@@ -214,11 +216,15 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 /// # Performance Explanation (cost)
 /// Piecewise Merge Join is used over Nested Loop Join due to its superior performance. Here is the breakdown:
 ///
+/// R: Buffered Side
+/// S: Streamed Side
+///
 /// ## Piecewise Merge Join (PWMJ)
+///
 /// # Classic Join:
 /// Requires sorting the probe side and, for each probe row, scanning the buffered side until the first match
 /// is found.
-///     Complexity: `O(sort(S) + |S| * scan(R))`.
+///     Complexity: `O(sort(S) + num_of_batches(|S|) * scan(R))`.
 ///
 /// # Mark Join:
 /// Sorts the probe side, then computes the min/max range of the probe keys and scans the buffered side only
@@ -230,7 +236,7 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 ///   Complexity: `O(|S| * |R|)`.
 ///
 /// ## Nested Loop Join
-///   Always going to be probe (O(N) * O(N)).
+///   Always going to be probe (O(S) * O(R)).
 ///
 /// # Further Reference Material
 /// DuckDB blog on Range Joins: [Range Joins in DuckDB](https://duckdb.org/2022/05/27/iejoin.html)
@@ -252,12 +258,17 @@ pub struct PiecewiseMergeJoinExec {
     buffered_fut: OnceAsync<BufferedSideData>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+
+    /// Sort expressions - See above for more details [`PiecewiseMergeJoinExec`]
+    ///
     /// The left sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
     left_sort_exprs: LexOrdering,
     /// The right sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
     /// Unsorted for mark joins
+    #[allow(unused)]
     right_sort_exprs: LexOrdering,
-    /// Sort options of join columns used in sorting the stream and buffered execution plans
+
+    /// This determines the sort order of all join columns used in sorting the stream and buffered execution plans.
     sort_options: SortOptions,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
@@ -459,12 +470,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // Existence joins don't need to be sorted on one side.
         if is_right_existence_join(self.join_type) {
-            // Right side needs to be sorted because this will be swapped to the
-            // buffered side
-            vec![
-                None,
-                Some(OrderingRequirements::from(self.right_sort_exprs.clone())),
-            ]
+            unimplemented!()
         } else {
             // Sort the right side in memory, so we do not need to enforce any sorting
             vec![
