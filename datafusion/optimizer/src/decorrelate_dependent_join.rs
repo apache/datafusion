@@ -523,6 +523,10 @@ impl DependentJoinDecorrelator {
             );
         }
 
+        if delim_scans.is_empty() {
+            return internal_err!("Empty delim_scans vector");
+        }
+
         // Join all delim_scans together.
         let final_delim_scan = if delim_scans.len() == 1 {
             delim_scans.into_iter().next().unwrap()
@@ -605,6 +609,11 @@ impl DependentJoinDecorrelator {
                     unimplemented!("")
                 }
                 other => {
+                    if self.domains.is_empty() {
+                        // No correlated columns, nothing to do.
+                        return Ok(other.clone());
+                    }
+
                     let delim_scan = self.build_delim_scan()?;
                     let left = self.decorrelate(other, true, 0)?;
                     return Ok(natural_join(
@@ -646,6 +655,10 @@ impl DependentJoinDecorrelator {
                 // columns and prevent errors when reordering of delim scans is enabled.
                 let mut proj = old_proj.clone();
                 proj.input = Arc::new(if exit_projection {
+                    if self.domains.is_empty() {
+                        return Ok(LogicalPlan::Projection(proj));
+                    }
+
                     let delim_scan = self.build_delim_scan()?;
                     let new_left = self.decorrelate(proj.input.deref(), true, 0)?;
                     LogicalPlanBuilder::new(new_left)
@@ -663,11 +676,6 @@ impl DependentJoinDecorrelator {
                         lateral_depth,
                     )?
                 });
-
-                // Now we add all the columns of the delim scan to the projection list.
-                //for dcol in self.dscan_cols.iter() {
-                //    proj.expr.push(col(dcol.clone()));
-                //}
 
                 for domain_col in self.domains.iter() {
                     proj.expr
