@@ -234,11 +234,14 @@ impl DependentJoinRewriter {
             ))?;
         if preserve_original_column_names {
             let original_expr = &original_proj.expr;
-            for (index, expr) in transformed_proj_exprs.iter_mut().enumerate() {
-                let matching_original_expr = original_expr.get(index).unwrap();
-                if expr != matching_original_expr {
-                    *expr = std::mem::replace(expr, expr.clone())
-                        .alias(matching_original_expr.schema_name().to_string());
+            for (child_plan_expr, original_expr) in
+                transformed_proj_exprs.iter_mut().zip(original_expr)
+            {
+                if child_plan_expr != original_expr {
+                    let new_expr = child_plan_expr
+                        .clone()
+                        .alias(original_expr.schema_name().to_string());
+                    *child_plan_expr = new_expr;
                 }
             }
         }
