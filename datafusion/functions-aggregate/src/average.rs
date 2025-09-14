@@ -27,6 +27,7 @@ use arrow::datatypes::{
     i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
     DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
@@ -195,11 +196,22 @@ impl AggregateUDFImpl for Avg {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
-            // Copied from datafusion_functions_aggregate::sum::Sum::state_fields
+            // Decimal accumulator actually uses a different precision during accumulation,
+            // see DecimalDistinctAvgAccumulator::with_decimal_params
+            let dt = match args.input_fields[0].data_type() {
+                DataType::Decimal128(_, scale) => {
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, *scale)
+                }
+                DataType::Decimal256(_, scale) => {
+                    DataType::Decimal256(DECIMAL256_MAX_PRECISION, *scale)
+                }
+                _ => args.return_type().clone(),
+            };
+            // Similar to datafusion_functions_aggregate::sum::Sum::state_fields
             // since the accumulator uses DistinctSumAccumulator internally.
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "avg distinct"),
-                Field::new_list_field(args.return_type().clone(), true),
+                Field::new_list_field(dt, true),
                 false,
             )
             .into()])
