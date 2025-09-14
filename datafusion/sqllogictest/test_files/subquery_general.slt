@@ -337,9 +337,31 @@ where exists (
 # 2
 # 4
 
+query TT
+explain select t1_int > (select avg(t1_int) from t1) from t1
+----
+logical_plan
+01)Projection: CAST(t1.t1_int AS Float64) > avg(t1.t1_int) AS t1.t1_int > avg(t1.t1_int)
+02)--LeftSingle Join(ComparisonJoin): 
+03)----TableScan: t1 projection=[t1_int]
+04)----Aggregate: groupBy=[[]], aggr=[[avg(CAST(t1.t1_int AS Float64))]]
+05)------Filter: Boolean(true)
+06)--------TableScan: t1 projection=[t1_int]
+physical_plan
+01)ProjectionExec: expr=[CAST(t1_int@0 AS Float64) > avg(t1.t1_int)@1 as t1.t1_int > avg(t1.t1_int)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----NestedLoopJoinExec: join_type=LeftSingle
+04)------DataSourceExec: partitions=1, partition_sizes=[2]
+05)------AggregateExec: mode=Final, gby=[], aggr=[avg(t1.t1_int)]
+06)--------CoalescePartitionsExec
+07)----------AggregateExec: mode=Partial, gby=[], aggr=[avg(t1.t1_int)]
+08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------------DataSourceExec: partitions=1, partition_sizes=[2]
+
+
 # fail
 query B rowsort
-select t1_int > (select avg(t1_int) from t1) from t1
+select (t1_int > (select avg(t1_int) from t1)) as a from t1
 ----
 false
 false

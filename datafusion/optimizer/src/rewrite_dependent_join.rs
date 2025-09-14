@@ -211,6 +211,7 @@ impl DependentJoinRewriter {
         current_subquery_depth: usize,
         current_plan: LogicalPlanBuilder,
         subquery_alias_by_offset: HashMap<usize, String>,
+        preserve_original_column_names: bool,
     ) -> Result<LogicalPlanBuilder> {
         // Normalize negated subquries in projection expressions.
         let normalized_exprs: Vec<Expr> = original_proj
@@ -219,7 +220,7 @@ impl DependentJoinRewriter {
             .map(normalize_negated_subqueries)
             .collect::<Result<Vec<Expr>>>()?;
 
-        let (transformed_plan, transformed_exprs) =
+        let (transformed_plan, mut transformed_exprs) =
             Self::rewrite_exprs_into_dependent_join_plan(
                 vec![normalized_exprs.iter().collect()],
                 dependent_join_node,
@@ -227,11 +228,21 @@ impl DependentJoinRewriter {
                 current_plan,
                 subquery_alias_by_offset,
             )?;
-        let transformed_proj_exprs =
-            transformed_exprs.first().ok_or(internal_datafusion_err!(
+        let mut transformed_proj_exprs =
+            transformed_exprs.pop().ok_or(internal_datafusion_err!(
                 "transform projection expr does not return 1 element"
             ))?;
-        transformed_plan.project(transformed_proj_exprs.clone())
+        if preserve_original_column_names {
+            let original_expr = &original_proj.expr;
+            for (index, expr) in transformed_proj_exprs.iter_mut().enumerate() {
+                let matching_original_expr = original_expr.get(index).unwrap();
+                if expr != matching_original_expr {
+                    *expr = std::mem::replace(expr, expr.clone())
+                        .alias(matching_original_expr.schema_name().to_string());
+                }
+            }
+        }
+        transformed_plan.project(transformed_proj_exprs)
     }
 
     fn rewrite_aggregate(
@@ -872,6 +883,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         let current_node_id = self.stack.pop().ok_or(internal_datafusion_err!(
             "stack cannot be empty during upward traversal"
         ))?;
+        let is_top_node = self.stack.len() == 0;
         let node_info = if let Entry::Occupied(e) = self.nodes.entry(current_node_id) {
             let node_info = e.get();
             if !node_info.is_dependent_join_node {
@@ -913,6 +925,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     current_subquery_depth,
                     current_plan,
                     subquery_alias_by_offset,
+                    is_top_node,
                 )?;
             }
             LogicalPlan::Filter(filter) => {
