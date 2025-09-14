@@ -43,7 +43,7 @@ use sqlparser::ast;
 use sqlparser::tokenizer::Span;
 
 // To avoid adding datafusion-functions-aggregate dependency, implement a DummyGroupingUDAF here
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DummyGroupingUDAF {
     signature: Signature,
 }

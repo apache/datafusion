@@ -91,7 +91,7 @@ macro_rules! grouping_id {
         description = "The indices of the column in the grouping set (Int32)"
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct GroupingFunc {
     signature: Signature,
 }
@@ -220,7 +220,7 @@ mod tests {
         },
         datatypes::Int32Type,
     };
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 
     #[test]
     fn test_grouping_uint8() -> Result<()> {
@@ -249,6 +249,7 @@ mod tests {
                 .map(|f| Arc::new(f.clone()))
                 .collect::<Vec<_>>(),
             return_field: Arc::new(Field::new("f", DataType::Int32, true)),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         let result = match result {
@@ -288,6 +289,7 @@ mod tests {
                 .map(|f| Arc::new(f.clone()))
                 .collect::<Vec<_>>(),
             return_field: Arc::new(Field::new("f", DataType::Int32, true)),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         let result = match result {
@@ -327,6 +329,7 @@ mod tests {
                 .map(|f| Arc::new(f.clone()))
                 .collect::<Vec<_>>(),
             return_field: Arc::new(Field::new("f", DataType::Int32, true)),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         let result = match result {
@@ -366,6 +369,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             number_rows: 4,
             return_field: Arc::new(Field::new("f", DataType::Int32, true)),
+            config_options: Arc::new(ConfigOptions::default()),
         })?;
 
         let result = match result {
@@ -407,6 +411,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             number_rows: 4,
             return_field: Arc::new(Field::new("f", DataType::Int32, true)),
+            config_options: Arc::new(ConfigOptions::default()),
         });
         assert!(result.is_err());
 
@@ -427,6 +432,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             number_rows: 1,
             return_field: Arc::new(Field::new("f", DataType::Int32, true)),
+            config_options: Arc::new(ConfigOptions::default()),
         });
         assert!(result.is_err());
         Ok(())
