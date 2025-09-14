@@ -92,8 +92,8 @@ async fn physical_plan_to_string(df: &DataFrame) -> String {
         .await
         .expect("Error creating physical plan");
 
-    let formated = displayable(physical_plan.as_ref()).indent(true);
-    formated.to_string()
+    let formatted = displayable(physical_plan.as_ref()).indent(true);
+    formatted.to_string()
 }
 
 pub fn table_with_constraints() -> Arc<dyn TableProvider> {
@@ -953,6 +953,83 @@ async fn window_using_aggregates() -> Result<()> {
     | -85         | 65       | 17              | -17           | 65     | 83  | -101 | 5  | -101 |
     | -85         | 83       | 5               | -25           | 83     | 83  | -85  | 2  | -48  |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_aggregates_with_filter() -> Result<()> {
+    // Define a small in-memory table to make expected values clear
+    let ts: Int32Array = [1, 2, 3, 4, 5].into_iter().collect();
+    let val: Int32Array = [-3, -2, 1, 4, -1].into_iter().collect();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("ts", Arc::new(ts) as _),
+        ("val", Arc::new(val) as _),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+
+    let df = ctx.table("t").await?;
+
+    // Build filtered window aggregates over ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    let mut exprs = vec![
+        (datafusion_functions_aggregate::sum::sum_udaf(), "sum_pos"),
+        (
+            datafusion_functions_aggregate::average::avg_udaf(),
+            "avg_pos",
+        ),
+        (
+            datafusion_functions_aggregate::min_max::min_udaf(),
+            "min_pos",
+        ),
+        (
+            datafusion_functions_aggregate::min_max::max_udaf(),
+            "max_pos",
+        ),
+        (
+            datafusion_functions_aggregate::count::count_udaf(),
+            "cnt_pos",
+        ),
+    ]
+    .into_iter()
+    .map(|(func, alias)| {
+        let w = WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(func),
+            vec![col("val")],
+        );
+
+        Expr::from(w)
+            .order_by(vec![col("ts").sort(true, true)])
+            .window_frame(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            ))
+            .filter(col("val").gt(lit(0)))
+            .build()
+            .unwrap()
+            .alias(alias)
+    })
+    .collect::<Vec<_>>();
+    exprs.extend_from_slice(&[col("ts"), col("val")]);
+
+    let results = df.select(exprs)?.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +---------+---------+---------+---------+---------+----+-----+
+    | sum_pos | avg_pos | min_pos | max_pos | cnt_pos | ts | val |
+    +---------+---------+---------+---------+---------+----+-----+
+    |         |         |         |         | 0       | 1  | -3  |
+    |         |         |         |         | 0       | 2  | -2  |
+    | 1       | 1.0     | 1       | 1       | 1       | 3  | 1   |
+    | 5       | 2.5     | 1       | 4       | 2       | 4  | 4   |
+    | 5       | 2.5     | 1       | 4       | 2       | 5  | -1  |
+    +---------+---------+---------+---------+---------+----+-----+
     "###
     );
 
@@ -5660,7 +5737,7 @@ async fn test_alias() -> Result<()> {
         .await?
         .select(vec![col("a"), col("test.b"), lit(1).alias("one")])?
         .alias("table_alias")?;
-    // All ouput column qualifiers are changed to "table_alias"
+    // All output column qualifiers are changed to "table_alias"
     df.schema().columns().iter().for_each(|c| {
         assert_eq!(c.relation, Some("table_alias".into()));
     });

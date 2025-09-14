@@ -729,6 +729,8 @@ message PhysicalPlanNode {
     JsonScanExecNode json_scan = 31;
     CooperativeExecNode cooperative = 32;
     GenerateSeriesNode generate_series = 33;
+    SortMergeJoinExecNode sort_merge_join = 34;
+    MemoryScanExecNode memory_scan = 35;
   }
 }
 
@@ -1030,6 +1032,7 @@ message CsvScanExecNode {
     string comment = 6;
   }
   bool newlines_in_values = 7;
+  bool truncate_rows = 8;
 }
 
 message JsonScanExecNode {
@@ -1038,6 +1041,15 @@ message JsonScanExecNode {
 
 message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
+}
+
+message MemoryScanExecNode {
+  repeated bytes partitions = 1;
+  datafusion_common.Schema schema = 2;
+  repeated uint32 projection = 3;
+  repeated PhysicalSortExprNodeCollection sort_information = 4;
+  bool show_sizes = 5;
+  optional uint32 fetch = 6;
 }
 
 message CooperativeExecNode {
@@ -1342,4 +1354,14 @@ message GenerateSeriesNode {
         GenerateSeriesArgsTimestamp timestamp_args = 5;
         GenerateSeriesArgsDate date_args = 6;
     }
+}
+
+message SortMergeJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  datafusion_common.JoinType join_type = 4;
+  JoinFilter filter = 5;
+  repeated SortExprNode sort_options = 6;
+  datafusion_common.NullEquality null_equality = 7;
 }

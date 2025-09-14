@@ -27,13 +27,9 @@ use crate::file_groups::FileGroup;
 #[allow(unused_imports)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use crate::{
-    display::FileGroupsDisplay,
-    file::FileSource,
-    file_compression_type::FileCompressionType,
-    file_stream::FileStream,
-    source::{DataSource, DataSourceExec},
-    statistics::MinMaxStatistics,
-    PartitionedFile,
+    display::FileGroupsDisplay, file::FileSource,
+    file_compression_type::FileCompressionType, file_stream::FileStream,
+    source::DataSource, statistics::MinMaxStatistics, PartitionedFile,
 };
 use arrow::datatypes::FieldRef;
 use arrow::{
@@ -52,17 +48,20 @@ use datafusion_common::{
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{expressions::Column, utils::reassign_predicate_columns};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
+use datafusion_physical_plan::projection::ProjectionExpr;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
-    projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
-    DisplayAs, DisplayFormatType, ExecutionPlan,
+    projection::{all_alias_free_columns, new_projections_for_columns},
+    DisplayAs, DisplayFormatType,
+};
+use datafusion_physical_plan::{
+    filter::collect_columns_from_predicate, filter_pushdown::FilterPushdownPropagation,
 };
 
 use datafusion_physical_plan::coop::cooperative;
@@ -137,6 +136,9 @@ use log::{debug, warn};
 /// // create an execution plan from the config
 /// let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
 /// ```
+///
+/// [`DataSourceExec`]: crate::source::DataSourceExec
+/// [`DataSourceExec::from_data_source`]: crate::source::DataSourceExec::from_data_source
 #[derive(Clone)]
 pub struct FileScanConfig {
     /// Object store URL, used to get an [`ObjectStore`] instance from
@@ -157,6 +159,8 @@ pub struct FileScanConfig {
     /// Note that this is **not** the schema of the physical files.
     /// This is the schema that the physical file schema will be
     /// mapped onto, and the schema that the [`DataSourceExec`] will return.
+    ///
+    /// [`DataSourceExec`]: crate::source::DataSourceExec
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
     ///
@@ -256,9 +260,10 @@ pub struct FileScanConfigBuilder {
     /// This is usually the same as the table schema as specified by the `TableProvider` minus any partition columns.
     ///
     /// This probably would be better named `table_schema`
+    ///
+    /// [`DataSourceExec`]: crate::source::DataSourceExec
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
-
     limit: Option<usize>,
     projection: Option<Vec<usize>>,
     table_partition_cols: Vec<FieldRef>,
@@ -577,8 +582,31 @@ impl DataSource for FileScanConfig {
 
     fn eq_properties(&self) -> EquivalenceProperties {
         let (schema, constraints, _, orderings) = self.project();
-        EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints)
+        let mut eq_properties =
+            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
+                .with_constraints(constraints);
+        if let Some(filter) = self.file_source.filter() {
+            // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
+            // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
+            match reassign_predicate_columns(filter, &schema, true) {
+                Ok(filter) => {
+                    match Self::add_filter_equivalence_info(filter, &mut eq_properties) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            warn!("Failed to add filter equivalence info: {e}");
+                            #[cfg(debug_assertions)]
+                            panic!("Failed to add filter equivalence info: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to reassign predicate columns: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to reassign predicate columns: {e}");
+                }
+            };
+        }
+        eq_properties
     }
 
     fn scheduling_type(&self) -> SchedulingType {
@@ -606,20 +634,22 @@ impl DataSource for FileScanConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        projection: &[ProjectionExpr],
+    ) -> Result<Option<Arc<dyn DataSource>>> {
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
 
         // Must be all column references, with no table partition columns (which can not be projected)
-        let partitioned_columns_in_proj = projection.expr().iter().any(|(expr, _)| {
-            expr.as_any()
+        let partitioned_columns_in_proj = projection.iter().any(|proj_expr| {
+            proj_expr
+                .expr
+                .as_any()
                 .downcast_ref::<Column>()
                 .map(|expr| expr.index() >= self.file_schema.fields().len())
                 .unwrap_or(false)
         });
 
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
-        let no_aliases = all_alias_free_columns(projection.expr());
+        let no_aliases = all_alias_free_columns(projection);
 
         Ok((no_aliases && !partitioned_columns_in_proj).then(|| {
             let file_scan = self.clone();
@@ -631,7 +661,8 @@ impl DataSource for FileScanConfig {
                     .clone()
                     .unwrap_or_else(|| (0..self.file_schema.fields().len()).collect()),
             );
-            DataSourceExec::from_data_source(
+
+            Arc::new(
                 FileScanConfigBuilder::from(file_scan)
                     // Assign projected statistics to source
                     .with_projection(Some(new_projections))
@@ -722,6 +753,17 @@ impl FileScanConfig {
             table_fields,
             self.file_schema.metadata().clone(),
         ))
+    }
+
+    fn add_filter_equivalence_info(
+        filter: Arc<dyn PhysicalExpr>,
+        eq_properties: &mut EquivalenceProperties,
+    ) -> Result<()> {
+        let (equal_pairs, _) = collect_columns_from_predicate(&filter);
+        for (lhs, rhs) in equal_pairs {
+            eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
+        }
+        Ok(())
     }
 
     pub fn projected_constraints(&self) -> Constraints {

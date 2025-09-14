@@ -37,8 +37,8 @@ use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{config::ConfigOptions, Result};
-use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -47,7 +47,7 @@ use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use itertools::{izip, Itertools};
 
-/// Attempts to recursively push given filters from the top of the tree into leafs.
+/// Attempts to recursively push given filters from the top of the tree into leaves.
 ///
 /// # Default Implementation
 ///
@@ -711,7 +711,7 @@ impl<T: Clone> FilteredVec<T> {
 fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut allow_pushdown = true;
     expr.apply(|e| {
-        allow_pushdown = allow_pushdown && allow_pushdown_for_expr_inner(e);
+        allow_pushdown = allow_pushdown && !is_volatile(e);
         if allow_pushdown {
             Ok(TreeNodeRecursion::Continue)
         } else {
@@ -720,20 +720,6 @@ fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     })
     .expect("Infallible traversal of PhysicalExpr tree failed");
     allow_pushdown
-}
-
-fn allow_pushdown_for_expr_inner(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    if let Some(scalar_function) =
-        expr.as_any()
-            .downcast_ref::<datafusion_physical_expr::ScalarFunctionExpr>()
-    {
-        // Check if the function is volatile using the proper volatility API
-        if scalar_function.fun().signature().volatility == Volatility::Volatile {
-            // Volatile functions should not be pushed down
-            return false;
-        }
-    }
-    true
 }
 
 #[cfg(test)]
