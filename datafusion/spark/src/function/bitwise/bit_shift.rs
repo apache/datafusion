@@ -95,37 +95,30 @@ where
 /// This is used to mimic Java's `>>>` operator, which does not exist in Rust.
 /// For unsigned types, this is just the normal right shift.
 /// For signed types, this casts to the unsigned type, shifts, then casts back.
-pub trait UShr<Rhs = Self> {
-    type Output;
-
-    #[must_use]
-    fn ushr(self, rhs: Rhs) -> Self::Output;
+trait UShr<Rhs> {
+    fn ushr(self, rhs: Rhs) -> Self;
 }
 
 impl UShr<i32> for u32 {
-    type Output = u32;
-    fn ushr(self, rhs: i32) -> Self::Output {
+    fn ushr(self, rhs: i32) -> Self {
         self >> rhs
     }
 }
 
 impl UShr<i32> for u64 {
-    type Output = u64;
-    fn ushr(self, rhs: i32) -> Self::Output {
+    fn ushr(self, rhs: i32) -> Self {
         self >> rhs
     }
 }
 
 impl UShr<i32> for i32 {
-    type Output = i32;
-    fn ushr(self, rhs: i32) -> Self::Output {
+    fn ushr(self, rhs: i32) -> Self {
         ((self as u32) >> rhs) as i32
     }
 }
 
 impl UShr<i32> for i64 {
-    type Output = i64;
-    fn ushr(self, rhs: i32) -> Self::Output {
+    fn ushr(self, rhs: i32) -> Self {
         ((self as u64) >> rhs) as i64
     }
 }
@@ -145,7 +138,7 @@ fn shift_right_unsigned<T: ArrowPrimitiveType>(
     shift: &PrimitiveArray<Int32Type>,
 ) -> Result<PrimitiveArray<T>>
 where
-    T::Native: ArrowNativeType + UShr<i32, Output = T::Native>,
+    T::Native: ArrowNativeType + UShr<i32>,
 {
     let bit_num = (T::Native::get_byte_width() * 8) as i32;
     let result = compute::binary::<_, Int32Type, _, _>(
@@ -169,7 +162,7 @@ trait BitShiftUDF: ScalarUDFImpl {
         T::Native: ArrowNativeType
             + std::ops::Shl<i32, Output = T::Native>
             + std::ops::Shr<i32, Output = T::Native>
-            + UShr<i32, Output = T::Native>;
+            + UShr<i32>;
 
     fn spark_shift(&self, arrays: &[ArrayRef]) -> Result<ArrayRef> {
         let value_array = arrays[0].as_ref();
@@ -268,7 +261,7 @@ impl BitShiftUDF for SparkShiftLeft {
         T::Native: ArrowNativeType
             + std::ops::Shl<i32, Output = T::Native>
             + std::ops::Shr<i32, Output = T::Native>
-            + UShr<i32, Output = T::Native>,
+            + UShr<i32>,
     {
         shift_left(value, shift)
     }
@@ -337,7 +330,7 @@ impl BitShiftUDF for SparkShiftRightUnsigned {
         T::Native: ArrowNativeType
             + std::ops::Shl<i32, Output = T::Native>
             + std::ops::Shr<i32, Output = T::Native>
-            + UShr<i32, Output = T::Native>,
+            + UShr<i32>,
     {
         shift_right_unsigned(value, shift)
     }
@@ -406,7 +399,7 @@ impl BitShiftUDF for SparkShiftRight {
         T::Native: ArrowNativeType
             + std::ops::Shl<i32, Output = T::Native>
             + std::ops::Shr<i32, Output = T::Native>
-            + UShr<i32, Output = T::Native>,
+            + UShr<i32>,
     {
         shift_right(value, shift)
     }
