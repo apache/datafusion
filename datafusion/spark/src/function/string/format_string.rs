@@ -331,7 +331,7 @@ pub struct ConversionSpecifier {
     /// flag `,`: include locale-specific grouping separators
     pub grouping_separator: bool,
     /// flag `(`: enclose negative numbers in parentheses
-    pub negative_in_parantheses: bool,
+    pub negative_in_parentheses: bool,
     /// field width
     pub width: NumericParam,
     /// floating point field precision
@@ -604,7 +604,7 @@ fn take_conversion_specifier(
         space_sign: false,
         force_sign: false,
         grouping_separator: false,
-        negative_in_parantheses: false,
+        negative_in_parentheses: false,
         width: NumericParam::Literal(0),
         precision: NumericParam::FromArgument, // Placeholder - must not be returned!
         // ignore length modifier
@@ -644,7 +644,7 @@ fn take_conversion_specifier(
                 spec.grouping_separator = true;
             }
             Some('(') => {
-                spec.negative_in_parantheses = true;
+                spec.negative_in_parentheses = true;
             }
             _ => {
                 break;
@@ -766,7 +766,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -805,7 +807,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -836,15 +840,14 @@ impl ConversionSpecifier {
                         "Expected integer value, got {:?}",
                         value
                     ))?;
-                    self.format_char(
-                        string,
-                        char::from_u32(value as u32).unwrap(),
-                    )
+                    self.format_char(string, char::from_u32(value as u32).unwrap())
                 }
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -883,7 +886,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -913,7 +918,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -938,15 +945,14 @@ impl ConversionSpecifier {
                         "Expected integer value, got {:?}",
                         value
                     ))?;
-                    self.format_char(
-                        string,
-                        char::from_u32(value as u32).unwrap(),
-                    )
+                    self.format_char(string, char::from_u32(value as u32).unwrap())
                 }
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -971,15 +977,14 @@ impl ConversionSpecifier {
                         "Expected integer value, got {:?}",
                         value
                     ))?;
-                    self.format_char(
-                        string,
-                        char::from_u32(value).unwrap(),
-                    )
+                    self.format_char(string, char::from_u32(value).unwrap())
                 }
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1004,15 +1009,14 @@ impl ConversionSpecifier {
                         "Expected integer value, got {:?}",
                         value
                     ))?;
-                    self.format_char(
-                        string,
-                        char::from_u32(value as u32).unwrap(),
-                    )
+                    self.format_char(string, char::from_u32(value as u32).unwrap())
                 }
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1038,7 +1042,7 @@ impl ConversionSpecifier {
                         string,
                         &value
                             .map(|v| v.to_f32().spark_string())
-                            .unwrap_or_else(||"null".to_string()),
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
 
                 ConversionType::HexFloatLower | ConversionType::HexFloatUpper => {
@@ -1072,7 +1076,7 @@ impl ConversionSpecifier {
                         string,
                         &value
                             .map(|v| v.spark_string())
-                            .unwrap_or_else(||"null".to_string()),
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 ConversionType::HexFloatLower | ConversionType::HexFloatUpper => {
                     let value = value.ok_or(exec_datafusion_err!(
@@ -1105,7 +1109,7 @@ impl ConversionSpecifier {
                         string,
                         &value
                             .map(|v| v.spark_string())
-                            .unwrap_or_else(||"null".to_string()),
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 ConversionType::HexFloatLower | ConversionType::HexFloatUpper => {
                     let value = value.ok_or(exec_datafusion_err!(
@@ -1157,7 +1161,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1181,7 +1187,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1202,7 +1210,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1222,7 +1232,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1242,7 +1254,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1262,7 +1276,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1282,7 +1298,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1303,7 +1321,9 @@ impl ConversionSpecifier {
                     ConversionType::StringLower | ConversionType::StringUpper => self
                         .format_string(
                             string,
-                            &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                            &value
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "null".to_string()),
                         ),
                     _ => {
                         exec_err!(
@@ -1325,7 +1345,9 @@ impl ConversionSpecifier {
                     ConversionType::StringLower | ConversionType::StringUpper => self
                         .format_string(
                             string,
-                            &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                            &value
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "null".to_string()),
                         ),
                     _ => {
                         exec_err!(
@@ -1346,7 +1368,9 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1361,12 +1385,14 @@ impl ConversionSpecifier {
                         "Expected date value, got {:?}",
                         value
                     ))?;
-                    self.formate_date(string, value as i64)
+                    self.format_date(string, value as i64)
                 }
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1381,12 +1407,14 @@ impl ConversionSpecifier {
                         "Expected date value, got {:?}",
                         value
                     ))?;
-                    self.formate_date(string, value)
+                    self.format_date(string, value)
                 }
                 ConversionType::StringLower | ConversionType::StringUpper => self
                     .format_string(
                         string,
-                        &value.map(|v| v.to_string()).unwrap_or_else(||"null".to_string()),
+                        &value
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
                     ),
                 _ => {
                     exec_err!(
@@ -1410,21 +1438,15 @@ impl ConversionSpecifier {
     ) -> Result<()> {
         let upper = self.conversion_type == ConversionType::HexFloatUpper;
         match self.precision {
-            NumericParam::FromArgument => {
-                value.format_hex(writer, None, upper).map_err(|e| {
-                    exec_datafusion_err!("Failed to format hex float: {}", e)
-                })
-            }
-            NumericParam::Literal(p) if p >= 13 => {
-                value.format_hex(writer, None, upper).map_err(|e| {
-                    exec_datafusion_err!("Failed to format hex float: {}", e)
-                })
-            }
-            NumericParam::Literal(p) => {
-                value.format_hex(writer, Some(p), upper).map_err(|e| {
-                    exec_datafusion_err!("Failed to format hex float: {}", e)
-                })
-            }
+            NumericParam::FromArgument => value
+                .format_hex(writer, None, upper)
+                .map_err(|e| exec_datafusion_err!("Failed to format hex float: {}", e)),
+            NumericParam::Literal(p) if p >= 13 => value
+                .format_hex(writer, None, upper)
+                .map_err(|e| exec_datafusion_err!("Failed to format hex float: {}", e)),
+            NumericParam::Literal(p) => value
+                .format_hex(writer, Some(p), upper)
+                .map_err(|e| exec_datafusion_err!("Failed to format hex float: {}", e)),
         }
     }
 
@@ -1465,7 +1487,7 @@ impl ConversionSpecifier {
             _ => exec_err!(
                 "Invalid conversion type: {:?} for char",
                 self.conversion_type
-            )
+            ),
         }
     }
 
@@ -1505,7 +1527,7 @@ impl ConversionSpecifier {
 
         // set up the sign
         if value.is_sign_negative() {
-            if self.negative_in_parantheses {
+            if self.negative_in_parentheses {
                 prefix.push('(');
                 suffix.push(')');
             } else {
@@ -1649,7 +1671,7 @@ impl ConversionSpecifier {
         let negative = value < 0;
         let abs_val = value.abs();
 
-        let (sign_prefix, sign_suffix) = if negative && self.negative_in_parantheses {
+        let (sign_prefix, sign_suffix) = if negative && self.negative_in_parentheses {
             ("(".to_owned(), ")".to_owned())
         } else if negative {
             ("-".to_owned(), "".to_owned())
@@ -1813,7 +1835,7 @@ impl ConversionSpecifier {
             _ => exec_err!(
                 "Invalid conversion type: {:?} for string",
                 self.conversion_type
-            )
+            ),
         }
     }
 
@@ -2020,7 +2042,7 @@ impl ConversionSpecifier {
         }
     }
 
-    fn formate_date(&self, writer: &mut String, date_days: i64) -> Result<()> {
+    fn format_date(&self, writer: &mut String, date_days: i64) -> Result<()> {
         // Convert days since epoch to timestamp in nanoseconds
         let timestamp_nanos = date_days * 24 * 60 * 60 * 1_000_000_000;
         self.format_time(writer, timestamp_nanos, &None)
@@ -2119,9 +2141,7 @@ pub trait FloatBits: std::fmt::Display {
 
     fn spark_string(&self) -> String {
         match self.category() {
-            FpCategory::Nan => {
-                "NaN".to_string()
-            }
+            FpCategory::Nan => "NaN".to_string(),
             FpCategory::Infinite => {
                 if self.to_parts().0 {
                     "-Infinity".to_string()
@@ -2129,9 +2149,7 @@ pub trait FloatBits: std::fmt::Display {
                     "Infinity".to_string()
                 }
             }
-            _ => {
-                self.to_string()
-            }
+            _ => self.to_string(),
         }
     }
 
