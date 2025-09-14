@@ -30,4 +30,5 @@ pub mod avro_to_arrow;
 pub mod file_format;
 pub mod source;
 
+pub use apache_avro;
 pub use file_format::*;

@@ -1445,25 +1445,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .map(|order_by_expr| {
                             let ordered_expr = &order_by_expr.expr;
                             let ordered_expr = ordered_expr.to_owned();
-                            let ordered_expr = self
-                                .sql_expr_to_logical_expr(
-                                    ordered_expr,
-                                    schema,
-                                    planner_context,
-                                )
-                                .unwrap();
+                            let ordered_expr = self.sql_expr_to_logical_expr(
+                                ordered_expr,
+                                schema,
+                                planner_context,
+                            )?;
                             let asc = order_by_expr.options.asc.unwrap_or(true);
                             let nulls_first =
                                 order_by_expr.options.nulls_first.unwrap_or_else(|| {
                                     self.options.default_null_ordering.nulls_first(asc)
                                 });
 
-                            SortExpr::new(ordered_expr, asc, nulls_first)
+                            Ok(SortExpr::new(ordered_expr, asc, nulls_first))
                         })
-                        .collect::<Vec<SortExpr>>();
-                    result
+                        .collect::<Result<Vec<SortExpr>>>()?;
+                    Ok(result)
                 })
-                .collect::<Vec<Vec<SortExpr>>>();
+                .collect::<Result<Vec<Vec<SortExpr>>>>()?;
 
             return Ok(results);
         }
@@ -1716,7 +1714,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let options = self.context_provider.options();
             let format = format.as_ref().unwrap_or(&options.explain.format);
 
-            let format: ExplainFormat = format.parse()?;
+            // verbose mode only supports indent format
+            let format: ExplainFormat = if verbose {
+                ExplainFormat::Indent
+            } else {
+                format.parse()?
+            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
@@ -2026,9 +2029,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut value_indices = vec![None; table_schema.fields().len()];
             let fields = columns
                 .into_iter()
-                .map(|c| self.ident_normalizer.normalize(c))
                 .enumerate()
                 .map(|(i, c)| {
+                    let c = self.ident_normalizer.normalize(c);
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;

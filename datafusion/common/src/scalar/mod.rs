@@ -881,8 +881,21 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     ))
 }
 
-/// Create a dictionary array representing all the values in values
-fn dict_from_values<K: ArrowDictionaryKeyType>(
+/// Create a `DictionaryArray` from the provided values array.
+///
+/// Each element gets a unique key (`0..N-1`), without deduplication.
+/// Useful for wrapping arrays in dictionary form.
+///
+/// # Input
+/// ["alice", "bob", "alice", null, "carol"]
+///
+/// # Output
+/// `DictionaryArray<Int32>`
+/// {
+///   keys:   [0, 1, 2, 3, 4],
+///   values: ["alice", "bob", "alice", null, "carol"]
+/// }
+pub fn dict_from_values<K: ArrowDictionaryKeyType>(
     values_array: ArrayRef,
 ) -> Result<ArrayRef> {
     // Create a key array with `size` elements of 0..array_len for all
@@ -1615,7 +1628,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match i128::from(10).checked_pow((*scale + 1) as u32) {
@@ -1631,7 +1644,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match i256::from(10).checked_pow((*scale + 1) as u32) {
@@ -5416,8 +5429,7 @@ mod tests {
             ScalarValue::new_ten(&DataType::Decimal128(7, 2)).unwrap(),
             ScalarValue::Decimal128(Some(1000), 7, 2)
         );
-        // No negative or zero scale
-        assert!(ScalarValue::new_ten(&DataType::Decimal128(5, 0)).is_err());
+        // No negative scale
         assert!(ScalarValue::new_ten(&DataType::Decimal128(5, -1)).is_err());
         // Invalid combination
         assert!(ScalarValue::new_ten(&DataType::Decimal128(0, 2)).is_err());
@@ -5439,8 +5451,7 @@ mod tests {
             ScalarValue::new_ten(&DataType::Decimal256(7, 2)).unwrap(),
             ScalarValue::Decimal256(Some(1000.into()), 7, 2)
         );
-        // No negative or zero scale
-        assert!(ScalarValue::new_ten(&DataType::Decimal256(5, 0)).is_err());
+        // No negative scale
         assert!(ScalarValue::new_ten(&DataType::Decimal256(5, -1)).is_err());
         // Invalid combination
         assert!(ScalarValue::new_ten(&DataType::Decimal256(0, 2)).is_err());

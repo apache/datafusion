@@ -59,6 +59,25 @@ dev/update_function_docs.sh file for updating surrounding text.
 # Aggregate Functions
 
 Aggregate functions operate on a set of values to compute a single result.
+
+## Filter clause
+
+Aggregate functions support the SQL `FILTER (WHERE ...)` clause to restrict which input rows contribute to the aggregate result.
+
+```sql
+function([exprs]) FILTER (WHERE condition)
+```
+
+Example:
+
+```sql
+SELECT
+  sum(salary) FILTER (WHERE salary > 0) AS sum_positive_salaries,
+  count(*)    FILTER (WHERE active)     AS active_count
+FROM employees;
+```
+
+Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/`MAX` return `NULL`.
 EOF
 
 echo "Running CLI and inserting aggregate function docs table"
@@ -265,6 +284,17 @@ UNBOUNDED FOLLOWING
 where **offset** is an non-negative integer.
 
 RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).
+
+## Filter clause for aggregate window functions
+
+Aggregate window functions support the SQL `FILTER (WHERE ...)` clause to include only rows that satisfy the predicate from the window frame in the aggregation.
+
+```sql
+sum(salary) FILTER (WHERE salary > 0)
+  OVER (PARTITION BY depname ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+```
+
+If no rows in the frame satisfy the filter for a given output row, `COUNT` yields `0` while `SUM`/`AVG`/`MIN`/`MAX` yield `NULL`.
 
 ## Aggregate functions
 

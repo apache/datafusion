@@ -320,7 +320,7 @@ pub trait TableFunctionImpl: Debug + Sync + Send {
 }
 
 /// A table that uses a function to generate data
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TableFunction {
     /// Name of the table function
     name: String,
