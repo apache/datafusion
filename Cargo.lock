@@ -2020,7 +2020,6 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-ipc",
- "base64 0.22.1",
  "chrono",
  "half",
  "hashbrown 0.14.5",
@@ -2170,7 +2169,7 @@ dependencies = [
  "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
@@ -2314,12 +2313,14 @@ dependencies = [
  "blake3",
  "chrono",
  "criterion",
+ "ctor",
  "datafusion-common",
  "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-expr-common",
  "datafusion-macros",
+ "env_logger",
  "hex",
  "itertools 0.14.0",
  "log",
@@ -2552,6 +2553,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
  "datafusion-functions-window",
  "datafusion-functions-window-common",
  "datafusion-physical-expr",
@@ -2746,6 +2748,7 @@ dependencies = [
  "substrait",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -6068,9 +6071,9 @@ dependencies = [
 
 [[package]]
 name = "sqllogictest"
-version = "0.28.3"
+version = "0.28.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fcbf91368a8d6807093d94f274fa4d0978cd78a310fee1d20368c545a606f7a"
+checksum = "3566426f72a13e393aa34ca3d542c5b0eb86da4c0db137ee9b5cfccc6179e52d"
 dependencies = [
  "async-trait",
  "educe",
@@ -6332,9 +6335,9 @@ checksum = "e502f78cdbb8ba4718f566c418c52bc729126ffd16baee5baa718cf25dd5a69a"
 
 [[package]]
 name = "tempfile"
-version = "3.21.0"
+version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15b61f8f20e3a6f7e0649d825294eaf317edce30f82cf6026e7e4cb9222a7d1e"
+checksum = "84fa4d11fadde498443cca10fd3ac23c951f0dc59e080e9f4b93d4df4e4eea53"
 dependencies = [
  "fastrand",
  "getrandom 0.3.3",
