@@ -361,7 +361,7 @@ physical_plan
 
 # fail
 query B rowsort
-select (t1_int > (select avg(t1_int) from t1)) as a from t1
+select t1_int > (select avg(t1_int) from t1) from t1
 ----
 false
 false
