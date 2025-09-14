@@ -523,6 +523,10 @@ explain format 123 select * from values (1);
 query error DataFusion error: Error during planning: EXPLAIN VERBOSE with FORMAT is not supported
 explain verbose format tree select * from values (1);
 
+# valid explain format
+query error DataFusion error: Invalid or Unsupported Configuration: Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got 'xxx'
+set datafusion.explain.format = "xxx";
+
 # verbose uses indent mode even when a different mode (e.g tree) is set
 
 statement ok
@@ -616,10 +620,10 @@ statement ok
 set datafusion.explain.format = "indent";
 
 # no such thing as json mode
-query error DataFusion error: Error during planning: Invalid explain format\. Expected 'indent', 'tree', 'pgjson' or 'graphviz'\. Got 'json'
+query error DataFusion error: Invalid or Unsupported Configuration: Invalid explain format\. Expected 'indent', 'tree', 'pgjson' or 'graphviz'\. Got 'json'
 explain format json select * from values (1);
 
-query error DataFusion error: Error during planning: Invalid explain format\. Expected 'indent', 'tree', 'pgjson' or 'graphviz'\. Got 'foo'
+query error DataFusion error: Invalid or Unsupported Configuration: Invalid explain format\. Expected 'indent', 'tree', 'pgjson' or 'graphviz'\. Got 'foo'
 explain format foo select * from values (1);
 
 # pgjson mode
