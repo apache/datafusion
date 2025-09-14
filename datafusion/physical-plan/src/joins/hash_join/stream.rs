@@ -51,6 +51,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt};
+use std::collections::HashMap as StdHashMap;
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -210,6 +211,8 @@ pub(super) struct HashJoinStream {
     /// Optional future to signal when bounds have been reported by all partitions
     /// and the dynamic filter has been updated
     bounds_waiter: Option<OnceFut<()>>,
+    /// Used by Letft Single Join to check it multiple rows matched at runtime.
+    left_match_counts: StdHashMap<u64, usize>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -331,6 +334,7 @@ impl HashJoinStream {
             right_side_ordered,
             bounds_accumulator,
             bounds_waiter: None,
+            left_match_counts: StdHashMap::new(),
         }
     }
 
@@ -585,6 +589,21 @@ impl HashJoinStream {
                 JoinSide::Left,
             )?
         };
+
+        // Validates cardinality constraints for single join types
+        // TODO: RightSingle support.
+        if matches!(self.join_type, JoinType::LeftSingle) {
+            for &left_idx in left_indices.values() {
+                let count = self.left_match_counts.entry(left_idx).or_insert(0);
+                *count += 1;
+                if *count > 1 {
+                    return internal_err!(
+                                "LeftSingle join constraint violated: build side row at index {} has multiple matches", 
+                                left_idx
+                            );
+                }
+            }
+        }
 
         self.join_metrics.output_batches.add(1);
         timer.done();

@@ -404,6 +404,10 @@ fn optimize_projections(
             });
             vec![required_indices.append(&additional_necessary_child_indices)]
         }
+        LogicalPlan::DependentJoin(..) => {
+            return Ok(Transformed::no(plan));
+        }
+        LogicalPlan::DelimGet(_) => return Ok(Transformed::no(plan)),
     };
 
     // Required indices are currently ordered (child0, child1, ...)
@@ -740,7 +744,8 @@ fn split_join_requirements(
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftMark
-        | JoinType::RightMark => {
+        | JoinType::RightMark
+        | JoinType::LeftSingle => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
@@ -1767,7 +1772,7 @@ mod tests {
         assert_snapshot!(
             optimized_plan.clone(),
             @r"
-        Left Join: test.a = test2.c1
+        Left Join(ComparisonJoin): test.a = test2.c1
           TableScan: test projection=[a, b]
           TableScan: test2 projection=[c1]
         "
@@ -1822,7 +1827,7 @@ mod tests {
             optimized_plan.clone(),
             @r"
         Projection: test.a, test.b
-          Left Join: test.a = test2.c1
+          Left Join(ComparisonJoin): test.a = test2.c1
             TableScan: test projection=[a, b]
             TableScan: test2 projection=[c1]
         "

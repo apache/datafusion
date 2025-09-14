@@ -294,7 +294,8 @@ impl NestedLoopJoinExec {
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
-                | JoinType::Full => EmissionType::Both,
+                | JoinType::Full
+                | JoinType::LeftSingle => EmissionType::Both,
             }
         } else {
             right.pipeline_behavior()
@@ -1694,7 +1695,8 @@ fn build_unmatched_batch_empty_schema(
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftAnti
-        | JoinType::RightAnti => batch_bitmap.false_count(),
+        | JoinType::RightAnti
+        | JoinType::LeftSingle => batch_bitmap.false_count(),
         JoinType::LeftSemi | JoinType::RightSemi => batch_bitmap.true_count(),
         JoinType::LeftMark | JoinType::RightMark => batch_bitmap.len(),
         _ => unreachable!(),
@@ -1785,7 +1787,7 @@ fn build_unmatched_batch(
     }
 
     match join_type {
-        JoinType::Full | JoinType::Right | JoinType::Left => {
+        JoinType::Full | JoinType::Right | JoinType::Left | JoinType::LeftSingle => {
             if join_type == JoinType::Right {
                 debug_assert_eq!(batch_side, JoinSide::Right);
             }

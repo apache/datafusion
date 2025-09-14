@@ -21,6 +21,7 @@ use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{assert_contains, Result};
+use datafusion_expr::CorrelatedColumnInfo;
 use datafusion_expr::{logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
 
@@ -43,6 +44,39 @@ pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
 /// some tests share a common table
 pub fn test_table_scan() -> Result<LogicalPlan> {
     test_table_scan_with_name("test")
+}
+
+pub fn test_delim_scan_with_name(
+    correlated_columns: Vec<CorrelatedColumnInfo>,
+) -> Result<LogicalPlan> {
+    LogicalPlanBuilder::delim_get(&correlated_columns)?.build()
+}
+
+/// Create a table with the given name and column definitions.
+///
+/// # Arguments
+/// * `name` - The name of the table to create
+/// * `columns` - Column definitions as slice of tuples (name, data_type)
+///
+/// # Example
+/// ```
+/// let plan = test_table_with_columns("integers", &[("i", DataType::Int32)])?;
+/// ```
+pub fn test_table_with_columns(
+    name: &str,
+    columns: &[(&str, DataType)],
+) -> Result<LogicalPlan> {
+    // Create fields with specified types for each column
+    let fields: Vec<Field> = columns
+        .iter()
+        .map(|&(col_name, ref data_type)| Field::new(col_name, data_type.clone(), false))
+        .collect();
+
+    // Create schema from fields
+    let schema = Schema::new(fields);
+
+    // Create table scan
+    table_scan(Some(name), &schema, None)?.build()
 }
 
 /// Scan an empty data source, mainly used in tests
