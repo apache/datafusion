@@ -18,8 +18,9 @@
 use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, CaseWhen, Expr as AstExpr, Function, Ident, Interval,
-    ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator, ValueWithSpan,
+    self, Array, BinaryOperator, CaseWhen, DuplicateTreatment, Expr as AstExpr, Function,
+    Ident, Interval, ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator,
+    ValueWithSpan,
 };
 use std::sync::Arc;
 use std::vec;
@@ -182,6 +183,8 @@ impl Unparser<'_> {
                     operand,
                     conditions,
                     else_result,
+                    case_token: AttachedToken::empty(),
+                    end_token: AttachedToken::empty(),
                 })
             }
             Expr::Cast(Cast { expr, data_type }) => {
@@ -198,6 +201,8 @@ impl Unparser<'_> {
                             partition_by,
                             order_by,
                             window_frame,
+                            filter,
+                            distinct,
                             ..
                         },
                 } = window_fun.as_ref();
@@ -256,11 +261,15 @@ impl Unparser<'_> {
                         span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-                        duplicate_treatment: None,
+                        duplicate_treatment: distinct
+                            .then_some(DuplicateTreatment::Distinct),
                         args,
                         clauses: vec![],
                     }),
-                    filter: None,
+                    filter: filter
+                        .as_ref()
+                        .map(|f| self.expr_to_sql_inner(f).map(Box::new))
+                        .transpose()?,
                     null_treatment: None,
                     over,
                     within_group: vec![],
@@ -278,7 +287,7 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char.map(|c| c.to_string()),
+                escape_char: escape_char.map(|c| SingleQuotedString(c.to_string())),
                 any: false,
             }),
             Expr::Like(Like {
@@ -293,7 +302,8 @@ impl Unparser<'_> {
                         negated: *negated,
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char.map(|c| c.to_string()),
+                        escape_char: escape_char
+                            .map(|c| SingleQuotedString(c.to_string())),
                         any: false,
                     })
                 } else {
@@ -301,7 +311,8 @@ impl Unparser<'_> {
                         negated: *negated,
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char.map(|c| c.to_string()),
+                        escape_char: escape_char
+                            .map(|c| SingleQuotedString(c.to_string())),
                         any: false,
                     })
                 }
@@ -339,7 +350,7 @@ impl Unparser<'_> {
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: distinct
-                            .then_some(ast::DuplicateTreatment::Distinct),
+                            .then_some(DuplicateTreatment::Distinct),
                         args,
                         clauses: vec![],
                     }),
@@ -1715,6 +1726,12 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
+            DataType::Decimal32(_precision, _scale) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Decimal64(_precision, _scale) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
             DataType::Decimal128(precision, scale)
             | DataType::Decimal256(precision, scale) => {
                 let mut new_precision = *precision as u64;
@@ -1774,7 +1791,7 @@ mod tests {
     use super::*;
 
     /// Mocked UDF
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct DummyUDF {
         signature: Signature,
     }
@@ -2051,6 +2068,8 @@ mod tests {
                         order_by: vec![],
                         window_frame: WindowFrame::new(None),
                         null_treatment: None,
+                        distinct: false,
+                        filter: None,
                     },
                 }),
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
@@ -2076,9 +2095,11 @@ mod tests {
                             ),
                         ),
                         null_treatment: None,
+                        distinct: false,
+                        filter: Some(Box::new(col("a").gt(lit(100)))),
                     },
                 }),
-                r#"count(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+                r#"count(*) FILTER (WHERE (a > 100)) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
             (col("a").is_not_null(), r#"a IS NOT NULL"#),
             (col("a").is_null(), r#"a IS NULL"#),
@@ -3149,6 +3170,26 @@ mod tests {
             let actual = format!("{}", unparser.expr_to_sql(&expr)?);
             assert_eq!(actual, expected);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_timestamp_sqlite() -> Result<()> {
+        let dialect: Arc<dyn Dialect> = Arc::new(SqliteDialect {});
+
+        let unparser = Unparser::new(dialect.as_ref());
+        let expr = Expr::Cast(Cast {
+            expr: Box::new(col("a")),
+            data_type: DataType::Timestamp(TimeUnit::Nanosecond, None),
+        });
+
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = ast.to_string();
+        let expected = "CAST(`a` AS TEXT)".to_string();
+
+        assert_eq!(actual, expected);
 
         Ok(())
     }

@@ -192,6 +192,13 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
 }
 
 #[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
+}
+
+#[cfg(test)]
 mod tests {
     use crate::all_default_functions;
     use datafusion_common::Result;

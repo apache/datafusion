@@ -487,6 +487,14 @@ impl Dialect for SqliteDialect {
         false
     }
 
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Text
+    }
+
     fn scalar_function_to_sql_overrides(
         &self,
         unparser: &Unparser,
@@ -599,17 +607,6 @@ impl Default for CustomDialect {
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
-        }
-    }
-}
-
-impl CustomDialect {
-    // Create a CustomDialect
-    #[deprecated(since = "41.0.0", note = "please use `CustomDialectBuilder` instead")]
-    pub fn new(identifier_quote_style: Option<char>) -> Self {
-        Self {
-            identifier_quote_style,
-            ..Default::default()
         }
     }
 }

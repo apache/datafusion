@@ -45,7 +45,7 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use crate::physical_plan::projection::ProjectionExec;
+use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -100,7 +100,7 @@ use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
-use log::{debug, trace};
+use log::debug;
 use tokio::sync::Mutex;
 
 /// Physical query planner that converts a `LogicalPlan` to an
@@ -556,8 +556,15 @@ impl DefaultPhysicalPlanner {
                     file_extension,
                 };
 
+                let ordering = input_exec.properties().output_ordering().cloned();
+
                 sink_format
-                    .create_writer_physical_plan(input_exec, session_state, config, None)
+                    .create_writer_physical_plan(
+                        input_exec,
+                        session_state,
+                        config,
+                        ordering.map(Into::into),
+                    )
                     .await?
             }
             LogicalPlan::Dml(DmlStatement {
@@ -1351,6 +1358,9 @@ impl DefaultPhysicalPlanner {
                     physical_name(expr),
                 ))?])),
             }
+        } else if group_expr.is_empty() {
+            // No GROUP BY clause - create empty PhysicalGroupBy
+            Ok(PhysicalGroupBy::new(vec![], vec![], vec![]))
         } else {
             Ok(PhysicalGroupBy::new_single(
                 group_expr
@@ -1639,6 +1649,8 @@ pub fn create_window_expr_with_name(
                         order_by,
                         window_frame,
                         null_treatment,
+                        distinct,
+                        filter,
                     },
             } = window_fun.as_ref();
             let physical_args =
@@ -1658,6 +1670,11 @@ pub fn create_window_expr_with_name(
             let window_frame = Arc::new(window_frame.clone());
             let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
+            let physical_filter = filter
+                .as_ref()
+                .map(|f| create_physical_expr(f, logical_schema, execution_props))
+                .transpose()?;
+
             windows::create_window_expr(
                 fun,
                 name,
@@ -1667,6 +1684,8 @@ pub fn create_window_expr_with_name(
                 window_frame,
                 physical_schema,
                 ignore_nulls,
+                *distinct,
+                physical_filter,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),
@@ -1770,21 +1789,24 @@ pub fn create_aggregate_expr_and_maybe_filter(
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
+    // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total"
+    // Some functions like `count_all()` create internal aliases,
+    // Unwrap all alias layers to get to the underlying aggregate function
     let (name, human_display, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => {
-            (Some(name.clone()), String::default(), expr.as_ref())
+        Expr::Alias(Alias { name, .. }) => {
+            let unaliased = e.clone().unalias_nested().data;
+            (Some(name.clone()), e.human_display().to_string(), unaliased)
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
             e.human_display().to_string(),
-            e,
+            e.clone(),
         ),
-        _ => (None, String::default(), e),
+        _ => (None, String::default(), e.clone()),
     };
 
     create_aggregate_expr_with_name_and_maybe_filter(
-        e,
+        &e,
         name,
         human_display,
         logical_input_schema,
@@ -1849,6 +1871,7 @@ impl DefaultPhysicalPlanner {
                 stringified_plans.push(StringifiedPlan::new(
                     FinalPhysicalPlan,
                     displayable(optimized_plan.as_ref())
+                        .set_tree_maximum_render_width(config.tree_maximum_render_width)
                         .tree_render()
                         .to_string(),
                 ));
@@ -2032,7 +2055,7 @@ impl DefaultPhysicalPlanner {
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent(false)
         );
-        trace!(
+        debug!(
             "Detailed input physical plan:\n{}",
             displayable(plan.as_ref()).indent(true)
         );
@@ -2054,7 +2077,7 @@ impl DefaultPhysicalPlanner {
             OptimizationInvariantChecker::new(optimizer)
                 .check(&new_plan, before_schema)?;
 
-            trace!(
+            debug!(
                 "Optimized physical plan by {}:\n{}\n",
                 optimizer.name(),
                 displayable(new_plan.as_ref()).indent(false)
@@ -2070,7 +2093,7 @@ impl DefaultPhysicalPlanner {
             "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent(false)
         );
-        trace!("Detailed optimized physical plan:\n{new_plan:?}");
+        debug!("Detailed optimized physical plan:\n{new_plan:?}");
         Ok(new_plan)
     }
 
@@ -2169,17 +2192,25 @@ impl DefaultPhysicalPlanner {
             PlannedExprResult::ExprWithName(physical_exprs),
             input_physical_schema.as_ref(),
         )? {
-            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => Ok(
-                Arc::new(ProjectionExec::try_new(physical_exprs, input_exec)?),
-            ),
+            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => {
+                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
+                    .into_iter()
+                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
+                    .collect();
+                Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input_exec)?))
+            }
             PlanAsyncExpr::Async(
                 async_map,
                 PlannedExprResult::ExprWithName(physical_exprs),
             ) => {
                 let async_exec =
                     AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
+                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
+                    .into_iter()
+                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
+                    .collect();
                 let new_proj_exec =
-                    ProjectionExec::try_new(physical_exprs, Arc::new(async_exec))?;
+                    ProjectionExec::try_new(proj_exprs, Arc::new(async_exec))?;
                 Ok(Arc::new(new_proj_exec))
             }
             _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
@@ -2339,7 +2370,7 @@ impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         // Checks for the more permissive `InvariantLevel::Always`.
-        // Plans are not guarenteed to be executable after each physical optimizer run.
+        // Plans are not guaranteed to be executable after each physical optimizer run.
         node.check_invariants(InvariantLevel::Always).map_err(|e|
             e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
         )?;
@@ -2403,6 +2434,7 @@ mod tests {
     use datafusion_expr::{
         col, lit, LogicalPlanBuilder, Operator, UserDefinedLogicalNodeCore,
     };
+    use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::expressions::{BinaryExpr, IsNotNullExpr};
     use datafusion_physical_expr::EquivalenceProperties;
@@ -2683,7 +2715,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
+        let expected = "expr: [ProjectionExpr { expr: BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);
@@ -2859,6 +2891,25 @@ mod tests {
         assert_eq!(
             "total_salary",
             physical_plan.schema().field(1).name().as_str()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_count_all_with_alias() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]));
+
+        let logical_plan = scan_empty(None, schema.as_ref(), None)?
+            .aggregate(Vec::<Expr>::new(), vec![count_all().alias("total_rows")])?
+            .build()?;
+
+        let physical_plan = plan(&logical_plan).await?;
+        assert_eq!(
+            "total_rows",
+            physical_plan.schema().field(0).name().as_str()
         );
         Ok(())
     }

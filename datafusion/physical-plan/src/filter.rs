@@ -34,7 +34,7 @@ use crate::filter_pushdown::{
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
-    ProjectionExec,
+    ProjectionExec, ProjectionExpr,
 };
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
@@ -516,11 +516,11 @@ impl ExecutionPlan for FilterExec {
                         .iter()
                         .map(|p| {
                             let field = filter_child_schema.field(*p).clone();
-                            (
-                                Arc::new(Column::new(field.name(), *p))
+                            ProjectionExpr {
+                                expr: Arc::new(Column::new(field.name(), *p))
                                     as Arc<dyn PhysicalExpr>,
-                                field.name().to_string(),
-                            )
+                                alias: field.name().to_string(),
+                            }
                         })
                         .collect::<Vec<_>>();
                     Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
@@ -717,8 +717,8 @@ impl RecordBatchStream for FilterExecStream {
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
 pub fn collect_columns_from_predicate(
-    predicate: &Arc<dyn PhysicalExpr>,
-) -> EqualAndNonEqual {
+    predicate: &'_ Arc<dyn PhysicalExpr>,
+) -> EqualAndNonEqual<'_> {
     let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
     let mut ne_predicate_columns = Vec::<PhysicalExprPairRef>::new();
 

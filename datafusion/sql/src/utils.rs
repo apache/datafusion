@@ -93,19 +93,28 @@ pub(crate) fn rebase_expr(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckColumnsMustReferenceAggregatePurpose {
+    Projection,
+    Having,
+    Qualify,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CheckColumnsSatisfyExprsPurpose {
-    ProjectionMustReferenceAggregate,
-    HavingMustReferenceAggregate,
+    Aggregate(CheckColumnsMustReferenceAggregatePurpose),
 }
 
 impl CheckColumnsSatisfyExprsPurpose {
     fn message_prefix(&self) -> &'static str {
         match self {
-            CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate => {
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Projection) => {
                 "Column in SELECT must be in GROUP BY or an aggregate function"
             }
-            CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate => {
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Having) => {
                 "Column in HAVING must be in GROUP BY or an aggregate function"
+            }
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Qualify) => {
+                "Column in QUALIFY must be in GROUP BY or an aggregate function"
             }
         }
     }
@@ -162,7 +171,7 @@ fn check_column_satisfies_expr(
             purpose.diagnostic_message(expr),
             expr.spans().and_then(|spans| spans.first()),
         )
-        .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({expr})"), None);
+        .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregate function like ANY_VALUE({expr})"), None);
 
         return plan_err!(
             "{}: While expanding wildcard, column \"{}\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"{}\" appears in the SELECT clause satisfies this requirement",
@@ -548,7 +557,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
                 let most_inner = unnest_stack.first().unwrap();
                 let inner_expr = most_inner.expr.as_ref();
                 // unnest(unnest(struct_arr_col)) is not allow to be done recursively
-                // it needs to be splitted into multiple unnest logical plan
+                // it needs to be split into multiple unnest logical plan
                 // unnest(struct_arr)
                 //  unnest(struct_arr_col) as struct_arr
                 // instead of unnest(struct_arr_col, depth = 2)

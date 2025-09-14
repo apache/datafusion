@@ -220,7 +220,7 @@ However, it is more common to use a [TableProvider]. To get a [TableSource] from
 [logicaltablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalTableSource.html
 [defaulttablesource]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
 [provider_as_source]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/fn.provider_as_source.html
-[tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
+[tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 [tablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html
 [`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 [`sessionstate::create_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.create_physical_plan

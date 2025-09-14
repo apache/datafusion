@@ -69,6 +69,10 @@ pub trait FileSource: Send + Sync {
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
     /// Initialize new instance with projected statistics
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
+    /// Returns the filter expression that will be applied during the file scan.
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        None
+    }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics

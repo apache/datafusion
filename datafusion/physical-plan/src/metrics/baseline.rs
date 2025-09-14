@@ -169,6 +169,23 @@ impl SpillMetrics {
     }
 }
 
+/// Metrics for tracking [`crate::stream::BatchSplitStream`] activity
+#[derive(Debug, Clone)]
+pub struct SplitMetrics {
+    /// Number of times an input [`RecordBatch`] was split
+    pub batches_split: Count,
+}
+
+impl SplitMetrics {
+    /// Create a new [`SplitMetrics`]
+    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self {
+            batches_split: MetricBuilder::new(metrics)
+                .counter("batches_split", partition),
+        }
+    }
+}
+
 /// Trait for things that produce output rows as a result of execution.
 pub trait RecordOutput {
     /// Record that some number of output rows have been produced

@@ -27,13 +27,9 @@ use crate::file_groups::FileGroup;
 #[allow(unused_imports)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use crate::{
-    display::FileGroupsDisplay,
-    file::FileSource,
-    file_compression_type::FileCompressionType,
-    file_stream::FileStream,
-    source::{DataSource, DataSourceExec},
-    statistics::MinMaxStatistics,
-    PartitionedFile,
+    display::FileGroupsDisplay, file::FileSource,
+    file_compression_type::FileCompressionType, file_stream::FileStream,
+    source::DataSource, statistics::MinMaxStatistics, PartitionedFile,
 };
 use arrow::datatypes::FieldRef;
 use arrow::{
@@ -52,16 +48,20 @@ use datafusion_common::{
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{expressions::Column, utils::reassign_predicate_columns};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
+use datafusion_physical_plan::projection::ProjectionExpr;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
-    projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
-    DisplayAs, DisplayFormatType, ExecutionPlan,
+    projection::{all_alias_free_columns, new_projections_for_columns},
+    DisplayAs, DisplayFormatType,
+};
+use datafusion_physical_plan::{
+    filter::collect_columns_from_predicate, filter_pushdown::FilterPushdownPropagation,
 };
 
 use datafusion_physical_plan::coop::cooperative;
@@ -71,7 +71,7 @@ use log::{debug, warn};
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
 ///
-/// Use [`Self::build`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
+/// Use [`DataSourceExec::from_data_source`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
 ///
 /// # Example
 /// ```
@@ -136,6 +136,9 @@ use log::{debug, warn};
 /// // create an execution plan from the config
 /// let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
 /// ```
+///
+/// [`DataSourceExec`]: crate::source::DataSourceExec
+/// [`DataSourceExec::from_data_source`]: crate::source::DataSourceExec::from_data_source
 #[derive(Clone)]
 pub struct FileScanConfig {
     /// Object store URL, used to get an [`ObjectStore`] instance from
@@ -156,6 +159,8 @@ pub struct FileScanConfig {
     /// Note that this is **not** the schema of the physical files.
     /// This is the schema that the physical file schema will be
     /// mapped onto, and the schema that the [`DataSourceExec`] will return.
+    ///
+    /// [`DataSourceExec`]: crate::source::DataSourceExec
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
     ///
@@ -188,6 +193,9 @@ pub struct FileScanConfig {
     /// Batch size while creating new batches
     /// Defaults to [`datafusion_common::config::ExecutionOptions`] batch_size.
     pub batch_size: Option<usize>,
+    /// Expression adapter used to adapt filters and projections that are pushed down into the scan
+    /// from the logical schema to the physical schema of the file.
+    pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -252,9 +260,10 @@ pub struct FileScanConfigBuilder {
     /// This is usually the same as the table schema as specified by the `TableProvider` minus any partition columns.
     ///
     /// This probably would be better named `table_schema`
+    ///
+    /// [`DataSourceExec`]: crate::source::DataSourceExec
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
-
     limit: Option<usize>,
     projection: Option<Vec<usize>>,
     table_partition_cols: Vec<FieldRef>,
@@ -265,6 +274,7 @@ pub struct FileScanConfigBuilder {
     file_compression_type: Option<FileCompressionType>,
     new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
+    expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl FileScanConfigBuilder {
@@ -293,6 +303,7 @@ impl FileScanConfigBuilder {
             table_partition_cols: vec![],
             constraints: None,
             batch_size: None,
+            expr_adapter_factory: None,
         }
     }
 
@@ -401,6 +412,20 @@ impl FileScanConfigBuilder {
         self
     }
 
+    /// Register an expression adapter used to adapt filters and projections that are pushed down into the scan
+    /// from the logical schema to the physical schema of the file.
+    /// This can include things like:
+    /// - Column ordering changes
+    /// - Handling of missing columns
+    /// - Rewriting expression to use pre-computed values or file format specific optimizations
+    pub fn with_expr_adapter(
+        mut self,
+        expr_adapter: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    ) -> Self {
+        self.expr_adapter_factory = expr_adapter;
+        self
+    }
+
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -420,6 +445,7 @@ impl FileScanConfigBuilder {
             file_compression_type,
             new_lines_in_values,
             batch_size,
+            expr_adapter_factory: expr_adapter,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -446,6 +472,7 @@ impl FileScanConfigBuilder {
             file_compression_type,
             new_lines_in_values,
             batch_size,
+            expr_adapter_factory: expr_adapter,
         }
     }
 }
@@ -466,6 +493,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             table_partition_cols: config.table_partition_cols,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
+            expr_adapter_factory: config.expr_adapter_factory,
         }
     }
 }
@@ -554,8 +582,31 @@ impl DataSource for FileScanConfig {
 
     fn eq_properties(&self) -> EquivalenceProperties {
         let (schema, constraints, _, orderings) = self.project();
-        EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints)
+        let mut eq_properties =
+            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
+                .with_constraints(constraints);
+        if let Some(filter) = self.file_source.filter() {
+            // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
+            // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
+            match reassign_predicate_columns(filter, &schema, true) {
+                Ok(filter) => {
+                    match Self::add_filter_equivalence_info(filter, &mut eq_properties) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            warn!("Failed to add filter equivalence info: {e}");
+                            #[cfg(debug_assertions)]
+                            panic!("Failed to add filter equivalence info: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to reassign predicate columns: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to reassign predicate columns: {e}");
+                }
+            };
+        }
+        eq_properties
     }
 
     fn scheduling_type(&self) -> SchedulingType {
@@ -583,20 +634,22 @@ impl DataSource for FileScanConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        projection: &[ProjectionExpr],
+    ) -> Result<Option<Arc<dyn DataSource>>> {
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
 
         // Must be all column references, with no table partition columns (which can not be projected)
-        let partitioned_columns_in_proj = projection.expr().iter().any(|(expr, _)| {
-            expr.as_any()
+        let partitioned_columns_in_proj = projection.iter().any(|proj_expr| {
+            proj_expr
+                .expr
+                .as_any()
                 .downcast_ref::<Column>()
                 .map(|expr| expr.index() >= self.file_schema.fields().len())
                 .unwrap_or(false)
         });
 
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
-        let no_aliases = all_alias_free_columns(projection.expr());
+        let no_aliases = all_alias_free_columns(projection);
 
         Ok((no_aliases && !partitioned_columns_in_proj).then(|| {
             let file_scan = self.clone();
@@ -608,7 +661,8 @@ impl DataSource for FileScanConfig {
                     .clone()
                     .unwrap_or_else(|| (0..self.file_schema.fields().len()).collect()),
             );
-            DataSourceExec::from_data_source(
+
+            Arc::new(
                 FileScanConfigBuilder::from(file_scan)
                     // Assign projected statistics to source
                     .with_projection(Some(new_projections))
@@ -646,64 +700,6 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
-    /// Create a new [`FileScanConfig`] with default settings for scanning files.
-    ///
-    /// See example on [`FileScanConfig`]
-    ///
-    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group`] and
-    /// [`Self::with_file_groups`].
-    ///
-    /// # Parameters:
-    /// * `object_store_url`: See [`Self::object_store_url`]
-    /// * `file_schema`: See [`Self::file_schema`]
-    #[allow(deprecated)] // `new` will be removed same time as `with_source`
-    pub fn new(
-        object_store_url: ObjectStoreUrl,
-        file_schema: SchemaRef,
-        file_source: Arc<dyn FileSource>,
-    ) -> Self {
-        let statistics = Statistics::new_unknown(&file_schema);
-        let file_source = file_source
-            .with_statistics(statistics.clone())
-            .with_schema(Arc::clone(&file_schema));
-        Self {
-            object_store_url,
-            file_schema,
-            file_groups: vec![],
-            constraints: Constraints::default(),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-            file_compression_type: FileCompressionType::UNCOMPRESSED,
-            new_lines_in_values: false,
-            file_source: Arc::clone(&file_source),
-            batch_size: None,
-        }
-    }
-
-    /// Set the file source
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
-        self.file_source =
-            file_source.with_statistics(Statistics::new_unknown(&self.file_schema));
-        self
-    }
-
-    /// Set the table constraints of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.constraints = constraints;
-        self
-    }
-
-    /// Set the statistics of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
-        self.file_source = self.file_source.with_statistics(statistics);
-        self
-    }
-
     fn projection_indices(&self) -> Vec<usize> {
         match &self.projection {
             Some(proj) => proj.clone(),
@@ -759,91 +755,20 @@ impl FileScanConfig {
         ))
     }
 
+    fn add_filter_equivalence_info(
+        filter: Arc<dyn PhysicalExpr>,
+        eq_properties: &mut EquivalenceProperties,
+    ) -> Result<()> {
+        let (equal_pairs, _) = collect_columns_from_predicate(&filter);
+        for (lhs, rhs) in equal_pairs {
+            eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
+        }
+        Ok(())
+    }
+
     pub fn projected_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
         self.constraints.project(&indexes).unwrap_or_default()
-    }
-
-    /// Set the projection of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
-        self.projection = projection;
-        self
-    }
-
-    /// Set the limit of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
-        self.limit = limit;
-        self
-    }
-
-    /// Add a file as a single group
-    ///
-    /// See [Self::file_groups] for more information.
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    #[allow(deprecated)]
-    pub fn with_file(self, file: PartitionedFile) -> Self {
-        self.with_file_group(FileGroup::new(vec![file]))
-    }
-
-    /// Add the file groups
-    ///
-    /// See [Self::file_groups] for more information.
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_file_groups(mut self, mut file_groups: Vec<FileGroup>) -> Self {
-        self.file_groups.append(&mut file_groups);
-        self
-    }
-
-    /// Add a new file group
-    ///
-    /// See [Self::file_groups] for more information
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_file_group(mut self, file_group: FileGroup) -> Self {
-        self.file_groups.push(file_group);
-        self
-    }
-
-    /// Set the partitioning columns of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
-        self.table_partition_cols = table_partition_cols
-            .into_iter()
-            .map(|f| Arc::new(f) as FieldRef)
-            .collect();
-        self
-    }
-
-    /// Set the output ordering of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
-        self.output_ordering = output_ordering;
-        self
-    }
-
-    /// Set the file compression type
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_file_compression_type(
-        mut self,
-        file_compression_type: FileCompressionType,
-    ) -> Self {
-        self.file_compression_type = file_compression_type;
-        self
-    }
-
-    /// Set the new_lines_in_values property
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
-        self.new_lines_in_values = new_lines_in_values;
-        self
-    }
-
-    /// Set the batch_size property
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
-        self.batch_size = batch_size;
-        self
     }
 
     /// Specifies whether newlines in (quoted) values are supported.
@@ -1073,12 +998,6 @@ impl FileScanConfig {
                     .collect()
             })
             .collect())
-    }
-
-    /// Returns a new [`DataSourceExec`] to scan the files specified by this config
-    #[deprecated(since = "47.0.0", note = "use DataSourceExec::new instead")]
-    pub fn build(self) -> Arc<DataSourceExec> {
-        DataSourceExec::from_data_source(self)
     }
 
     /// Write the data_type based on file_source
@@ -1895,13 +1814,28 @@ mod tests {
         struct File {
             name: &'static str,
             date: &'static str,
-            statistics: Vec<Option<(f64, f64)>>,
+            statistics: Vec<Option<(Option<f64>, Option<f64>)>>,
         }
         impl File {
             fn new(
                 name: &'static str,
                 date: &'static str,
                 statistics: Vec<Option<(f64, f64)>>,
+            ) -> Self {
+                Self::new_nullable(
+                    name,
+                    date,
+                    statistics
+                        .into_iter()
+                        .map(|opt| opt.map(|(min, max)| (Some(min), Some(max))))
+                        .collect(),
+                )
+            }
+
+            fn new_nullable(
+                name: &'static str,
+                date: &'static str,
+                statistics: Vec<Option<(Option<f64>, Option<f64>)>>,
             ) -> Self {
                 Self {
                     name,
@@ -1968,21 +1902,35 @@ mod tests {
                 sort: vec![col("value").sort(false, true)],
                 expected_result: Ok(vec![vec!["1", "0"], vec!["2"]]),
             },
-            // reject nullable sort columns
             TestCase {
-                name: "no nullable sort columns",
+                name: "nullable sort columns, nulls last",
                 file_schema: Schema::new(vec![Field::new(
                     "value".to_string(),
                     DataType::Float64,
-                    true, // should fail because nullable
+                    true,
                 )]),
                 files: vec![
-                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
-                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
-                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                    File::new_nullable("0", "2023-01-01", vec![Some((Some(0.00), Some(0.49)))]),
+                    File::new_nullable("1", "2023-01-01", vec![Some((Some(0.50), None))]),
+                    File::new_nullable("2", "2023-01-02", vec![Some((Some(0.00), None))]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column")
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]])
+            },
+            TestCase {
+                name: "nullable sort columns, nulls first",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    true,
+                )]),
+                files: vec![
+                    File::new_nullable("0", "2023-01-01", vec![Some((None, Some(0.49)))]),
+                    File::new_nullable("1", "2023-01-01", vec![Some((Some(0.50), Some(1.00)))]),
+                    File::new_nullable("2", "2023-01-02", vec![Some((None, Some(1.00)))]),
+                ],
+                sort: vec![col("value").sort(true, true)],
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]])
             },
             TestCase {
                 name: "all three non-overlapping",
@@ -2062,7 +2010,7 @@ mod tests {
                     .map(|expr| {
                         create_physical_sort_expr(
                             &expr,
-                            &DFSchema::try_from(table_schema.as_ref().clone())?,
+                            &DFSchema::try_from(Arc::clone(&table_schema))?,
                             &ExecutionProps::default(),
                         )
                     })
@@ -2076,7 +2024,7 @@ mod tests {
             );
             let result = FileScanConfig::split_groups_by_statistics(
                 &table_schema,
-                &[partitioned_files.clone()],
+                std::slice::from_ref(&partitioned_files),
                 &sort_order,
             );
             let results_by_name = result
@@ -2142,12 +2090,12 @@ mod tests {
                             .map(|stats| {
                                 stats
                                     .map(|(min, max)| ColumnStatistics {
-                                        min_value: Precision::Exact(ScalarValue::from(
-                                            min,
-                                        )),
-                                        max_value: Precision::Exact(ScalarValue::from(
-                                            max,
-                                        )),
+                                        min_value: Precision::Exact(
+                                            ScalarValue::Float64(min),
+                                        ),
+                                        max_value: Precision::Exact(
+                                            ScalarValue::Float64(max),
+                                        ),
                                         ..Default::default()
                                     })
                                     .unwrap_or_default()

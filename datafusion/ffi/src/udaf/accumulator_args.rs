@@ -75,6 +75,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             ignore_nulls: args.ignore_nulls,
             fun_definition: None,
             aggregate_function: None,
+            human_display: args.name.to_string(),
         };
         let physical_expr_def = physical_expr_def.encode_to_vec().into();
 

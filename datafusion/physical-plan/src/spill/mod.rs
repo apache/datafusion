@@ -28,7 +28,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::ArrayData;
+use arrow::array::{layout, ArrayData, BufferSpec};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{
     reader::StreamReader,
@@ -304,11 +304,16 @@ impl IPCStreamWriter {
         compression_type: SpillCompression,
     ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
-            exec_datafusion_err!("Failed to create partition file at {path:?}: {e:?}")
+            exec_datafusion_err!("(Hint: you may increase the file descriptor limit with shell command 'ulimit -n 4096') Failed to create partition file at {path:?}: {e:?}")
         })?;
 
         let metadata_version = MetadataVersion::V5;
-        let alignment = 8;
+        // Depending on the schema, some array types such as StringViewArray require larger (16 byte in this case) alignment.
+        // If the actual buffer layout after IPC read does not satisfy the alignment requirement,
+        // Arrow ArrayBuilder will copy the buffer into a newly allocated, properly aligned buffer.
+        // This copying may lead to memory blowup during IPC read due to duplicated buffers.
+        // To avoid this, we compute the maximum required alignment based on the schema and configure the IPCStreamWriter accordingly.
+        let alignment = get_max_alignment_for_schema(schema);
         let mut write_options =
             IpcWriteOptions::try_new(alignment, false, metadata_version)?;
         write_options = write_options.try_with_compression(compression_type.into())?;
@@ -339,6 +344,29 @@ impl IPCStreamWriter {
     pub fn finish(&mut self) -> Result<()> {
         self.writer.finish().map_err(Into::into)
     }
+}
+
+// Returns the maximum byte alignment required by any field in the schema (>= 8), derived from Arrow buffer layouts.
+fn get_max_alignment_for_schema(schema: &Schema) -> usize {
+    let minimum_alignment = 8;
+    let mut max_alignment = minimum_alignment;
+    for field in schema.fields() {
+        let layout = layout(field.data_type());
+        let required_alignment = layout
+            .buffers
+            .iter()
+            .map(|buffer_spec| {
+                if let BufferSpec::FixedWidth { alignment, .. } = buffer_spec {
+                    *alignment
+                } else {
+                    minimum_alignment
+                }
+            })
+            .max()
+            .unwrap_or(minimum_alignment);
+        max_alignment = std::cmp::max(max_alignment, required_alignment);
+    }
+    max_alignment
 }
 
 #[cfg(test)]
@@ -474,10 +502,15 @@ mod tests {
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
 
-        let spill_file = spill_manager
-            .spill_record_batch_by_size(&batch1, "Test Spill", 1)?
+        let (spill_file, max_batch_mem) = spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &batch1,
+                "Test Spill",
+                1,
+            )?
             .unwrap();
         assert!(spill_file.path().exists());
+        assert!(max_batch_mem > 0);
 
         let stream = spill_manager.read_spill_as_stream(spill_file)?;
         assert_eq!(stream.schema(), schema);
@@ -850,7 +883,7 @@ mod tests {
         let completed_file = spill_manager.spill_record_batch_and_finish(&[], "Test")?;
         assert!(completed_file.is_none());
 
-        // Test write empty batch with interface `spill_record_batch_by_size()`
+        // Test write empty batch with interface `spill_record_batch_by_size_and_return_max_batch_memory()`
         let empty_batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -858,8 +891,12 @@ mod tests {
                 Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
             ],
         )?;
-        let completed_file =
-            spill_manager.spill_record_batch_by_size(&empty_batch, "Test", 1)?;
+        let completed_file = spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &empty_batch,
+                "Test",
+                1,
+            )?;
         assert!(completed_file.is_none());
 
         Ok(())
@@ -901,5 +938,20 @@ mod tests {
 
                 Ok(())
             })
+    }
+
+    #[test]
+    fn test_alignment_for_schema() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("strings", DataType::Utf8View, false)]);
+        let alignment = get_max_alignment_for_schema(&schema);
+        assert_eq!(alignment, 16);
+
+        let schema = Schema::new(vec![
+            Field::new("int32", DataType::Int32, false),
+            Field::new("int64", DataType::Int64, false),
+        ]);
+        let alignment = get_max_alignment_for_schema(&schema);
+        assert_eq!(alignment, 8);
+        Ok(())
     }
 }

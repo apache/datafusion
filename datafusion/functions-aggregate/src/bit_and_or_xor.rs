@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
 use std::mem::{size_of, size_of_val};
 
 use ahash::RandomState;
@@ -196,7 +197,7 @@ make_bitwise_udaf_expr_and_func!(
 );
 
 /// The different types of bitwise operations that can be performed.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 enum BitwiseOperationType {
     And,
     Or,
@@ -210,7 +211,7 @@ impl Display for BitwiseOperationType {
 }
 
 /// [BitwiseOperation] struct encapsulates information about a bitwise operation.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct BitwiseOperation {
     signature: Signature,
     /// `operation` indicates the type of bitwise operation to be performed.
@@ -478,7 +479,7 @@ impl<T: ArrowNumericType> Default for DistinctBitXorAccumulator<T> {
 
 impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
 where
-    T::Native: std::ops::BitXor<Output = T::Native> + std::hash::Hash + Eq,
+    T::Native: std::ops::BitXor<Output = T::Native> + Hash + Eq,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {

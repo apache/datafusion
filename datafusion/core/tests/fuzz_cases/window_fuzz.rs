@@ -288,6 +288,8 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     Arc::new(window_frame),
                     &extended_schema,
                     false,
+                    false,
+                    None,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
                     vec![window_expr],
@@ -660,6 +662,8 @@ async fn run_window_test(
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,
+            false,
+            None,
         )?],
         exec1,
         false,
@@ -678,6 +682,8 @@ async fn run_window_test(
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,
+            false,
+            None,
         )?],
         exec2,
         search_mode.clone(),

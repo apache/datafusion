@@ -70,6 +70,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression1", prefix = "First"),
     standard_argument(name = "expression2", prefix = "Second")
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct CovarianceSample {
     signature: Signature,
     aliases: Vec<String>,
@@ -165,6 +166,7 @@ impl AggregateUDFImpl for CovarianceSample {
     standard_argument(name = "expression1", prefix = "First"),
     standard_argument(name = "expression2", prefix = "Second")
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct CovariancePopulation {
     signature: Signature,
 }

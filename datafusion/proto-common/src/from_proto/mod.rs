@@ -37,6 +37,7 @@ use datafusion_common::{
         TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
+    not_impl_err,
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
@@ -257,7 +258,15 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::Interval(interval_unit) => {
                 DataType::Interval(parse_i32_to_interval_unit(interval_unit)?)
             }
-            arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
+            arrow_type::ArrowTypeEnum::Decimal32(protobuf::Decimal32Type {
+                precision,
+                scale,
+            }) => DataType::Decimal32(*precision as u8, *scale as i8),
+            arrow_type::ArrowTypeEnum::Decimal64(protobuf::Decimal64Type {
+                precision,
+                scale,
+            }) => DataType::Decimal64(*precision as u8, *scale as i8),
+            arrow_type::ArrowTypeEnum::Decimal128(protobuf::Decimal128Type {
                 precision,
                 scale,
             }) => DataType::Decimal128(*precision as u8, *scale as i8),
@@ -468,6 +477,14 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::NullValue(v) => {
                 let null_type: DataType = v.try_into()?;
                 null_type.try_into().map_err(Error::DataFusionError)?
+            }
+            Value::Decimal32Value(_val) => {
+                return not_impl_err!("Decimal32 protobuf deserialization")
+                    .map_err(Error::DataFusionError)
+            }
+            Value::Decimal64Value(_val) => {
+                return not_impl_err!("Decimal64 protobuf deserialization")
+                    .map_err(Error::DataFusionError)
             }
             Value::Decimal128Value(val) => {
                 let array = vec_to_array(val.value.clone());
@@ -900,6 +917,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             null_regex: (!proto_opts.null_regex.is_empty())
                 .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
+            truncated_rows: proto_opts.truncated_rows.first().map(|h| *h != 0),
         })
     }
 }
@@ -936,12 +954,6 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
                     protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
-                })
-                .unwrap_or(None),
-            max_statistics_size: value
-                .max_statistics_size_opt.as_ref()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(*v as usize),
                 })
                 .unwrap_or(None),
             max_row_group_size: value.max_row_group_size as usize,
@@ -1007,12 +1019,6 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
                 .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
                     protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
-                })
-                .unwrap_or(None),
-            max_statistics_size: value
-                .max_statistics_size_opt
-                .map(|opt| match opt {
-                    protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
                 })
                 .unwrap_or(None),
             encoding: value

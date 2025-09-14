@@ -18,6 +18,7 @@
 //! [`StringAgg`] accumulator for the `string_agg` function
 
 use std::any::Any;
+use std::hash::Hash;
 use std::mem::size_of_val;
 
 use crate::array_agg::ArrayAgg;
@@ -81,7 +82,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
     )
 )]
 /// STRING_AGG aggregate expression
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StringAgg {
     signature: Signature,
     array_agg: ArrayAgg,
@@ -175,6 +176,10 @@ impl AggregateUDFImpl for StringAgg {
             array_agg_acc,
             delimiter,
         )))
+    }
+
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Reversed(string_agg_udaf())
     }
 
     fn documentation(&self) -> Option<&Documentation> {

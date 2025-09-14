@@ -254,6 +254,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operand,
                 conditions,
                 else_result,
+                case_token: _,
+                end_token: _,
             } => self.sql_case_identifier_to_expr(
                 operand,
                 conditions,
@@ -446,6 +448,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 substring_from,
                 substring_for,
                 special: _,
+                shorthand: _,
             } => self.sql_substring_to_expr(
                 expr,
                 substring_from,
@@ -813,7 +816,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<String>,
+        escape_char: Option<Value>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
@@ -823,13 +826,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("ANY in LIKE expression");
         }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = if let Some(char) = escape_char {
-            if char.len() != 1 {
-                return plan_err!("Invalid escape character in LIKE expression");
+        let escape_char = match escape_char {
+            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
+                Some(char.chars().next().unwrap())
             }
-            Some(char.chars().next().unwrap())
-        } else {
-            None
+            Some(value) => return plan_err!("Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"),
+            None => None,
         };
         Ok(Expr::Like(Like::new(
             negated,
@@ -845,7 +847,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<String>,
+        escape_char: Option<Value>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -854,13 +856,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
-        let escape_char = if let Some(char) = escape_char {
-            if char.len() != 1 {
-                return plan_err!("Invalid escape character in SIMILAR TO expression");
+        let escape_char = match escape_char {
+            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
+                Some(char.chars().next().unwrap())
             }
-            Some(char.chars().next().unwrap())
-        } else {
-            None
+            Some(value) => return plan_err!("Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"),
+            None => None,
         };
         Ok(Expr::SimilarTo(Like::new(
             negated,

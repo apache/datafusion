@@ -109,7 +109,7 @@ pub const INTERVAL_DAY_TIME_TYPE_REF: u32 = 2;
 /// [`ScalarValue::IntervalMonthDayNano`]: datafusion::common::ScalarValue::IntervalMonthDayNano
 #[deprecated(
     since = "41.0.0",
-    note = "Use Substrait `IntervalCompund` type instead"
+    note = "Use Substrait `IntervalCompound` type instead"
 )]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
 
@@ -119,6 +119,6 @@ pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
 /// [`IntervalUnit::MonthDayNano`]: datafusion::arrow::datatypes::IntervalUnit::MonthDayNano
 #[deprecated(
     since = "43.0.0",
-    note = "Use Substrait `IntervalCompund` type instead"
+    note = "Use Substrait `IntervalCompound` type instead"
 )]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_NAME: &str = "interval-month-day-nano";

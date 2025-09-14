@@ -25,8 +25,10 @@ use std::sync::Arc;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
+use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -36,11 +38,8 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{
-    conjunction, EquivalenceProperties, Partitioning, PhysicalExpr,
-};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::filter::collect_columns_from_predicate;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -161,8 +160,8 @@ pub trait DataSource: Send + Sync + Debug {
     }
     fn try_swapping_with_projection(
         &self,
-        _projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
+        _projection: &[ProjectionExpr],
+    ) -> Result<Option<Arc<dyn DataSource>>>;
     /// Try to push down filters into this DataSource.
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
@@ -267,15 +266,22 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, Arc::clone(&context))
+        let stream = self.data_source.open(partition, Arc::clone(&context))?;
+        let batch_size = context.session_config().batch_size();
+        log::debug!(
+            "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
+        );
+        let metrics = self.data_source.metrics();
+        let split_metrics = SplitMetrics::new(&metrics, partition);
+        Ok(Box::pin(BatchSplitStream::new(
+            stream,
+            batch_size,
+            split_metrics,
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.data_source.metrics().clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.data_source.statistics()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -311,7 +317,15 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.data_source.try_swapping_with_projection(projection)
+        match self
+            .data_source
+            .try_swapping_with_projection(projection.expr())?
+        {
+            Some(new_data_source) => {
+                Ok(Some(Arc::new(DataSourceExec::new(new_data_source))))
+            }
+            None => Ok(None),
+        }
     }
 
     fn handle_child_pushdown_result(
@@ -333,21 +347,10 @@ impl ExecutionPlan for DataSourceExec {
             Some(data_source) => {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
+                // Re-compute properties since we have new filters which will impact equivalence info
                 new_node.cache =
                     Self::compute_properties(Arc::clone(&new_node.data_source));
 
-                // Recompute equivalence info using new filters
-                let filter = conjunction(
-                    res.filters
-                        .iter()
-                        .zip(parent_filters)
-                        .filter_map(|(s, f)| match s {
-                            PushedDown::Yes => Some(f),
-                            PushedDown::No => None,
-                        })
-                        .collect_vec(),
-                );
-                new_node = new_node.add_filter_equivalence_info(filter)?;
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
                     updated_node: Some(Arc::new(new_node)),
@@ -393,20 +396,6 @@ impl DataSourceExec {
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.cache = self.cache.with_partitioning(partitioning);
         self
-    }
-
-    /// Add filters' equivalence info
-    fn add_filter_equivalence_info(
-        mut self,
-        filter: Arc<dyn PhysicalExpr>,
-    ) -> Result<Self> {
-        let (equal_pairs, _) = collect_columns_from_predicate(&filter);
-        for (lhs, rhs) in equal_pairs {
-            self.cache
-                .eq_properties
-                .add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
-        }
-        Ok(self)
     }
 
     fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
