@@ -23,16 +23,18 @@ concurrency:
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
-    branches:
-      - main
 
   pull_request:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+  
+  merge_group:
 
 jobs:
   security_audit:

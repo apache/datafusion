@@ -2060,7 +2060,10 @@ pub struct EmptyRelation {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for EmptyRelation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.produce_one_row.partial_cmp(&other.produce_one_row)
+        self.produce_one_row
+            .partial_cmp(&other.produce_one_row)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2114,7 +2117,10 @@ pub struct Values {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Values {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.values.partial_cmp(&other.values)
+        self.values
+            .partial_cmp(&other.values)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2139,6 +2145,8 @@ impl PartialOrd for Projection {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2187,14 +2195,22 @@ impl Projection {
 ///   will be computed.
 /// * `exprs`: A slice of `Expr` expressions representing the projection operation to apply.
 ///
+/// # Metadata Handling
+///
+/// - **Schema-level metadata**: Passed through unchanged from the input schema
+/// - **Field-level metadata**: Determined by each expression via [`exprlist_to_fields`], which
+///   calls [`Expr::to_field`] to handle expression-specific metadata (literals, aliases, etc.)
+///
 /// # Returns
 ///
 /// A `Result` containing an `Arc<DFSchema>` representing the schema of the result
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
+    // Preserve input schema metadata at the schema level
     let metadata = input.schema().metadata().clone();
 
+    // Convert expressions to fields with Field properties determined by `Expr::to_field`
     let schema =
         DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
             .with_functional_dependencies(calc_func_dependencies_for_project(
@@ -2249,6 +2265,8 @@ impl PartialOrd for SubqueryAlias {
             Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2606,7 +2624,10 @@ impl PartialOrd for TableScan {
             filters: &other.filters,
             fetch: &other.fetch,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2929,7 +2950,10 @@ impl Union {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Union {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.inputs.partial_cmp(&other.inputs)
+        self.inputs
+            .partial_cmp(&other.inputs)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3210,7 +3234,10 @@ impl PartialOrd for Explain {
             stringified_plans: &other.stringified_plans,
             logical_optimization_succeeded: &other.logical_optimization_succeeded,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3233,6 +3260,8 @@ impl PartialOrd for Analyze {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3460,7 +3489,10 @@ impl PartialOrd for DistinctOn {
             sort_expr: &other.sort_expr,
             input: &other.input,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3647,6 +3679,8 @@ impl PartialOrd for Aggregate {
             }
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3919,7 +3953,10 @@ impl PartialOrd for Join {
             join_constraint: &other.join_constraint,
             null_equality: &other.null_equality,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -4084,7 +4121,10 @@ impl PartialOrd for Unnest {
             dependency_indices: &other.dependency_indices,
             options: &other.options,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 

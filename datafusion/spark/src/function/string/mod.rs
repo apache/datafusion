@@ -19,6 +19,7 @@ pub mod ascii;
 pub mod char;
 pub mod format_string;
 pub mod ilike;
+pub mod length;
 pub mod like;
 pub mod luhn_check;
 
@@ -29,6 +30,7 @@ use std::sync::Arc;
 make_udf_function!(ascii::SparkAscii, ascii);
 make_udf_function!(char::CharFunc, char);
 make_udf_function!(ilike::SparkILike, ilike);
+make_udf_function!(length::SparkLengthFunc, length);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
@@ -52,6 +54,11 @@ pub mod expr_fn {
         str pattern
     ));
     export_functions!((
+        length,
+        "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros.",
+        arg1
+    ));
+    export_functions!((
         like,
         "Returns true if str matches pattern (case sensitive).",
         str pattern
@@ -73,6 +80,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         ascii(),
         char(),
         ilike(),
+        length(),
         like(),
         luhn_check(),
         format_string(),

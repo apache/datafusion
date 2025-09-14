@@ -1714,7 +1714,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let options = self.context_provider.options();
             let format = format.as_ref().unwrap_or(&options.explain.format);
 
-            let format: ExplainFormat = format.parse()?;
+            // verbose mode only supports indent format
+            let format: ExplainFormat = if verbose {
+                ExplainFormat::Indent
+            } else {
+                format.parse()?
+            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
@@ -2024,9 +2029,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut value_indices = vec![None; table_schema.fields().len()];
             let fields = columns
                 .into_iter()
-                .map(|c| self.ident_normalizer.normalize(c))
                 .enumerate()
                 .map(|(i, c)| {
+                    let c = self.ident_normalizer.normalize(c);
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
