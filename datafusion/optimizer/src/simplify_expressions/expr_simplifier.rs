@@ -1811,7 +1811,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                 // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                                 let Some(value) = try_cast_literal_to_type(&right_lit_value, &expr_type) else {
                                     internal_err!(
-                                        "Can't cast the list expr {:?} to type {:?}",
+                                        "Can't cast the list expr {:?} to type {}",
                                         right_lit_value, &expr_type
                                     )?
                                 };

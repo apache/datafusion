@@ -669,8 +669,8 @@ impl DFSchema {
                         ))
                     {
                         _plan_err!(
-                            "Schema mismatch: Expected field '{}' with type {:?}, \
-                            but got '{}' with type {:?}.",
+                            "Schema mismatch: Expected field '{}' with type {}, \
+                            but got '{}' with type {}.",
                             f1.name(),
                             f1.data_type(),
                             f2.name(),
@@ -1308,8 +1308,8 @@ impl SchemaExt for Schema {
                 .try_for_each(|(f1, f2)| {
                     if f1.name() != f2.name() || (!DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) && !can_cast_types(f2.data_type(), f1.data_type())) {
                         _plan_err!(
-                            "Inserting query schema mismatch: Expected table field '{}' with type {:?}, \
-                            but got '{}' with type {:?}.",
+                            "Inserting query schema mismatch: Expected table field '{}' with type {}, \
+                            but got '{}' with type {}.",
                             f1.name(),
                             f1.data_type(),
                             f2.name(),

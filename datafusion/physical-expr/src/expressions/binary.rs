@@ -179,7 +179,7 @@ macro_rules! binary_string_array_flag_op {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
             other => internal_err!(
-                "Data type {:?} not supported for binary_string_array_flag_op operation '{}' on string array",
+                "Data type {} not supported for binary_string_array_flag_op operation '{}' on string array",
                 other, stringify!($OP)
             ),
         }
@@ -258,7 +258,7 @@ macro_rules! binary_string_array_flag_op_scalar {
                     DataType::Utf8View => compute_utf8view_flag_op_scalar!(values, $RIGHT, $OP, StringViewArray, $NOT, $FLAG),
                     DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
                     other => internal_err!(
-                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
+                        "Data type {} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
                         other, stringify!($OP)
                     ),
                 }.map(
@@ -273,7 +273,7 @@ macro_rules! binary_string_array_flag_op_scalar {
                 )
             },
             other => internal_err!(
-                "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
+                "Data type {} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
                 other, stringify!($OP)
             ),
         };

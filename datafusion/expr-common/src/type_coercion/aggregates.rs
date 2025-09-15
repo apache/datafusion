@@ -304,7 +304,7 @@ pub fn coerce_avg_type(func_name: &str, arg_types: &[DataType]) -> Result<Vec<Da
             DataType::Dictionary(_, v) => coerced_type(func_name, v.as_ref()),
             _ => {
                 plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
+                    "The function {:?} does not support inputs of type {}.",
                     func_name,
                     data_type
                 )

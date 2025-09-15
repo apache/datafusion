@@ -352,10 +352,10 @@ impl LogicalType for NativeType {
             }
             _ => {
                 return _internal_err!(
-                "Unavailable default cast for native type {:?} from physical type {:?}",
-                self,
-                origin
-            )
+                    "Unavailable default cast for native type {} from physical type {}",
+                    self,
+                    origin
+                )
             }
         })
     }

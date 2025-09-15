@@ -4156,7 +4156,7 @@ fn get_unnested_columns(
         }
         _ => {
             return internal_err!(
-                "trying to unnest on invalid data type {:?}",
+                "trying to unnest on invalid data type {}",
                 data_type
             );
         }
@@ -4182,7 +4182,7 @@ fn get_unnested_list_datatype_recursive(
         _ => {}
     };
 
-    internal_err!("trying to unnest on invalid data type {:?}", data_type)
+    internal_err!("trying to unnest on invalid data type {}", data_type)
 }
 
 #[cfg(test)]
