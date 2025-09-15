@@ -371,8 +371,54 @@ impl ExprSchemable for Expr {
 
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     ///
+    /// This function converts an expression into a field with appropriate metadata
+    /// and nullability based on the expression type and context. It is the primary
+    /// mechanism for determining field-level schemas.
+    ///
+    /// # Field Property Resolution
+    ///
+    /// For each expression, the following properties are determined:
+    ///
+    /// ## Data Type Resolution
+    /// - **Column references**: Data type from input schema field
+    /// - **Literals**: Data type inferred from literal value
+    /// - **Aliases**: Data type inherited from the underlying expression (the aliased expression)
+    /// - **Binary expressions**: Result type from type coercion rules
+    /// - **Boolean expressions**: Always a boolean type
+    /// - **Cast expressions**: Target data type from cast operation
+    /// - **Function calls**: Return type based on function signature and argument types
+    ///
+    /// ## Nullability Determination
+    /// - **Column references**: Inherit nullability from input schema field
+    /// - **Literals**: Nullable only if literal value is NULL
+    /// - **Aliases**: Inherit nullability from the underlying expression (the aliased expression)
+    /// - **Binary expressions**: Nullable if either operand is nullable
+    /// - **Boolean expressions**: Always non-nullable (IS NULL, EXISTS, etc.)
+    /// - **Cast expressions**: determined by the input expression's nullability rules
+    /// - **Function calls**: Based on function nullability rules and input nullability
+    ///
+    /// ## Metadata Handling
+    /// - **Column references**: Preserve original field metadata from input schema
+    /// - **Literals**: Use explicitly provided metadata, otherwise empty
+    /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
+    /// - **Binary expressions**: field metadata is empty
+    /// - **Boolean expressions**: field metadata is empty
+    /// - **Cast expressions**: determined by the input expression's field metadata handling
+    /// - **Scalar functions**: Generate metadata via function's [`return_field_from_args`] method,
+    ///   with the default implementation returning empty field metadata
+    /// - **Aggregate functions**: Generate metadata via function's [`return_field`] method,
+    ///   with the default implementation returning empty field metadata
+    /// - **Window functions**: field metadata is empty
+    ///
+    /// ## Table Reference Scoping
+    /// - Establishes proper qualified field references when columns belong to specific tables
+    /// - Maintains table context for accurate field resolution in multi-table scenarios
+    ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
+    ///
+    /// [`return_field_from_args`]: crate::ScalarUDF::return_field_from_args
+    /// [`return_field`]: crate::AggregateUDF::return_field
     fn to_field(
         &self,
         schema: &dyn ExprSchema,

@@ -87,6 +87,8 @@ uuid = { version = "1.18", features = ["v4"], optional = true }
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
+ctor = { workspace = true }
+env_logger = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 

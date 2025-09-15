@@ -94,6 +94,7 @@ pub struct CsvSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    truncate_rows: bool,
 }
 
 impl CsvSource {
@@ -110,6 +111,11 @@ impl CsvSource {
     /// true if the first line of each file is a header
     pub fn has_header(&self) -> bool {
         self.has_header
+    }
+
+    // true if rows length support truncate
+    pub fn truncate_rows(&self) -> bool {
+        self.truncate_rows
     }
     /// A column delimiter
     pub fn delimiter(&self) -> u8 {
@@ -156,6 +162,13 @@ impl CsvSource {
         conf.comment = comment;
         conf
     }
+
+    /// Whether to support truncate rows when read csv file
+    pub fn with_truncate_rows(&self, truncate_rows: bool) -> Self {
+        let mut conf = self.clone();
+        conf.truncate_rows = truncate_rows;
+        conf
+    }
 }
 
 impl CsvSource {
@@ -175,7 +188,8 @@ impl CsvSource {
                 .expect("Batch size must be set before initializing builder"),
         )
         .with_header(self.has_header)
-        .with_quote(self.quote);
+        .with_quote(self.quote)
+        .with_truncated_rows(self.truncate_rows);
         if let Some(terminator) = self.terminator {
             builder = builder.with_terminator(terminator);
         }
@@ -340,6 +354,7 @@ impl FileOpener for CsvOpener {
 
         let config = CsvSource {
             has_header: csv_has_header,
+            truncate_rows: self.config.truncate_rows,
             ..(*self.config).clone()
         };
 
