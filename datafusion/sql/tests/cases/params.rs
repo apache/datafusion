@@ -183,7 +183,7 @@ fn test_prepare_statement_to_plan_no_param() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan"
+    Prepare: "my_plan" 
       Projection: person.id, person.age
         Filter: person.age = Int64(10)
           TableScan: person
