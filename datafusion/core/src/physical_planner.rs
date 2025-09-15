@@ -1250,7 +1250,7 @@ impl DefaultPhysicalPlanner {
             }
 
             // N Children
-            LogicalPlan::Union(_) => Arc::new(UnionExec::new(children.vec())),
+            LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
