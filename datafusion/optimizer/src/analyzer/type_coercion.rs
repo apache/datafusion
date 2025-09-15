@@ -351,9 +351,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
-                        "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
-                    ),
+                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
+                    plan_datafusion_err!(
+                    "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+                ),
                 )?;
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
@@ -905,10 +906,17 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     let then_else_coerce_type =
         get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(
             || {
-                plan_datafusion_err!(
-                    "Failed to coerce then ({then_types:?}) and else ({else_type}) \
-                     to common types in CASE WHEN expression"
-                )
+                if let Some(else_type) = else_type {
+                    plan_datafusion_err!(
+                        "Failed to coerce then ({then_types:?}) and else ({else_type}) \
+                         to common types in CASE WHEN expression"
+                    )
+                } else {
+                    plan_datafusion_err!(
+                        "Failed to coerce then ({then_types:?}) and else (None) \
+                         to common types in CASE WHEN expression"
+                    )
+                }
             },
         )?;
 
