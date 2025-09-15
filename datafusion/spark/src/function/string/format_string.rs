@@ -365,7 +365,7 @@ pub enum ConversionType {
     BooleanUpper,
     /// `b`
     BooleanLower,
-    /// Not implemented yet. Can be implemented after https://github.com/apache/datafusion/pull/17093 is merged
+    /// Not implemented yet. Can be implemented after <https://github.com/apache/datafusion/pull/17093> is merged
     /// `h`
     HexHashLower,
     /// `H`
