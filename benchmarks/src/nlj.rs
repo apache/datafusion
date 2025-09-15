@@ -146,6 +146,15 @@ const NLJ_QUERIES: &[&str] = &[
         FULL JOIN range(30000) AS t2
         ON (t1.value > t2.value);
     "#,
+    // Q13: INNER 200K x 1 | Low 0.1% | very small probe side
+    // TODO: ensure the optimizer won't swap order after we're able to turn off join
+    // reordering from configuration.
+    r#"
+        SELECT *
+        FROM range(200000) AS t1
+        FULL JOIN range(1) AS t2
+        ON ((t1.value + t2.value) % 1000) = 1
+    "#,
 ];
 
 impl RunOpt {
