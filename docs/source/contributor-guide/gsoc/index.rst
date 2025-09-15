@@ -31,6 +31,6 @@ project ideas in the sections below.
 .. toctree::
    :maxdepth: 1
 
-   gsoc_application_guidelines
-   gsoc_project_ideas
+   gsoc_application_guidelines_2025
+   gsoc_project_ideas_2025
 
