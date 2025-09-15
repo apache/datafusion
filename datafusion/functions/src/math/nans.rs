@@ -36,7 +36,7 @@ use std::sync::Arc;
 +----------+
 | isnan(1) |
 +----------+
-| true     |
+| false    |
 +----------+
 ```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
