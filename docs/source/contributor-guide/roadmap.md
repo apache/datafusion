@@ -73,22 +73,23 @@ visible, but we are very limited on review bandwidth. If you open a ticket and i
 doesn't get any response, try `@`-mentioning recently active community members
 in the ticket, or [posting to the mailing list or Discord](communication.md).
 
-### Sponsoring Maintainers
+### Supervising Maintainers
 
-We have found that most successful epics have one or more "sponsoring
+We have found that most successful epics have one or more "supervising
 maintainers", a committer ([see here for current list]) who take the lead on
 reviewing and committing PRs, helps with design, and coordinates and
 communicates with the community. If you want to ship a large feature, we
-recommend finding a sponsoring maintainer upfront; otherwise, your PRs might
+recommend finding such maintainer upfront; otherwise, your PRs may
 remain unreviewed for a very long time.
 
-There is currently no formal process for appointing a sponsoring maintainer or
-for tracking who has that role for a given epic. Instead, we rely on the
-discussion on the ticket or PR. Helping complete an epic is a significant time
-commitment, so maintainers are more likely to sponsor features they are
-particularly interested in or align with their own project's use of DataFusion.
+Supervising maintainers have no additional formal authority and there is
+currently no formal process for appointing, approving or tracking who has that
+role for a given epic. Instead, we rely on discussion on the ticket or PR.
+Helping complete an epic is a significant time commitment, so maintainers are
+more likely to help features they are particularly interested in or align with
+their own project's use of DataFusion.
 
-If you are willing to be a sponsoring maintainer for a feature, please say so
+If you are willing to be a supervising maintainer for a feature, please say so
 explicitly. If you are unsure, we suggest asking directly who is willing to take
 the role, as it can be hard to tell sometimes whether a committer is simply
 participating and giving general feedback.
