@@ -1248,7 +1248,7 @@ impl NestedLoopJoinStream {
             "When fetching the right batch, empty batches will be skipped"
         );
         if (self.batch_size / right_batch.num_rows()) > 10 {
-            // Calculate max left rows to handle at once. This opeator tries to handle
+            // Calculate max left rows to handle at once. This operator tries to handle
             // up to `datafusion.execution.batch_size` rows at once in the intermediate
             // batch.
             let l_row_count = self.batch_size / right_batch.num_rows();
@@ -1424,7 +1424,7 @@ impl NestedLoopJoinStream {
             let current_right_bitmap = local_right_bitmap
                 .ok_or_else(|| {
                     internal_datafusion_err!(
-                        "Should be Some if the current join type requries right bitmap"
+                        "Should be Some if the current join type requires right bitmap"
                     )
                 })?
                 .finish();
