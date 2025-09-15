@@ -19,10 +19,6 @@
 
 # Governance
 
-The current PMC and committers are listed in the [Apache Phonebook].
-
-[apache phonebook]: https://projects.apache.org/committee.html?datafusion
-
 ## Overview
 
 DataFusion is part of the [Apache Software Foundation] and is governed following
@@ -37,6 +33,84 @@ commercial interests].
 As much as practicable, we strive to make decisions by consensus, and anyone in
 the community is encouraged to propose ideas, start discussions, and contribute
 to the project.
+
+## People
+
+DataFusion is currently governed by the following individuals
+
+<!--
+
+The following table can be updated by running the following script:
+
+docs/scripts/update_committer_list.py
+
+Notes:
+
+* The github and Affiliation columns are not auto updated as there is no public source for this
+  information. In order to provide this date, the table must be manually edited.
+
+-->
+
+<!-- Begin Auto-Generated Committer List -->
+
+| Name                    | Apache ID        | github                                                  | Affiliation | Role      |
+| ----------------------- | ---------------- | ------------------------------------------------------- | ----------- | --------- |
+| Andrew Lamb             | alamb            | [alamb](https://github.com/alamb)                       | InfluxData  | PMC Chair |
+| Andrew Grove            | agrove           | [andygrove](https://github.com/andygrove)               |             | PMC       |
+| Mustafa Akur            | akurmustafa      | [akurmustafa](https://github.com/akurmustafa)           |             | PMC       |
+| Berkay Şahin            | berkay           | [berkaysynnada](https://github.com/berkaysynnada)       |             | PMC       |
+| Oleks V                 | comphead         | [comphead](https://github.com/comphead)                 |             | PMC       |
+| Daniël Heres            | dheres           | [Dandandan](https://github.com/Dandandan)               |             | PMC       |
+| QP Hou                  | houqp            | [houqp](https://github.com/houqp)                       |             | PMC       |
+| Jie Wen                 | jakevin          | [jakevin](https://github.com/jakevin)                   |             | PMC       |
+| Jay Zhan                | jayzhan          | [jayzhan211](https://github.com/jayzhan211)             |             | PMC       |
+| Jonah Gao               | jonah            | [jonahgao](https://github.com/jonahgao)                 |             | PMC       |
+| Kun Liu                 | liukun           |                                                         |             | PMC       |
+| Mehmet Ozan Kabak       | ozankabak        | [ozankabak](https://github.com/ozankabak)               |             | PMC       |
+| Tim Saucer              | timsaucer        | [timsaucer](https://github.com/timsaucer)               |             | PMC       |
+| L. C. Hsieh             | viirya           | [viirya](https://github.com/viirya)                     |             | PMC       |
+| Ruihang Xia             | wayne            | [waynexia](https://github.com/waynexia)                 |             | PMC       |
+| Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         |             | PMC       |
+| Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               |             | PMC       |
+| Xudong Wang             | xudong963        | [xudong963](https://github.com/xudong963)               |             | PMC       |
+| Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 |             | Committer |
+| Brent Gardner           | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     |             | Committer |
+| Dmitrii Blaginin        | blaginin         | [blaginin](https://github.com/blaginin)                 |             | Committer |
+| Piotr Findeisen         | findepi          | [findepi](https://github.com/findepi)                   |             | Committer |
+| Jax Liu                 | goldmedal        | [goldmedal](https://github.com/goldmedal)               |             | Committer |
+| Huaxin Gao              | huaxingao        | [huaxingao](https://github.com/huaxingao)               |             | Committer |
+| Ifeanyi Ubah            | iffyio           | [iffyio](https://github.com/iffyio)                     |             | Committer |
+| Jeffrey Vo              | jeffreyvo        | [Jefffrey](https://github.com/Jefffrey)                 |             | Committer |
+| Liu Jiayu               | jiayuliu         |                                                         |             | Committer |
+| Ruiqiu Cao              | kamille          | [Rachelint](https://github.com/Rachelint)               |             | Committer |
+| Kazuyuki Tanimura       | kazuyukitanimura | [kazuyukitanimura](https://github.com/kazuyukitanimura) |             | Committer |
+| Eduard Karacharov       | korowa           | [korowa](https://github.com/korowa)                     |             | Committer |
+| Siew Kam Onn            | kosiew           | [kosiew](https://github.com/kosiew)                     |             | Committer |
+| Lewis Zhang             | linwei           |                                                         |             | Committer |
+| Matt Butrovich          | mbutrovich       | [mbutrovich](https://github.com/mbutrovich)             |             | Committer |
+| Metehan Yildirim        | mete             |                                                         |             | Committer |
+| Marko Milenković        | milenkovicm      | [milenkovicm](https://github.com/milenkovicm)           |             | Committer |
+| Wang Mingming           | mingmwang        | [mingmwang](https://github.com/mingmwang)               |             | Committer |
+| Michael Ward            | mjward           |                                                         |             | Committer |
+| Marco Neumann           | mneumann         | [crepererum](https://github.com/crepererum)             |             | Committer |
+| Zhong Yanghong          | nju_yaho         |                                                         |             | Committer |
+| Paddy Horan             | paddyhoran       | [paddyhoran](https://github.com/paddyhoran)             |             | Committer |
+| Parth Chandra           | parthc           | [parthchandra](https://github.com/parthchandra)         |             | Committer |
+| Rémi Dettai             | rdettai          | [rdettai](https://github.com/rdettai)                   |             | Committer |
+| Sun Chao                | sunchao          | [sunchao](https://github.com/sunchao)                   |             | Committer |
+| Daniel Harris           | thinkharderdev   | [thinkharderdev](https://github.com/thinkharderdev)     |             | Committer |
+| Raphael Taylor-Davies   | tustvold         | [tustvold](https://github.com/tustvold)                 |             | Committer |
+| Weijun Huang            | weijun           | [Weijun-H](https://github.com/Weijun-H)                 |             | Committer |
+| Yang Jiang              | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               |             | Committer |
+| Yijie Shen              | yjshen           | [yjshen](https://github.com/yjshen)                     |             | Committer |
+| Yongting You            | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             |             | Committer |
+| Qi Zhu                  | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           |             | Committer |
+
+<!-- End Auto-Generated Committer List -->
+
+Note that the authoritative list of PMC and committers is the [Apache Phonebook]
+
+[apache phonebook]: https://projects.apache.org/committee.html?datafusion
 
 ## Roles
 
