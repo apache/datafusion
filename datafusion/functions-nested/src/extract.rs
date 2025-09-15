@@ -939,7 +939,7 @@ fn array_any_value_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&array)?;
             general_array_any_value::<i64>(array)
         }
-        data_type => exec_err!("array_any_value does not support type: {}", data_type),
+        data_type => exec_err!("array_any_value does not support type: {data_type}"),
     }
 }
 

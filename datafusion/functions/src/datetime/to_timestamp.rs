@@ -368,10 +368,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 }
             }
             other => {
-                exec_err!(
-                    "Unsupported data type {} for function to_timestamp",
-                    other
-                )
+                exec_err!("Unsupported data type {other} for function to_timestamp")
             }
         }
     }
