@@ -480,7 +480,7 @@ fn get_udwf_args_and_return_types(
 
 #[inline]
 fn remove_native_type_prefix(native_type: NativeType) -> String {
-    format!("{native_type:?}")
+    format!("{native_type}")
 }
 
 #[async_trait]

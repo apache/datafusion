@@ -2111,7 +2111,7 @@ impl DefaultPhysicalPlanner {
 
             // "System supplied type" --> Use debug format of the datatype
             let data_type = field.data_type();
-            data_types.append_value(format!("{data_type:?}"));
+            data_types.append_value(format!("{data_type}"));
 
             // "YES if the column is possibly nullable, NO if it is known not nullable. "
             let nullable_str = if field.is_nullable() { "YES" } else { "NO" };

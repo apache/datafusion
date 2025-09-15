@@ -1137,7 +1137,7 @@ impl ScalarValue {
             DataType::Null => ScalarValue::Null,
             _ => {
                 return _not_impl_err!(
-                    "Can't create a null scalar from data_type \"{data_type:?}\""
+                    "Can't create a null scalar from data_type \"{data_type}\""
                 );
             }
         })
@@ -1369,7 +1369,7 @@ impl ScalarValue {
             DataType::Date64 => ScalarValue::Date64(Some(0)),
             _ => {
                 return _not_impl_err!(
-                    "Can't create a zero scalar from data_type \"{datatype:?}\""
+                    "Can't create a zero scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1507,7 +1507,7 @@ impl ScalarValue {
             // Unsupported types for now
             _ => {
                 _not_impl_err!(
-                    "Default value for data_type \"{datatype:?}\" is not implemented yet"
+                    "Default value for data_type \"{datatype}\" is not implemented yet"
                 )
             }
         }
@@ -1557,7 +1557,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create an one scalar from data_type \"{datatype:?}\""
+                    "Can't create an one scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1603,7 +1603,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                    "Can't create a negative one scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1656,7 +1656,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create a ten scalar from data_type \"{datatype:?}\""
+                    "Can't create a ten scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -2375,7 +2375,7 @@ impl ScalarValue {
                         } else {
                             _exec_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected {data_type:?}, got {sv:?}"
+                                Expected {data_type}, got {sv:?}"
                             )
                         }
                     })

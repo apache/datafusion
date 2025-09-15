@@ -642,7 +642,7 @@ impl ExprSchemable for Expr {
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
-            plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
+            plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
         }
     }
 }

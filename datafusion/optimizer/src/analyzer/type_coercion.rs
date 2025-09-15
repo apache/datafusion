@@ -352,7 +352,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
-                        "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
+                        "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
                     ),
                 )?;
                 let new_subquery = Subquery {
@@ -478,7 +478,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => plan_err!(
-                        "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
+                        "Can not find compatible types to compare {expr_data_type} with {list_data_types:?}"
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
@@ -685,7 +685,7 @@ fn coerce_scalar_range_aware(
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
             coerce_scalar(largest_type, value).map_or_else(
-                |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
+                |_| exec_err!("Cannot cast {value:?} to {target_type}"),
                 |_| ScalarValue::try_from(target_type),
             )
         } else {
@@ -737,7 +737,7 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
     } else {
-        internal_err!("Cannot run range queries on datatype: {col_type:?}")
+        internal_err!("Cannot run range queries on datatype: {col_type}")
     }
 }
 
@@ -896,7 +896,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
                 get_coerce_type_for_case_expression(&when_types, Some(case_type));
             coerced_type.ok_or_else(|| {
                 plan_datafusion_err!(
-                    "Failed to coerce case ({case_type:?}) and when ({when_types:?}) \
+                    "Failed to coerce case ({case_type}) and when ({when_types:?}) \
                      to common types in CASE WHEN expression"
                 )
             })
@@ -906,7 +906,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
         get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(
             || {
                 plan_datafusion_err!(
-                    "Failed to coerce then ({then_types:?}) and else ({else_type:?}) \
+                    "Failed to coerce then ({then_types:?}) and else ({else_type}) \
                      to common types in CASE WHEN expression"
                 )
             },

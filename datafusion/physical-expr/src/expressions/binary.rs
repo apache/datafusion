@@ -731,7 +731,7 @@ fn to_result_type_array(
                     Ok(cast(&array, result_type)?)
                 } else {
                     internal_err!(
-                            "Incompatible Dictionary value type {value_type:?} with result type {result_type:?} of Binary operator {op:?}"
+                            "Incompatible Dictionary value type {value_type} with result type {result_type} of Binary operator {op:?}"
                         )
                 }
             }

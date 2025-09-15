@@ -610,7 +610,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             datatype => {
                 return Err(SchemaError(format!(
-                    "Nested list of {datatype:?} not supported"
+                    "Nested list of {datatype} not supported"
                 )));
             }
         };

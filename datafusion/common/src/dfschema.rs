@@ -1063,7 +1063,7 @@ fn format_simple_data_type(data_type: &DataType) -> String {
             format!("decimal256({precision}, {scale})")
         }
         DataType::Null => "null".to_string(),
-        _ => format!("{data_type:?}").to_lowercase(),
+        _ => format!("{data_type}").to_lowercase(),
     }
 }
 
