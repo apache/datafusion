@@ -26,20 +26,14 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion_common::{
-    format::DEFAULT_CAST_OPTIONS,
     nested_struct::{cast_column, validate_struct_compatibility},
     plan_err, ColumnStatistics,
 };
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
 /// the table schema.
-pub type CastColumnFn = dyn Fn(
-        &ArrayRef,
-        &Field,
-        &arrow::compute::CastOptions,
-    ) -> datafusion_common::Result<ArrayRef>
-    + Send
-    + Sync;
+pub type CastColumnFn =
+    dyn Fn(&ArrayRef, &Field) -> datafusion_common::Result<ArrayRef> + Send + Sync;
 
 /// Factory for creating [`SchemaAdapter`]
 ///
@@ -258,9 +252,7 @@ pub(crate) fn can_cast_field(
 ) -> datafusion_common::Result<bool> {
     match (file_field.data_type(), table_field.data_type()) {
         (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-            // validate_struct_compatibility returns Result<()>; on success we can cast structs
-            validate_struct_compatibility(source_fields, target_fields)?;
-            Ok(true)
+            validate_struct_compatibility(source_fields, target_fields)
         }
         _ => {
             if can_cast_types(file_field.data_type(), table_field.data_type()) {
@@ -310,13 +302,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
-                Arc::new(
-                    |array: &ArrayRef,
-                     field: &Field,
-                     opts: &arrow::compute::CastOptions| {
-                        cast_column(array, field, opts)
-                    },
-                ),
+                Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
             )),
             projection,
         ))
@@ -428,13 +414,7 @@ impl SchemaMapper for SchemaMapping {
                     || Ok(new_null_array(field.data_type(), batch_rows)),
                     // However, if it does exist in both, use the cast_column function
                     // to perform any necessary conversions
-                    |batch_idx| {
-                        (self.cast_column)(
-                            &batch_cols[batch_idx],
-                            field,
-                            &DEFAULT_CAST_OPTIONS,
-                        )
-                    },
+                    |batch_idx| (self.cast_column)(&batch_cols[batch_idx], field),
                 )
             })
             .collect::<datafusion_common::Result<Vec<_>, _>>()?;
@@ -661,11 +641,7 @@ mod tests {
         let mapping = SchemaMapping::new(
             Arc::clone(&projected_schema),
             field_mappings.clone(),
-            Arc::new(
-                |array: &ArrayRef, field: &Field, opts: &arrow::compute::CastOptions| {
-                    cast_column(array, field, opts)
-                },
-            ),
+            Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
         );
 
         // Check that fields were set correctly
