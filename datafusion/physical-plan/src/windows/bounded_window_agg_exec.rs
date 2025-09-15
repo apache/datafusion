@@ -879,9 +879,9 @@ impl SortedSearch {
             cur_window_expr_out_result_len
         });
         argmin(out_col_counts).map_or(0, |(min_idx, minima)| {
-            let mut counts = counts.swap_remove(min_idx);
+            let mut slowest_partition = counts.swap_remove(min_idx);
             for (partition_key, partition_batch) in partition_buffers.iter_mut() {
-                if let Some(count) = counts.remove(partition_key) {
+                if let Some(count) = slowest_partition.remove(partition_key) {
                     partition_batch.n_out_row = count;
                 }
             }
