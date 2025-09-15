@@ -355,8 +355,6 @@ pub enum NumericParam {
     /// The literal width
     Literal(i32),
     /// Get the width from the previous argument
-    ///
-    /// This should never be passed to [Printf::format()][crate::Printf::format()].
     FromArgument,
 }
 
