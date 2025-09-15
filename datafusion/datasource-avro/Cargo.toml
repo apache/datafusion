@@ -35,22 +35,16 @@ apache-avro = { workspace = true }
 arrow = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
-datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store", "avro"] }
 datafusion-datasource = { workspace = true }
-datafusion-execution = { workspace = true }
-datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
 num-traits = { version = "0.2" }
 object_store = { workspace = true }
-tokio = { workspace = true }
 
 [dev-dependencies]
-rstest = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]
