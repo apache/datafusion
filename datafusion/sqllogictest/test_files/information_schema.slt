@@ -774,14 +774,14 @@ repeat String 1 OUT 0
 query TT??TTT rowsort
 show functions like 'date_trunc';
 ----
-date_trunc Timestamp(Microsecond, None) [precision, expression] [String, Timestamp(Microsecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Microsecond, Some("+TZ")) [precision, expression] [String, Timestamp(Microsecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Millisecond, None) [precision, expression] [String, Timestamp(Millisecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Millisecond, Some("+TZ")) [precision, expression] [String, Timestamp(Millisecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Nanosecond, None) [precision, expression] [String, Timestamp(Nanosecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [String, Timestamp(Nanosecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Second, None) [precision, expression] [String, Timestamp(Second, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Second, Some("+TZ")) [precision, expression] [String, Timestamp(Second, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc NativeType::Timestamp(Microsecond, None) [precision, expression] [NativeType::String, NativeType::Timestamp(Microsecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc NativeType::Timestamp(Microsecond, Some("+TZ")) [precision, expression] [NativeType::String, NativeType::Timestamp(Microsecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc NativeType::Timestamp(Millisecond, None) [precision, expression] [NativeType::String, NativeType::Timestamp(Millisecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc NativeType::Timestamp(Millisecond, Some("+TZ")) [precision, expression] [NativeType::String, NativeType::Timestamp(Millisecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc NativeType::Timestamp(Nanosecond, None) [precision, expression] [NativeType::String, NativeType::Timestamp(Nanosecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc NativeType::Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [NativeType::String, NativeType::Timestamp(Nanosecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc NativeType::Timestamp(Second, None) [precision, expression] [NativeType::String, NativeType::Timestamp(Second, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc NativeType::Timestamp(Second, Some("+TZ")) [precision, expression] [NativeType::String, NativeType::Timestamp(Second, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
 
 statement ok
 show functions
