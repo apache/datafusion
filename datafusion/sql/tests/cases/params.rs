@@ -20,6 +20,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{assert_contains, ParamValues, ScalarValue};
 use datafusion_expr::{LogicalPlan, Prepare, Statement};
 use insta::assert_snapshot;
+use itertools::Itertools as _;
 use std::collections::HashMap;
 
 pub struct ParameterTest<'a> {

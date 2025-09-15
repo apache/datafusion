@@ -470,6 +470,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use itertools::Itertools as _;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 
