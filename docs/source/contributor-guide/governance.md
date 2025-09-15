@@ -73,7 +73,7 @@ Notes:
 | Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         | Posit       | PMC       |
 | Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               |             | PMC       |
 | Xudong Wang             | xudong963        | [xudong963](https://github.com/xudong963)               |             | PMC       |
-| Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 |             | Committer |
+| Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 |  Pydantic   | Committer |
 | Brent Gardner           | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     |             | Committer |
 | Dmitrii Blaginin        | blaginin         | [blaginin](https://github.com/blaginin)                 |             | Committer |
 | Piotr Findeisen         | findepi          | [findepi](https://github.com/findepi)                   |             | Committer |
