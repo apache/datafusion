@@ -654,7 +654,7 @@ static DOCUMENTATION_SIN: LazyLock<Documentation> = LazyLock::new(|| {
 +----------+
 | sin(0)   |
 +----------+
-|  1.0     |
+|  0.0     |
 +----------+
 ```"#,
     )
