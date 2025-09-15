@@ -20,6 +20,7 @@ use crate::expr::Case;
 use crate::{expr_schema::ExprSchemable, Expr};
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, DFSchema, HashSet, Result};
+use itertools::Itertools as _;
 
 /// Helper struct for building [Expr::Case]
 pub struct CaseBuilder {
@@ -83,7 +84,8 @@ impl CaseBuilder {
             let unique_types: HashSet<&DataType> = then_types.iter().collect();
             if unique_types.len() != 1 {
                 return plan_err!(
-                    "CASE expression 'then' values had multiple data types: {unique_types:?}"
+                    "CASE expression 'then' values had multiple data types: {}",
+                    unique_types.iter().join(", ")
                 );
             }
         }

@@ -2264,6 +2264,7 @@ dependencies = [
  "env_logger",
  "indexmap 2.11.1",
  "insta",
+ "itertools 0.14.0",
  "paste",
  "recursive",
  "serde_json",

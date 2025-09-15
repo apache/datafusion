@@ -31,6 +31,7 @@ use datafusion_common::cast::{
 use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 
 use datafusion_expr::ColumnarValue;
+use itertools::Itertools as _;
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
@@ -39,7 +40,10 @@ pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
             || arg.data_type().equals_datatype(&DataType::Null)
     }) {
         let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
-        return plan_err!("{name} received incompatible types: '{types:?}'.");
+        return plan_err!(
+            "{name} received incompatible types: '{}'.",
+            types.iter().join(", ")
+        );
     }
 
     Ok(())

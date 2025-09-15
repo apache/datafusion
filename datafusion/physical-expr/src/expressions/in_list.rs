@@ -488,7 +488,8 @@ mod tests {
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
             None => plan_err!(
-                "Can not find compatible types to compare {expr_type} with {list_types:?}"
+                "Can not find compatible types to compare {expr_type} with {}",
+                list_types.iter().join(", ")
             ),
             Some(data_type) => {
                 // find the coerced type

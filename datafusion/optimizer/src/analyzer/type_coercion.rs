@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_expr::binary::BinaryTypeCoercer;
-use itertools::izip;
+use itertools::{izip, Itertools as _};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 
@@ -479,7 +479,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => plan_err!(
-                        "Can not find compatible types to compare {expr_data_type} with {list_data_types:?}"
+                        "Can not find compatible types to compare {expr_data_type} with {}", list_data_types.iter().join(", ")
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
@@ -897,8 +897,9 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
                 get_coerce_type_for_case_expression(&when_types, Some(case_type));
             coerced_type.ok_or_else(|| {
                 plan_datafusion_err!(
-                    "Failed to coerce case ({case_type}) and when ({when_types:?}) \
-                     to common types in CASE WHEN expression"
+                    "Failed to coerce case ({case_type}) and when ({}) \
+                     to common types in CASE WHEN expression",
+                    when_types.iter().join(", ")
                 )
             })
         })
@@ -908,13 +909,15 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
             || {
                 if let Some(else_type) = else_type {
                     plan_datafusion_err!(
-                        "Failed to coerce then ({then_types:?}) and else ({else_type}) \
-                         to common types in CASE WHEN expression"
+                        "Failed to coerce then ({}) and else ({else_type}) \
+                         to common types in CASE WHEN expression",
+                        then_types.iter().join(", ")
                     )
                 } else {
                     plan_datafusion_err!(
-                        "Failed to coerce then ({then_types:?}) and else (None) \
-                         to common types in CASE WHEN expression"
+                        "Failed to coerce then ({}) and else (None) \
+                         to common types in CASE WHEN expression",
+                        then_types.iter().join(", ")
                     )
                 }
             },
