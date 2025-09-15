@@ -422,7 +422,7 @@ static DOCUMENTATION_DEGREES: LazyLock<Documentation> = LazyLock::new(|| {
 +------------+
 | degrees(0) |
 +------------+
-| 0.0        |
+| 180.0      |
 +------------+
 ```"#,
     )
