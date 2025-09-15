@@ -1711,10 +1711,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
 
             // default to configuration value
+            // verbose mode only supports indent format
             let options = self.context_provider.options();
-            let format = format.as_ref().unwrap_or(&options.explain.format);
-
-            let format: ExplainFormat = format.parse()?;
+            let format = if verbose {
+                ExplainFormat::Indent
+            } else if let Some(format) = format {
+                ExplainFormat::from_str(&format)?
+            } else {
+                options.explain.format.clone()
+            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
