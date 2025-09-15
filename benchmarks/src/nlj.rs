@@ -153,7 +153,7 @@ const NLJ_QUERIES: &[&str] = &[
         WHERE EXISTS (
             SELECT 1
             FROM range(10000) AS t2
-            WHERE t1.id = t2.id AND t2.id % 10000 = 0
+            WHERE t1.id > t2.id AND t2.id = 0
         )
     "#,
     // Q14: SEMI JOIN 10K x 10K |  Medium 20%
@@ -163,7 +163,7 @@ const NLJ_QUERIES: &[&str] = &[
         WHERE EXISTS (
             SELECT 1
             FROM range(10000) AS t2
-            WHERE t1.id = t2.id AND t2.id % 5 = 0
+            WHERE t1.id > t2.id AND t2.id % 5 = 0
         )
     "#,
     // Q15: SEMI JOIN 10K x 10K |  High 90%
@@ -173,7 +173,7 @@ const NLJ_QUERIES: &[&str] = &[
         WHERE EXISTS (
             SELECT 1
             FROM range(10000) AS t2
-            WHERE t1.id = t2.id AND t2.id % 10 <> 0
+            WHERE t1.id > t2.id AND t2.id % 10 <> 0
         )
     "#,
     // Q16: ANTI JOIN 10K * 10K | LOW 0.1%
@@ -181,7 +181,8 @@ const NLJ_QUERIES: &[&str] = &[
         SELECT *
         FROM range(10000) AS t1
         WHERE NOT EXISTS (
-            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id
+            SELECT 1 FROM range(10000) AS t2 
+            WHERE t1.id < t2.id AND t2.id % 10000 = 0
         )
     "#,
     // Q17: ANTI JOIN 10K * 10K | MEDIUM 20%
@@ -189,7 +190,8 @@ const NLJ_QUERIES: &[&str] = &[
         SELECT *
         FROM range(10000) AS t1
         WHERE NOT EXISTS (
-            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id AND t2.id % 5 = 0
+            SELECT 1 FROM range(10000) AS t2 
+            WHERE t1.id > t2.id AND t2.id % 5 = 0
         )
     "#,
     // Q18: ANTI JOIN 10K * 10K | HIGH 90%
@@ -197,7 +199,8 @@ const NLJ_QUERIES: &[&str] = &[
         SELECT *
         FROM range(10000) AS t1
         WHERE NOT EXISTS (
-            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id AND t2.id % 10 = 0
+            SELECT 1 FROM range(10000) AS t2 
+            WHERE t1.id <> t2.id AND t2.id % 10 <> 0
         )
     "#,
     // Q19: Mark joins 10K * 10K | LOW 0.1%
@@ -205,7 +208,8 @@ const NLJ_QUERIES: &[&str] = &[
         SELECT
         t1.id,
         EXISTS (
-            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id
+            SELECT 1 FROM range(10000) AS t2
+            WHERE t1.id < t2.id AND t2.id % 1000 = 0
         ) AS has_match
         FROM range(10000) AS t1
     "#,
@@ -214,7 +218,8 @@ const NLJ_QUERIES: &[&str] = &[
         SELECT
         t1.id,
         EXISTS (
-            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id AND t2.id % 5 = 0
+            SELECT 1 FROM range(10000) AS t2
+            WHERE t1.id % 5 <> t2.id % 5 AND t2.id % 5 = 0
         ) AS has_match
         FROM range(10000) AS t1
     "#,
@@ -223,7 +228,8 @@ const NLJ_QUERIES: &[&str] = &[
         SELECT
         t1.id,
         EXISTS (
-            SELECT 1 FROM range(10000) AS t2 WHERE t1.id = t2.id AND t2.id % 10 != 0
+            SELECT 1 FROM range(10000) AS t2
+            WHERE t1.id % 10 <> t2.id % 10 AND t2.id % 10 != 0
         ) AS has_match
         FROM range(10000) AS t1
     "#
