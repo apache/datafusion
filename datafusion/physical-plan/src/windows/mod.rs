@@ -636,7 +636,8 @@ pub fn get_window_mode(
 
 fn sort_options_resolving_constant(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
     vec![
-        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
+        // TODO restore while avoiding exponential planning time
+        //PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
         PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
     ]
 }

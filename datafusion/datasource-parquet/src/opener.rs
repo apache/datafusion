@@ -154,6 +154,7 @@ impl FileOpener for ParquetOpener {
         let encryption_context = self.get_encryption_context();
 
         Ok(Box::pin(async move {
+            #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
                 .get_file_decryption_properties(&file_location)
                 .await?;
