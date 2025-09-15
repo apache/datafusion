@@ -18,11 +18,6 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
-use std::{
-    any::Any, borrow::Cow, collections::HashMap, fmt::Debug, fmt::Formatter,
-    fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
-};
-
 use crate::file_groups::FileGroup;
 #[allow(unused_imports)]
 use crate::schema_adapter::SchemaAdapterFactory;
@@ -52,7 +47,7 @@ use datafusion_physical_expr::{expressions::Column, utils::reassign_predicate_co
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::projection::ProjectionExpr;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
@@ -63,7 +58,13 @@ use datafusion_physical_plan::{
 use datafusion_physical_plan::{
     filter::collect_columns_from_predicate, filter_pushdown::FilterPushdownPropagation,
 };
+use std::ops::Range;
+use std::{
+    any::Any, borrow::Cow, collections::HashMap, fmt::Debug, fmt::Formatter,
+    fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
+};
 
+use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
 use log::{debug, warn};
@@ -703,10 +704,12 @@ impl FileScanConfig {
     fn projection_indices(&self) -> Vec<usize> {
         match &self.projection {
             Some(proj) => proj.clone(),
-            None => (0..self.file_schema.fields().len()
-                + self.table_partition_cols.len())
-                .collect(),
+            None => self.column_indices().collect(),
         }
+    }
+
+    fn column_indices(&self) -> Range<usize> {
+        0..self.file_schema.fields().len() + self.table_partition_cols.len()
     }
 
     pub fn projected_stats(&self) -> Statistics {
@@ -734,9 +737,17 @@ impl FileScanConfig {
     }
 
     pub fn projected_schema(&self) -> Arc<Schema> {
+        let full_schema = self.full_schema();
+        if let Some(projection) = &self.projection {
+            Arc::new(full_schema.project(projection).unwrap())
+        } else {
+            full_schema
+        }
+    }
+
+    fn full_schema(&self) -> Arc<Schema> {
         let table_fields: Vec<_> = self
-            .projection_indices()
-            .into_iter()
+            .column_indices()
             .map(|idx| {
                 if idx < self.file_schema.fields().len() {
                     self.file_schema.field(idx).clone()
@@ -1365,30 +1376,16 @@ fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
 ) -> Vec<LexOrdering> {
+    let Ok(projected_orderings) = project_orderings(
+        base_config.output_ordering.clone(),
+        &base_config.full_schema(),
+        &base_config.projection_indices(),
+    ) else {
+        return vec![];
+    };
+
     let mut all_orderings = vec![];
-    for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let name = col.name();
-                if let Some((idx, _)) = projected_schema.column_with_name(name) {
-                    // Compute the new sort expression (with correct index) after projection:
-                    new_ordering.push(PhysicalSortExpr::new(
-                        Arc::new(Column::new(name, idx)),
-                        *options,
-                    ));
-                    continue;
-                }
-            }
-            // Cannot find expression in the projected_schema, stop iterating
-            // since rest of the orderings are violated
-            break;
-        }
-
-        let Some(new_ordering) = LexOrdering::new(new_ordering) else {
-            continue;
-        };
-
+    for output_ordering in projected_orderings {
         // Check if any file groups are not sorted
         if base_config.file_groups.iter().any(|group| {
             if group.len() <= 1 {
@@ -1397,7 +1394,7 @@ fn get_projected_output_ordering(
             }
 
             let statistics = match MinMaxStatistics::new_from_files(
-                &new_ordering,
+                &output_ordering,
                 projected_schema,
                 base_config.projection.as_deref(),
                 group.iter(),
@@ -1420,7 +1417,7 @@ fn get_projected_output_ordering(
             continue;
         }
 
-        all_orderings.push(new_ordering);
+        all_orderings.push(output_ordering);
     }
     all_orderings
 }
@@ -1459,6 +1456,7 @@ mod tests {
     use datafusion_common::{assert_batches_eq, internal_err};
     use datafusion_expr::SortExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     /// Returns the column names on the schema
     pub fn columns(schema: &Schema) -> Vec<String> {
