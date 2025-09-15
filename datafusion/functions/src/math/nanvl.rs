@@ -37,11 +37,11 @@ use datafusion_macros::user_doc;
 Returns the second argument otherwise."#,
     syntax_example = "nanvl(expression_x, expression_y)",
     sql_example = r#"```sql
-> SELECT nanvl( 0, 5);
+> SELECT nanvl(0, 5);
 +------------+
 | nanvl(0,5) |
 +------------+
-|    5       |
+| 0          |
 +------------+
 ```"#,
     argument(
