@@ -491,11 +491,20 @@ mod test {
             .map(|idx| local_limit.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        let schema = scan.schema();
-        let mut expected_statistic_partition = Statistics::new_unknown(&schema);
-        expected_statistic_partition.num_rows = Precision::Exact(1);
-        assert_eq!(statistics[0], expected_statistic_partition);
-        assert_eq!(statistics[1], expected_statistic_partition);
+        let mut expected_0 = statistics[0].clone();
+        expected_0.column_statistics = expected_0
+            .column_statistics
+            .into_iter()
+            .map(|c| c.to_inexact())
+            .collect();
+        let mut expected_1 = statistics[1].clone();
+        expected_1.column_statistics = expected_1
+            .column_statistics
+            .into_iter()
+            .map(|c| c.to_inexact())
+            .collect();
+        assert_eq!(statistics[0], expected_0);
+        assert_eq!(statistics[1], expected_1);
         Ok(())
     }
 

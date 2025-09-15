@@ -1918,6 +1918,10 @@ fn compare_join_arrays(
             DataType::Utf8 => compare_value!(StringArray),
             DataType::Utf8View => compare_value!(StringViewArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
+            DataType::LargeBinary => compare_value!(LargeBinaryArray),
             DataType::Decimal128(..) => compare_value!(Decimal128Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
@@ -1986,6 +1990,10 @@ fn is_join_arrays_equal(
             DataType::Utf8 => compare_value!(StringArray),
             DataType::Utf8View => compare_value!(StringViewArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
+            DataType::LargeBinary => compare_value!(LargeBinaryArray),
             DataType::Decimal128(..) => compare_value!(Decimal128Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
