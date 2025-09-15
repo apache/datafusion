@@ -43,12 +43,12 @@ use datafusion_macros::user_doc;
     syntax_example = r#"log(base, numeric_expression)
 log(numeric_expression)"#,
     sql_example = r#"```sql
-> SELECT log(2.71828);
-+--------------+
-| log(2.71828) |
-+--------------+
-| 1.0          |
-+--------------+
+> SELECT log(10);
++---------+
+| log(10) |
++---------+
+| 1.0     |
++---------+
 ```"#,
     standard_argument(name = "base", prefix = "Base numeric"),
     standard_argument(name = "numeric_expression", prefix = "Numeric")
