@@ -275,7 +275,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
             (dt, name) => exec_err!(
                 "get_field is only possible on maps with utf8 indexes or struct \
-                                         with utf8 indexes. Received {dt:?} with {name:?} index"
+                                         with utf8 indexes. Received {dt} with {name:?} index"
             ),
         }
     }

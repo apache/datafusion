@@ -1193,7 +1193,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::PI)),
-            _ => _internal_err!("PI is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("PI is not supported for data type: {}", datatype),
         }
     }
 
@@ -1203,7 +1203,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
             _ => {
-                _internal_err!("PI_UPPER is not supported for data type: {:?}", datatype)
+                _internal_err!("PI_UPPER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1214,7 +1214,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F64)),
             _ => {
-                _internal_err!("-PI_LOWER is not supported for data type: {:?}", datatype)
+                _internal_err!("-PI_LOWER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1225,10 +1225,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F64)),
             _ => {
-                _internal_err!(
-                    "PI_UPPER/2 is not supported for data type: {:?}",
-                    datatype
-                )
+                _internal_err!("PI_UPPER/2 is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1243,10 +1240,7 @@ impl ScalarValue {
                 Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F64))
             }
             _ => {
-                _internal_err!(
-                    "-PI/2_LOWER is not supported for data type: {:?}",
-                    datatype
-                )
+                _internal_err!("-PI/2_LOWER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1256,7 +1250,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::PI)),
-            _ => _internal_err!("-PI is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("-PI is not supported for data type: {}", datatype),
         }
     }
 
@@ -1265,7 +1259,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::FRAC_PI_2)),
             DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::FRAC_PI_2)),
-            _ => _internal_err!("PI/2 is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("PI/2 is not supported for data type: {}", datatype),
         }
     }
 
@@ -1274,7 +1268,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::FRAC_PI_2)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::FRAC_PI_2)),
-            _ => _internal_err!("-PI/2 is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("-PI/2 is not supported for data type: {}", datatype),
         }
     }
 
@@ -1284,7 +1278,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(f32::INFINITY)),
             DataType::Float64 => Ok(ScalarValue::from(f64::INFINITY)),
             _ => {
-                _internal_err!("Infinity is not supported for data type: {:?}", datatype)
+                _internal_err!("Infinity is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1296,7 +1290,7 @@ impl ScalarValue {
             DataType::Float64 => Ok(ScalarValue::from(f64::NEG_INFINITY)),
             _ => {
                 _internal_err!(
-                    "Negative Infinity is not supported for data type: {:?}",
+                    "Negative Infinity is not supported for data type: {}",
                     datatype
                 )
             }
@@ -2364,7 +2358,7 @@ impl ScalarValue {
                     DataType::UInt16 => dict_from_values::<UInt16Type>(values)?,
                     DataType::UInt32 => dict_from_values::<UInt32Type>(values)?,
                     DataType::UInt64 => dict_from_values::<UInt64Type>(values)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 }
             }
             DataType::FixedSizeBinary(size) => {
@@ -2937,7 +2931,7 @@ impl ScalarValue {
                     DataType::UInt16 => dict_from_scalar::<UInt16Type>(v, size)?,
                     DataType::UInt32 => dict_from_scalar::<UInt32Type>(v, size)?,
                     DataType::UInt64 => dict_from_scalar::<UInt64Type>(v, size)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 }
             }
             ScalarValue::Null => get_or_create_cached_null_array(size),
@@ -3197,7 +3191,7 @@ impl ScalarValue {
                     DataType::UInt16 => get_dict_value::<UInt16Type>(array, index)?,
                     DataType::UInt32 => get_dict_value::<UInt32Type>(array, index)?,
                     DataType::UInt64 => get_dict_value::<UInt64Type>(array, index)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 };
                 // look up the index in the values dictionary
                 let value = match values_index {
@@ -3571,7 +3565,7 @@ impl ScalarValue {
                     DataType::UInt16 => get_dict_value::<UInt16Type>(array, index)?,
                     DataType::UInt32 => get_dict_value::<UInt32Type>(array, index)?,
                     DataType::UInt64 => get_dict_value::<UInt64Type>(array, index)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 };
                 // was the value in the array non null?
                 match values_index {

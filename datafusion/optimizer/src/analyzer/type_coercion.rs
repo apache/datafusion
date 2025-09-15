@@ -252,7 +252,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             if dt.is_integer() || dt.is_null() {
                 expr.cast_to(&DataType::Int64, schema)
             } else {
-                plan_err!("Expected {expr_name} to be an integer or null, but got {dt:?}")
+                plan_err!("Expected {expr_name} to be an integer or null, but got {dt}")
             }
         }
 

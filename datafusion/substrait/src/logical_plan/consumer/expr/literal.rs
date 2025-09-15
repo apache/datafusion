@@ -498,7 +498,7 @@ pub(crate) fn from_substrait_literal(
                 }
             }
         }
-        _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
+        _ => return not_impl_err!("Unsupported literal_type: {}", lit.literal_type),
     };
 
     Ok(scalar_value)
