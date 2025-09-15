@@ -985,7 +985,7 @@ mod tests {
         // Test that UnionExec::try_new returns the single input directly
         let schema = create_test_schema()?;
         let memory_exec: Arc<dyn ExecutionPlan> =
-            Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
         let memory_exec_clone = Arc::clone(&memory_exec);
         let result = UnionExec::try_new(vec![memory_exec])?;
 
@@ -1001,8 +1001,10 @@ mod tests {
     fn test_union_schema_multiple_inputs() -> Result<()> {
         // Test that existing functionality with multiple inputs still works
         let schema = create_test_schema()?;
-        let memory_exec1 = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
-        let memory_exec2 = Arc::new(TestMemoryExec::try_new(&[], schema.clone(), None)?);
+        let memory_exec1 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let memory_exec2 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
 
         let union_plan = UnionExec::try_new(vec![memory_exec1, memory_exec2])?;
 
