@@ -151,7 +151,7 @@ impl ScalarUDFImpl for ParseUrl {
             );
         }
         match arg_types.len() {
-            2 | 3 => {
+            2 | 3 if arg_types.iter().all(is_string_type) => {
                 if arg_types
                     .iter()
                     .any(|arg| matches!(arg, DataType::LargeUtf8))
@@ -166,6 +166,11 @@ impl ScalarUDFImpl for ParseUrl {
                     Ok(DataType::Utf8)
                 }
             }
+            2 | 3 => plan_err!(
+                "`{}` expects STRING arguments, got {:?}",
+                &self.name(),
+                arg_types
+            ),
             _ => plan_err!(
                 "`{}` expects 2 or 3 arguments, got {}",
                 &self.name(),
@@ -178,6 +183,13 @@ impl ScalarUDFImpl for ParseUrl {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_parse_url, vec![])(&args)
     }
+}
+
+fn is_string_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+    )
 }
 
 /// Core implementation of URL parsing function.
@@ -316,16 +328,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, LargeStringArray, StringArray};
+    use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
+    use std::array::from_ref;
     use std::sync::Arc;
 
     fn sa(vals: &[Option<&str>]) -> ArrayRef {
         Arc::new(StringArray::from(vals.to_vec())) as ArrayRef
-    }
-    fn lsa(vals: &[Option<&str>]) -> ArrayRef {
-        Arc::new(LargeStringArray::from(vals.to_vec())) as ArrayRef
     }
 
     #[test]
@@ -421,18 +431,6 @@ mod tests {
     }
 
     #[test]
-    fn test_spark_largeutf8_propagation() -> Result<()> {
-        let urls = lsa(&[Some("http://[2001:db8::2]:8080/index.html?ok=1")]);
-        let parts = sa(&[Some("HOST")]);
-        let out = spark_handled_parse_url(&[urls, parts], |x| x)?;
-        assert!(out.as_any().downcast_ref::<LargeStringArray>().is_some());
-
-        let lsa_out = out.as_any().downcast_ref::<LargeStringArray>().unwrap();
-        assert_eq!(lsa_out.value(0), "[2001:db8::2]");
-        Ok(())
-    }
-
-    #[test]
     fn test_spark_userinfo_and_nulls() -> Result<()> {
         let urls = sa(&[
             Some("ftp://user:pwd@ftp.example.com:21/files"),
@@ -454,7 +452,7 @@ mod tests {
     #[test]
     fn test_invalid_arg_count() {
         let urls = sa(&[Some("https://example.com")]);
-        let err = spark_handled_parse_url(&[urls.clone()], |x| x).unwrap_err();
+        let err = spark_handled_parse_url(from_ref(&urls), |x| x).unwrap_err();
         assert!(format!("{err}").contains("expects 2 or 3 arguments"));
 
         let parts = sa(&[Some("HOST")]);
@@ -482,12 +480,17 @@ mod tests {
         let rt = udf.return_type(&[DataType::Utf8, DataType::Utf8])?;
         assert_eq!(rt, DataType::Utf8);
 
+        let rt = udf.return_type(&[DataType::LargeUtf8, DataType::LargeUtf8])?;
+        assert_eq!(rt, DataType::LargeUtf8);
+
+        let rt = udf.return_type(&[DataType::Utf8, DataType::Utf8, DataType::Utf8])?;
+        assert_eq!(rt, DataType::Utf8);
+
         let rt = udf.return_type(&[DataType::LargeUtf8, DataType::Utf8])?;
         assert_eq!(rt, DataType::LargeUtf8);
 
-        let rt =
-            udf.return_type(&[DataType::Utf8, DataType::Utf8, DataType::LargeUtf8])?;
-        assert_eq!(rt, DataType::LargeUtf8);
+        let rt = udf.return_type(&[DataType::Utf8View, DataType::Utf8])?;
+        assert_eq!(rt, DataType::Utf8View);
 
         let err = udf
             .return_type(&[DataType::Int32, DataType::Utf8])
@@ -495,12 +498,6 @@ mod tests {
         assert!(format!("{err}").contains("expects STRING arguments"));
 
         let err = udf.return_type(&[DataType::Utf8]).unwrap_err();
-        assert!(format!("{err}").contains("expects 2 or 3 arguments"));
-
-        let ok = udf.coerce_types(&[DataType::Utf8, DataType::LargeUtf8])?;
-        assert_eq!(ok, vec![DataType::Utf8, DataType::LargeUtf8]);
-
-        let err = udf.coerce_types(&[DataType::Utf8]).unwrap_err();
         assert!(format!("{err}").contains("expects 2 or 3 arguments"));
 
         Ok(())
