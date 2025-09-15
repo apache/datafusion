@@ -262,11 +262,11 @@ pub struct PiecewiseMergeJoinExec {
     /// Sort expressions - See above for more details [`PiecewiseMergeJoinExec`]
     ///
     /// The left sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
-    left_sort_exprs: LexOrdering,
+    left_child_plan_required_order: LexOrdering,
     /// The right sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
     /// Unsorted for mark joins
     #[allow(unused)]
-    right_sort_exprs: LexOrdering,
+    ight_batch_required_orders: LexOrdering,
 
     /// This determines the sort order of all join columns used in sorting the stream and buffered execution plans.
     sort_options: SortOptions,
@@ -316,17 +316,21 @@ impl PiecewiseMergeJoinExec {
         };
 
         // Give the same `sort_option for comparison later`
-        let left_sort_exprs =
+        let left_child_plan_required_order =
             vec![PhysicalSortExpr::new(Arc::clone(&on.0), sort_options)];
-        let right_sort_exprs =
+        let ight_batch_required_orders =
             vec![PhysicalSortExpr::new(Arc::clone(&on.1), sort_options)];
 
-        let Some(left_sort_exprs) = LexOrdering::new(left_sort_exprs) else {
+        let Some(left_child_plan_required_order) =
+            LexOrdering::new(left_child_plan_required_order)
+        else {
             return internal_err!(
                 "PiecewiseMergeJoinExec requires valid sort expressions for its left side"
             );
         };
-        let Some(right_sort_exprs) = LexOrdering::new(right_sort_exprs) else {
+        let Some(ight_batch_required_orders) =
+            LexOrdering::new(ight_batch_required_orders)
+        else {
             return internal_err!(
                 "PiecewiseMergeJoinExec requires valid sort expressions for its right side"
             );
@@ -355,8 +359,8 @@ impl PiecewiseMergeJoinExec {
             schema,
             buffered_fut: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
-            left_sort_exprs,
-            right_sort_exprs,
+            left_child_plan_required_order,
+            ight_batch_required_orders,
             sort_options,
             cache,
         })
@@ -474,7 +478,9 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         } else {
             // Sort the right side in memory, so we do not need to enforce any sorting
             vec![
-                Some(OrderingRequirements::from(self.left_sort_exprs.clone())),
+                Some(OrderingRequirements::from(
+                    self.left_child_plan_required_order.clone(),
+                )),
                 None,
             ]
         }
@@ -507,32 +513,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let on_buffered = Arc::clone(&self.on.0);
         let on_streamed = Arc::clone(&self.on.1);
 
-        // If the join type is either RightSemi, RightAnti, or RightMark we will swap the inputs
-        // and sort ordering because we want the mark side to be the buffered side.
-        let (buffered, streamed, on_buffered, on_streamed, operator) =
-            if is_right_existence_join(self.join_type) {
-                (
-                    Arc::clone(&self.streamed),
-                    Arc::clone(&self.buffered),
-                    on_streamed,
-                    on_buffered,
-                    self.operator.swap().unwrap(),
-                )
-            } else {
-                (
-                    Arc::clone(&self.buffered),
-                    Arc::clone(&self.streamed),
-                    on_buffered,
-                    on_streamed,
-                    self.operator,
-                )
-            };
-
         let metrics = BuildProbeJoinMetrics::new(0, &self.metrics);
         let buffered_fut = self.buffered_fut.try_once(|| {
             let reservation = MemoryConsumer::new("PiecewiseMergeJoinInput")
                 .register(context.memory_pool());
-            let buffered_stream = buffered.execute(partition, Arc::clone(&context))?;
+            let buffered_stream =
+                self.buffered.execute(partition, Arc::clone(&context))?;
             Ok(build_buffered_data(
                 buffered_stream,
                 Arc::clone(&on_buffered),
@@ -542,7 +528,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
             ))
         })?;
 
-        let streamed = streamed.execute(partition, Arc::clone(&context))?;
+        let streamed = self.streamed.execute(partition, Arc::clone(&context))?;
 
         let batch_size = context.session_config().batch_size();
 
@@ -554,7 +540,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 Arc::clone(&self.schema),
                 on_streamed,
                 self.join_type,
-                operator,
+                self.operator,
                 streamed,
                 BufferedSide::Initial(BufferedSideInitialState { buffered_fut }),
                 PiecewiseMergeJoinStreamState::WaitBufferedSide,
