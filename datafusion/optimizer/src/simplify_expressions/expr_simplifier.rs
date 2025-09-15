@@ -1404,9 +1404,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 expr: None,
                 mut when_then_expr,
                 else_expr: _,
-            }) if !when_then_expr.is_empty()
-                && is_true(when_then_expr[0].0.as_ref()) =>
-            {
+            }) if !when_then_expr.is_empty() && is_true(when_then_expr[0].0.as_ref()) => {
                 let (_, then_) = when_then_expr.swap_remove(0);
                 Transformed::yes(*then_)
             }
@@ -3570,10 +3568,7 @@ mod tests {
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
-                vec![(
-                    Box::new(lit(true)),
-                    Box::new(lit(1)),
-                )],
+                vec![(Box::new(lit(true)), Box::new(lit(1)),)],
                 Some(Box::new(col("x"))),
             ))),
             lit(1)
@@ -3583,10 +3578,7 @@ mod tests {
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
-                vec![(
-                    Box::new(lit(true)),
-                    Box::new(col("a")),
-                )],
+                vec![(Box::new(lit(true)), Box::new(col("a")),)],
                 Some(Box::new(col("b"))),
             ))),
             col("a")
@@ -3609,10 +3601,7 @@ mod tests {
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
-                vec![(
-                    Box::new(lit(true)),
-                    Box::new(col("a")),
-                )],
+                vec![(Box::new(lit(true)), Box::new(col("a")),)],
                 None,
             ))),
             col("a")
