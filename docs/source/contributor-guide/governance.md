@@ -70,7 +70,7 @@ Notes:
 | Tim Saucer              | timsaucer        | [timsaucer](https://github.com/timsaucer)               |             | PMC       |
 | L. C. Hsieh             | viirya           | [viirya](https://github.com/viirya)                     |             | PMC       |
 | Ruihang Xia             | wayne            | [waynexia](https://github.com/waynexia)                 |             | PMC       |
-| Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         |             | PMC       |
+| Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         | Posit       | PMC       |
 | Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               |             | PMC       |
 | Xudong Wang             | xudong963        | [xudong963](https://github.com/xudong963)               |             | PMC       |
 | Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 |             | Committer |
