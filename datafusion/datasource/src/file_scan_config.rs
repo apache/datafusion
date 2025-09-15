@@ -1468,6 +1468,7 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::col;
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
         verify_sort_integrity,
@@ -1476,8 +1477,9 @@ mod tests {
     use arrow::array::{Int32Array, RecordBatch};
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_batches_eq, internal_err};
-    use datafusion_expr::SortExpr;
+    use datafusion_expr::{Operator, SortExpr};
     use datafusion_physical_expr::create_physical_sort_expr;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 
     /// Returns the column names on the schema
     pub fn columns(schema: &Schema) -> Vec<String> {
@@ -2231,6 +2233,54 @@ mod tests {
         );
         assert!(config.new_lines_in_values);
         assert_eq!(config.output_ordering.len(), 1);
+    }
+
+    #[test]
+    fn equivalence_properties_after_schema_change() {
+        let file_schema = aggr_test_schema();
+        let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
+        // Create a file source with a filter
+        let file_source: Arc<dyn FileSource> =
+            Arc::new(MockSource::default().with_filter(Arc::new(BinaryExpr::new(
+                col("c2", &file_schema).unwrap(),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+            ))));
+
+        let config = FileScanConfigBuilder::new(
+            object_store_url.clone(),
+            Arc::clone(&file_schema),
+            Arc::clone(&file_source),
+        )
+        .with_projection(Some(vec![0, 1, 2]))
+        .build();
+
+        // Simulate projection being updated. Since the filter has already been pushed down,
+        // the new projection won't include the filtered column.
+        let data_source = config
+            .try_swapping_with_projection(&[ProjectionExpr::new(
+                col("c3", &file_schema).unwrap(),
+                "c3".to_string(),
+            )])
+            .unwrap()
+            .unwrap();
+
+        // Gather the equivalence properties from the new data source. There should
+        // be no equivalence class for column c2 since it was removed by the projection.
+        let eq_properties = data_source.eq_properties();
+        let eq_group = eq_properties.eq_group();
+
+        for class in eq_group.iter() {
+            for expr in class.iter() {
+                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                    assert_ne!(
+                        col.name(),
+                        "c2",
+                        "c2 should not be present in any equivalence class"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
