@@ -20,7 +20,6 @@
 //!
 //! [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
 use std::collections::HashSet;
-use std::str;
 use std::sync::Arc;
 
 use arrow::array::{Array, AsArray, BinaryViewBuilder};
@@ -37,7 +36,6 @@ use log::{debug, trace};
 
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
     cast_column, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
