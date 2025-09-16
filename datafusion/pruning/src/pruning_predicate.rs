@@ -2702,12 +2702,15 @@ mod tests {
         // With safe casting, invalid UTF-8 should be converted to null rather than erroring
         let result =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
-        
+
         // Verify we got a record batch with null value for the invalid UTF-8 data
         assert_eq!(result.num_rows(), 1);
         assert_eq!(result.num_columns(), 1);
         let column = result.column(0);
-        assert!(column.is_null(0), "Invalid UTF-8 should be converted to null with safe casting");
+        assert!(
+            column.is_null(0),
+            "Invalid UTF-8 should be converted to null with safe casting"
+        );
     }
 
     #[test]
