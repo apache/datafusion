@@ -1878,9 +1878,12 @@ mod tests {
     use datafusion_expr::{and, col, lit, or};
     use insta::assert_snapshot;
 
-    use arrow::array::Decimal128Array;
+    use arrow::array::{Array, Decimal128Array};
     use arrow::{
-        array::{BinaryArray, Int32Array, Int64Array, StringArray, UInt64Array},
+        array::{
+            ArrayRef, BinaryArray, BooleanArray, Int32Array, Int64Array, StringArray,
+            StructArray, UInt64Array,
+        },
         datatypes::TimeUnit,
     };
     use datafusion_expr::expr::InList;
@@ -2501,6 +2504,138 @@ mod tests {
         | 1970-01-01T00:00:00.000000010 |
         +-------------------------------+
         ");
+    }
+
+    #[test]
+    fn test_build_statistics_struct_column() {
+        let flag_field = Arc::new(Field::new("flag", DataType::Boolean, true));
+        let label_field = Arc::new(Field::new("label", DataType::Utf8, true));
+        let nested_struct_fields =
+            vec![flag_field.as_ref().clone(), label_field.as_ref().clone()];
+        let nested_field = Arc::new(Field::new(
+            "nested",
+            DataType::Struct(nested_struct_fields.clone().into()),
+            true,
+        ));
+        let id_field = Arc::new(Field::new("id", DataType::Int32, true));
+        let struct_type = DataType::Struct(
+            vec![id_field.as_ref().clone(), nested_field.as_ref().clone()].into(),
+        );
+
+        let nested_min = Arc::new(StructArray::from(vec![
+            (
+                flag_field.clone(),
+                Arc::new(BooleanArray::from(vec![Some(true), Some(false)])) as ArrayRef,
+            ),
+            (
+                label_field.clone(),
+                Arc::new(StringArray::from(vec![Some("alpha"), None])) as ArrayRef,
+            ),
+        ]));
+
+        let nested_max = Arc::new(StructArray::from(vec![
+            (
+                flag_field.clone(),
+                Arc::new(BooleanArray::from(vec![Some(true), Some(true)])) as ArrayRef,
+            ),
+            (
+                label_field.clone(),
+                Arc::new(StringArray::from(vec![Some("omega"), Some("middle")]))
+                    as ArrayRef,
+            ),
+        ]));
+
+        let struct_min = Arc::new(StructArray::from(vec![
+            (
+                id_field.clone(),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+            ),
+            (nested_field.clone(), nested_min.clone() as ArrayRef),
+        ]));
+
+        let struct_max = Arc::new(StructArray::from(vec![
+            (
+                id_field.clone(),
+                Arc::new(Int32Array::from(vec![Some(10), Some(20)])) as ArrayRef,
+            ),
+            (nested_field.clone(), nested_max.clone() as ArrayRef),
+        ]));
+
+        let container_stats = ContainerStats::new()
+            .with_min(struct_min.clone() as ArrayRef)
+            .with_max(struct_max.clone() as ArrayRef);
+
+        let statistics = TestStatistics::new().with("struct_col", container_stats);
+
+        let required_columns = RequiredColumns::from(vec![
+            (
+                phys_expr::Column::new("struct_col", 0),
+                StatisticsType::Min,
+                Field::new("struct_col_min", struct_type.clone(), true),
+            ),
+            (
+                phys_expr::Column::new("struct_col", 0),
+                StatisticsType::Max,
+                Field::new("struct_col_max", struct_type.clone(), true),
+            ),
+        ]);
+
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 2);
+
+        let min_column = batch.column(0).clone();
+        let max_column = batch.column(1).clone();
+
+        assert_eq!(min_column.data_type(), &struct_type);
+        assert_eq!(max_column.data_type(), &struct_type);
+        let min_struct = min_column
+            .as_ref()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let max_struct = max_column
+            .as_ref()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        let min_nested = min_struct.column(1).clone();
+        let max_nested = max_struct.column(1).clone();
+
+        assert_eq!(min_nested.data_type(), nested_field.data_type());
+        assert_eq!(max_nested.data_type(), nested_field.data_type());
+
+        let expected_min_array: ArrayRef = struct_min.clone();
+        let expected_max_array: ArrayRef = struct_max.clone();
+        let expected_nested_min_array: ArrayRef = nested_min.clone();
+        let expected_nested_max_array: ArrayRef = nested_max.clone();
+
+        for row in 0..batch.num_rows() {
+            let actual_min = ScalarValue::try_from_array(&min_column, row).unwrap();
+            let expected_min =
+                ScalarValue::try_from_array(&expected_min_array, row).unwrap();
+            assert_eq!(actual_min, expected_min);
+
+            let actual_max = ScalarValue::try_from_array(&max_column, row).unwrap();
+            let expected_max =
+                ScalarValue::try_from_array(&expected_max_array, row).unwrap();
+            assert_eq!(actual_max, expected_max);
+
+            let actual_nested_min =
+                ScalarValue::try_from_array(&min_nested, row).unwrap();
+            let expected_nested_min =
+                ScalarValue::try_from_array(&expected_nested_min_array, row).unwrap();
+            assert_eq!(actual_nested_min, expected_nested_min);
+
+            let actual_nested_max =
+                ScalarValue::try_from_array(&max_nested, row).unwrap();
+            let expected_nested_max =
+                ScalarValue::try_from_array(&expected_nested_max_array, row).unwrap();
+            assert_eq!(actual_nested_max, expected_nested_max);
+        }
     }
 
     #[test]
