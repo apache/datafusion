@@ -936,6 +936,8 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
             matches!(array.data_type(), DataType::Binary | DataType::LargeBinary);
 
         let array = if is_string && is_binary {
+            // Use safe casting so that any invalid UTF8 bytes are converted to NULL
+            // rather than producing unchecked string values.
             let mut cast_options = DEFAULT_CAST_OPTIONS;
             cast_options.safe = true;
             cast_column(&array, stat_field, &cast_options)?
