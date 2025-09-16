@@ -1881,7 +1881,7 @@ mod tests {
     use std::ops::{Not, Rem};
 
     use super::*;
-    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{assert_contains, test_util::batches_to_string};
     use datafusion_expr::{and, col, lit, or};
     use insta::assert_snapshot;
 
@@ -2807,12 +2807,9 @@ mod tests {
 
         let result =
             build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
-        assert!(
-            result.to_string().contains(
-                "Cannot cast struct field 'nested' from type Int32 to type Struct"
-            ),
-            "{}",
-            result
+        assert_contains!(
+            result.to_string(),
+            "Cannot cast struct field 'nested' from type Int32 to type Struct"
         );
     }
 
@@ -2838,12 +2835,9 @@ mod tests {
 
         let result =
             build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
-        assert!(
-            result
-                .to_string()
-                .contains("Cannot cast column of type Int32 to struct type"),
-            "{}",
-            result
+        assert_contains!(
+            result.to_string(),
+            "Cannot cast column of type Int32 to struct type"
         );
     }
 
@@ -2872,12 +2866,9 @@ mod tests {
 
         let result =
             build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
-        assert!(
-            result
-                .to_string()
-                .contains("mismatched statistics length. Expected 2, got 1"),
-            "{}",
-            result
+        assert_contains!(
+            result.to_string(),
+            "mismatched statistics length. Expected 2, got 1"
         );
     }
 
