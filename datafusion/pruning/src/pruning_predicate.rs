@@ -26,7 +26,6 @@ use std::sync::Arc;
 use arrow::array::AsArray;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
-    compute::CastOptions,
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -932,16 +931,17 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array =
-            if data_type == &DataType::Utf8 && array.data_type() == &DataType::Binary {
-                let cast_opts = CastOptions {
-                    safe: true,
-                    ..DEFAULT_CAST_OPTIONS
-                };
-                cast_column(&array, stat_field, &cast_opts)?
-            } else {
-                cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
-            };
+        let is_string = matches!(data_type, DataType::Utf8 | DataType::LargeUtf8);
+        let is_binary =
+            matches!(array.data_type(), DataType::Binary | DataType::LargeBinary);
+
+        let array = if is_string && is_binary {
+            let mut cast_options = DEFAULT_CAST_OPTIONS;
+            cast_options.safe = true;
+            cast_column(&array, stat_field, &cast_options)?
+        } else {
+            cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
+        };
 
         arrays.push(array);
     }
@@ -1886,8 +1886,8 @@ mod tests {
     use arrow::array::{Array, Decimal128Array};
     use arrow::{
         array::{
-            ArrayRef, BinaryArray, BooleanArray, Int32Array, Int64Array, StringArray,
-            StructArray, UInt64Array,
+            ArrayRef, BinaryArray, BooleanArray, Int32Array, Int64Array,
+            LargeBinaryArray, StringArray, StructArray, UInt64Array,
         },
         datatypes::TimeUnit,
     };
@@ -2533,6 +2533,37 @@ mod tests {
         +-------------------------------+
         | 1970-01-01T00:00:00.000000010 |
         +-------------------------------+
+        ");
+    }
+
+    #[test]
+    fn test_build_statistics_large_binary_to_large_utf8() {
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("bin", 0),
+            StatisticsType::Min,
+            Field::new("bin_min", DataType::LargeUtf8, true),
+        )]);
+
+        let statistics = TestStatistics::new().with(
+            "bin",
+            ContainerStats::new().with_min(Arc::new(LargeBinaryArray::from(vec![
+                Some("alpha".as_bytes()),
+                None,
+                Some("omega".as_bytes()),
+            ])) as ArrayRef),
+        );
+
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +---------+
+        | bin_min |
+        +---------+
+        | alpha   |
+        |         |
+        | omega   |
+        +---------+
         ");
     }
 
