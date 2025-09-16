@@ -87,7 +87,7 @@ fn parse_decimals_3() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),1,1)
+    Projection: Decimal32(Some(1),1,1)
       EmptyRelation: rows=1
     "
     );
@@ -101,7 +101,7 @@ fn parse_decimals_4() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),2,2)
+    Projection: Decimal32(Some(1),2,2)
       EmptyRelation: rows=1
     "
     );
@@ -115,7 +115,7 @@ fn parse_decimals_5() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(10),2,1)
+    Projection: Decimal32(Some(10),2,1)
       EmptyRelation: rows=1
     "
     );
@@ -129,7 +129,7 @@ fn parse_decimals_6() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1001),4,2)
+    Projection: Decimal32(Some(1001),4,2)
       EmptyRelation: rows=1
     "
     );
@@ -318,7 +318,19 @@ fn test_int_decimal_no_scale() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: CAST(Int64(10) AS Decimal128(5, 0))
+    Projection: CAST(Int64(10) AS Decimal32(5, 0))
+      EmptyRelation: rows=1
+    "
+    );
+}
+
+#[test]
+fn test_int_decimal128_no_scale() {
+    let plan = logical_plan("SELECT CAST(10 AS DECIMAL(20))").unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: CAST(Int64(10) AS Decimal128(20, 0))
       EmptyRelation: rows=1
     "
     );

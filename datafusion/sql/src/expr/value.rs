@@ -21,6 +21,7 @@ use arrow::compute::kernels::cast_utils::{
 };
 use arrow::datatypes::{
     i256, DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
 };
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
@@ -372,7 +373,32 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
     } else {
         digits
     };
-    if precision <= DECIMAL128_MAX_PRECISION as u64 {
+
+    if precision <= DECIMAL32_MAX_PRECISION as u64 {
+        let val = int_val.to_i32().ok_or_else(|| {
+            // Failures are unexpected here as we have already checked the precision
+            internal_datafusion_err!(
+                "Unexpected overflow when converting {} to i32",
+                int_val
+            )
+        })?;
+        Ok(Expr::Literal(
+            ScalarValue::Decimal32(Some(val), precision as u8, scale as i8),
+            None,
+        ))
+    } else if precision <= DECIMAL64_MAX_PRECISION as u64 {
+        let val = int_val.to_i64().ok_or_else(|| {
+            // Failures are unexpected here as we have already checked the precision
+            internal_datafusion_err!(
+                "Unexpected overflow when converting {} to i64",
+                int_val
+            )
+        })?;
+        Ok(Expr::Literal(
+            ScalarValue::Decimal64(Some(val), precision as u8, scale as i8),
+            None,
+        ))
+    } else if precision <= DECIMAL128_MAX_PRECISION as u64 {
         let val = int_val.to_i128().ok_or_else(|| {
             // Failures are unexpected here as we have already checked the precision
             internal_datafusion_err!(
@@ -460,15 +486,24 @@ mod tests {
     fn test_parse_decimal() {
         // Supported cases
         let cases = [
-            ("0", ScalarValue::Decimal128(Some(0), 1, 0)),
-            ("1", ScalarValue::Decimal128(Some(1), 1, 0)),
-            ("123.45", ScalarValue::Decimal128(Some(12345), 5, 2)),
+            ("0", ScalarValue::Decimal32(Some(0), 1, 0)),
+            ("1", ScalarValue::Decimal32(Some(1), 1, 0)),
+            ("123.45", ScalarValue::Decimal32(Some(12345), 5, 2)),
             // Digit count is less than scale
-            ("0.001", ScalarValue::Decimal128(Some(1), 3, 3)),
+            ("0.001", ScalarValue::Decimal32(Some(1), 3, 3)),
             // Scientific notation
-            ("123.456e-2", ScalarValue::Decimal128(Some(123456), 6, 5)),
+            ("123.456e-2", ScalarValue::Decimal32(Some(123456), 6, 5)),
             // Negative scale
-            ("123456e128", ScalarValue::Decimal128(Some(123456), 6, -128)),
+            ("123456e128", ScalarValue::Decimal32(Some(123456), 6, -128)),
+            // Decimal128
+            (
+                &("9".repeat(19) + "." + "99999"),
+                ScalarValue::Decimal128(
+                    Some(i128::from_str(&"9".repeat(24)).unwrap()),
+                    24,
+                    5,
+                ),
+            ),
             // Decimal256
             (
                 &("9".repeat(39) + "." + "99999"),
