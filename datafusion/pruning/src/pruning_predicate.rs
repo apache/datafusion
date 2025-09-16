@@ -2710,6 +2710,111 @@ mod tests {
     }
 
     #[test]
+    fn test_build_statistics_struct_incompatible_layout_error() {
+        // Request struct statistics but provide an incompatible nested layout
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("struct_col", 3),
+            StatisticsType::Min,
+            Field::new(
+                "struct_col_min",
+                DataType::Struct(
+                    vec![Field::new(
+                        "nested",
+                        DataType::Struct(
+                            vec![Field::new("value", DataType::Int32, true)].into(),
+                        ),
+                        true,
+                    )]
+                    .into(),
+                ),
+                true,
+            ),
+        )]);
+
+        let statistics = OneContainerStats {
+            min_values: Some(Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new("nested", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+            )]))),
+            max_values: None,
+            num_containers: 1,
+        };
+
+        let result =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
+        assert!(
+            result.to_string().contains(
+                "Cannot cast struct field 'nested' from type Int32 to type Struct"
+            ),
+            "{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_build_statistics_struct_non_struct_source_error() {
+        // Request struct statistics but provide a non-struct statistics array
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("struct_col", 3),
+            StatisticsType::Min,
+            Field::new(
+                "struct_col_min",
+                DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
+                true,
+            ),
+        )]);
+
+        let statistics = OneContainerStats {
+            min_values: Some(Arc::new(Int32Array::from(vec![Some(1)]))),
+            max_values: None,
+            num_containers: 1,
+        };
+
+        let result =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
+        assert!(
+            result
+                .to_string()
+                .contains("Cannot cast column of type Int32 to struct type"),
+            "{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_build_statistics_struct_inconsistent_length() {
+        // Ensure mismatched statistics lengths for struct arrays still error out
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("struct_col", 3),
+            StatisticsType::Min,
+            Field::new(
+                "struct_col_min",
+                DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
+                true,
+            ),
+        )]);
+
+        let statistics = OneContainerStats {
+            min_values: Some(Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new("value", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![Some(10)])) as ArrayRef,
+            )]))),
+            max_values: None,
+            num_containers: 2,
+        };
+
+        let result =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
+        assert!(
+            result
+                .to_string()
+                .contains("mismatched statistics length. Expected 2, got 1"),
+            "{}",
+            result
+        );
+    }
+
+    #[test]
     fn row_group_predicate_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         let expected_expr =
