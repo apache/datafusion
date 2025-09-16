@@ -790,7 +790,7 @@ impl SessionContext {
         }
 
         match (cmd.if_not_exists, cmd.or_replace, exist) {
-            (true, false, true) => return self.return_empty_dataframe(),
+            (true, false, true) => self.return_empty_dataframe(),
             (false, true, true) => {
                 let result = self
                     .find_and_deregister(cmd.name.clone(), TableType::Base)
