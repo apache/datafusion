@@ -25,7 +25,6 @@ use std::sync::Arc;
 use arrow::array::AsArray;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
-    compute::CastOptions,
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -930,14 +929,20 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        // Cast using "safe" semantics so invalid binary statistics for string fields
-        // produce `NULL` values instead of errors.
-        let cast_options = CastOptions {
-            safe: true,
-            ..DEFAULT_CAST_OPTIONS
-        };
-
-        let array = cast_column(&array, stat_field, &cast_options)?;
+        let array =
+            if data_type == &DataType::Utf8 && array.data_type() == &DataType::Binary {
+                // Statistics coming from Parquet can store string columns in binary form and
+                // the bytes are not guaranteed to be valid UTF-8. `cast_column` always uses
+                // `DEFAULT_CAST_OPTIONS` (with `safe = false`) which would forward those raw
+                // bytes into a Utf8Array. We instead call Arrow's cast kernel directly with
+                // `safe = true` so Arrow validates each value and converts invalid sequences
+                // into nulls (see https://github.com/apache/arrow-rs/issues/3691).
+                let mut cast_options = DEFAULT_CAST_OPTIONS;
+                cast_options.safe = true;
+                arrow::compute::cast_with_options(&array, data_type, &cast_options)?
+            } else {
+                cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
+            };
 
         arrays.push(array);
     }
