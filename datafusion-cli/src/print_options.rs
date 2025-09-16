@@ -16,10 +16,14 @@
 // under the License.
 
 use std::fmt::{Display, Formatter};
-use std::io::Write;
+use std::io;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
 
+use crate::object_storage::instrumented::{
+    InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
+};
 use crate::print_format::PrintFormat;
 
 use arrow::datatypes::SchemaRef;
@@ -73,6 +77,8 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
+    pub object_store_profile_mode: InstrumentedObjectStoreMode,
+    pub instrumented_registry: Arc<InstrumentedObjectStoreRegistry>,
 }
 
 // Returns the query execution details formatted
@@ -128,11 +134,7 @@ impl PrintOptions {
             query_start_time,
         );
 
-        if !self.quiet {
-            writeln!(writer, "{formatted_exec_details}")?;
-        }
-
-        Ok(())
+        self.write_output(&mut writer, formatted_exec_details)
     }
 
     /// Print the stream to stdout using the specified format
@@ -174,8 +176,23 @@ impl PrintOptions {
             query_start_time,
         );
 
+        self.write_output(&mut writer, formatted_exec_details)
+    }
+
+    fn write_output<W: io::Write>(
+        &self,
+        writer: &mut W,
+        formatted_exec_details: String,
+    ) -> Result<()> {
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
+
+            if self.object_store_profile_mode != InstrumentedObjectStoreMode::Disabled {
+                writeln!(writer, "Object Store Profiling")?;
+                for store in self.instrumented_registry.stores() {
+                    write!(writer, "{store}")?;
+                }
+            }
         }
 
         Ok(())
