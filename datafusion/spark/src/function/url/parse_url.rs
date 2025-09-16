@@ -26,7 +26,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -143,53 +143,13 @@ impl ScalarUDFImpl for ParseUrl {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 3 {
-            return plan_err!(
-                "{} expects 2 or 3 arguments, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        }
-        match arg_types.len() {
-            2 | 3 if arg_types.iter().all(is_string_type) => {
-                if arg_types
-                    .iter()
-                    .any(|arg| matches!(arg, DataType::LargeUtf8))
-                {
-                    Ok(DataType::LargeUtf8)
-                } else if arg_types
-                    .iter()
-                    .any(|arg| matches!(arg, DataType::Utf8View))
-                {
-                    Ok(DataType::Utf8View)
-                } else {
-                    Ok(DataType::Utf8)
-                }
-            }
-            2 | 3 => plan_err!(
-                "`{}` expects STRING arguments, got {:?}",
-                &self.name(),
-                arg_types
-            ),
-            _ => plan_err!(
-                "`{}` expects 2 or 3 arguments, got {}",
-                &self.name(),
-                arg_types.len()
-            ),
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_parse_url, vec![])(&args)
     }
-}
-
-fn is_string_type(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
-    )
 }
 
 /// Core implementation of URL parsing function.
@@ -329,7 +289,6 @@ where
 mod tests {
     use super::*;
     use arrow::array::{ArrayRef, Int32Array, StringArray};
-    use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use std::array::from_ref;
     use std::sync::Arc;
@@ -471,35 +430,5 @@ mod tests {
         let err = spark_handled_parse_url(&[urls, bad_part], |x| x).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("expects STRING arguments"));
-    }
-
-    #[test]
-    fn test_return_type_and_coercion() -> Result<()> {
-        let udf = ParseUrl::new();
-
-        let rt = udf.return_type(&[DataType::Utf8, DataType::Utf8])?;
-        assert_eq!(rt, DataType::Utf8);
-
-        let rt = udf.return_type(&[DataType::LargeUtf8, DataType::LargeUtf8])?;
-        assert_eq!(rt, DataType::LargeUtf8);
-
-        let rt = udf.return_type(&[DataType::Utf8, DataType::Utf8, DataType::Utf8])?;
-        assert_eq!(rt, DataType::Utf8);
-
-        let rt = udf.return_type(&[DataType::LargeUtf8, DataType::Utf8])?;
-        assert_eq!(rt, DataType::LargeUtf8);
-
-        let rt = udf.return_type(&[DataType::Utf8View, DataType::Utf8])?;
-        assert_eq!(rt, DataType::Utf8View);
-
-        let err = udf
-            .return_type(&[DataType::Int32, DataType::Utf8])
-            .unwrap_err();
-        assert!(format!("{err}").contains("expects STRING arguments"));
-
-        let err = udf.return_type(&[DataType::Utf8]).unwrap_err();
-        assert!(format!("{err}").contains("expects 2 or 3 arguments"));
-
-        Ok(())
     }
 }
