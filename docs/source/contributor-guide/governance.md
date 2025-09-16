@@ -104,7 +104,7 @@ Notes:
 | Yang Jiang              | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               |             | Committer |
 | Yijie Shen              | yjshen           | [yjshen](https://github.com/yjshen)                     |             | Committer |
 | Yongting You            | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             |             | Committer |
-| Qi Zhu                  | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           |             | Committer |
+| Qi Zhu                  | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           | Polygon.io  | Committer |
 
 <!-- End Auto-Generated Committer List -->
 
