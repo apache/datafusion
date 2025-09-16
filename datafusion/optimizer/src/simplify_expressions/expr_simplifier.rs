@@ -3586,7 +3586,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_expr_case_when_true() {
+    fn simplify_expr_case_when_first_true() {
         // CASE WHEN true THEN 1 ELSE x END --> 1
         assert_eq!(
             simplify(Expr::Case(Case::new(
@@ -3651,6 +3651,82 @@ mod tests {
             None,
             vec![(Box::new(col("x").gt(lit(5))), Box::new(lit(1)))],
             Some(Box::new(lit(2))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_expr_case_when_any_true() {
+        // CASE WHEN x > 0 THEN a WHEN true THEN b ELSE c END --> CASE WHEN x > 0 THEN a ELSE b END
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(lit(true)), Box::new(col("b"))),
+                ],
+                Some(Box::new(col("c"))),
+            ))),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("x").gt(lit(0))), Box::new(col("a")))],
+                Some(Box::new(col("b"))),
+            ))
+        );
+
+        // CASE WHEN x > 0 THEN a WHEN y < 0 THEN b WHEN true THEN c WHEN z = 0 THEN d ELSE e END
+        // --> CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                    (Box::new(lit(true)), Box::new(col("c"))),
+                    (Box::new(col("z").eq(lit(0))), Box::new(col("d"))),
+                ],
+                Some(Box::new(col("e"))),
+            ))),
+            Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                ],
+                Some(Box::new(col("c"))),
+            ))
+        );
+
+        // CASE WHEN x > 0 THEN a WHEN y < 0 THEN b WHEN true THEN c END (no else)
+        // --> CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                    (Box::new(lit(true)), Box::new(col("c"))),
+                ],
+                None,
+            ))),
+            Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                ],
+                Some(Box::new(col("c"))),
+            ))
+        );
+
+        // Negative test: CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![
+                (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+            ],
+            Some(Box::new(col("c"))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
     }
