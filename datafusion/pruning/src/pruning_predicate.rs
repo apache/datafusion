@@ -2833,12 +2833,9 @@ mod tests {
 
         let result =
             build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
-        assert!(
-            result
-                .to_string()
-                .contains("mismatched statistics length. Expected 3, got 1"),
-            "{}",
-            result
+        assert_contains!(
+            result.to_string(),
+            "mismatched statistics length. Expected 3, got 1"
         );
     }
 
