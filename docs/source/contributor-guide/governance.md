@@ -81,18 +81,18 @@ Notes:
 | Huaxin Gao              | huaxingao        | [huaxingao](https://github.com/huaxingao)               |             | Committer |
 | Ifeanyi Ubah            | iffyio           | [iffyio](https://github.com/iffyio)                     |             | Committer |
 | Jeffrey Vo              | jeffreyvo        | [Jefffrey](https://github.com/Jefffrey)                 |             | Committer |
-| Liu Jiayu               | jiayuliu         |                                                         |             | Committer |
+| Liu Jiayu               | jiayuliu         | [jimexist](https://github.com/jimexist)                                                        |             | Committer |
 | Ruiqiu Cao              | kamille          | [Rachelint](https://github.com/Rachelint)               |             | Committer |
 | Kazuyuki Tanimura       | kazuyukitanimura | [kazuyukitanimura](https://github.com/kazuyukitanimura) |             | Committer |
 | Eduard Karacharov       | korowa           | [korowa](https://github.com/korowa)                     |             | Committer |
 | Siew Kam Onn            | kosiew           | [kosiew](https://github.com/kosiew)                     |             | Committer |
 | Lewis Zhang             | linwei           | [lewiszlw](https://github.com/lewiszlw)                 | diit.cn     | Committer |
-| Matt Butrovich          | mbutrovich       | [mbutrovich](https://github.com/mbutrovich)             |             | Committer |
+| Matt Butrovich          | mbutrovich       | [mbutrovich](https://github.com/mbutrovich)             |    Apple         | Committer |
 | Metehan Yildirim        | mete             |    [metegenez](https://github.com/metegenez)                                                      |             | Committer |
 | Marko Milenković        | milenkovicm      | [milenkovicm](https://github.com/milenkovicm)           |             | Committer |
 | Wang Mingming           | mingmwang        | [mingmwang](https://github.com/mingmwang)               |             | Committer |
 | Michael Ward            | mjward           |     [Michael-J-Ward ](https://github.com/Michael-J-Ward )                                                    |             | Committer |
-| Marco Neumann           | mneumann         | [crepererum](https://github.com/crepererum)             |             | Committer |
+| Marco Neumann           | mneumann         | [crepererum](https://github.com/crepererum)             |     InfluxData        | Committer |
 | Zhong Yanghong          | nju_yaho         |     [yahoNanJing](https://github.com/yahoNanJing)                                                    |             | Committer |
 | Paddy Horan             | paddyhoran       | [paddyhoran](https://github.com/paddyhoran)             |             | Committer |
 | Parth Chandra           | parthc           | [parthchandra](https://github.com/parthchandra)         |             | Committer |
