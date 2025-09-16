@@ -148,7 +148,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .map_err(|e| DataFusionError::Execution(e.to_string()))?
             .iter()
             .map(|expr_node| {
-                parse_physical_expr(expr_node, &default_ctx, &schema, &codec)
+                parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)
             })
             .collect::<Result<Vec<_>>>()?;
 
