@@ -69,7 +69,7 @@ Notes:
 | Mehmet Ozan Kabak       | ozankabak        | [ozankabak](https://github.com/ozankabak)               |    Synnada, Inc         | PMC       |
 | Tim Saucer              | timsaucer        | [timsaucer](https://github.com/timsaucer)               |             | PMC       |
 | L. C. Hsieh             | viirya           | [viirya](https://github.com/viirya)                     | Databricks  | PMC       |
-| Ruihang Xia             | wayne            | [waynexia](https://github.com/waynexia)                 |             | PMC       |
+| Ruihang Xia             | wayne            | [waynexia](https://github.com/waynexia)                 |  Greptime  | PMC       |
 | Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         | Posit       | PMC       |
 | Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               | LanceDB     | PMC       |
 | Xudong Wang             | xudong963        | [xudong963](https://github.com/xudong963)               | Polygon.io  | PMC       |
