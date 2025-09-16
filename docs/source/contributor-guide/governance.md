@@ -74,12 +74,12 @@ Notes:
 | Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               |             | PMC       |
 | Xudong Wang             | xudong963        | [xudong963](https://github.com/xudong963)               | Polygon.io  | PMC       |
 | Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 | Pydantic    | Committer |
-| Brent Gardner           | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     |             | Committer |
-| Dmitrii Blaginin        | blaginin         | [blaginin](https://github.com/blaginin)                 |             | Committer |
-| Piotr Findeisen         | findepi          | [findepi](https://github.com/findepi)                   |             | Committer |
-| Jax Liu                 | goldmedal        | [goldmedal](https://github.com/goldmedal)               |             | Committer |
+| Brent Gardner           | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     | Coralogix | Committer |
+| Dmitrii Blaginin        | blaginin         | [blaginin](https://github.com/blaginin)                 | SpiralDB | Committer |
+| Piotr Findeisen         | findepi          | [findepi](https://github.com/findepi)                   |    dbt Labs         | Committer |
+| Jax Liu                 | goldmedal        | [goldmedal](https://github.com/goldmedal)               |  Canner      | Committer |
 | Huaxin Gao              | huaxingao        | [huaxingao](https://github.com/huaxingao)               |             | Committer |
-| Ifeanyi Ubah            | iffyio           | [iffyio](https://github.com/iffyio)                     |             | Committer |
+| Ifeanyi Ubah            | iffyio           | [iffyio](https://github.com/iffyio)                     |  Validio    | Committer |
 | Jeffrey Vo              | jeffreyvo        | [Jefffrey](https://github.com/Jefffrey)                 |             | Committer |
 | Liu Jiayu               | jiayuliu         | [jimexist](https://github.com/jimexist)                                                        |             | Committer |
 | Ruiqiu Cao              | kamille          | [Rachelint](https://github.com/Rachelint)               |             | Committer |
