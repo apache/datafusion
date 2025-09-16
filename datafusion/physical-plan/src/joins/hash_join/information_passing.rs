@@ -115,8 +115,8 @@
 //! In the case of a hash join, we update dynamic filters after fully processing the build side, and before scanning the probe side.
 //!
 //! References:
-//! - https://github.com/apache/datafusion/issues/7955
-//! - https://datafusion.apache.org/blog/2025/09/10/dynamic-filters/
+//! - <https://github.com/apache/datafusion/issues/7955>
+//! - <https://datafusion.apache.org/blog/2025/09/10/dynamic-filters/>
 
 use std::{any::Any, fmt, hash::Hash, sync::Arc};
 
@@ -460,7 +460,7 @@ impl SharedBuildAccumulator {
                 (Some(bounds_expr), Some(hash_eval_expr)) => Arc::new(BinaryExpr::new(
                     bounds_expr,
                     Operator::And,
-                    hash_eval_expr.clone(),
+                    Arc::clone(&hash_eval_expr),
                 )),
                 _ => return Ok(()),
             };
@@ -563,7 +563,7 @@ impl PhysicalExpr for HashComparePhysicalExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(Self {
             exprs: children,
-            hashes: self.hashes.clone(),
+            hashes: Arc::clone(&self.hashes),
             random_state: self.random_state,
             reservation: self.reservation.new_empty(),
         }))

@@ -416,7 +416,7 @@ impl HashJoinStream {
             let build_accumulator = Arc::clone(build_accumulator);
             let left_data_bounds = left_data.bounds.clone();
             let left_data_hash_map = if self.enable_hash_collection {
-                Some(left_data.hash_map.clone())
+                Some(Arc::clone(&left_data.hash_map))
             } else {
                 None
             };
