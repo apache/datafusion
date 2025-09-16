@@ -2306,136 +2306,29 @@ mod tests {
         }
     }
 
-    struct StructColumnStats {
-        struct_type: DataType,
-        nested_field: Arc<Field>,
-        struct_min: Arc<StructArray>,
-        struct_max: Arc<StructArray>,
-        nested_min: Arc<StructArray>,
-        nested_max: Arc<StructArray>,
-        statistics: TestStatistics,
-    }
-
-    /// Builds statistics for a nested struct column used in the struct column
-    /// tests.
-    ///
-    /// The produced layout mirrors the `struct_col` column in the tests:
-    ///
-    /// ```text
-    /// struct_col: Struct<
-    ///     id: Int32,
-    ///     nested: Struct<
-    ///         flag: Boolean,
-    ///         label: Utf8,
-    ///     >,
-    /// >
-    /// ```
-    ///
-    /// The returned [`StructColumnStats`] provides the min/max arrays for both
-    /// the outer struct and its nested struct values as well as the
-    /// [`TestStatistics`] wrapper that exposes them to the pruning code.
-    fn make_struct_stats() -> StructColumnStats {
-        let flag_field = Arc::new(Field::new("flag", DataType::Boolean, true));
-        let label_field = Arc::new(Field::new("label", DataType::Utf8, true));
-        let nested_struct_fields =
-            vec![flag_field.as_ref().clone(), label_field.as_ref().clone()];
-        let nested_field = Arc::new(Field::new(
-            "nested",
-            DataType::Struct(nested_struct_fields.clone().into()),
-            true,
-        ));
-        let id_field = Arc::new(Field::new("id", DataType::Int32, true));
-        let struct_type = DataType::Struct(
-            vec![id_field.as_ref().clone(), nested_field.as_ref().clone()].into(),
+    fn make_struct_required_cols(
+        column_name: &str,
+        column_index: usize,
+        fields: Vec<(StatisticsType, Field)>,
+        min_values: Option<ArrayRef>,
+        max_values: Option<ArrayRef>,
+        num_containers: usize,
+    ) -> (RequiredColumns, OneContainerStats) {
+        let column = phys_expr::Column::new(column_name, column_index);
+        let required_columns = RequiredColumns::from(
+            fields
+                .into_iter()
+                .map(|(statistics_type, field)| (column.clone(), statistics_type, field))
+                .collect::<Vec<_>>(),
         );
 
-        let nested_min = Arc::new(StructArray::from(vec![
-            (
-                flag_field.clone(),
-                Arc::new(BooleanArray::from(vec![Some(true), Some(false)])) as ArrayRef,
-            ),
-            (
-                label_field.clone(),
-                Arc::new(StringArray::from(vec![Some("alpha"), None])) as ArrayRef,
-            ),
-        ]));
+        let statistics = OneContainerStats {
+            min_values,
+            max_values,
+            num_containers,
+        };
 
-        let nested_max = Arc::new(StructArray::from(vec![
-            (
-                flag_field.clone(),
-                Arc::new(BooleanArray::from(vec![Some(true), Some(true)])) as ArrayRef,
-            ),
-            (
-                label_field.clone(),
-                Arc::new(StringArray::from(vec![Some("omega"), Some("middle")]))
-                    as ArrayRef,
-            ),
-        ]));
-
-        let struct_min = Arc::new(StructArray::from(vec![
-            (
-                id_field.clone(),
-                Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef,
-            ),
-            (nested_field.clone(), nested_min.clone() as ArrayRef),
-        ]));
-
-        let struct_max = Arc::new(StructArray::from(vec![
-            (
-                id_field.clone(),
-                Arc::new(Int32Array::from(vec![Some(10), Some(20)])) as ArrayRef,
-            ),
-            (nested_field.clone(), nested_max.clone() as ArrayRef),
-        ]));
-
-        let container_stats = ContainerStats::new()
-            .with_min(struct_min.clone() as ArrayRef)
-            .with_max(struct_max.clone() as ArrayRef);
-
-        let statistics = TestStatistics::new().with("struct_col", container_stats);
-
-        StructColumnStats {
-            struct_type,
-            nested_field,
-            struct_min,
-            struct_max,
-            nested_min,
-            nested_max,
-            statistics,
-        }
-    }
-
-    /// Creates [`RequiredColumns`] entries for the `struct_col` statistics using
-    /// the provided struct layout and statistics kinds.
-    ///
-    /// When paired with [`make_struct_stats`], `struct_type` describes the
-    /// nested layout `Struct<id: Int32, nested: Struct<flag: Boolean, label:
-    /// Utf8>>`.
-    fn make_struct_required_columns(
-        struct_type: &DataType,
-        column_index: usize,
-        stat_types: &[StatisticsType],
-    ) -> RequiredColumns {
-        let column = phys_expr::Column::new("struct_col", column_index);
-        let required: Vec<_> = stat_types
-            .iter()
-            .map(|stat_type| {
-                let suffix = match stat_type {
-                    StatisticsType::Min => "min",
-                    StatisticsType::Max => "max",
-                    StatisticsType::NullCount => "null_count",
-                    StatisticsType::RowCount => "row_count",
-                };
-                let field_name = format!("struct_col_{suffix}");
-                (
-                    column.clone(),
-                    *stat_type,
-                    Field::new(&field_name, struct_type.clone(), true),
-                )
-            })
-            .collect();
-
-        RequiredColumns::from(required)
+        (required_columns, statistics)
     }
 
     /// Row count should only be referenced once in the pruning expression, even if we need the row count
@@ -2677,22 +2570,80 @@ mod tests {
 
     #[test]
     fn test_build_statistics_struct_column() {
-        let StructColumnStats {
-            struct_type,
-            nested_field,
-            struct_min,
-            struct_max,
-            nested_min,
-            nested_max,
-            statistics,
-        } = make_struct_stats();
-
-        let required_columns = make_struct_required_columns(
-            &struct_type,
-            0,
-            &[StatisticsType::Min, StatisticsType::Max],
+        let flag_field = Arc::new(Field::new("flag", DataType::Boolean, true));
+        let label_field = Arc::new(Field::new("label", DataType::Utf8, true));
+        let nested_struct_fields =
+            vec![flag_field.as_ref().clone(), label_field.as_ref().clone()];
+        let nested_field = Arc::new(Field::new(
+            "nested",
+            DataType::Struct(nested_struct_fields.clone().into()),
+            true,
+        ));
+        let id_field = Arc::new(Field::new("id", DataType::Int32, true));
+        let struct_type = DataType::Struct(
+            vec![id_field.as_ref().clone(), nested_field.as_ref().clone()].into(),
         );
 
+        let nested_min = Arc::new(StructArray::from(vec![
+            (
+                flag_field.clone(),
+                Arc::new(BooleanArray::from(vec![Some(true), Some(false)])) as ArrayRef,
+            ),
+            (
+                label_field.clone(),
+                Arc::new(StringArray::from(vec![Some("alpha"), None])) as ArrayRef,
+            ),
+        ]));
+
+        let nested_max = Arc::new(StructArray::from(vec![
+            (
+                flag_field.clone(),
+                Arc::new(BooleanArray::from(vec![Some(true), Some(true)])) as ArrayRef,
+            ),
+            (
+                label_field.clone(),
+                Arc::new(StringArray::from(vec![Some("omega"), Some("middle")]))
+                    as ArrayRef,
+            ),
+        ]));
+
+        let struct_min = Arc::new(StructArray::from(vec![
+            (
+                id_field.clone(),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+            ),
+            (nested_field.clone(), nested_min.clone() as ArrayRef),
+        ]));
+
+        let struct_max = Arc::new(StructArray::from(vec![
+            (
+                id_field.clone(),
+                Arc::new(Int32Array::from(vec![Some(10), Some(20)])) as ArrayRef,
+            ),
+            (nested_field.clone(), nested_max.clone() as ArrayRef),
+        ]));
+
+        let expected_min_array: ArrayRef = struct_min.clone();
+        let expected_max_array: ArrayRef = struct_max.clone();
+        let num_containers = expected_min_array.len();
+
+        let (required_columns, statistics) = make_struct_required_cols(
+            "struct_col",
+            0,
+            vec![
+                (
+                    StatisticsType::Min,
+                    Field::new("struct_col_min", struct_type.clone(), true),
+                ),
+                (
+                    StatisticsType::Max,
+                    Field::new("struct_col_max", struct_type.clone(), true),
+                ),
+            ],
+            Some(expected_min_array.clone()),
+            Some(expected_max_array.clone()),
+            num_containers,
+        );
         let batch =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
 
@@ -2721,8 +2672,6 @@ mod tests {
         assert_eq!(min_nested.data_type(), nested_field.data_type());
         assert_eq!(max_nested.data_type(), nested_field.data_type());
 
-        let expected_min_array: ArrayRef = struct_min.clone();
-        let expected_max_array: ArrayRef = struct_max.clone();
         let expected_nested_min_array: ArrayRef = nested_min.clone();
         let expected_nested_max_array: ArrayRef = nested_max.clone();
 
@@ -2817,25 +2766,34 @@ mod tests {
     #[test]
     fn test_build_statistics_struct_incompatible_layout_error() {
         // Request struct statistics but provide an incompatible nested layout
-        let struct_type = DataType::Struct(
-            vec![Field::new(
-                "nested",
-                DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
-                true,
-            )]
-            .into(),
+        let requested_field = Field::new(
+            "struct_col_min",
+            DataType::Struct(
+                vec![Field::new(
+                    "nested",
+                    DataType::Struct(
+                        vec![Field::new("value", DataType::Int32, true)].into(),
+                    ),
+                    true,
+                )]
+                .into(),
+            ),
+            true,
         );
-        let required_columns =
-            make_struct_required_columns(&struct_type, 3, &[StatisticsType::Min]);
 
-        let statistics = OneContainerStats {
-            min_values: Some(Arc::new(StructArray::from(vec![(
-                Arc::new(Field::new("nested", DataType::Int32, true)),
-                Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
-            )]))),
-            max_values: None,
-            num_containers: 1,
-        };
+        let min_values: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("nested", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+        )]));
+
+        let (required_columns, statistics) = make_struct_required_cols(
+            "struct_col",
+            3,
+            vec![(StatisticsType::Min, requested_field)],
+            Some(min_values),
+            None,
+            1,
+        );
 
         let result =
             build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
@@ -2851,16 +2809,22 @@ mod tests {
     #[test]
     fn test_build_statistics_struct_non_struct_source_error() {
         // Request struct statistics but provide a non-struct statistics array
-        let struct_type =
-            DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into());
-        let required_columns =
-            make_struct_required_columns(&struct_type, 3, &[StatisticsType::Min]);
+        let requested_field = Field::new(
+            "struct_col_min",
+            DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
+            true,
+        );
 
-        let statistics = OneContainerStats {
-            min_values: Some(Arc::new(Int32Array::from(vec![Some(1)]))),
-            max_values: None,
-            num_containers: 1,
-        };
+        let min_values: ArrayRef = Arc::new(Int32Array::from(vec![Some(1)]));
+
+        let (required_columns, statistics) = make_struct_required_cols(
+            "struct_col",
+            3,
+            vec![(StatisticsType::Min, requested_field)],
+            Some(min_values),
+            None,
+            1,
+        );
 
         let result =
             build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
@@ -2876,19 +2840,25 @@ mod tests {
     #[test]
     fn test_build_statistics_struct_inconsistent_length() {
         // Ensure mismatched statistics lengths for struct arrays still error out
-        let struct_type =
-            DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into());
-        let required_columns =
-            make_struct_required_columns(&struct_type, 3, &[StatisticsType::Min]);
+        let requested_field = Field::new(
+            "struct_col_min",
+            DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
+            true,
+        );
 
-        let statistics = OneContainerStats {
-            min_values: Some(Arc::new(StructArray::from(vec![(
-                Arc::new(Field::new("value", DataType::Int32, true)),
-                Arc::new(Int32Array::from(vec![Some(10)])) as ArrayRef,
-            )]))),
-            max_values: None,
-            num_containers: 2,
-        };
+        let min_values: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("value", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![Some(10)])) as ArrayRef,
+        )]));
+
+        let (required_columns, statistics) = make_struct_required_cols(
+            "struct_col",
+            3,
+            vec![(StatisticsType::Min, requested_field)],
+            Some(min_values),
+            None,
+            2,
+        );
 
         let result =
             build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
