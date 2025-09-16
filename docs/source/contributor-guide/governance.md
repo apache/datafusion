@@ -58,7 +58,7 @@ Notes:
 | Andrew Lamb             | alamb            | [alamb](https://github.com/alamb)                       | InfluxData  | PMC Chair |
 | Andrew Grove            | agrove           | [andygrove](https://github.com/andygrove)               | Apple       | PMC       |
 | Mustafa Akur            | akurmustafa      | [akurmustafa](https://github.com/akurmustafa)           | OHSU        | PMC       |
-| Berkay Şahin            | berkay           | [berkaysynnada](https://github.com/berkaysynnada)       |             | PMC       |
+| Berkay Şahin            | berkay           | [berkaysynnada](https://github.com/berkaysynnada)       |     Synnada        | PMC       |
 | Oleks V                 | comphead         | [comphead](https://github.com/comphead)                 |             | PMC       |
 | Daniël Heres            | dheres           | [Dandandan](https://github.com/Dandandan)               |             | PMC       |
 | QP Hou                  | houqp            | [houqp](https://github.com/houqp)                       |             | PMC       |
