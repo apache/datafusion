@@ -1405,11 +1405,17 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 expr: None,
                 mut when_then_expr,
                 else_expr,
-            // if let guard is not stabilited so we can't use it yet: https://github.com/rust-lang/rust/issues/51114
-            // Once it's supported we can avoid searching through when_then_expr twice in the below .any() and .position() calls
-            // }) if let Some(i) = when_then_expr.iter().position(|(when, _)| is_true(when.as_ref())) => {
-            }) if when_then_expr.iter().any(|(when, _)| is_true(when.as_ref())) => {
-                if let Some(i) = when_then_expr.iter().position(|(when, _)| is_true(when.as_ref())) {
+                // if let guard is not stabilized so we can't use it yet: https://github.com/rust-lang/rust/issues/51114
+                // Once it's supported we can avoid searching through when_then_expr twice in the below .any() and .position() calls
+                // }) if let Some(i) = when_then_expr.iter().position(|(when, _)| is_true(when.as_ref())) => {
+            }) if when_then_expr
+                .iter()
+                .any(|(when, _)| is_true(when.as_ref())) =>
+            {
+                if let Some(i) = when_then_expr
+                    .iter()
+                    .position(|(when, _)| is_true(when.as_ref()))
+                {
                     let (_, then_) = when_then_expr.swap_remove(i);
                     // CASE WHEN true THEN A ... END --> A
                     if i == 0 {
@@ -1417,13 +1423,11 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     }
                     // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
                     let truncated_when_then_expr = when_then_expr[..i].to_vec();
-                    return Ok(Transformed::yes(
-                        Expr::Case(Case {
-                            expr: None,
-                            when_then_expr: truncated_when_then_expr,
-                            else_expr: Some(then_),
-                        })
-                    ))
+                    return Ok(Transformed::yes(Expr::Case(Case {
+                        expr: None,
+                        when_then_expr: truncated_when_then_expr,
+                        else_expr: Some(then_),
+                    })));
                 }
                 Transformed::no(Expr::Case(Case {
                     expr: None,
