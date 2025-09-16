@@ -26,7 +26,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::hash_join::shared_bounds::{ColumnBounds, SharedBuildAccumulator};
+use crate::joins::hash_join::information_passing::{
+    ColumnBounds, SharedBuildAccumulator,
+};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
@@ -81,7 +83,7 @@ use futures::TryStreamExt;
 use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
-const HASH_JOIN_SEED: RandomState =
+static HASH_JOIN_SEED: RandomState =
     RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
 /// HashTable and input data for the left (build side) of a join
@@ -341,7 +343,7 @@ pub struct HashJoinExec {
     /// the hash table creation.
     left_fut: Arc<OnceAsync<JoinLeftData>>,
     /// Shared the `RandomState` for the hashing algorithm
-    random_state: RandomState,
+    random_state: &'static RandomState,
     /// Partitioning mode to use
     pub mode: PartitionMode,
     /// Execution metrics
@@ -424,8 +426,6 @@ impl HashJoinExec {
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
-        let random_state = HASH_JOIN_SEED;
-
         let join_schema = Arc::new(join_schema);
 
         //  check if the projection is valid
@@ -452,7 +452,7 @@ impl HashJoinExec {
             join_type: *join_type,
             join_schema,
             left_fut: Default::default(),
-            random_state,
+            random_state: &HASH_JOIN_SEED,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection,
@@ -841,7 +841,7 @@ impl ExecutionPlan for HashJoinExec {
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
             left_fut: Arc::clone(&self.left_fut),
-            random_state: self.random_state.clone(),
+            random_state: self.random_state,
             mode: self.mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection: self.projection.clone(),
@@ -871,7 +871,7 @@ impl ExecutionPlan for HashJoinExec {
             join_schema: Arc::clone(&self.join_schema),
             // Reset the left_fut to allow re-execution
             left_fut: Arc::new(OnceAsync::default()),
-            random_state: self.random_state.clone(),
+            random_state: self.random_state,
             mode: self.mode,
             metrics: ExecutionPlanMetricsSet::new(),
             projection: self.projection.clone(),
@@ -927,7 +927,7 @@ impl ExecutionPlan for HashJoinExec {
                         let left_stream = self.left.execute(0, Arc::clone(&context))?;
 
                         Ok(collect_left_input(
-                            self.random_state.clone(),
+                            self.random_state,
                             left_stream,
                             on_left.clone(),
                             join_metrics.clone(),
@@ -949,7 +949,7 @@ impl ExecutionPlan for HashJoinExec {
 
                 (
                     OnceFut::new(collect_left_input(
-                        self.random_state.clone(),
+                        self.random_state,
                         left_stream,
                         on_left.clone(),
                         join_metrics.clone(),
@@ -981,8 +981,6 @@ impl ExecutionPlan for HashJoinExec {
                         .iter()
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
-                    let null_equality = self.null_equality;
-                    let random_state = self.random_state.clone();
                     Some(Arc::clone(df.build_accumulator.get_or_init(|| {
                         Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
@@ -990,8 +988,7 @@ impl ExecutionPlan for HashJoinExec {
                             self.right.as_ref(),
                             filter,
                             on_right,
-                            null_equality,
-                            random_state,
+                            self.random_state,
                             reservation,
                         ))
                     })))
@@ -1026,7 +1023,7 @@ impl ExecutionPlan for HashJoinExec {
             self.filter.clone(),
             self.join_type,
             right_stream,
-            self.random_state.clone(),
+            self.random_state,
             join_metrics,
             column_indices_after_projection,
             self.null_equality,
@@ -1188,7 +1185,7 @@ impl ExecutionPlan for HashJoinExec {
                     join_type: self.join_type,
                     join_schema: Arc::clone(&self.join_schema),
                     left_fut: Arc::clone(&self.left_fut),
-                    random_state: self.random_state.clone(),
+                    random_state: self.random_state,
                     mode: self.mode,
                     metrics: ExecutionPlanMetricsSet::new(),
                     projection: self.projection.clone(),
@@ -1354,7 +1351,7 @@ impl BuildSideState {
 /// visited indices bitmap, and computed bounds (if requested).
 #[allow(clippy::too_many_arguments)]
 async fn collect_left_input(
-    random_state: RandomState,
+    random_state: &RandomState,
     left_stream: SendableRecordBatchStream,
     on_left: Vec<PhysicalExprRef>,
     metrics: BuildProbeJoinMetrics,

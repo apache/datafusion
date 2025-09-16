@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::joins::hash_join::exec::JoinLeftData;
-use crate::joins::hash_join::shared_bounds::SharedBuildAccumulator;
+use crate::joins::hash_join::information_passing::SharedBuildAccumulator;
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
 };
@@ -189,7 +189,7 @@ pub(super) struct HashJoinStream {
     /// right (probe) input
     right: SendableRecordBatchStream,
     /// Random state used for hashing initialization
-    random_state: RandomState,
+    random_state: &'static RandomState,
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Information of index and left / right placement of columns
@@ -306,7 +306,7 @@ impl HashJoinStream {
         filter: Option<JoinFilter>,
         join_type: JoinType,
         right: SendableRecordBatchStream,
-        random_state: RandomState,
+        random_state: &'static RandomState,
         join_metrics: BuildProbeJoinMetrics,
         column_indices: Vec<ColumnIndex>,
         null_equality: NullEquality,
@@ -466,7 +466,7 @@ impl HashJoinStream {
 
                 self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);
-                create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+                create_hashes(&keys_values, self.random_state, &mut self.hashes_buffer)?;
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());

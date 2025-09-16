@@ -15,13 +15,111 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utilities for shared bounds. Used in dynamic filter pushdown in Hash Joins.
-// TODO: include the link to the Dynamic Filter blog post.
+//! Utilities for passing information from the build side of a hash join to the probe side.
+//! This is also known as "sideways information passing", and enables optimizations that take
+//! of the smaller build side to reduce data processed on the larger probe side.
+//!
+//! As an example, let's consider TPC-H Query 17:
+//!
+//! ```sql
+//! select
+//! sum(l_extendedprice) / 7.0 as avg_yearly
+//! from
+//!     lineitem,
+//!     part
+//! where
+//!         p_partkey = l_partkey
+//!   and p_brand = 'Brand#23'
+//!   and p_container = 'MED BOX'
+//!   and l_quantity < (
+//!     select
+//!             0.2 * avg(l_quantity)
+//!     from
+//!         lineitem
+//!     where
+//!             l_partkey = p_partkey
+//! );
+//! ```
+//! The join portion of the query should look something like this:
+//!
+//! ```text
+//!                            │                                                         
+//!                            │                                                         
+//!                 2044 Rows  │                                                         
+//!                            │                                                         
+//!                            ▼                                                         
+//!                    ┌────────────────┐                                                 
+//!                    │    HashJoin    │                                                 
+//!                    │   p_partkey =  │                                                 
+//!                    │   l_partkey    │                                                 
+//!                    └──┬─────────┬───┘                     
+//!              2M Rows  │         │  60M Rows              
+//!                       │         │                          
+//!                       │         │                          
+//!              ┌────────┘         └─────────┐               
+//!              │                            │               This scan decodes 60M values of l_quantity and l_extendedprice,
+//!              ▼                            ▼               even though all but 2044 are filtered by the join!
+//!      ┌──────────────────┐        ┌─────────────────────┐                                
+//!      │Scan: part        │        │Scan: lineitem       │                  │             
+//!      │projection:       │        │projection:          │                  │              
+//!      │  p_partkey       │        │  l_quantity,        │                  │             
+//!      │filters:          │        │  l_extendedprice,   │◀─ ─ ─ ─ ─ ─ ─ ─ ─              
+//!      │  p_brand = ..    │        │  l_partkey          │                                
+//!      │  p_container = ..│        │filters:             │                                
+//!      │                  │        │  NONE               │                                
+//!      └──────────────────┘        └─────────────────────┘                                
+//! ```
+//!
+//! The key observation is that the scan of `lineitem` produces 60 million rows, but only 2044 of them
+//! will pass the join condition. If we can push down a filter to the scan of `lineitem` that only limits
+//! the number of rows produced, we can avoid a lot of unnecessary work.
+//!
+//! Given that in a hash join, we fully process the build side (in this case, `part`) before scanning partitions
+//! of the probe side (`lineitem`), we can collect information from the build side that helps us construct filters
+//! for the probe side. This allows us to transform the above plan into something like this:
+//!
+//! ```text
+//!                            │                                                         
+//!                            │                                                         
+//!                 2044 Rows  │                                                         
+//!                            │                                                         
+//!                            ▼                                                         
+//!                    ┌────────────────┐                                                 
+//!                    │    HashJoin    │                                                 
+//!                    │   p_partkey =  │                                                 
+//!                    │   l_partkey    │                                                 
+//!                    └──┬─────────┬───┘                     
+//!              2M Rows  │         │  60M Rows              
+//!                       │         │                          
+//!                       │         │                          
+//!              ┌────────┘         └─────────┐               
+//!              │                            │               
+//!              ▼                            ▼               
+//!      ┌──────────────────┐        ┌──────────────────────────────┐                                
+//!      │Scan: part        │        │Scan: lineitem                │         Now, the scan contains a filter that takes into account                      
+//!      │projection:       │        │projection:                   │         min/max bounds from the left side. This enables scans that                       
+//!      │  p_partkey       │        │  l_quantity,                 │         take advantage of late materialization to avoid decoding                     
+//!      │filters:          │        │  l_extendedprice,            │         l_quantity and l_extendedprice for rows that do not match.                       
+//!      │  p_brand = ..    │        │  l_partkey                   │                   │             
+//!      │  p_container = ..│        │filters:                      │                   │             
+//!      └──────────────────┘        │  l_partkey >= min(p_partkey) │                   │
+//!                                  │    and                       │ ◀─ ─ ─ ─ ─ ─ ─ ─ ─
+//!                                  │  l_partkey <= max(p_partkey) │
+//!                                  │    and                       │
+//!                                  │  ...                         │                                
+//!                                  └──────────────────────────────┘                                
+//! ```
+//!
+//! Dynamic filters are expressions that allow us to pass information sideways in a query plan. They essentially start out
+//! as dummy filters that are always true (resulting in no selectivity), and may be updated later during query execution.
+//! In the case of a hash join, we update dynamic filters after fully processing the build side, and before scanning the probe side.
+//!
+//! References:
+//! - https://github.com/apache/datafusion/issues/7955
+//! - https://datafusion.apache.org/blog/2025/09/10/dynamic-filters/
 
-use std::fmt;
-use std::sync::Arc;
+use std::{any::Any, fmt, hash::Hash, sync::Arc};
 
-use crate::joins::hash_join::hash_eval::HashEvalPhysicalExpr;
 use crate::joins::utils::JoinHashMapType;
 use crate::joins::utils::NoHashHasher;
 use crate::joins::utils::NoHashSet;
@@ -30,12 +128,17 @@ use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 
 use ahash::RandomState;
+use arrow::{
+    array::BooleanArray,
+    buffer::MutableBuffer,
+    datatypes::{DataType, Schema},
+    util::bit_util,
+};
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::HashSet;
-use datafusion_common::NullEquality;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{hash_utils::create_hashes, Result, ScalarValue};
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_expr::Operator;
+use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
@@ -95,8 +198,8 @@ impl PartitionBounds {
 ///
 /// ## Synchronization Strategy
 ///
-/// 1. Each partition values computed from its build-side data (e.g. min/max bounds, available hashes)
-/// 2. The per-partition information is accumulated in partition-agnostic state
+/// 1. Each partition relays values computed from its build-side data (e.g. min/max bounds, available hashes)
+/// 2. The per-partition information is accumulated in shared state
 /// 3. A [`Barrier`] is used to track reporters. Once the last partition reports, the information is merged and the filter is updated exactly once
 ///
 /// ## Partition Counting
@@ -112,27 +215,30 @@ impl PartitionBounds {
 /// partition executions.
 pub(crate) struct SharedBuildAccumulator {
     /// Shared state protected by a single mutex to avoid ordering concerns
-    inner: Mutex<SharedBoundsState>,
+    inner: Mutex<SharedBuildState>,
+    /// Synchronization barrier to track when all partitions have reported
     barrier: Barrier,
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter bounds
     on_right: Vec<PhysicalExprRef>,
-    null_equality: NullEquality,
-    random_state: RandomState,
+    /// Random state used for hash computation
+    random_state: &'static RandomState,
 }
 
 /// State protected by SharedBuildAccumulator's mutex
-struct SharedBoundsState {
+struct SharedBuildState {
     /// Bounds from completed partitions.
     /// Each element represents the column bounds computed by one partition.
     bounds: Vec<PartitionBounds>,
+    /// Hashes from the left (build) side, if enabled
     left_hashes: NoHashSet<u64>,
+    /// Memory reservation tracking the memory used by `left_hashes`
     reservation: MemoryReservation,
 }
 
 impl SharedBuildAccumulator {
-    /// Creates a new SharedBuildAccumulator configured for the given partition mode
+    /// Creates a new [SharedBuildAccumulator] configured for the given partition mode
     ///
     /// This method calculates how many times `collect_build_side` will be called based on the
     /// partition mode's execution pattern. This count is critical for determining when we have
@@ -163,8 +269,7 @@ impl SharedBuildAccumulator {
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
-        null_equality: NullEquality,
-        random_state: RandomState,
+        random_state: &'static RandomState,
         reservation: MemoryReservation,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
@@ -182,7 +287,7 @@ impl SharedBuildAccumulator {
             PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
         };
         Self {
-            inner: Mutex::new(SharedBoundsState {
+            inner: Mutex::new(SharedBuildState {
                 bounds: Vec::with_capacity(expected_calls),
                 left_hashes: HashSet::with_hasher(core::hash::BuildHasherDefault::<
                     NoHashHasher,
@@ -192,7 +297,6 @@ impl SharedBuildAccumulator {
             barrier: Barrier::new(expected_calls),
             dynamic_filter,
             on_right,
-            null_equality,
             random_state,
         }
     }
@@ -285,8 +389,8 @@ impl SharedBuildAccumulator {
     ///
     /// # Arguments
     /// * `left_side_partition_id` - The identifier for the **left-side** partition reporting its bounds
-    /// * `partition_bounds` - The bounds computed by this partition (if any)
-    /// * `left_hash_map` - The hashes from the build side for this partition (if any)
+    /// * `partition_bounds` - The bounds computed by this partition (if enabled)
+    /// * `left_hash_map` - The hashes from the build side for this partition (if enabled)
     ///
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed
@@ -339,11 +443,11 @@ impl SharedBuildAccumulator {
             };
 
             let maybe_hash_eval_expr = if !inner.left_hashes.is_empty() {
-                Some(Arc::new(HashEvalPhysicalExpr::new(
+                Some(Arc::new(HashComparePhysicalExpr::new(
                     self.on_right.clone(),
                     std::mem::take(&mut inner.left_hashes),
-                    self.null_equality,
-                    self.random_state.clone(),
+                    self.random_state,
+                    inner.reservation.take(),
                 )) as Arc<dyn PhysicalExpr>)
             } else {
                 None
@@ -370,5 +474,138 @@ impl SharedBuildAccumulator {
 impl fmt::Debug for SharedBuildAccumulator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SharedBuildAccumulator")
+    }
+}
+
+/// A [`PhysicalExpr`] that evaluates to a boolean array indicating which rows in a batch
+/// have hashes that exist in a given set of hashes.
+///
+/// This is currently used to implement hash-based dynamic filters in hash joins. That is,
+/// this expression can be pushed down to the probe side of a hash join to filter out rows
+/// that do not have a matching hash in the build side, allowing the scan to emit only the rows
+/// that are guaranteed to have at least one match.
+struct HashComparePhysicalExpr {
+    /// Expressions that will be evaluated to compute hashes for filtering
+    exprs: Vec<PhysicalExprRef>,
+    /// Hashes to filter against
+    hashes: NoHashSet<u64>,
+    /// Random state for hash computation
+    random_state: &'static RandomState,
+    /// Memory reservation used to track the memory used by `hashes`
+    reservation: MemoryReservation,
+}
+
+impl HashComparePhysicalExpr {
+    pub fn new(
+        exprs: Vec<PhysicalExprRef>,
+        hashes: NoHashSet<u64>,
+        random_state: &'static RandomState,
+        reservation: MemoryReservation,
+    ) -> Self {
+        Self {
+            exprs,
+            hashes,
+            random_state,
+            reservation,
+        }
+    }
+}
+
+impl fmt::Debug for HashComparePhysicalExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HashComparePhysicalExpr [ {:?} ]", self.exprs)
+    }
+}
+
+impl Hash for HashComparePhysicalExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.exprs.hash(state);
+    }
+}
+
+impl PartialEq for HashComparePhysicalExpr {
+    fn eq(&self, other: &Self) -> bool {
+        // TODO: We limit comparison to uphold the equality property w.r.t `Hash`.
+        // However, this means we may consider two expressions equal when they are actually not.
+        // Since this is currently just used internally for dynamic filters, this may be acceptable
+        // for now. If this expression is ever exposed more broadly, we should revisit this.
+        self.exprs == other.exprs
+    }
+}
+
+impl Eq for HashComparePhysicalExpr {}
+
+impl fmt::Display for HashComparePhysicalExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let exprs = self
+            .exprs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "HashComparePhysicalExpr [ {exprs} ]")
+    }
+}
+
+impl PhysicalExpr for HashComparePhysicalExpr {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        self.exprs.iter().collect()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(Self {
+            exprs: children,
+            hashes: self.hashes.clone(),
+            random_state: self.random_state,
+            reservation: self.reservation.new_empty(),
+        }))
+    }
+
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn evaluate(
+        &self,
+        batch: &arrow::record_batch::RecordBatch,
+    ) -> Result<ColumnarValue> {
+        let num_rows = batch.num_rows();
+
+        let expr_values = self
+            .exprs
+            .iter()
+            .map(|col| col.evaluate(&batch)?.into_array(num_rows))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Compute hashes for each row based on the evaluated expressions
+        let mut hashes_buffer = vec![0; num_rows];
+        create_hashes(&expr_values, &self.random_state, &mut hashes_buffer)?;
+
+        // Create a boolean array where each position indicates if the corresponding hash is in the set of known hashes
+        let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(num_rows, 8));
+        for (idx, hash) in hashes_buffer.into_iter().enumerate() {
+            if self.hashes.contains(&hash) {
+                bit_util::set_bit(buf.as_slice_mut(), idx);
+            }
+        }
+
+        Ok(ColumnarValue::Array(Arc::new(
+            BooleanArray::new_from_packed(buf, 0, num_rows),
+        )))
+    }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string())
     }
 }
