@@ -251,7 +251,7 @@ struct VectorizedOperationBuffers {
     /// The `vectorized append` row indices buffer
     append_row_indices: Vec<usize>,
 
-    /// If all the values in `append_row_indices` are continuous
+    /// If all the values in `append_row_indices` are consecutive
     /// i.e. `append_row_indices[i] + 1 == append_row_indices[i + 1]`
     /// this is used to optimize the `vectorized_append` operation
     are_row_indices_consecutive: bool,
