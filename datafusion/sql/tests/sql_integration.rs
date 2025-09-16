@@ -4633,7 +4633,7 @@ fn test_no_substring_registered() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: Please try with `unicode_expressions` DataFusion feature enabled"
     );
 }
 
@@ -4645,7 +4645,7 @@ fn test_no_substring_registered_alt_syntax() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: Please try with `unicode_expressions` DataFusion feature enabled"
     );
 }
 

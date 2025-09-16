@@ -233,7 +233,23 @@ impl ScalarUDF {
     ///
     /// See [`ScalarUDFImpl::invoke_with_args`] for details.
     pub fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        self.inner.invoke_with_args(args)
+        #[cfg(debug_assertions)]
+        let return_field = Arc::clone(&args.return_field);
+        let result = self.inner.invoke_with_args(args)?;
+        // Maybe this could be enabled always?
+        // This doesn't use debug_assert!, but it's meant to run anywhere except on production. It's same in spirit, thus conditioning on debug_assertions.
+        #[cfg(debug_assertions)]
+        {
+            if &result.data_type() != return_field.data_type() {
+                return datafusion_common::internal_err!("Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
+                        self.name(),
+                        result.data_type(),
+                        return_field.data_type()
+                    );
+            }
+            // TODO verify return data is non-null when it was promised to be?
+        }
+        Ok(result)
     }
 
     /// Get the circuits of inner implementation

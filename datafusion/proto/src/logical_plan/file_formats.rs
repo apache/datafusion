@@ -72,6 +72,7 @@ impl CsvOptionsProto {
                 newlines_in_values: options
                     .newlines_in_values
                     .map_or(vec![], |v| vec![v as u8]),
+                truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
             }
         } else {
             CsvOptionsProto::default()
@@ -156,6 +157,11 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 None
             } else {
                 Some(proto.newlines_in_values[0] != 0)
+            },
+            truncated_rows: if proto.truncated_rows.is_empty() {
+                None
+            } else {
+                Some(proto.truncated_rows[0] != 0)
             },
         }
     }

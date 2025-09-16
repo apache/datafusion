@@ -1535,7 +1535,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
 #[test]
 fn test_union_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
-    let union = Arc::new(UnionExec::new(vec![csv.clone(), csv.clone(), csv]));
+    let union = UnionExec::try_new(vec![csv.clone(), csv.clone(), csv])?;
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
