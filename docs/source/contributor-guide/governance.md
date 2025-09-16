@@ -100,10 +100,10 @@ Notes:
 | Sun Chao                | sunchao          | [sunchao](https://github.com/sunchao)                   |             | Committer |
 | Daniel Harris           | thinkharderdev   | [thinkharderdev](https://github.com/thinkharderdev)     |             | Committer |
 | Raphael Taylor-Davies   | tustvold         | [tustvold](https://github.com/tustvold)                 |             | Committer |
-| Weijun Huang            | weijun           | [Weijun-H](https://github.com/Weijun-H)                 |             | Committer |
-| Yang Jiang              | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               |             | Committer |
+| Weijun Huang            | weijun           | [Weijun-H](https://github.com/Weijun-H)                 |OrbDB            | Committer |
+| Yang Jiang              | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               | Ebay            | Committer |
 | Yijie Shen              | yjshen           | [yjshen](https://github.com/yjshen)                     |             | Committer |
-| Yongting You            | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             |             | Committer |
+| Yongting You            | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             | Independent | Committer |
 | Qi Zhu                  | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           | Polygon.io  | Committer |
 
 <!-- End Auto-Generated Committer List -->
