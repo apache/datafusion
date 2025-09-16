@@ -64,10 +64,12 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality, Result,
+    ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
+use datafusion_functions_aggregate::count::DistinctCountAccumulator;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
@@ -104,10 +106,14 @@ pub(super) struct JoinLeftData {
     _reservation: MemoryReservation,
     /// Bounds computed from the build side for dynamic filter pushdown
     pub(super) bounds: Option<Vec<ColumnBounds>>,
+    /// Optional min value for constructing perfect hash join vector. Will opt for perfect hash join if this value is 
+    /// Some
+    _min_value: Option<ScalarValue>,
 }
 
 impl JoinLeftData {
     /// Create a new `JoinLeftData` from its parts
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         hash_map: Box<dyn JoinHashMapType>,
         batch: RecordBatch,
@@ -116,6 +122,7 @@ impl JoinLeftData {
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
         bounds: Option<Vec<ColumnBounds>>,
+        min_value: Option<ScalarValue>,
     ) -> Self {
         Self {
             hash_map,
@@ -125,6 +132,7 @@ impl JoinLeftData {
             probe_threads_counter,
             _reservation: reservation,
             bounds,
+            _min_value: min_value,
         }
     }
 
@@ -358,6 +366,7 @@ pub struct HashJoinExec {
     /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
     /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
     dynamic_filter: Option<HashJoinExecDynamicFilter>,
+    can_perfect: bool,
 }
 
 #[derive(Clone)]
@@ -415,11 +424,18 @@ impl HashJoinExec {
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
+
         if on.is_empty() {
             return plan_err!("On constraints in HashJoinExec should be non-empty");
         }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
+
+        // For executing a perfect hash join it must obey the following conditions:
+        let can_perfect = matches!(join_type, JoinType::Inner) // Is Inner join
+            && on.len() == 1 // One `on`` condition
+            && on[0].0.data_type(&left_schema)?.is_integer() // Both join keys are integers
+            && on[0].1.data_type(&right_schema)?.is_integer();
 
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
@@ -460,6 +476,7 @@ impl HashJoinExec {
             null_equality,
             cache,
             dynamic_filter: None,
+            can_perfect,
         })
     }
 
@@ -858,6 +875,7 @@ impl ExecutionPlan for HashJoinExec {
             )?,
             // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
+            can_perfect: self.can_perfect,
         }))
     }
 
@@ -880,6 +898,7 @@ impl ExecutionPlan for HashJoinExec {
             cache: self.cache.clone(),
             // Reset dynamic filter and bounds accumulator to initial state
             dynamic_filter: None,
+            can_perfect: self.can_perfect,
         }))
     }
 
@@ -930,6 +949,7 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown,
+                    self.can_perfect,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -948,6 +968,7 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown,
+                    self.can_perfect,
                 ))
             }
             PartitionMode::Auto => {
@@ -1181,6 +1202,7 @@ impl ExecutionPlan for HashJoinExec {
                         filter: dynamic_filter,
                         bounds_accumulator: OnceLock::new(),
                     }),
+                    can_perfect: self.can_perfect,
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
             }
@@ -1204,7 +1226,9 @@ struct CollectLeftAccumulator {
     /// Accumulator for tracking the minimum value across all batches
     min: MinAccumulator,
     /// Accumulator for tracking the maximum value across all batches
-    max: MaxAccumulator,
+    max: Option<MaxAccumulator>,
+    /// Accumulator for tracking if the values are distinct across all batches
+    distinct: Option<DistinctCountAccumulator>,
 }
 
 impl CollectLeftAccumulator {
@@ -1216,7 +1240,12 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// A new `CollectLeftAccumulator` instance configured for the expression's data type
-    fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Result<Self> {
+    fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+        should_compute_bounds: bool,
+        can_perfect: bool,
+    ) -> Result<Self> {
         /// Recursively unwraps dictionary types to get the underlying value type.
         fn dictionary_value_type(data_type: &DataType) -> DataType {
             match data_type {
@@ -1231,10 +1260,21 @@ impl CollectLeftAccumulator {
             .data_type(schema)
             // Min/Max can operate on dictionary data but expect to be initialized with the underlying value type
             .map(|dt| dictionary_value_type(&dt))?;
+
+        let (max, distinct) = (
+            // Create max accumulator if `should_compute_bounds` == true
+            should_compute_bounds
+                .then(|| MaxAccumulator::try_new(&data_type))
+                .transpose()?,
+            // Create distinct accumulator if `can_perfect`  == true;
+            can_perfect.then_some(DistinctCountAccumulator::try_new(&data_type)),
+        );
+
         Ok(Self {
             expr,
             min: MinAccumulator::try_new(&data_type)?,
-            max: MaxAccumulator::try_new(&data_type)?,
+            max,
+            distinct,
         })
     }
 
@@ -1251,7 +1291,15 @@ impl CollectLeftAccumulator {
     fn update_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
         self.min.update_batch(std::slice::from_ref(&array))?;
-        self.max.update_batch(std::slice::from_ref(&array))?;
+
+        if let Some(max) = &mut self.max {
+            max.update_batch(std::slice::from_ref(&array))?;
+        }
+
+        if let Some(distinct) = &mut self.distinct {
+            distinct.update_batch(std::slice::from_ref(&array))?;
+        }
+
         Ok(())
     }
 
@@ -1261,11 +1309,37 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// The `ColumnBounds` containing the minimum and maximum values observed
-    fn evaluate(mut self) -> Result<ColumnBounds> {
-        Ok(ColumnBounds::new(
-            self.min.evaluate()?,
-            self.max.evaluate()?,
-        ))
+    fn evaluate(
+        mut self,
+        compute_bounds: bool,
+        can_perfect: bool,
+    ) -> Result<(ScalarValue, Option<ScalarValue>, Option<ScalarValue>)> {
+        let min = self.min.evaluate()?;
+        let max = if compute_bounds {
+            if let Some(mut max) = self.max {
+                Some(max.evaluate()?)
+            } else {
+                return internal_err!(
+                    "Bounds requested `compute_bounds` != true at creation"
+                );
+            }
+        } else {
+            None
+        };
+
+        let distinct = if can_perfect {
+            if let Some(mut distinct) = self.distinct {
+                Some(distinct.evaluate()?)
+            } else {
+                return internal_err!(
+                    "Distinct requested `can_perfect` != true at creation"
+                );
+            }
+        } else {
+            None
+        };
+
+        Ok((min, max, distinct))
     }
 }
 
@@ -1286,18 +1360,24 @@ impl BuildSideState {
         on_left: Vec<Arc<dyn PhysicalExpr>>,
         schema: &SchemaRef,
         should_compute_bounds: bool,
+        can_perfect: bool,
     ) -> Result<Self> {
         Ok(Self {
             batches: Vec::new(),
             num_rows: 0,
             metrics,
             reservation,
-            bounds_accumulators: should_compute_bounds
+            bounds_accumulators: (should_compute_bounds || can_perfect)
                 .then(|| {
                     on_left
                         .iter()
                         .map(|expr| {
-                            CollectLeftAccumulator::try_new(Arc::clone(expr), schema)
+                            CollectLeftAccumulator::try_new(
+                                Arc::clone(expr),
+                                schema,
+                                should_compute_bounds,
+                                can_perfect,
+                            )
                         })
                         .collect::<Result<Vec<_>>>()
                 })
@@ -1312,7 +1392,8 @@ impl BuildSideState {
 /// 1. Consuming the entire left stream and collecting all batches into memory
 /// 2. Building a hash map from the join key columns for efficient probe operations
 /// 3. Computing bounds for dynamic filter pushdown (if enabled)
-/// 4. Preparing visited indices bitmap for certain join types
+/// 4. Computing distinct values for perfect join (if enabled)
+/// 5. Preparing visited indices bitmap for certain join types
 ///
 /// # Parameters
 /// * `random_state` - Random state for consistent hashing across partitions
@@ -1323,7 +1404,8 @@ impl BuildSideState {
 /// * `with_visited_indices_bitmap` - Whether to track visited indices (for outer joins)
 /// * `probe_threads_count` - Number of threads that will probe this hash table
 /// * `should_compute_bounds` - Whether to compute min/max bounds for dynamic filtering
-///
+/// * `can_perfect` — If `true`, compute perfect-hash feasibility (single-key min/distinct)
+/// 
 /// # Dynamic Filter Coordination
 /// When `should_compute_bounds` is true, this function computes the min/max bounds
 /// for each join key column but does NOT update the dynamic filter. Instead, the
@@ -1344,6 +1426,7 @@ async fn collect_left_input(
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
     should_compute_bounds: bool,
+    can_perfect: bool,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1356,6 +1439,7 @@ async fn collect_left_input(
         on_left.clone(),
         &schema,
         should_compute_bounds,
+        can_perfect,
     )?;
 
     let state = left_stream
@@ -1457,16 +1541,41 @@ async fn collect_left_input(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Compute bounds for dynamic filter if enabled
-    let bounds = match bounds_accumulators {
-        Some(accumulators) if num_rows > 0 => {
-            let bounds = accumulators
-                .into_iter()
-                .map(CollectLeftAccumulator::evaluate)
-                .collect::<Result<Vec<_>>>()?;
-            Some(bounds)
+    // Compute bounds for dynamic filter if enabled. At this point the bound accumulator could
+    // have been initialized for pushdown min/max, perfect hash join min/distinct,
+    // or both.
+    let (bounds, min_value) = match (bounds_accumulators, num_rows > 0) {
+        (Some(accs), true) => {
+            let mut bounds_vec =
+                should_compute_bounds.then(|| Vec::with_capacity(accs.len()));
+
+            // Don't need to initialize a vec, a distinct values as perfect joins can only be allowed if there is
+            // one join key.
+            let mut perfect_min: Option<ScalarValue> = None;
+
+            for acc in accs.into_iter() {
+                let (min, max, distinct) =
+                    acc.evaluate(should_compute_bounds, can_perfect)?;
+
+                // If the bounds are innitialized we can push into bounds
+                if let Some(bounds_vec) = bounds_vec.as_mut() {
+                    let bound = ColumnBounds::new(min.clone(), max.unwrap());
+                    bounds_vec.push(bound);
+                }
+
+                if let Some(distinct) = distinct {
+                    let distinct_int: i32 = distinct.try_into()?;
+
+                    // Check if the values are distinct
+                    if (distinct_int as usize) == num_rows {
+                        perfect_min = Some(min);
+                    }
+                }
+            }
+
+            (bounds_vec, perfect_min)
         }
-        _ => None,
+        _ => (None, None),
     };
 
     let data = JoinLeftData::new(
@@ -1477,6 +1586,7 @@ async fn collect_left_input(
         AtomicUsize::new(probe_threads_count),
         reservation,
         bounds,
+        min_value,
     );
 
     Ok(data)

@@ -746,12 +746,20 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
 /// more efficient such as [`PrimitiveDistinctCountAccumulator`] and
 /// [`BytesDistinctCountAccumulator`]
 #[derive(Debug)]
-struct DistinctCountAccumulator {
+pub struct DistinctCountAccumulator {
     values: HashSet<ScalarValue, RandomState>,
     state_data_type: DataType,
 }
 
 impl DistinctCountAccumulator {
+    /// Creates new `DistinctCountAccumulator`
+    pub fn try_new(data_type: &DataType) -> Self {
+        Self {
+            values: HashSet::with_hasher(RandomState::new()),
+            state_data_type: data_type.clone(),
+        }
+    }
+
     // calculating the size for fixed length values, taking first batch size *
     // number of batches This method is faster than .full_size(), however it is
     // not suitable for variable length values like strings or complex types
