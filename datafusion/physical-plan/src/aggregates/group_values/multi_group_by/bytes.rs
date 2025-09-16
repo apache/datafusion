@@ -22,7 +22,7 @@ use arrow::array::{
     GenericBinaryArray, GenericByteArray, GenericStringArray, OffsetSizeTrait,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
+use arrow::datatypes::{ArrowNativeType, ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
@@ -165,6 +165,74 @@ where
                 let new_len = self.offsets.len() + rows.len();
                 let offset = self.buffer.len();
                 self.offsets.resize(new_len, O::usize_as(offset));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn append_array_slice_inner<B>(
+        &mut self,
+        array: &ArrayRef,
+        start: usize,
+        length: usize,
+    ) -> Result<()>
+    where
+        B: ByteArrayType,
+    {
+        let array = array.as_bytes::<B>();
+
+        let offsets = array.offsets();
+        let bytes = array.value_data();
+
+        // Is the slice all nulls
+        let all_nulls: bool;
+
+        // 1. Append the nulls
+        if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+            let nulls_slice = nulls.slice(start, length);
+            all_nulls = nulls_slice.null_count() == length;
+            self.nulls.append_buffer(&nulls_slice);
+        } else {
+            all_nulls = false;
+            self.nulls.append_n(length, false);
+        }
+
+        let values_start = offsets[start].as_usize();
+        let values_end = offsets[start + length].as_usize();
+
+        // 2. Append the offsets
+
+        // Must be before adding the bytes to the buffer
+        let mut last_offset = self.buffer.len();
+
+        if all_nulls {
+            // If all nulls, we can just repeat the last offset
+            for _ in 0..length {
+                self.offsets.push(O::usize_as(last_offset));
+            }
+        } else {
+            for start_and_end_values in offsets[start..=start + length].windows(2) {
+                let length = start_and_end_values[1] - start_and_end_values[0];
+                last_offset += length.as_usize();
+                self.offsets.push(O::usize_as(last_offset));
+            }
+        }
+
+        // 3. Append the bytes
+
+        // Only if not all nulls append the actual bytes
+        if !all_nulls {
+            // Note: if the array have nulls we might copy some bytes that are not used.
+
+            // Add all the bytes for the values directly to the byte buffer
+            self.buffer.append_slice(&bytes[values_start..values_end]);
+
+            if self.buffer.len() > self.max_buffer_size {
+                return Err(DataFusionError::Execution(format!(
+                    "offset overflow, buffer size > {}",
+                    self.max_buffer_size
+                )));
             }
         }
 
@@ -320,6 +388,37 @@ where
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
                 self.vectorized_append_inner::<GenericStringType<O>>(column, rows)?
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
+
+        Ok(())
+    }
+
+    fn append_array_slice(
+        &mut self,
+        column: &ArrayRef,
+        start: usize,
+        length: usize,
+    ) -> Result<()> {
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.append_array_slice_inner::<GenericBinaryType<O>>(
+                    column, start, length,
+                )?
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.append_array_slice_inner::<GenericStringType<O>>(
+                    column, start, length,
+                )?
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };

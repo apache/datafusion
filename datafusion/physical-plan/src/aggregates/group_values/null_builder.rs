@@ -61,6 +61,13 @@ impl MaybeNullBufferBuilder {
         }
     }
 
+    /// Append [`NullBuffer`] to this [`NullBufferBuilder`]
+    ///
+    /// This is useful when you want to concatenate two null buffers.
+    pub fn append_buffer(&mut self, other: &NullBuffer) {
+        self.nulls.append_buffer(other);
+    }
+
     /// return the number of heap allocated bytes used by this structure to store boolean values
     pub fn allocated_size(&self) -> usize {
         // NullBufferBuilder builder::allocated_size returns capacity in bits
