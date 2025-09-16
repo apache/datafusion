@@ -790,9 +790,26 @@ impl SessionContext {
         }
 
         if exist {
-            match cmd.if_not_exists {
-                true => return self.return_empty_dataframe(),
-                false => {
+            match (cmd.if_not_exists, cmd.or_replace) {
+                (true, false) => return self.return_empty_dataframe(),
+                (false, true) => {
+                    let result = self
+                        .find_and_deregister(cmd.name.clone(), TableType::Base)
+                        .await;
+                    match result {
+                        Ok(true) => {
+                            let table_provider: Arc<dyn TableProvider> =
+                                self.create_custom_table(cmd).await?;
+                            self.register_table(cmd.name.clone(), table_provider)?;
+                            return self.return_empty_dataframe();
+                        }
+                        _ => return exec_err!("View '{}' doesn't exist.", cmd.name),
+                    }
+                }
+                (true, true) => {
+                    return exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+                }
+                (false, false) => {
                     return exec_err!("Table '{}' already exists", cmd.name);
                 }
             }

@@ -272,7 +272,7 @@ drop table my_table
 
 # select_into
 statement ok
-SELECT* INTO my_table FROM (SELECT * FROM aggregate_simple)
+SELECT * INTO my_table FROM (SELECT * FROM aggregate_simple)
 
 query RRB rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
@@ -606,6 +606,19 @@ CREATE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
 # 'IF NOT EXISTS' cannot coexist with 'REPLACE'
 statement error Execution error: 'IF NOT EXISTS' cannot coexist with 'REPLACE'
 CREATE OR REPLACE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
+
+# CREATE OR REPLACE
+statement ok
+CREATE OR REPLACE EXTERNAL TABLE aggregate_simple_repl
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE OR REPLACE EXTERNAL TABLE aggregate_simple_repl
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
 
 # Should insert into an empty table
 statement ok
