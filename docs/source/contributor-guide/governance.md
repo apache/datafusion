@@ -59,7 +59,7 @@ Notes:
 | Andrew Grove            | agrove           | [andygrove](https://github.com/andygrove)               | Apple       | PMC       |
 | Mustafa Akur            | akurmustafa      | [akurmustafa](https://github.com/akurmustafa)           | OHSU        | PMC       |
 | Berkay Şahin            | berkay           | [berkaysynnada](https://github.com/berkaysynnada)       |     Synnada        | PMC       |
-| Oleks V                 | comphead         | [comphead](https://github.com/comphead)                 |             | PMC       |
+| Oleksandr Voievodin                 | comphead         | [comphead](https://github.com/comphead)                 |    Apple         | PMC       |
 | Daniël Heres            | dheres           | [Dandandan](https://github.com/Dandandan)               |             | PMC       |
 | QP Hou                  | houqp            | [houqp](https://github.com/houqp)                       |             | PMC       |
 | Jie Wen                 | jakevin          | [jakevin](https://github.com/jakevin)                   |             | PMC       |
@@ -68,7 +68,7 @@ Notes:
 | Kun Liu                 | liukun           |                                                         |             | PMC       |
 | Mehmet Ozan Kabak       | ozankabak        | [ozankabak](https://github.com/ozankabak)               |             | PMC       |
 | Tim Saucer              | timsaucer        | [timsaucer](https://github.com/timsaucer)               |             | PMC       |
-| L. C. Hsieh             | viirya           | [viirya](https://github.com/viirya)                     |             | PMC       |
+| L. C. Hsieh             | viirya           | [viirya](https://github.com/viirya)                     | Databricks  | PMC       |
 | Ruihang Xia             | wayne            | [waynexia](https://github.com/waynexia)                 |             | PMC       |
 | Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         | Posit       | PMC       |
 | Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               |             | PMC       |
