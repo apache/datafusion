@@ -1548,9 +1548,9 @@ async fn collect_left_input(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Compute bounds for dynamic filter if enabled. At this point the bound accumulator could
-    // have been initialized for pushdown min/max, perfect hash join min/distinct,
-    // or both.
+    // Compute statistics for dynamic filter or perfect hash join if enabled. At this point 
+    // the bound accumulator could have been initialized for pushdown min/max, perfect hash 
+    // join min/distinct, or both.
     let (bounds, min_value) = match (bounds_accumulators, num_rows > 0) {
         (Some(accs), true) => {
             let mut bounds_vec =
