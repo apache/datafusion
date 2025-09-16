@@ -46,8 +46,8 @@ docs/scripts/update_committer_list.py
 
 Notes:
 
-* The github and Affiliation columns are not auto updated as there is no public source for this
-  information. In order to provide this date, the table must be manually edited.
+* The script only updates the Name and Apache ID columns. The rest of the data
+  is manually provided.
 
 -->
 
