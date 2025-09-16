@@ -586,12 +586,12 @@ impl PhysicalExpr for HashComparePhysicalExpr {
         let expr_values = self
             .exprs
             .iter()
-            .map(|col| col.evaluate(&batch)?.into_array(num_rows))
+            .map(|col| col.evaluate(batch)?.into_array(num_rows))
             .collect::<Result<Vec<_>>>()?;
 
         // Compute hashes for each row based on the evaluated expressions
         let mut hashes_buffer = vec![0; num_rows];
-        create_hashes(&expr_values, &self.random_state, &mut hashes_buffer)?;
+        create_hashes(&expr_values, self.random_state, &mut hashes_buffer)?;
 
         // Create a boolean array where each position indicates if the corresponding hash is in the set of known hashes
         let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(num_rows, 8));
@@ -607,6 +607,6 @@ impl PhysicalExpr for HashComparePhysicalExpr {
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{self}")
     }
 }

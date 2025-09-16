@@ -1441,7 +1441,7 @@ async fn collect_left_input(
             batch,
             &mut *hashmap,
             offset,
-            &random_state,
+            random_state,
             &mut hashes_buffer,
             0,
             true,
