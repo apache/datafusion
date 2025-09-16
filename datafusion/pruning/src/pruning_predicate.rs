@@ -908,7 +908,6 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     // For each needed statistics column:
     for (column, statistics_type, stat_field) in required_columns.iter() {
         let column = Column::from_name(column.name());
-        let _column_name = column.name().to_string();
         let data_type = stat_field.data_type();
 
         let num_containers = statistics.num_containers();
