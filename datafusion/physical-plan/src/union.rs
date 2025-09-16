@@ -352,8 +352,7 @@ impl ExecutionPlan for UnionExec {
             .map(|child| make_with_child(projection, child))
             .collect::<Result<Vec<_>>>()?;
 
-        #[allow(deprecated)]
-        Ok(Some(Arc::new(UnionExec::new(new_children))))
+        Ok(Some(UnionExec::try_new(new_children.clone())?))
     }
 }
 
@@ -751,8 +750,7 @@ mod tests {
         let csv = test::scan_partitioned(4);
         let csv2 = test::scan_partitioned(5);
 
-        #[allow(deprecated)]
-        let union_exec = Arc::new(UnionExec::new(vec![csv, csv2]));
+        let union_exec: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![csv, csv2])?;
 
         // Should have 9 partitions and 9 output batches
         assert_eq!(
@@ -934,8 +932,7 @@ mod tests {
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_orderings(union_expected_orderings);
 
-            #[allow(deprecated)]
-            let union = UnionExec::new(vec![child1, child2]);
+            let union: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![child1, child2])?;
             let union_eq_properties = union.properties().equivalence_properties();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
