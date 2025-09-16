@@ -611,8 +611,7 @@ mod tests {
             }
             other => {
                 return Err(DataFusionError::Internal(format!(
-                    "expected Array or Scalar IntervalMonthDayNano, got {:?}",
-                    other
+                    "expected Array or Scalar IntervalMonthDayNano, got {other:?}"
                 )));
             }
         }
