@@ -31,6 +31,14 @@ use std::sync::Arc;
     doc_section(label = "Math Functions"),
     description = "Returns true if a given number is +NaN or -NaN otherwise returns false.",
     syntax_example = "isnan(numeric_expression)",
+    sql_example = r#"```sql
+> SELECT isnan(1);
++----------+
+| isnan(1) |
++----------+
+| false    |
++----------+
+```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
