@@ -95,7 +95,7 @@ Notes:
 | Marco Neumann           | mneumann         | [crepererum](https://github.com/crepererum)             |     InfluxData        | Committer |
 | Zhong Yanghong          | nju_yaho         |     [yahoNanJing](https://github.com/yahoNanJing)                                                    |             | Committer |
 | Paddy Horan             | paddyhoran       | [paddyhoran](https://github.com/paddyhoran)             | Assured Allies | Committer |
-| Parth Chandra           | parthc           | [parthchandra](https://github.com/parthchandra)         |             | Committer |
+| Parth Chandra           | parthc           | [parthchandra](https://github.com/parthchandra)         |  Apple  | Committer |
 | Rémi Dettai             | rdettai          | [rdettai](https://github.com/rdettai)                   |             | Committer |
 | Chao Sun                | sunchao          | [sunchao](https://github.com/sunchao)                   |      OpenAI       | Committer |
 | Daniel Harris           | thinkharderdev   | [thinkharderdev](https://github.com/thinkharderdev)     | Coralogix   | Committer |
