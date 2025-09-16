@@ -86,7 +86,7 @@ Notes:
 | Kazuyuki Tanimura       | kazuyukitanimura | [kazuyukitanimura](https://github.com/kazuyukitanimura) |             | Committer |
 | Eduard Karacharov       | korowa           | [korowa](https://github.com/korowa)                     |             | Committer |
 | Siew Kam Onn            | kosiew           | [kosiew](https://github.com/kosiew)                     |             | Committer |
-| Lewis Zhang             | linwei           |                                                         |             | Committer |
+| Lewis Zhang             | linwei           | [lewiszlw](https://github.com/lewiszlw)                 | diit.cn     | Committer |
 | Matt Butrovich          | mbutrovich       | [mbutrovich](https://github.com/mbutrovich)             |             | Committer |
 | Metehan Yildirim        | mete             |                                                         |             | Committer |
 | Marko Milenković        | milenkovicm      | [milenkovicm](https://github.com/milenkovicm)           |             | Committer |
