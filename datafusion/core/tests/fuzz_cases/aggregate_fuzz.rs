@@ -947,6 +947,8 @@ async fn test_group_by_multiple_columns_all_unique() -> Result<()> {
             &ctx,
             Arc::clone(&scan_schema),
             vec![input.clone()],
+            // It is important to get the grouping keys back so we can test that we don't
+            // mess them up
             r#"
               SELECT
                 idx,
