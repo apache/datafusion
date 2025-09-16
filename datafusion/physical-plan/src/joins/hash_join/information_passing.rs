@@ -455,7 +455,8 @@ impl SharedBuildAccumulator {
 
             let filter_expr = match (maybe_bounds_expr, maybe_hash_eval_expr) {
                 (None, Some(expr)) | (Some(expr), None) => expr,
-                // This branch shouldn't be taken
+                // Bounds collection and hash collection are current mutually exclusive, so this branch should not be
+                // taken at the moment. However, if they are ever enabled together, this is how we would combine them.
                 (Some(bounds_expr), Some(hash_eval_expr)) => Arc::new(BinaryExpr::new(
                     bounds_expr,
                     Operator::And,
