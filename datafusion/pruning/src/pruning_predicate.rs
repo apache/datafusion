@@ -25,6 +25,7 @@ use std::sync::Arc;
 use arrow::array::AsArray;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
+    compute::CastOptions,
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -929,14 +930,14 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array =
-            if data_type == &DataType::Utf8 && array.data_type() == &DataType::Binary {
-                let mut cast_options = DEFAULT_CAST_OPTIONS;
-                cast_options.safe = true;
-                arrow::compute::cast_with_options(&array, data_type, &cast_options)?
-            } else {
-                cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
-            };
+        // Cast using "safe" semantics so invalid binary statistics for string fields
+        // produce `NULL` values instead of errors.
+        let cast_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let array = cast_column(&array, stat_field, &cast_options)?;
 
         arrays.push(array);
     }
