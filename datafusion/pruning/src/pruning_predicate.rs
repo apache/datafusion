@@ -930,7 +930,8 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-            let array = if data_type == &DataType::Utf8 && array.data_type() == &DataType::Binary {
+        let array =
+            if data_type == &DataType::Utf8 && array.data_type() == &DataType::Binary {
                 // Statistics from Parquet may store string columns as binary bytes that are not
                 // guaranteed valid UTF-8. Use safe cast options so invalid sequences become nulls.
                 let cast_options = CastOptions {
