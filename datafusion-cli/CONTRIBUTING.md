@@ -22,7 +22,8 @@
 ## Running Tests
 
 First check out test files with
-```
+
+```shell
 git submodule update --init
 ```
 
