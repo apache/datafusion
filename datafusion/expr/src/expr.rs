@@ -39,10 +39,38 @@ use datafusion_common::{
     Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+#[cfg(feature = "sql")]
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
-    NullTreatment, RenameSelectItem, ReplaceSelectElement,
+    RenameSelectItem, ReplaceSelectElement,
 };
+
+// This mirrors sqlparser::ast::NullTreatment but we need our own variant
+// for when the sql feature is disabled.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub enum NullTreatment {
+    IgnoreNulls,
+    RespectNulls,
+}
+
+impl Display for NullTreatment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            NullTreatment::IgnoreNulls => "IGNORE NULLS",
+            NullTreatment::RespectNulls => "RESPECT NULLS",
+        })
+    }
+}
+
+#[cfg(feature = "sql")]
+impl From<sqlparser::ast::NullTreatment> for NullTreatment {
+    fn from(value: sqlparser::ast::NullTreatment) -> Self {
+        match value {
+            sqlparser::ast::NullTreatment::IgnoreNulls => Self::IgnoreNulls,
+            sqlparser::ast::NullTreatment::RespectNulls => Self::RespectNulls,
+        }
+    }
+}
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
@@ -1380,6 +1408,130 @@ impl GroupingSet {
                 }
                 exprs
             }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub struct IlikeSelectItem {
+    pub pattern: String,
+}
+#[cfg(not(feature = "sql"))]
+impl Display for IlikeSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "ILIKE '{}'", &self.pattern)?;
+        Ok(())
+    }
+}
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub enum ExcludeSelectItem {
+    Single(Ident),
+    Multiple(Vec<Ident>),
+}
+#[cfg(not(feature = "sql"))]
+impl Display for ExcludeSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "EXCLUDE")?;
+        match self {
+            Self::Single(column) => {
+                write!(f, " {column}")?;
+            }
+            Self::Multiple(columns) => {
+                write!(f, " ({})", display_comma_separated(columns))?;
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub struct ExceptSelectItem {
+    pub first_element: Ident,
+    pub additional_elements: Vec<Ident>,
+}
+#[cfg(not(feature = "sql"))]
+impl Display for ExceptSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "EXCEPT ")?;
+        if self.additional_elements.is_empty() {
+            write!(f, "({})", self.first_element)?;
+        } else {
+            write!(
+                f,
+                "({}, {})",
+                self.first_element,
+                display_comma_separated(&self.additional_elements)
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "sql"))]
+pub fn display_comma_separated<T>(slice: &[T]) -> String
+where
+    T: Display,
+{
+    use itertools::Itertools;
+    slice.iter().map(|v| format!("{v}")).join(", ")
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub enum RenameSelectItem {
+    Single(String),
+    Multiple(Vec<String>),
+}
+#[cfg(not(feature = "sql"))]
+impl Display for RenameSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "RENAME")?;
+        match self {
+            Self::Single(column) => {
+                write!(f, " {column}")?;
+            }
+            Self::Multiple(columns) => {
+                write!(f, " ({})", display_comma_separated(columns))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub struct Ident {
+    /// The value of the identifier without quotes.
+    pub value: String,
+    /// The starting quote if any. Valid quote characters are the single quote,
+    /// double quote, backtick, and opening square bracket.
+    pub quote_style: Option<char>,
+    /// The span of the identifier in the original SQL string.
+    pub span: String,
+}
+#[cfg(not(feature = "sql"))]
+impl Display for Ident {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "[{}]", self.value)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[cfg(not(feature = "sql"))]
+pub struct ReplaceSelectElement {
+    pub expr: String,
+    pub column_name: Ident,
+    pub as_keyword: bool,
+}
+#[cfg(not(feature = "sql"))]
+impl Display for ReplaceSelectElement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if self.as_keyword {
+            write!(f, "{} AS {}", self.expr, self.column_name)
+        } else {
+            write!(f, "{} {}", self.expr, self.column_name)
         }
     }
 }
