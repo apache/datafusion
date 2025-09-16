@@ -309,10 +309,13 @@ impl LogicalPlanBuilder {
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
                 let metadata = value.metadata(&schema)?;
-                common_metadata = FieldMetadata::merge_options(
-                    common_metadata.as_ref(),
-                    Some(&metadata),
-                );
+                if let Some(ref cm) = common_metadata {
+                    if &metadata != cm {
+                        return plan_err!("Inconsistent metadata across values list at row {i} column {j}. Was {:?} but found {:?}", cm, metadata);
+                    }
+                } else {
+                    common_metadata = Some(metadata.clone());
+                }
                 let data_type = value.get_type(&schema)?;
                 if data_type == DataType::Null {
                     continue;
@@ -2827,6 +2830,19 @@ mod tests {
         ])?
         .build()?;
         assert_eq!(*values.schema().field(0).metadata(), metadata.to_hashmap());
+
+        // Do not allow VALUES with different metadata mixed together
+        let metadata2: HashMap<String, String> =
+            [("ARROW:extension:metadata".to_string(), "test2".to_string())]
+                .into_iter()
+                .collect();
+        let metadata2 = FieldMetadata::from(metadata2);
+        assert!(LogicalPlanBuilder::values(vec![
+            vec![lit_with_metadata(1, Some(metadata.clone()))],
+            vec![lit_with_metadata(2, Some(metadata2.clone()))],
+        ])
+        .is_err());
+
         Ok(())
     }
 }
