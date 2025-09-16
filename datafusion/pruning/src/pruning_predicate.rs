@@ -35,13 +35,13 @@ use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err,
+    cast_column, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
-    ScalarValue,
+    Column, DFSchema, ScalarValue,
 };
-use datafusion_common::{Column, DFSchema};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
@@ -929,7 +929,7 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array = arrow::compute::cast(&array, data_type)?;
+        let array = cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?;
 
         arrays.push(array);
     }
