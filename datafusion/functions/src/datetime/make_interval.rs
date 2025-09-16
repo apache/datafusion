@@ -575,32 +575,44 @@ mod tests {
         let number_rows = 2;
         let res: ColumnarValue = invoke_make_interval_with_args(vec![], number_rows)?;
 
-        let ColumnarValue::Array(arr) = res else {
-            return Err(DataFusionError::Internal(
-                "expected ColumnarValue::Array(IntervalMonthDayNano)".into(),
-            ));
-        };
-
-        let arr: &IntervalMonthDayNanoArray = arr
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected IntervalMonthDayNanoArray".into())
-            })?;
-
-        if arr.len() != number_rows {
-            return Err(DataFusionError::Internal(format!(
-                "expected array length {number_rows}, got {}",
-                arr.len()
-            )));
-        }
-
-        for i in 0..number_rows {
-            let iv: IntervalMonthDayNano = arr.value(i);
-            if iv.months != 0 || iv.days != 0 || iv.nanoseconds != 0 {
+        match res {
+            ColumnarValue::Array(arr) => {
+                let arr = arr
+                    .as_any()
+                    .downcast_ref::<IntervalMonthDayNanoArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "expected IntervalMonthDayNanoArray".into(),
+                        )
+                    })?;
+                if arr.len() != number_rows {
+                    return Err(DataFusionError::Internal(format!(
+                        "expected array length {number_rows}, got {}",
+                        arr.len()
+                    )));
+                }
+                for i in 0..number_rows {
+                    let iv = arr.value(i);
+                    if (iv.months, iv.days, iv.nanoseconds) != (0, 0, 0) {
+                        return Err(DataFusionError::Internal(format!(
+                            "row {i}: expected (0,0,0), got ({},{},{})",
+                            iv.months, iv.days, iv.nanoseconds
+                        )));
+                    }
+                }
+            }
+            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(iv))) => {
+                if (iv.months, iv.days, iv.nanoseconds) != (0, 0, 0) {
+                    return Err(DataFusionError::Internal(format!(
+                        "expected scalar 0s, got ({},{},{})",
+                        iv.months, iv.days, iv.nanoseconds
+                    )));
+                }
+            }
+            other => {
                 return Err(DataFusionError::Internal(format!(
-                    "row {i}: expected 0 months, 0 days, 0 ns; got months={}, days={}, ns={}",
-                    iv.months, iv.days, iv.nanoseconds
+                    "expected Array or Scalar IntervalMonthDayNano, got {:?}",
+                    other
                 )));
             }
         }
