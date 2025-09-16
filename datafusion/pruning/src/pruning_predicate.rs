@@ -23,7 +23,7 @@ use std::collections::HashSet;
 use std::str;
 use std::sync::Arc;
 
-use arrow::array::AsArray;
+use arrow::array::{Array, AsArray, BinaryViewBuilder};
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -919,7 +919,8 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
             StatisticsType::NullCount => statistics.null_counts(&column),
             StatisticsType::RowCount => statistics.row_counts(&column),
         };
-        let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
+        let mut array =
+            array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
         if num_containers != array.len() {
             return internal_err!(
@@ -931,19 +932,27 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let is_string = matches!(data_type, DataType::Utf8 | DataType::LargeUtf8);
-        let is_binary =
-            matches!(array.data_type(), DataType::Binary | DataType::LargeBinary);
+        let is_string = matches!(
+            data_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        );
+        let is_binary = matches!(
+            array.data_type(),
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+        );
 
-        let array = if is_string && is_binary {
+        if is_string && is_binary {
+            array = sanitize_binary_array_for_utf8(array);
+        }
+
+        let mut cast_options = DEFAULT_CAST_OPTIONS;
+        if is_string && is_binary {
             // Use safe casting so that any invalid UTF8 bytes are converted to NULL
             // rather than producing unchecked string values.
-            let mut cast_options = DEFAULT_CAST_OPTIONS;
             cast_options.safe = true;
-            cast_column(&array, stat_field, &cast_options)?
-        } else {
-            cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
-        };
+        }
+
+        let array = cast_column(&array, stat_field, &cast_options)?;
 
         arrays.push(array);
     }
@@ -958,6 +967,27 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
         plan_datafusion_err!("Can not create statistics record batch: {err}")
     })
+}
+
+fn sanitize_binary_array_for_utf8(array: ArrayRef) -> ArrayRef {
+    match array.data_type() {
+        DataType::BinaryView => {
+            let binary_view = array.as_binary_view();
+            let mut builder = BinaryViewBuilder::with_capacity(binary_view.len());
+
+            for value in binary_view.iter() {
+                match value {
+                    Some(bytes) if str::from_utf8(bytes).is_ok() => {
+                        builder.append_value(bytes)
+                    }
+                    _ => builder.append_null(),
+                }
+            }
+
+            Arc::new(builder.finish()) as ArrayRef
+        }
+        _ => array,
+    }
 }
 
 struct PruningExpressionBuilder<'a> {
@@ -1888,7 +1918,7 @@ mod tests {
     use arrow::array::{Array, Decimal128Array};
     use arrow::{
         array::{
-            ArrayRef, BinaryArray, BooleanArray, Int32Array, Int64Array,
+            ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Int32Array, Int64Array,
             LargeBinaryArray, StringArray, StructArray, UInt64Array,
         },
         datatypes::TimeUnit,
@@ -2539,7 +2569,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_statistics_large_binary_to_large_utf8() {
+    fn test_build_statistics_large_binary_to_large_utf8_invalid_bytes() {
         let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("bin", 0),
             StatisticsType::Min,
@@ -2550,13 +2580,17 @@ mod tests {
             "bin",
             ContainerStats::new().with_min(Arc::new(LargeBinaryArray::from(vec![
                 Some("alpha".as_bytes()),
-                None,
+                Some(&[0xf0, 0x28, 0x8c, 0x28]),
                 Some("omega".as_bytes()),
             ])) as ArrayRef),
         );
 
         let batch =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
+
+        assert!(!batch.column(0).is_null(0));
+        assert!(batch.column(0).is_null(1));
+        assert!(!batch.column(0).is_null(2));
 
         assert_snapshot!(batches_to_string(&[batch]), @r"
         +---------+
@@ -2566,6 +2600,41 @@ mod tests {
         |         |
         | omega   |
         +---------+
+        ");
+    }
+
+    #[test]
+    fn test_build_statistics_binary_view_to_utf8_view_invalid_bytes() {
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("bin_view", 0),
+            StatisticsType::Min,
+            Field::new("bin_view_min", DataType::Utf8View, true),
+        )]);
+
+        let statistics = TestStatistics::new().with(
+            "bin_view",
+            ContainerStats::new().with_min(Arc::new(BinaryViewArray::from(vec![
+                Some("alpha".as_bytes()),
+                Some(&[0xf0, 0x28, 0x8c, 0x28]),
+                Some("omega".as_bytes()),
+            ])) as ArrayRef),
+        );
+
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+
+        assert!(!batch.column(0).is_null(0));
+        assert!(batch.column(0).is_null(1));
+        assert!(!batch.column(0).is_null(2));
+
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------------+
+        | bin_view_min |
+        +--------------+
+        | alpha        |
+        |              |
+        | omega        |
+        +--------------+
         ");
     }
 
