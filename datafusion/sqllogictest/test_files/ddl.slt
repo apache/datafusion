@@ -587,7 +587,7 @@ statement ok
 CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 # Should not recreate the same EXTERNAL table
-statement error Execution error: Table 'aggregate_simple' already exists
+statement error Execution error: External table 'aggregate_simple' already exists
 CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 statement ok
@@ -619,6 +619,42 @@ CREATE OR REPLACE EXTERNAL TABLE aggregate_simple_repl
 STORED AS CSV
 LOCATION '../core/tests/data/aggregate_simple.csv'
 OPTIONS ('format.has_header' 'true');
+
+# Create replacement table for table that doesn't already exist
+statement ok
+DROP TABLE IF EXISTS aggregate_table;
+
+statement ok
+CREATE OR REPLACE EXTERNAL TABLE aggregate_table
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TTT
+DESCRIBE aggregate_table;
+----
+c1 Float64 YES
+c2 Float64 YES
+c3 Boolean YES
+
+# Create replacement table with different format for table that doesn't already exist
+query I
+COPY (SELECT * FROM (VALUES (1),(2),(3)) AS t(id))
+TO 'test_files/scratch/ddl/test_table'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE OR REPLACE EXTERNAL TABLE aggregate_table
+STORED AS PARQUET
+LOCATION 'test_files/scratch/ddl/test_table';
+
+
+query TTT
+DESCRIBE aggregate_table;
+----
+id Int64 YES
 
 # Should insert into an empty table
 statement ok
