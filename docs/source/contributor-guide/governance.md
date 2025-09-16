@@ -57,7 +57,7 @@ Notes:
 | ----------------------- | ---------------- | ------------------------------------------------------- | ----------- | --------- |
 | Andrew Lamb             | alamb            | [alamb](https://github.com/alamb)                       | InfluxData  | PMC Chair |
 | Andrew Grove            | agrove           | [andygrove](https://github.com/andygrove)               |             | PMC       |
-| Mustafa Akur            | akurmustafa      | [akurmustafa](https://github.com/akurmustafa)           |             | PMC       |
+| Mustafa Akur            | akurmustafa      | [akurmustafa](https://github.com/akurmustafa)           | OHSU        | PMC       |
 | Berkay Şahin            | berkay           | [berkaysynnada](https://github.com/berkaysynnada)       |             | PMC       |
 | Oleks V                 | comphead         | [comphead](https://github.com/comphead)                 |             | PMC       |
 | Daniël Heres            | dheres           | [Dandandan](https://github.com/Dandandan)               |             | PMC       |
@@ -73,7 +73,7 @@ Notes:
 | Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         | Posit       | PMC       |
 | Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               |             | PMC       |
 | Xudong Wang             | xudong963        | [xudong963](https://github.com/xudong963)               |             | PMC       |
-| Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 |  Pydantic   | Committer |
+| Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 | Pydantic    | Committer |
 | Brent Gardner           | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     |             | Committer |
 | Dmitrii Blaginin        | blaginin         | [blaginin](https://github.com/blaginin)                 |             | Committer |
 | Piotr Findeisen         | findepi          | [findepi](https://github.com/findepi)                   |             | Committer |
