@@ -1656,10 +1656,10 @@ query TT
 explain select coalesce(1, y/x), coalesce(2, y/x) from t;
 ----
 logical_plan
-01)Projection: CASE WHEN Boolean(true) THEN Int64(1) ELSE CAST(t.y / t.x AS Int64) END AS coalesce(Int64(1),t.y / t.x), CASE WHEN Boolean(true) THEN Int64(2) ELSE CAST(t.y / t.x AS Int64) END AS coalesce(Int64(2),t.y / t.x)
-02)--TableScan: t projection=[x, y]
+01)Projection: Int64(1) AS coalesce(Int64(1),t.y / t.x), Int64(2) AS coalesce(Int64(2),t.y / t.x)
+02)--TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[CASE WHEN true THEN 1 ELSE CAST(y@1 / x@0 AS Int64) END as coalesce(Int64(1),t.y / t.x), CASE WHEN true THEN 2 ELSE CAST(y@1 / x@0 AS Int64) END as coalesce(Int64(2),t.y / t.x)]
+01)ProjectionExec: expr=[1 as coalesce(Int64(1),t.y / t.x), 2 as coalesce(Int64(2),t.y / t.x)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT

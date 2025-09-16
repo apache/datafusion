@@ -585,6 +585,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
         self.sql_with_options(sql, SQLOptions::new()).await
     }
@@ -615,6 +616,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub async fn sql_with_options(
         &self,
         sql: &str,
@@ -648,6 +650,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn parse_sql_expr(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
         self.state.read().create_logical_expr(sql, df_schema)
     }

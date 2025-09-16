@@ -297,7 +297,7 @@ async fn test_fuzz_topk_filter_pushdown() {
                         order_vec.push(ordering);
                     }
                     None => {
-                        orders.insert(order_column.to_string(), vec![ordering]);
+                        orders.insert((*order_column).to_string(), vec![ordering]);
                     }
                 }
             }

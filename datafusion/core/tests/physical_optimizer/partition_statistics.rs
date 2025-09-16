@@ -357,7 +357,7 @@ mod test {
     async fn test_statistic_by_partition_of_union() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let union_exec: Arc<dyn ExecutionPlan> =
-            Arc::new(UnionExec::new(vec![scan.clone(), scan]));
+            UnionExec::try_new(vec![scan.clone(), scan])?;
         let statistics = (0..union_exec.output_partitioning().partition_count())
             .map(|idx| union_exec.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
