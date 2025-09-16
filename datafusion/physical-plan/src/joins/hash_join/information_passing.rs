@@ -445,7 +445,7 @@ impl SharedBuildAccumulator {
             let maybe_hash_eval_expr = if !inner.left_hashes.is_empty() {
                 Some(Arc::new(HashComparePhysicalExpr::new(
                     self.on_right.clone(),
-                    std::mem::take(&mut inner.left_hashes),
+                    Arc::new(std::mem::take(&mut inner.left_hashes)),
                     self.random_state,
                     inner.reservation.take(),
                 )) as Arc<dyn PhysicalExpr>)
@@ -488,7 +488,7 @@ struct HashComparePhysicalExpr {
     /// Expressions that will be evaluated to compute hashes for filtering
     exprs: Vec<PhysicalExprRef>,
     /// Hashes to filter against
-    hashes: NoHashSet<u64>,
+    hashes: Arc<NoHashSet<u64>>,
     /// Random state for hash computation
     random_state: &'static RandomState,
     /// Memory reservation used to track the memory used by `hashes`
@@ -498,7 +498,7 @@ struct HashComparePhysicalExpr {
 impl HashComparePhysicalExpr {
     pub fn new(
         exprs: Vec<PhysicalExprRef>,
-        hashes: NoHashSet<u64>,
+        hashes: Arc<NoHashSet<u64>>,
         random_state: &'static RandomState,
         reservation: MemoryReservation,
     ) -> Self {
