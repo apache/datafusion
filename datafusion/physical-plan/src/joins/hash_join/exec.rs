@@ -1213,13 +1213,18 @@ impl ExecutionPlan for HashJoinExec {
 
 /// Accumulator for collecting min/max bounds from build-side data during hash join.
 ///
-/// This struct encapsulates the logic for progressively computing column bounds
-/// (minimum and maximum values) for a specific join key expression as batches
-/// are processed during the build phase of a hash join.
+/// This struct incrementally tracks:
+/// - **min**: Global minimum of the key across all record batches (always maintained)
+/// - **max**: Global maximum (enabled when `should_compute_bounds` was true at construction)
+/// - **distinct**: Count of distinct key values (enabled when `can_perfect` was true at construction)
 ///
-/// The bounds are used for dynamic filter pushdown optimization, where filters
-/// based on the actual data ranges can be pushed down to the probe side to
-/// eliminate unnecessary data early.
+/// These statistics allow for:
+///  - Dynamic filter pushdown: When `should_compute_bounds` is set, the accumulator computes `min`/`max` per
+///    build-side join key. The caller can merge these bounds across partitions and
+///    push a range predicate.
+///  - Perfect hash join: When `can_perfect` is set, the accumulator computes a `distinct` count and
+///    min value to check if the number of non null values in the build side is equal to the distinct 
+///    values. This allows for perfect hash join execution.
 struct CollectLeftAccumulator {
     /// The physical expression to evaluate for each batch
     expr: Arc<dyn PhysicalExpr>,
@@ -1313,7 +1318,7 @@ impl CollectLeftAccumulator {
         mut self,
         compute_bounds: bool,
         can_perfect: bool,
-    ) -> Result<(ScalarValue, Option<ScalarValue>, Option<ScalarValue>)> {
+    ) -> Result<(ScalarValue, Option<ScalarValue>, Option<usize>)> {
         let min = self.min.evaluate()?;
         let max = if compute_bounds {
             if let Some(mut max) = self.max {
@@ -1329,7 +1334,7 @@ impl CollectLeftAccumulator {
 
         let distinct = if can_perfect {
             if let Some(mut distinct) = self.distinct {
-                Some(distinct.evaluate()?)
+                Some(distinct.evaluate_as_usize()?)
             } else {
                 return internal_err!(
                     "Distinct requested `can_perfect` != true at creation"
@@ -1499,6 +1504,7 @@ async fn collect_left_input(
 
     let mut hashes_buffer = Vec::new();
     let mut offset = 0;
+    let mut non_null_row_count = can_perfect.then_some(0);
 
     // Updating hashmap starting from the last batch
     let batches_iter = batches.iter().rev();
@@ -1514,6 +1520,7 @@ async fn collect_left_input(
             &mut hashes_buffer,
             0,
             true,
+            non_null_row_count.as_mut(),
         )?;
         offset += batch.num_rows();
     }
@@ -1564,10 +1571,7 @@ async fn collect_left_input(
                 }
 
                 if let Some(distinct) = distinct {
-                    let distinct_int: i32 = distinct.try_into()?;
-
-                    // Check if the values are distinct
-                    if (distinct_int as usize) == num_rows {
+                    if distinct == non_null_row_count.unwrap() {
                         perfect_min = Some(min);
                     }
                 }

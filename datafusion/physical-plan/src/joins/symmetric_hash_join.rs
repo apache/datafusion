@@ -1210,6 +1210,7 @@ impl OneSideHashJoiner {
             &mut self.hashes_buffer,
             self.deleted_offset,
             false,
+            None,
         )?;
         Ok(())
     }

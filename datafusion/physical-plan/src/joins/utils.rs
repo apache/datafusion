@@ -1663,12 +1663,18 @@ pub fn update_hash(
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: usize,
     fifo_hashmap: bool,
+    non_null_row_count: Option<&mut usize>,
 ) -> Result<()> {
     // evaluate the keys
     let keys_values = on
         .iter()
         .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
+
+    if let Some(null_rows) = non_null_row_count {
+        // Only need the first key because perfect hash join can only allow one join key
+        *null_rows += keys_values[0].len() - keys_values[0].null_count();
+    };
 
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;

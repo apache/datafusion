@@ -760,6 +760,11 @@ impl DistinctCountAccumulator {
         }
     }
 
+    /// Returns the number of distinct values. Avoids the conversion from `ScalarValue` compared to `evaluate()`
+    pub fn evaluate_as_usize(&mut self) -> Result<usize> {
+        Ok(self.values.len())
+    }
+
     // calculating the size for fixed length values, taking first batch size *
     // number of batches This method is faster than .full_size(), however it is
     // not suitable for variable length values like strings or complex types
