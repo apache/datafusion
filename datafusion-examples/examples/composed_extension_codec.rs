@@ -32,7 +32,6 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::common::internal_err;
@@ -71,9 +70,8 @@ async fn main() {
         .expect("to proto");
 
     // deserialize proto back to execution plan
-    let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), runtime.deref(), &composed_codec)
+        .try_into_physical_plan(&ctx.task_ctx(), &composed_codec)
         .expect("from proto");
 
     // assert that the original and deserialized execution plans are equal
