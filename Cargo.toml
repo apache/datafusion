@@ -122,7 +122,7 @@ datafusion-datasource-json = { path = "datafusion/datasource-json", version = "5
 datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "50.0.0", default-features = false }
 datafusion-doc = { path = "datafusion/doc", version = "50.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "50.0.0", default-features = false }
-datafusion-expr = { path = "datafusion/expr", version = "50.0.0", default-features = false}
+datafusion-expr = { path = "datafusion/expr", version = "50.0.0", default-features = false }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "50.0.0" }
 datafusion-ffi = { path = "datafusion/ffi", version = "50.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "50.0.0" }
