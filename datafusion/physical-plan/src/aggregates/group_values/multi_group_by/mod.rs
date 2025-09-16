@@ -251,15 +251,10 @@ struct VectorizedOperationBuffers {
     /// The `vectorized append` row indices buffer
     append_row_indices: Vec<usize>,
 
-    /// The last row index in `append_row_indices`
-    ///
-    /// Will be None if `append_row_indices` is empty
-    last_append_row_index: Option<usize>,
-
     /// If all the values in `append_row_indices` are continuous
     /// i.e. `append_row_indices[i] + 1 == append_row_indices[i + 1]`
     /// this is used to optimize the `vectorized_append` operation
-    are_row_indices_continuous: bool,
+    are_row_indices_consecutive: bool,
 
     /// The `vectorized_equal_to` row indices buffer
     equal_to_row_indices: Vec<usize>,
@@ -286,19 +281,18 @@ impl VectorizedOperationBuffers {
     }
 
     fn add_append_row_index(&mut self, row: usize) {
-        self.are_row_indices_continuous = self.are_row_indices_continuous
+        self.are_row_indices_consecutive = self.are_row_indices_consecutive
             && self
-                .last_append_row_index
+                .append_row_indices
+                .last()
                 .is_none_or(|last| last + 1 == row);
-        self.last_append_row_index = Some(row);
 
         self.append_row_indices.push(row);
     }
 
     fn clear_append_row_indices(&mut self) {
         self.append_row_indices.clear();
-        self.are_row_indices_continuous = true;
-        self.last_append_row_index = None;
+        self.are_row_indices_consecutive = true;
     }
 }
 
@@ -620,7 +614,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         }
 
         let iter = self.group_values.iter_mut().zip(cols.iter());
-        if self.vectorized_operation_buffers.are_row_indices_continuous
+        if self
+            .vectorized_operation_buffers
+            .are_row_indices_consecutive
             && !self
                 .vectorized_operation_buffers
                 .append_row_indices
