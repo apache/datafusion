@@ -34,7 +34,7 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
-use crate::coalesce::{BatchCoalescer, CoalescerState};
+use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -53,7 +53,7 @@ use futures::stream::{Stream, StreamExt};
 /// buffering and returns the final batch once the number of collected rows
 /// reaches the `fetch` value.
 ///
-/// See [`BatchCoalescer`] for more information
+/// See [`LimitedBatchCoalescer`] for more information
 #[derive(Debug, Clone)]
 pub struct CoalesceBatchesExec {
     /// The input plan
@@ -182,14 +182,13 @@ impl ExecutionPlan for CoalesceBatchesExec {
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CoalesceBatchesStream {
             input: self.input.execute(partition, context)?,
-            coalescer: BatchCoalescer::new(
+            coalescer: LimitedBatchCoalescer::new(
                 self.input.schema(),
                 self.target_batch_size,
                 self.fetch,
             ),
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
-            // Start by pulling data
-            inner_state: CoalesceBatchesStreamState::Pull,
+            completed: false,
         }))
     }
 
@@ -249,12 +248,11 @@ struct CoalesceBatchesStream {
     /// The input plan
     input: SendableRecordBatchStream,
     /// Buffer for combining batches
-    coalescer: BatchCoalescer,
+    coalescer: LimitedBatchCoalescer,
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
-    /// The current inner state of the stream. This state dictates the current
-    /// action or operation to be performed in the streaming process.
-    inner_state: CoalesceBatchesStreamState,
+    /// is the input stream exhausted or limit reached?
+    completed: bool,
 }
 
 impl Stream for CoalesceBatchesStream {
@@ -274,50 +272,6 @@ impl Stream for CoalesceBatchesStream {
     }
 }
 
-/// Enumeration of possible states for `CoalesceBatchesStream`.
-/// It represents different stages in the lifecycle of a stream of record batches.
-///
-/// An example of state transition:
-/// Notation:
-/// `[3000]`: A batch with size 3000
-/// `{[2000], [3000]}`: `CoalesceBatchStream`'s internal buffer with 2 batches buffered
-/// Input of `CoalesceBatchStream` will generate three batches `[2000], [3000], [4000]`
-/// The coalescing procedure will go through the following steps with 4096 coalescing threshold:
-/// 1. Read the first batch and get it buffered.
-/// - initial state: `Pull`
-/// - initial buffer: `{}`
-/// - updated buffer: `{[2000]}`
-/// - next state: `Pull`
-/// 2. Read the second batch, the coalescing target is reached since 2000 + 3000 > 4096
-/// - initial state: `Pull`
-/// - initial buffer: `{[2000]}`
-/// - updated buffer: `{[2000], [3000]}`
-/// - next state: `ReturnBuffer`
-/// 4. Two batches in the batch get merged and consumed by the upstream operator.
-/// - initial state: `ReturnBuffer`
-/// - initial buffer: `{[2000], [3000]}`
-/// - updated buffer: `{}`
-/// - next state: `Pull`
-/// 5. Read the third input batch.
-/// - initial state: `Pull`
-/// - initial buffer: `{}`
-/// - updated buffer: `{[4000]}`
-/// - next state: `Pull`
-/// 5. The input is ended now. Jump to exhaustion state preparing the finalized data.
-/// - initial state: `Pull`
-/// - initial buffer: `{[4000]}`
-/// - updated buffer: `{[4000]}`
-/// - next state: `Exhausted`
-#[derive(Debug, Clone, Eq, PartialEq)]
-enum CoalesceBatchesStreamState {
-    /// State to pull a new batch from the input stream.
-    Pull,
-    /// State to return a buffered batch.
-    ReturnBuffer,
-    /// State indicating that the stream is exhausted.
-    Exhausted,
-}
-
 impl CoalesceBatchesStream {
     fn poll_next_inner(
         self: &mut Pin<&mut Self>,
@@ -325,51 +279,39 @@ impl CoalesceBatchesStream {
     ) -> Poll<Option<Result<RecordBatch>>> {
         let cloned_time = self.baseline_metrics.elapsed_compute().clone();
         loop {
-            match &self.inner_state {
-                CoalesceBatchesStreamState::Pull => {
-                    // Attempt to pull the next batch from the input stream.
-                    let input_batch = ready!(self.input.poll_next_unpin(cx));
-                    // Start timing the operation. The timer records time upon being dropped.
-                    let _timer = cloned_time.timer();
+            // If there is any completed batch ready, return it
+            if let Some(batch) = self.coalescer.next_completed_batch() {
+                return Poll::Ready(Some(Ok(batch)));
+            }
+            if self.completed {
+                // If input is done and no batches are ready, return None to signal end of stream.
+                return Poll::Ready(None);
+            }
+            // Attempt to pull the next batch from the input stream.
+            let input_batch = ready!(self.input.poll_next_unpin(cx));
+            // Start timing the operation. The timer records time upon being dropped.
+            let _timer = cloned_time.timer();
 
-                    match input_batch {
-                        Some(Ok(batch)) => match self.coalescer.push_batch(batch) {
-                            CoalescerState::Continue => {}
-                            CoalescerState::LimitReached => {
-                                self.inner_state = CoalesceBatchesStreamState::Exhausted;
-                            }
-                            CoalescerState::TargetReached => {
-                                self.inner_state =
-                                    CoalesceBatchesStreamState::ReturnBuffer;
-                            }
-                        },
-                        None => {
-                            // End of input stream, but buffered batches might still be present.
-                            self.inner_state = CoalesceBatchesStreamState::Exhausted;
+            match input_batch {
+                None => {
+                    // Input stream is exhausted, finalize any remaining batches
+                    self.completed = true;
+                    self.coalescer.finish()?;
+                }
+                Some(Ok(batch)) => {
+                    match self.coalescer.push_batch(batch)? {
+                        PushBatchStatus::Continue => {
+                            // Keep pushing more batches
                         }
-                        other => return Poll::Ready(other),
+                        PushBatchStatus::LimitReached => {
+                            // limit was reached, so stop early
+                            self.completed = true;
+                            self.coalescer.finish()?;
+                        }
                     }
                 }
-                CoalesceBatchesStreamState::ReturnBuffer => {
-                    let _timer = cloned_time.timer();
-                    // Combine buffered batches into one batch and return it.
-                    let batch = self.coalescer.finish_batch()?;
-                    // Set to pull state for the next iteration.
-                    self.inner_state = CoalesceBatchesStreamState::Pull;
-                    return Poll::Ready(Some(Ok(batch)));
-                }
-                CoalesceBatchesStreamState::Exhausted => {
-                    // Handle the end of the input stream.
-                    return if self.coalescer.is_empty() {
-                        // If buffer is empty, return None indicating the stream is fully consumed.
-                        Poll::Ready(None)
-                    } else {
-                        let _timer = cloned_time.timer();
-                        // If the buffer still contains batches, prepare to return them.
-                        let batch = self.coalescer.finish_batch()?;
-                        Poll::Ready(Some(Ok(batch)))
-                    };
-                }
+                // Error case
+                other => return Poll::Ready(other),
             }
         }
     }
