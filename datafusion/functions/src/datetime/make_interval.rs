@@ -19,13 +19,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
-use arrow::array::{
-    Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray, PrimitiveBuilder,
-};
+use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray};
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
-use arrow::datatypes::{DataType, IntervalMonthDayNano, IntervalMonthDayNanoType};
-use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
+use arrow::datatypes::{DataType, IntervalMonthDayNano};
+use datafusion_common::{
+    exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -117,13 +117,9 @@ impl ScalarUDFImpl for MakeIntervalFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.is_empty() {
-            let n: usize = std::cmp::max(args.number_rows, 1);
-            let mut b: PrimitiveBuilder<IntervalMonthDayNanoType> =
-                IntervalMonthDayNanoBuilder::with_capacity(n);
-            for _ in 0..n {
-                b.append_value(IntervalMonthDayNano::new(0, 0, 0));
-            }
-            return Ok(ColumnarValue::Array(Arc::new(b.finish())));
+            return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                Some(IntervalMonthDayNano::new(0, 0, 0)),
+            )));
         }
         make_scalar_function(make_interval_kernel, vec![])(&args.args)
     }
@@ -133,7 +129,7 @@ impl ScalarUDFImpl for MakeIntervalFunc {
         match length {
             x if x > 7 => {
                 exec_err!(
-                    "make_interval expects between 1 and 7, got {}",
+                    "make_interval expects between 0 and 7 arguments, got {}",
                     arg_types.len()
                 )
             }
@@ -158,20 +154,14 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
     use arrow::array::AsArray;
     use arrow::datatypes::{Float64Type, Int32Type};
 
-    // 0 args is in invoke_with_args
-    if args.is_empty() || args.len() > 7 {
-        return exec_err!("make_interval expects between 0 and 7, got {}", args.len());
+    if args.len() > 7 {
+        return exec_err!(
+            "make_interval expects between 0 and 7 arguments, got {}",
+            args.len()
+        );
     }
 
     let n_rows = args[0].len();
-    for (i, a) in args.iter().enumerate().skip(1) {
-        if a.len() != n_rows {
-            return exec_err!(
-                "make_dt_interval: argument {i} has length {}, expected {n_rows}",
-                a.len()
-            );
-        }
-    }
 
     let years = args
         .first()
@@ -282,7 +272,9 @@ pub fn make_interval_month_day_nano(
     use datafusion_common::DataFusionError;
 
     if !sec.is_finite() {
-        return Err(DataFusionError::Execution("seconds is NaN/Inf".into()));
+        return Err(DataFusionError::Execution(
+            "seconds cannot be NaN or Inf".into(),
+        ));
     }
 
     // checks if overflow
@@ -318,13 +310,13 @@ pub fn make_interval_month_day_nano(
 
     let secs_nanos = sec_int
         .checked_mul(1_000_000_000)
-        .ok_or_else(|| DataFusionError::Execution("seconds to nanos overflow".into()))?;
+        .ok_or_else(|| DataFusionError::Execution("overflow summing nanoseconds: (hours+mins)={} + secs_nanos={} exceeds i64 range".into()))?;
 
     let total_nanos = hours_nanos
         .checked_add(mins_nanos)
         .and_then(|v| v.checked_add(secs_nanos))
         .and_then(|v| v.checked_add(frac_nanos))
-        .ok_or_else(|| DataFusionError::Execution("sum nanos overflow".into()))?;
+        .ok_or_else(|| DataFusionError::Execution("overflow summing nanoseconds: (hours+mins+secs)={} + frac_nanos={} exceeds i64 range".into()))?;
 
     Ok(Some(IntervalMonthDayNano::new(
         months,
