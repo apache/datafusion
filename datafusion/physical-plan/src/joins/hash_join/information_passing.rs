@@ -140,7 +140,7 @@ use datafusion_common::{hash_utils::create_hashes, Result, ScalarValue};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::PhysicalExpr;
 
 use itertools::Itertools;
 use parking_lot::Mutex;
@@ -221,7 +221,7 @@ pub(crate) struct SharedBuildAccumulator {
     /// Dynamic filter for pushdown to probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter bounds
-    on_right: Vec<PhysicalExprRef>,
+    on_right: Vec<Arc<dyn PhysicalExpr>>,
     /// Random state used for hash computation
     random_state: &'static RandomState,
 }
@@ -268,7 +268,7 @@ impl SharedBuildAccumulator {
         left_child: &dyn ExecutionPlan,
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
-        on_right: Vec<PhysicalExprRef>,
+        on_right: Vec<Arc<dyn PhysicalExpr>>,
         random_state: &'static RandomState,
         reservation: MemoryReservation,
     ) -> Self {
@@ -486,7 +486,7 @@ impl fmt::Debug for SharedBuildAccumulator {
 /// that are guaranteed to have at least one match.
 struct HashComparePhysicalExpr {
     /// Expressions that will be evaluated to compute hashes for filtering
-    exprs: Vec<PhysicalExprRef>,
+    exprs: Vec<Arc<dyn PhysicalExpr>>,
     /// Hashes to filter against
     hashes: Arc<NoHashSet<u64>>,
     /// Random state for hash computation
@@ -497,7 +497,7 @@ struct HashComparePhysicalExpr {
 
 impl HashComparePhysicalExpr {
     pub fn new(
-        exprs: Vec<PhysicalExprRef>,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
         hashes: Arc<NoHashSet<u64>>,
         random_state: &'static RandomState,
         reservation: MemoryReservation,
