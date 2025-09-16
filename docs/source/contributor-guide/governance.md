@@ -94,11 +94,11 @@ Notes:
 | Michael Ward            | mjward           |     [Michael-J-Ward ](https://github.com/Michael-J-Ward )                                                    |             | Committer |
 | Marco Neumann           | mneumann         | [crepererum](https://github.com/crepererum)             |     InfluxData        | Committer |
 | Zhong Yanghong          | nju_yaho         |     [yahoNanJing](https://github.com/yahoNanJing)                                                    |             | Committer |
-| Paddy Horan             | paddyhoran       | [paddyhoran](https://github.com/paddyhoran)             |             | Committer |
+| Paddy Horan             | paddyhoran       | [paddyhoran](https://github.com/paddyhoran)             | Assured Allies | Committer |
 | Parth Chandra           | parthc           | [parthchandra](https://github.com/parthchandra)         |             | Committer |
 | Rémi Dettai             | rdettai          | [rdettai](https://github.com/rdettai)                   |             | Committer |
 | Chao Sun                | sunchao          | [sunchao](https://github.com/sunchao)                   |      OpenAI       | Committer |
-| Daniel Harris           | thinkharderdev   | [thinkharderdev](https://github.com/thinkharderdev)     |             | Committer |
+| Daniel Harris           | thinkharderdev   | [thinkharderdev](https://github.com/thinkharderdev)     | Coralogix   | Committer |
 | Raphael Taylor-Davies   | tustvold         | [tustvold](https://github.com/tustvold)                 |             | Committer |
 | Weijun Huang            | weijun           | [Weijun-H](https://github.com/Weijun-H)                 |OrbDB            | Committer |
 | Yang Jiang              | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               | Ebay            | Committer |
