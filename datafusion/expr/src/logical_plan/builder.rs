@@ -2482,12 +2482,12 @@ mod tests {
             return plan_err!("Plan should have returned an DataFusionError::Internal");
         };
 
-        let desc = desc
+        let desc = (*desc
             .split(DataFusionError::BACK_TRACE_SEP)
             .collect::<Vec<&str>>()
             .first()
-            .unwrap_or(&"")
-            .to_string();
+            .unwrap_or(&""))
+        .to_string();
 
         assert_snapshot!(desc, @"trying to unnest on invalid data type UInt32");
 
