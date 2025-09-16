@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow::{
-    array::{new_null_array, ArrayRef, BinaryArray, BooleanArray},
+    array::{new_null_array, ArrayRef, BooleanArray},
     compute::CastOptions,
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
@@ -40,7 +40,7 @@ use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    cast_column, internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
+    cast_column, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     Column, DFSchema, ScalarValue,
 };
@@ -909,7 +909,7 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     // For each needed statistics column:
     for (column, statistics_type, stat_field) in required_columns.iter() {
         let column = Column::from_name(column.name());
-        let column_name = column.name().to_string();
+        let _column_name = column.name().to_string();
         let data_type = stat_field.data_type();
 
         let num_containers = statistics.num_containers();
@@ -932,48 +932,16 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array = if data_type == &DataType::Utf8
-            && array.data_type() == &DataType::Binary
-        {
-            // Statistics from Parquet may store string columns as binary bytes that are not
-            // guaranteed valid UTF-8. First validate that all bytes are valid UTF-8.
-            let binary_array =
-                array
-                    .as_any()
-                    .downcast_ref::<BinaryArray>()
-                    .ok_or_else(|| {
-                        internal_datafusion_err!(
-                            "Statistics column '{}' expected BinaryArray but found {:?}",
-                            column_name.clone(),
-                            array.data_type()
-                        )
-                    })?;
-
-            // Check for invalid UTF-8 sequences and return a clear error
-            if let Some((row, err)) =
-                binary_array.iter().enumerate().find_map(|(row, value)| {
-                    value.and_then(|bytes| {
-                        str::from_utf8(bytes).err().map(|err| (row, err))
-                    })
-                })
-            {
-                return plan_err!(
-                        "Statistics for column '{}' contains invalid UTF-8 data at row {}: {}",
-                        column_name,
-                        row,
-                        err
-                    );
-            }
-
-            // Use cast_column with safe casting to handle edge cases consistently
-            let cast_options = CastOptions {
-                safe: true,
-                ..DEFAULT_CAST_OPTIONS
+        let array =
+            if data_type == &DataType::Utf8 && array.data_type() == &DataType::Binary {
+                let cast_opts = CastOptions {
+                    safe: true,
+                    ..DEFAULT_CAST_OPTIONS
+                };
+                cast_column(&array, stat_field, &cast_opts)?
+            } else {
+                cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
             };
-            cast_column(&array, stat_field, &cast_options)?
-        } else {
-            cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
-        };
 
         arrays.push(array);
     }
@@ -2716,7 +2684,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_statistics_invalid_utf8_error() {
+    fn test_build_statistics_invalid_utf8_safe_cast() {
         // Request a record batch for a Utf8 column but provide invalid binary statistics
         let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("s3", 3),
@@ -2731,9 +2699,15 @@ mod tests {
             num_containers: 1,
         };
 
+        // With safe casting, invalid UTF-8 should be converted to null rather than erroring
         let result =
-            build_statistics_record_batch(&statistics, &required_columns).unwrap_err();
-        assert!(result.to_string().contains("invalid UTF-8"), "{}", result);
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+        
+        // Verify we got a record batch with null value for the invalid UTF-8 data
+        assert_eq!(result.num_rows(), 1);
+        assert_eq!(result.num_columns(), 1);
+        let column = result.column(0);
+        assert!(column.is_null(0), "Invalid UTF-8 should be converted to null with safe casting");
     }
 
     #[test]
