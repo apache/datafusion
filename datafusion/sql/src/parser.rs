@@ -741,16 +741,15 @@ impl<'a> DFParser<'a> {
             Keyword::EXTERNAL,
         ]) {
             self.parse_create_external_table(true, true)
-        } else if  self.parser.parse_keyword(Keyword::EXTERNAL) {
+        } else if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table(false, false)
-        }else if self
+        } else if self
             .parser
             .parse_keywords(&[Keyword::UNBOUNDED, Keyword::EXTERNAL])
         {
             self.parse_create_external_table(true, false)
         } else {
-
-        Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
+            Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
     }
 
