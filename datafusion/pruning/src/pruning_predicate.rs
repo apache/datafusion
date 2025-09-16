@@ -929,7 +929,14 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array = cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?;
+        let array =
+            if data_type == &DataType::Utf8 && array.data_type() == &DataType::Binary {
+                let mut cast_options = DEFAULT_CAST_OPTIONS;
+                cast_options.safe = true;
+                arrow::compute::cast_with_options(&array, data_type, &cast_options)?
+            } else {
+                cast_column(&array, stat_field, &DEFAULT_CAST_OPTIONS)?
+            };
 
         arrays.push(array);
     }
