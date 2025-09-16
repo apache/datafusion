@@ -1405,6 +1405,7 @@ impl protobuf::PhysicalPlanNode {
         for input in &union.inputs {
             inputs.push(input.try_into_physical_plan(ctx, runtime, extension_codec)?);
         }
+        #[allow(deprecated)]
         Ok(Arc::new(UnionExec::new(inputs)))
     }
 
@@ -2619,6 +2620,7 @@ impl protobuf::PhysicalPlanNode {
                                 None
                             },
                             newlines_in_values: maybe_csv.newlines_in_values(),
+                            truncate_rows: csv_config.truncate_rows(),
                         },
                     )),
                 }));

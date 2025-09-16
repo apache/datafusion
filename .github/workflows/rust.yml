@@ -23,6 +23,8 @@ concurrency:
 
 on:
   push:
+    branches-ignore:
+      - 'gh-readonly-queue/**'
     paths-ignore:
       - "docs/**"
       - "**.md"
@@ -34,6 +36,7 @@ on:
       - "**.md"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"
+  merge_group:
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
@@ -406,8 +409,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        run: |
-          cargo install wasm-pack
+        uses: taiki-e/install-action@849bd009f730a24e9db18262f4e9f062591dee39  # v2
+        with:
+          tool: wasm-pack
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
@@ -746,7 +750,10 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        run: cargo install cargo-msrv
+        uses: taiki-e/install-action@849bd009f730a24e9db18262f4e9f062591dee39  # v2
+        with:
+          tool: cargo-msrv
+
       - name: Check datafusion
         working-directory: datafusion/core
         run: |

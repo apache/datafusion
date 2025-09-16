@@ -1032,6 +1032,7 @@ message CsvScanExecNode {
     string comment = 6;
   }
   bool newlines_in_values = 7;
+  bool truncate_rows = 8;
 }
 
 message JsonScanExecNode {

@@ -934,6 +934,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             null_value: opts.null_value.clone().unwrap_or_default(),
             null_regex: opts.null_regex.clone().unwrap_or_default(),
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
+            truncated_rows: opts.truncated_rows.map_or_else(Vec::new, |h| vec![h as u8]),
         })
     }
 }

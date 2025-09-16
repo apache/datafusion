@@ -22,6 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
+use crate::format::ExplainFormat;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -455,6 +456,11 @@ config_namespace! {
         /// tables (e.g. `/table/year=2021/month=01/data.parquet`).
         pub listing_table_ignore_subdirectory: bool, default = true
 
+        /// Should a `ListingTable` created through the `ListingTableFactory` infer table
+        /// partitions from Hive compliant directories. Defaults to true (partition columns are
+        /// inferred and will be represented in the table schema).
+        pub listing_table_factory_infer_partitions: bool, default = true
+
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
 
@@ -874,7 +880,7 @@ config_namespace! {
 
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
-        pub format: String, default = "indent".to_string()
+        pub format: ExplainFormat, default = ExplainFormat::Indent
 
         /// (format=tree only) Maximum total width of the rendered tree.
         /// When set to 0, the tree will have no width limit.
@@ -2521,6 +2527,10 @@ config_namespace! {
         // The input regex for Nulls when loading CSVs.
         pub null_regex: Option<String>, default = None
         pub comment: Option<u8>, default = None
+        // Whether to allow truncated rows when parsing.
+        // By default this is set to false and will error if the CSV rows have different lengths.
+        // When set to true then it will allow records with less than the expected number of columns
+        pub truncated_rows: Option<bool>, default = None
     }
 }
 
@@ -2610,6 +2620,15 @@ impl CsvOptions {
         compression: CompressionTypeVariant,
     ) -> Self {
         self.compression = compression;
+        self
+    }
+
+    /// Whether to allow truncated rows when parsing.
+    /// By default this is set to false and will error if the CSV rows have different lengths.
+    /// When set to true then it will allow records with less than the expected number of columns and fill the missing columns with nulls.
+    /// If the record’s schema is not nullable, then it will still return an error.
+    pub fn with_truncated_rows(mut self, allow: bool) -> Self {
+        self.truncated_rows = Some(allow);
         self
     }
 
