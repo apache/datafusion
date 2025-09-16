@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use datafusion::common::internal_err;
 use datafusion::common::Result;
-use datafusion::logical_expr::registry::FunctionRegistry;
+use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
@@ -73,7 +73,7 @@ async fn main() {
     // deserialize proto back to execution plan
     let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
+        .try_into_physical_plan(&ctx.task_ctx(), runtime.deref(), &composed_codec)
         .expect("from proto");
 
     // assert that the original and deserialized execution plans are equal
@@ -124,7 +124,7 @@ impl ExecutionPlan for ParentExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<datafusion::execution::TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
     }
@@ -139,7 +139,7 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if buf == "ParentExec".as_bytes() {
             Ok(Arc::new(ParentExec {
@@ -200,7 +200,7 @@ impl ExecutionPlan for ChildExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<datafusion::execution::TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
     }
@@ -215,7 +215,7 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         &self,
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if buf == "ChildExec".as_bytes() {
             Ok(Arc::new(ChildExec {}))

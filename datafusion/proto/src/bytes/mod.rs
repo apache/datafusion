@@ -24,6 +24,7 @@ use crate::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use crate::protobuf;
+use datafusion::execution::TaskContext;
 use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_expr::{
     create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LogicalPlan, Volatility,
@@ -322,7 +323,7 @@ pub fn physical_plan_from_json(
 /// Deserialize a PhysicalPlan from bytes
 pub fn physical_plan_from_bytes(
     bytes: &[u8],
-    ctx: &SessionContext,
+    ctx: &TaskContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
     physical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
@@ -331,7 +332,7 @@ pub fn physical_plan_from_bytes(
 /// Deserialize a PhysicalPlan from bytes
 pub fn physical_plan_from_bytes_with_extension_codec(
     bytes: &[u8],
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)

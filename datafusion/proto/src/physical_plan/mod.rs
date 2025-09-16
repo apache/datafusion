@@ -58,7 +58,7 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::execution::FunctionRegistry;
+use datafusion::execution::{FunctionRegistry, TaskContext};
 use datafusion::functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
@@ -98,7 +98,6 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
-use datafusion::prelude::SessionContext;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -127,7 +126,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
     fn try_into_physical_plan(
         &self,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -546,7 +545,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_explain_physical_plan(
         &self,
         explain: &protobuf::ExplainExecNode,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
         _runtime: &RuntimeEnv,
         _extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -564,7 +563,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_projection_physical_plan(
         &self,
         projection: &protobuf::ProjectionExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -596,7 +595,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_filter_physical_plan(
         &self,
         filter: &protobuf::FilterExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -644,7 +643,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_csv_scan_physical_plan(
         &self,
         scan: &protobuf::CsvScanExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         _runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -691,7 +690,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_json_scan_physical_plan(
         &self,
         scan: &protobuf::JsonScanExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         _runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -708,7 +707,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         _runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -769,7 +768,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         _runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -790,7 +789,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_memory_scan_physical_plan(
         &self,
         scan: &protobuf::MemoryScanExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         _runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -841,7 +840,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_coalesce_batches_physical_plan(
         &self,
         coalesce_batches: &protobuf::CoalesceBatchesExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -856,7 +855,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_merge_physical_plan(
         &self,
         merge: &protobuf::CoalescePartitionsExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -871,7 +870,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_repartition_physical_plan(
         &self,
         repart: &protobuf::RepartitionExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -892,7 +891,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_global_limit_physical_plan(
         &self,
         limit: &protobuf::GlobalLimitExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -913,7 +912,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_local_limit_physical_plan(
         &self,
         limit: &protobuf::LocalLimitExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -925,7 +924,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_window_physical_plan(
         &self,
         window_agg: &protobuf::WindowAggExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -983,7 +982,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_aggregate_physical_plan(
         &self,
         hash_agg: &protobuf::AggregateExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1151,7 +1150,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_hash_join_physical_plan(
         &self,
         hashjoin: &protobuf::HashJoinExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1269,7 +1268,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_symmetric_hash_join_physical_plan(
         &self,
         sym_join: &protobuf::SymmetricHashJoinExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1397,7 +1396,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_union_physical_plan(
         &self,
         union: &protobuf::UnionExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1411,7 +1410,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_interleave_physical_plan(
         &self,
         interleave: &protobuf::InterleaveExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1425,7 +1424,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_cross_join_physical_plan(
         &self,
         crossjoin: &protobuf::CrossJoinExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1439,7 +1438,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_empty_physical_plan(
         &self,
         empty: &protobuf::EmptyExecNode,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
         _runtime: &RuntimeEnv,
         _extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1450,7 +1449,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_placeholder_row_physical_plan(
         &self,
         placeholder: &protobuf::PlaceholderRowExecNode,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
         _runtime: &RuntimeEnv,
         _extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1461,7 +1460,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_sort_physical_plan(
         &self,
         sort: &protobuf::SortExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1513,7 +1512,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_sort_preserving_merge_physical_plan(
         &self,
         sort: &protobuf::SortPreservingMergeExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1566,7 +1565,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_extension_physical_plan(
         &self,
         extension: &protobuf::PhysicalExtensionNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1585,7 +1584,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_nested_loop_join_physical_plan(
         &self,
         join: &protobuf::NestedLoopJoinExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1659,7 +1658,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_analyze_physical_plan(
         &self,
         analyze: &protobuf::AnalyzeExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1676,7 +1675,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_json_sink_physical_plan(
         &self,
         sink: &protobuf::JsonSinkExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1714,7 +1713,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_csv_sink_physical_plan(
         &self,
         sink: &protobuf::CsvSinkExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1752,7 +1751,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_parquet_sink_physical_plan(
         &self,
         sink: &protobuf::ParquetSinkExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1795,7 +1794,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_unnest_physical_plan(
         &self,
         unnest: &protobuf::UnnestExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1826,7 +1825,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_sort_join(
         &self,
         sort_join: &SortMergeJoinExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -2003,7 +2002,7 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_cooperative_physical_plan(
         &self,
         field_stream: &protobuf::CooperativeExecNode,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -3276,7 +3275,7 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
 
     fn try_into_physical_plan(
         &self,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>>;
@@ -3294,7 +3293,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        registry: &dyn FunctionRegistry,
+        ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
@@ -3350,7 +3349,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
@@ -3452,9 +3451,9 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        registry: &dyn FunctionRegistry,
+        ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.decode_protobuf(buf, |codec, data| codec.try_decode(data, inputs, registry))
+        self.decode_protobuf(buf, |codec, data| codec.try_decode(data, inputs, ctx))
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
@@ -3480,7 +3479,7 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
 
 fn into_physical_plan(
     node: &Option<Box<protobuf::PhysicalPlanNode>>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     runtime: &RuntimeEnv,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
