@@ -1241,22 +1241,24 @@ impl NestedLoopJoinStream {
         // The regular implementation is not efficient if the plan's right child is
         // very small (e.g. 1 row total), because inside the inner loop of NLJ, it's
         // handling one input right batch at once, if it's not large enough, the
-        // overheads like filter evalaution can't be amortized through vectorization.
+        // overheads like filter evaluation can't be amortized through vectorization.
         debug_assert_ne!(
             right_batch.num_rows(),
             0,
             "When fetching the right batch, empty batches will be skipped"
         );
-        if (self.batch_size / right_batch.num_rows()) > 10 {
+
+        let l_row_cnt_ratio = self.batch_size / right_batch.num_rows();
+        if l_row_cnt_ratio > 10 {
             // Calculate max left rows to handle at once. This operator tries to handle
             // up to `datafusion.execution.batch_size` rows at once in the intermediate
             // batch.
-            let l_row_count = self.batch_size / right_batch.num_rows();
             let l_row_count = std::cmp::min(
-                l_row_count,
+                l_row_cnt_ratio,
                 left_data.batch().num_rows() - self.left_probe_idx,
             );
 
+            debug_assert!(l_row_count != 0, "This function should only be entered when there are remaining left rows to process");
             let joined_batch = self.process_left_range_join(
                 &left_data,
                 &right_batch,
@@ -1302,13 +1304,12 @@ impl NestedLoopJoinStream {
         l_start_index: usize,
         l_row_count: usize,
     ) -> Result<Option<RecordBatch>> {
-        // Construct the Cartesian product between the specified range of left rows and the entire right_batch.
-        // Do not apply filters or update any bitmaps here.
+        // Construct the Cartesian product between the specified range of left rows
+        // and the entire right_batch. First, it calculates the index vectors, then
+        // materializes the intermediate batch, and finally applies the join filter
+        // to it.
+        // -----------------------------------------------------------
         let right_rows = right_batch.num_rows();
-        if l_row_count == 0 || right_rows == 0 {
-            return Ok(None);
-        }
-
         let total_rows = l_row_count * right_rows;
 
         // Build index arrays for cartesian product: left_range X right_batch
