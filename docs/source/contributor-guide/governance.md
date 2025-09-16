@@ -62,16 +62,16 @@ Notes:
 | Oleksandr Voievodin                 | comphead         | [comphead](https://github.com/comphead)                 |    Apple         | PMC       |
 | Daniël Heres            | dheres           | [Dandandan](https://github.com/Dandandan)               |             | PMC       |
 | QP Hou                  | houqp            | [houqp](https://github.com/houqp)                       |             | PMC       |
-| Jie Wen                 | jakevin          | [jakevin](https://github.com/jakevin)                   |             | PMC       |
+| Jie Wen                 | jackwener          | [jakevin](https://github.com/jackwener)                   |             | PMC       |
 | Jay Zhan                | jayzhan          | [jayzhan211](https://github.com/jayzhan211)             |             | PMC       |
 | Jonah Gao               | jonah            | [jonahgao](https://github.com/jonahgao)                 |             | PMC       |
-| Kun Liu                 | liukun           |                                                         |             | PMC       |
-| Mehmet Ozan Kabak       | ozankabak        | [ozankabak](https://github.com/ozankabak)               |             | PMC       |
+| Kun Liu                 | liukun           |   [liukun4515](https://github.com/liukun4515)                                                      |             | PMC       |
+| Mehmet Ozan Kabak       | ozankabak        | [ozankabak](https://github.com/ozankabak)               |    Synnada, Inc         | PMC       |
 | Tim Saucer              | timsaucer        | [timsaucer](https://github.com/timsaucer)               |             | PMC       |
 | L. C. Hsieh             | viirya           | [viirya](https://github.com/viirya)                     | Databricks  | PMC       |
 | Ruihang Xia             | wayne            | [waynexia](https://github.com/waynexia)                 |             | PMC       |
 | Wes McKinney            | wesm             | [wesm](https://github.com/wesm)                         | Posit       | PMC       |
-| Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               |             | PMC       |
+| Will Jones              | wjones127        | [wjones127](https://github.com/wjones127)               | LanceDB     | PMC       |
 | Xudong Wang             | xudong963        | [xudong963](https://github.com/xudong963)               | Polygon.io  | PMC       |
 | Adrian Garcia Badaracco | adriangb         | [adriangb](https://github.com/adriangb)                 | Pydantic    | Committer |
 | Brent Gardner           | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     | Coralogix | Committer |
