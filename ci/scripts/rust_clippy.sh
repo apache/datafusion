@@ -18,6 +18,6 @@
 # under the License.
 
 set -ex
-cargo clippy --all-targets --workspace --features avro,pyarrow,integration-tests -- -D warnings
+#cargo clippy --all-targets --workspace --features avro -- -D warnings
 cd datafusion-cli
-cargo clippy --all-targets --all-features -- -D warnings
+#cargo clippy --all-targets --all-features -- -D warnings

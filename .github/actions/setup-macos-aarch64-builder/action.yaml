@@ -39,8 +39,7 @@ runs:
     - name: Setup Rust toolchain
       shell: bash
       run: |
-        rustup update stable
-        rustup toolchain install stable
+        rustup toolchain install stable --no-self-update
         rustup default stable
         rustup component add rustfmt
     - name: Setup rust cache

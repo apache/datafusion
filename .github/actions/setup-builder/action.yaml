@@ -37,7 +37,7 @@ runs:
       run: |
         RETRY=("ci/scripts/retry" timeout 120)
         echo "Installing ${{ inputs.rust-version }}"
-        "${RETRY[@]}" rustup toolchain install ${{ inputs.rust-version }}
+        "${RETRY[@]}" rustup toolchain install ${{ inputs.rust-version }} --no-self-update
         "${RETRY[@]}" rustup default ${{ inputs.rust-version }}
         "${RETRY[@]}" rustup component add rustfmt
     - name: Configure rust runtime env
