@@ -88,21 +88,21 @@ Notes:
 | Siew Kam Onn            | kosiew           | [kosiew](https://github.com/kosiew)                     |             | Committer |
 | Lewis Zhang             | linwei           | [lewiszlw](https://github.com/lewiszlw)                 | diit.cn     | Committer |
 | Matt Butrovich          | mbutrovich       | [mbutrovich](https://github.com/mbutrovich)             |             | Committer |
-| Metehan Yildirim        | mete             |                                                         |             | Committer |
+| Metehan Yildirim        | mete             |    [metegenez](https://github.com/metegenez)                                                      |             | Committer |
 | Marko Milenković        | milenkovicm      | [milenkovicm](https://github.com/milenkovicm)           |             | Committer |
 | Wang Mingming           | mingmwang        | [mingmwang](https://github.com/mingmwang)               |             | Committer |
-| Michael Ward            | mjward           |                                                         |             | Committer |
+| Michael Ward            | mjward           |     [Michael-J-Ward ](https://github.com/Michael-J-Ward )                                                    |             | Committer |
 | Marco Neumann           | mneumann         | [crepererum](https://github.com/crepererum)             |             | Committer |
-| Zhong Yanghong          | nju_yaho         |                                                         |             | Committer |
+| Zhong Yanghong          | nju_yaho         |     [yahoNanJing](https://github.com/yahoNanJing)                                                    |             | Committer |
 | Paddy Horan             | paddyhoran       | [paddyhoran](https://github.com/paddyhoran)             |             | Committer |
 | Parth Chandra           | parthc           | [parthchandra](https://github.com/parthchandra)         |             | Committer |
 | Rémi Dettai             | rdettai          | [rdettai](https://github.com/rdettai)                   |             | Committer |
-| Sun Chao                | sunchao          | [sunchao](https://github.com/sunchao)                   |             | Committer |
+| Chao Sun                | sunchao          | [sunchao](https://github.com/sunchao)                   |      OpenAI       | Committer |
 | Daniel Harris           | thinkharderdev   | [thinkharderdev](https://github.com/thinkharderdev)     |             | Committer |
 | Raphael Taylor-Davies   | tustvold         | [tustvold](https://github.com/tustvold)                 |             | Committer |
 | Weijun Huang            | weijun           | [Weijun-H](https://github.com/Weijun-H)                 |OrbDB            | Committer |
 | Yang Jiang              | yangjiang        | [Ted-jiang](https://github.com/Ted-jiang)               | Ebay            | Committer |
-| Yijie Shen              | yjshen           | [yjshen](https://github.com/yjshen)                     |             | Committer |
+| Yijie Shen              | yjshen           | [yjshen](https://github.com/yjshen)                     |  DataPelago | Committer |
 | Yongting You            | ytyou            | [2010YOUY01](https://github.com/2010YOUY01)             | Independent | Committer |
 | Qi Zhu                  | zhuqi            | [zhuqi-lucas](https://github.com/zhuqi-lucas)           | Polygon.io  | Committer |
 
