@@ -106,7 +106,7 @@ pub(super) struct JoinLeftData {
     _reservation: MemoryReservation,
     /// Bounds computed from the build side for dynamic filter pushdown
     pub(super) bounds: Option<Vec<ColumnBounds>>,
-    /// Optional min value for constructing perfect hash join vector. Will opt for perfect hash join if this value is 
+    /// Optional min value for constructing perfect hash join vector. Will opt for perfect hash join if this value is
     /// Some
     _min_value: Option<ScalarValue>,
 }
@@ -1223,7 +1223,7 @@ impl ExecutionPlan for HashJoinExec {
 ///    build-side join key. The caller can merge these bounds across partitions and
 ///    push a range predicate.
 ///  - Perfect hash join: When `can_perfect` is set, the accumulator computes a `distinct` count and
-///    min value to check if the number of non null values in the build side is equal to the distinct 
+///    min value to check if the number of non null values in the build side is equal to the distinct
 ///    values. This allows for perfect hash join execution.
 struct CollectLeftAccumulator {
     /// The physical expression to evaluate for each batch
@@ -1410,7 +1410,7 @@ impl BuildSideState {
 /// * `probe_threads_count` - Number of threads that will probe this hash table
 /// * `should_compute_bounds` - Whether to compute min/max bounds for dynamic filtering
 /// * `can_perfect` — If `true`, compute perfect-hash feasibility (single-key min/distinct)
-/// 
+///
 /// # Dynamic Filter Coordination
 /// When `should_compute_bounds` is true, this function computes the min/max bounds
 /// for each join key column but does NOT update the dynamic filter. Instead, the
@@ -1548,8 +1548,8 @@ async fn collect_left_input(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Compute statistics for dynamic filter or perfect hash join if enabled. At this point 
-    // the bound accumulator could have been initialized for pushdown min/max, perfect hash 
+    // Compute statistics for dynamic filter or perfect hash join if enabled. At this point
+    // the bound accumulator could have been initialized for pushdown min/max, perfect hash
     // join min/distinct, or both.
     let (bounds, min_value) = match (bounds_accumulators, num_rows > 0) {
         (Some(accs), true) => {
