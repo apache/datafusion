@@ -741,8 +741,53 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
+                let (mut aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(agg_filter);
+
+                let mut async_exprs = Vec::new();
+                let num_input_columns = physical_input_schema.fields().len();
+
+                for agg_func in &mut aggregates {
+                    match self.try_plan_async_exprs(
+                        num_input_columns,
+                        PlannedExprResult::Expr(agg_func.expressions()),
+                        physical_input_schema.as_ref(),
+                    )? {
+                        PlanAsyncExpr::Async(
+                            async_map,
+                            PlannedExprResult::Expr(physical_exprs),
+                        ) => {
+                            async_exprs.extend(async_map.async_exprs);
+
+                            if let Some(new_agg_func) = agg_func.with_new_expressions(
+                                physical_exprs,
+                                agg_func
+                                    .order_bys()
+                                    .iter()
+                                    .cloned()
+                                    .map(|x| x.expr)
+                                    .collect(),
+                            ) {
+                                *agg_func = Arc::new(new_agg_func);
+                            } else {
+                                return internal_err!("Failed to plan async expression");
+                            }
+                        }
+                        PlanAsyncExpr::Sync(PlannedExprResult::Expr(_)) => {
+                            // Do nothing
+                        }
+                        _ => {
+                            return internal_err!(
+                                "Unexpected result from try_plan_async_exprs"
+                            )
+                        }
+                    }
+                }
+                let input_exec = if !async_exprs.is_empty() {
+                    Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
+                } else {
+                    input_exec
+                };
 
                 let initial_aggr = Arc::new(AggregateExec::try_new(
                     AggregateMode::Partial,
@@ -2272,11 +2317,13 @@ impl DefaultPhysicalPlanner {
     }
 }
 
+#[derive(Debug)]
 enum PlannedExprResult {
     ExprWithName(Vec<(Arc<dyn PhysicalExpr>, String)>),
     Expr(Vec<Arc<dyn PhysicalExpr>>),
 }
 
+#[derive(Debug)]
 enum PlanAsyncExpr {
     Sync(PlannedExprResult),
     Async(AsyncMapper, PlannedExprResult),
