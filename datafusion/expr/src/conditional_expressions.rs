@@ -82,7 +82,9 @@ impl CaseBuilder {
             // Cannot verify types until execution type
         } else {
             let unique_types: HashSet<&DataType> = then_types.iter().collect();
-            if unique_types.len() != 1 {
+            if unique_types.is_empty() {
+                return plan_err!("CASE expression 'then' values had no data types");
+            } else if unique_types.len() != 1 {
                 return plan_err!(
                     "CASE expression 'then' values had multiple data types: {}",
                     unique_types.iter().join(", ")

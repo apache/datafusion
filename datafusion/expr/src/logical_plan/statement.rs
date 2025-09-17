@@ -111,7 +111,7 @@ impl Statement {
                     Statement::Prepare(Prepare {
                         name, data_types, ..
                     }) => {
-                        write!(f, "Prepare: {name:?} {}", data_types.iter().join(", "))
+                        write!(f, "Prepare: {name:?} [{}]", data_types.iter().join(", "))
                     }
                     Statement::Execute(Execute {
                         name, parameters, ..

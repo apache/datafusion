@@ -155,7 +155,7 @@ fn test_prepare_statement_to_plan_no_param() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" Int32
+    Prepare: "my_plan" [Int32]
       Projection: person.id, person.age
         Filter: person.age = Int64(10)
           TableScan: person
@@ -183,7 +183,7 @@ fn test_prepare_statement_to_plan_no_param() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" 
+    Prepare: "my_plan" []
       Projection: person.id, person.age
         Filter: person.age = Int64(10)
           TableScan: person
@@ -265,7 +265,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" Int32
+    Prepare: "my_plan" [Int32]
       Projection: $1
         EmptyRelation: rows=1
     "#
@@ -290,7 +290,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" Int32
+    Prepare: "my_plan" [Int32]
       Projection: Int64(1) + $1
         EmptyRelation: rows=1
     "#
@@ -315,7 +315,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" Int32, Float64
+    Prepare: "my_plan" [Int32, Float64]
       Projection: Int64(1) + $1 + $2
         EmptyRelation: rows=1
     "#
@@ -376,7 +376,7 @@ fn test_prepare_statement_infer_types_from_join() {
         test.run(),
         @r#"
     ** Initial Plan:
-    Prepare: "my_plan" Int32
+    Prepare: "my_plan" [Int32]
       Projection: person.id, orders.order_id
         Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
           TableScan: person
@@ -424,7 +424,7 @@ fn test_prepare_statement_infer_types_from_predicate() {
         test.run(),
         @r#"
     ** Initial Plan:
-    Prepare: "my_plan" Int32
+    Prepare: "my_plan" [Int32]
       Projection: person.id, person.age
         Filter: person.age = $1
           TableScan: person
@@ -476,7 +476,7 @@ fn test_prepare_statement_infer_types_from_between_predicate() {
         test.run(),
         @r#"
     ** Initial Plan:
-    Prepare: "my_plan" Int32, Int32
+    Prepare: "my_plan" [Int32, Int32]
       Projection: person.id, person.age
         Filter: person.age BETWEEN $1 AND $2
           TableScan: person
@@ -533,7 +533,7 @@ fn test_prepare_statement_infer_types_subquery() {
         test.run(),
         @r#"
     ** Initial Plan:
-    Prepare: "my_plan" UInt32
+    Prepare: "my_plan" [UInt32]
       Projection: person.id, person.age
         Filter: person.age = (<subquery>)
           Subquery:
@@ -598,7 +598,7 @@ fn test_prepare_statement_update_infer() {
         test.run(),
         @r#"
     ** Initial Plan:
-    Prepare: "my_plan" Int32, UInt32
+    Prepare: "my_plan" [Int32, UInt32]
       Dml: op=[Update] table=[person]
         Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
           Filter: person.id = $2
@@ -662,7 +662,7 @@ fn test_prepare_statement_insert_infer() {
         test.run(),
         @r#"
     ** Initial Plan:
-    Prepare: "my_plan" UInt32, Utf8, Utf8
+    Prepare: "my_plan" [UInt32, Utf8, Utf8]
       Dml: op=[Insert Into] table=[person]
         Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
           Values: ($1, $2, $3)
@@ -681,7 +681,7 @@ fn test_prepare_statement_to_plan_one_param() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" Int32
+    Prepare: "my_plan" [Int32]
       Projection: person.id, person.age
         Filter: person.age = $1
           TableScan: person
@@ -714,7 +714,7 @@ fn test_prepare_statement_to_plan_data_type() {
         // age is defined as Int32 but prepare statement declares it as DOUBLE/Float64
         // Prepare statement and its logical plan should be created successfully
         @r#"
-    Prepare: "my_plan" Float64
+    Prepare: "my_plan" [Float64]
       Projection: person.id, person.age
         Filter: person.age = $1
           TableScan: person
@@ -747,7 +747,7 @@ fn test_prepare_statement_to_plan_multi_params() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" Int32, Utf8View, Float64, Int32, Float64, Utf8View
+    Prepare: "my_plan" [Int32, Utf8View, Float64, Int32, Float64, Utf8View]
       Projection: person.id, person.age, $6
         Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2
           TableScan: person
@@ -790,7 +790,7 @@ fn test_prepare_statement_to_plan_having() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" Int32, Float64, Float64, Float64
+    Prepare: "my_plan" [Int32, Float64, Float64, Float64]
       Projection: person.id, sum(person.age)
         Filter: sum(person.age) < $1 AND sum(person.age) > Int64(10) OR sum(person.age) IN ([$3, $4])
           Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
@@ -831,7 +831,7 @@ fn test_prepare_statement_to_plan_limit() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" Int64, Int64
+    Prepare: "my_plan" [Int64, Int64]
       Limit: skip=$1, fetch=$2
         Projection: person.id
           TableScan: person

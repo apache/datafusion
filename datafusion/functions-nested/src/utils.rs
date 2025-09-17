@@ -41,7 +41,7 @@ pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     }) {
         let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
         return plan_err!(
-            "{name} received incompatible types: '{}'.",
+            "{name} received incompatible types: {}",
             types.iter().join(", ")
         );
     }

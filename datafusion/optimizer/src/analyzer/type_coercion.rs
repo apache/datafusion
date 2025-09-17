@@ -479,7 +479,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => plan_err!(
-                        "Can not find compatible types to compare {expr_data_type} with {}", list_data_types.iter().join(", ")
+                        "Can not find compatible types to compare {expr_data_type} with [{}]", list_data_types.iter().join(", ")
                     ),
                     Some(coerced_type) => {
                         // find the coerced type

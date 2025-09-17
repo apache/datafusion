@@ -133,7 +133,7 @@ impl ScalarUDFImpl for MakeArray {
             Ok(vec![unified; arg_types.len()])
         } else {
             plan_err!(
-                "Failed to unify argument types of {}: {}",
+                "Failed to unify argument types of {}: [{}]",
                 self.name(),
                 arg_types.iter().join(", ")
             )
