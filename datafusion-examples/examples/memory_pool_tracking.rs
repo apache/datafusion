@@ -110,11 +110,11 @@ async fn automatic_usage_example() -> datafusion::error::Result<()> {
                 Error: Not enough memory to continue external sort. Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes
                 caused by
                     Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
-                    ExternalSorterMerge[3]#112(can spill: false) consumed 10.0 MB,
-                    ExternalSorterMerge[10]#147(can spill: false) consumed 10.0 MB,
-                    ExternalSorter[1]#93(can spill: true) consumed 69.0 KB,
-                    ExternalSorter[13]#155(can spill: true) consumed 67.6 KB,
-                    ExternalSorter[8]#140(can spill: true) consumed 67.2 KB.
+                    ExternalSorterMerge[3]#112(can spill: false) consumed 10.0 MB, peak 10.0 MB,
+                    ExternalSorterMerge[10]#147(can spill: false) consumed 10.0 MB, peak 10.0 MB,
+                    ExternalSorter[1]#93(can spill: true) consumed 69.0 KB, peak 69.0 KB,
+                    ExternalSorter[13]#155(can spill: true) consumed 67.6 KB, peak 67.6 KB,
+                    ExternalSorter[8]#140(can spill: true) consumed 67.2 KB, peak 67.2 KB.
                 Error: Failed to allocate additional 10.0 MB for ExternalSorterMerge[0] with 0.0 B already allocated for this reservation - 7.1 MB remain available for the total pool
              */
         }

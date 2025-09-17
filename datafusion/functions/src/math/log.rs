@@ -22,8 +22,14 @@ use std::sync::Arc;
 
 use super::power::PowerFunc;
 
-use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use crate::utils::{calculate_binary_math, decimal128_to_i128};
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::{
+    DataType, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int32Type,
+    Int64Type, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+};
+use arrow::error::ArrowError;
+use arrow_buffer::i256;
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
@@ -58,18 +64,76 @@ impl Default for LogFunc {
 
 impl LogFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Float32]),
-                    Exact(vec![Float64]),
-                    Exact(vec![Float32, Float32]),
-                    Exact(vec![Float64, Float64]),
+                    Numeric(1),
+                    Numeric(2),
+                    Exact(vec![DataType::Float32, DataType::Float32]),
+                    Exact(vec![DataType::Float64, DataType::Float64]),
+                    Exact(vec![
+                        DataType::Int64,
+                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                    ]),
+                    Exact(vec![
+                        DataType::Float32,
+                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                    ]),
+                    Exact(vec![
+                        DataType::Float64,
+                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                    ]),
+                    Exact(vec![
+                        DataType::Int64,
+                        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
+                    ]),
+                    Exact(vec![
+                        DataType::Float32,
+                        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
+                    ]),
+                    Exact(vec![
+                        DataType::Float64,
+                        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
         }
+    }
+}
+
+/// Binary function to calculate an integer logarithm of Decimal128 `value` using `base` base
+/// Returns error if base is invalid
+fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if !base.is_finite() || base.trunc() != base {
+        return Err(ArrowError::ComputeError(format!(
+            "Log cannot use non-integer base: {base}"
+        )));
+    }
+    if (base as u32) < 2 {
+        return Err(ArrowError::ComputeError(format!(
+            "Log base must be greater than 1: {base}"
+        )));
+    }
+
+    let unscaled_value = decimal128_to_i128(value, scale)?;
+    if unscaled_value > 0 {
+        let log_value: u32 = unscaled_value.ilog(base as i128);
+        Ok(log_value as f64)
+    } else {
+        // Reflect f64::log behaviour
+        Ok(f64::NAN)
+    }
+}
+
+/// Binary function to calculate an integer logarithm of Decimal128 `value` using `base` base
+/// Returns error if base is invalid or if value is out of bounds of Decimal128
+fn log_decimal256(value: i256, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    match value.to_i128() {
+        Some(value) => log_decimal128(value, scale, base),
+        None => Err(ArrowError::NotYetImplemented(format!(
+            "Log of Decimal256 larger than Decimal128 is not yet supported: {value}"
+        ))),
     }
 }
 
@@ -86,7 +150,8 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
+        // Check last argument (value)
+        match &arg_types.last().ok_or(plan_datafusion_err!("No args"))? {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
         }
@@ -121,55 +186,68 @@ impl ScalarUDFImpl for LogFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
 
-        let mut base = ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0)));
-
-        let mut x = &args[0];
-        if args.len() == 2 {
-            x = &args[1];
-            base = ColumnarValue::Array(Arc::clone(&args[0]));
-        }
-        // note in f64::log params order is different than in sql. e.g in sql log(base, x) == f64::log(x, base)
-        let arr: ArrayRef = match args[0].data_type() {
-            DataType::Float64 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(x.as_primitive::<Float64Type>().unary::<_, Float64Type>(
-                        |value: f64| f64::log(value, base as f64),
-                    ))
-                }
-                ColumnarValue::Array(base) => {
-                    let x = x.as_primitive::<Float64Type>();
-                    let base = base.as_primitive::<Float64Type>();
-                    let result = arrow::compute::binary::<_, _, _, Float64Type>(
-                        x,
-                        base,
-                        f64::log,
-                    )?;
-                    Arc::new(result) as _
-                }
-                _ => {
-                    return exec_err!("log function requires a scalar or array for base")
-                }
-            },
-
-            DataType::Float32 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => Arc::new(
-                    x.as_primitive::<Float32Type>()
-                        .unary::<_, Float32Type>(|value: f32| f32::log(value, base)),
+        let (base, value) = if args.len() == 2 {
+            // note in f64::log params order is different than in sql. e.g in sql log(base, x) == f64::log(x, base)
+            (ColumnarValue::Array(Arc::clone(&args[0])), &args[1])
+        } else {
+            // log(num) - assume base is 10
+            let ret_type = if args[0].data_type().is_null() {
+                &DataType::Float64
+            } else {
+                args[0].data_type()
+            };
+            (
+                ColumnarValue::Array(
+                    ScalarValue::new_ten(ret_type)?.to_array_of_size(args[0].len())?,
                 ),
-                ColumnarValue::Array(base) => {
-                    let x = x.as_primitive::<Float32Type>();
-                    let base = base.as_primitive::<Float32Type>();
-                    let result = arrow::compute::binary::<_, _, _, Float32Type>(
-                        x,
-                        base,
-                        f32::log,
-                    )?;
-                    Arc::new(result) as _
-                }
-                _ => {
-                    return exec_err!("log function requires a scalar or array for base")
-                }
-            },
+                &args[0],
+            )
+        };
+
+        // All log functors have format 'log(value, base)'
+        // Therefore, for `calculate_binary_math` the first type means a type of main array
+        // The second type is the type of the base array (even if derived from main)
+        let arr: ArrayRef = match value.data_type() {
+            DataType::Float32 => calculate_binary_math::<
+                Float32Type,
+                Float32Type,
+                Float32Type,
+                _,
+            >(value, &base, |x, b| Ok(f32::log(x, b)))?,
+            DataType::Float64 => calculate_binary_math::<
+                Float64Type,
+                Float64Type,
+                Float64Type,
+                _,
+            >(value, &base, |x, b| Ok(f64::log(x, b)))?,
+            DataType::Int32 => {
+                calculate_binary_math::<Int32Type, Float64Type, Float64Type, _>(
+                    value,
+                    &base,
+                    |x, b| Ok(f64::log(x as f64, b)),
+                )?
+            }
+            DataType::Int64 => {
+                calculate_binary_math::<Int64Type, Float64Type, Float64Type, _>(
+                    value,
+                    &base,
+                    |x, b| Ok(f64::log(x as f64, b)),
+                )?
+            }
+            DataType::Decimal128(_precision, scale) => {
+                calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
+                    value,
+                    &base,
+                    |x, b| log_decimal128(x, *scale, b),
+                )?
+            }
+            DataType::Decimal256(_precision, scale) => {
+                calculate_binary_math::<Decimal256Type, Float64Type, Float64Type, _>(
+                    value,
+                    &base,
+                    |x, b| log_decimal256(x, *scale, b),
+                )?
+            }
             other => {
                 return exec_err!("Unsupported data type {other:?} for function log")
             }
@@ -256,9 +334,11 @@ mod tests {
 
     use super::*;
 
-    use arrow::array::{Float32Array, Float64Array, Int64Array};
+    use arrow::array::{
+        Date32Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
+    };
     use arrow::compute::SortOptions;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, DECIMAL256_MAX_PRECISION};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::DFSchema;
@@ -266,33 +346,37 @@ mod tests {
     use datafusion_expr::simplify::SimplifyContext;
 
     #[test]
-    #[should_panic]
     fn test_log_invalid_base_type() {
         let arg_fields = vec![
-            Field::new("a", DataType::Float64, false).into(),
-            Field::new("a", DataType::Int64, false).into(),
+            Field::new("b", DataType::Date32, false).into(),
+            Field::new("n", DataType::Float64, false).into(),
         ];
         let args = ScalarFunctionArgs {
             args: vec![
+                ColumnarValue::Array(Arc::new(Date32Array::from(vec![5, 10, 15, 20]))), // base
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
                     10.0, 100.0, 1000.0, 10000.0,
                 ]))), // num
-                ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
             ],
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
-        let _ = LogFunc::new().invoke_with_args(args);
+        let result = LogFunc::new().invoke_with_args(args);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string().lines().next().unwrap(),
+            "Arrow error: Cast error: Casting from Date32 to Float64 not supported"
+        );
     }
 
     #[test]
     fn test_log_invalid_value() {
-        let arg_field = Field::new("a", DataType::Int64, false).into();
+        let arg_field = Field::new("a", DataType::Date32, false).into();
         let args = ScalarFunctionArgs {
             args: vec![
-                ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
+                ColumnarValue::Array(Arc::new(Date32Array::from(vec![10]))), // num
             ],
             arg_fields: vec![arg_field],
             number_rows: 1,
@@ -372,7 +456,7 @@ mod tests {
         ];
         let args = ScalarFunctionArgs {
             args: vec![
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // base
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
             ],
             arg_fields,
@@ -406,7 +490,7 @@ mod tests {
         ];
         let args = ScalarFunctionArgs {
             args: vec![
-                ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // base
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
             ],
             arg_fields,
@@ -511,14 +595,14 @@ mod tests {
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
-                    2.0, 2.0, 3.0, 5.0,
+                    2.0, 2.0, 3.0, 5.0, 5.0,
                 ]))), // base
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
-                    8.0, 4.0, 81.0, 625.0,
+                    8.0, 4.0, 81.0, 625.0, -123.0,
                 ]))), // num
             ],
             arg_fields,
-            number_rows: 4,
+            number_rows: 5,
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
@@ -531,11 +615,12 @@ mod tests {
                 let floats = as_float64_array(&arr)
                     .expect("failed to convert result to a Float64Array");
 
-                assert_eq!(floats.len(), 4);
+                assert_eq!(floats.len(), 5);
                 assert!((floats.value(0) - 3.0).abs() < 1e-10);
                 assert!((floats.value(1) - 2.0).abs() < 1e-10);
                 assert!((floats.value(2) - 4.0).abs() < 1e-10);
                 assert!((floats.value(3) - 4.0).abs() < 1e-10);
+                assert!(floats.value(4).is_nan());
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
@@ -729,6 +814,290 @@ mod tests {
         assert_eq!(
             log.output_ordering(&[base_order, num_order]).unwrap(),
             SortProperties::Unordered
+        );
+    }
+
+    #[test]
+    fn test_log_scalar_decimal128_unary() {
+        let arg_field = Field::new("a", DataType::Decimal128(38, 0), false).into();
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(10), 38, 0)), // num
+            ],
+            arg_fields: vec![arg_field],
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Decimal128(38, 0), true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = LogFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Decimal128Array");
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_scalar_decimal128() {
+        let arg_fields = vec![
+            Field::new("b", DataType::Float64, false).into(),
+            Field::new("x", DataType::Decimal128(38, 0), false).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // base
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(64), 38, 0)), // num
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = LogFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 6.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_decimal128_unary() {
+        let arg_field = Field::new("a", DataType::Decimal128(38, 0), false).into();
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(
+                    Decimal128Array::from(vec![10, 100, 1000, 10000, 12600, -123])
+                        .with_precision_and_scale(38, 0)
+                        .unwrap(),
+                )), // num
+            ],
+            arg_fields: vec![arg_field],
+            number_rows: 6,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = LogFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 6);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+                assert!((floats.value(1) - 2.0).abs() < 1e-10);
+                assert!((floats.value(2) - 3.0).abs() < 1e-10);
+                assert!((floats.value(3) - 4.0).abs() < 1e-10);
+                assert!((floats.value(4) - 4.0).abs() < 1e-10); // Integer rounding
+                assert!(floats.value(5).is_nan());
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_decimal128_base_decimal() {
+        // Base stays 2 despite scaling
+        for base in [
+            ScalarValue::Decimal128(Some(i128::from(2)), 38, 0),
+            ScalarValue::Decimal128(Some(i128::from(2000)), 38, 3),
+        ] {
+            let arg_fields = vec![
+                Field::new("b", DataType::Decimal128(38, 0), false).into(),
+                Field::new("x", DataType::Decimal128(38, 0), false).into(),
+            ];
+            let args = ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(base), // base
+                    ColumnarValue::Scalar(ScalarValue::Decimal128(Some(64), 38, 0)), // num
+                ],
+                arg_fields,
+                number_rows: 1,
+                return_field: Field::new("f", DataType::Float64, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
+            let result = LogFunc::new()
+                .invoke_with_args(args)
+                .expect("failed to initialize function log");
+
+            match result {
+                ColumnarValue::Array(arr) => {
+                    let floats = as_float64_array(&arr)
+                        .expect("failed to convert result to a Float64Array");
+
+                    assert_eq!(floats.len(), 1);
+                    assert!((floats.value(0) - 6.0).abs() < 1e-10);
+                }
+                ColumnarValue::Scalar(_) => {
+                    panic!("Expected an array value")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_decimal128_value_scale() {
+        // Value stays 1000 despite scaling
+        for value in [
+            ScalarValue::Decimal128(Some(i128::from(1000)), 38, 0),
+            ScalarValue::Decimal128(Some(i128::from(10000)), 38, 1),
+            ScalarValue::Decimal128(Some(i128::from(1000000)), 38, 3),
+        ] {
+            let arg_fields = vec![
+                Field::new("b", DataType::Decimal128(38, 0), false).into(),
+                Field::new("x", DataType::Decimal128(38, 0), false).into(),
+            ];
+            let args = ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(value), // base
+                ],
+                arg_fields,
+                number_rows: 1,
+                return_field: Field::new("f", DataType::Float64, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
+            let result = LogFunc::new()
+                .invoke_with_args(args)
+                .expect("failed to initialize function log");
+
+            match result {
+                ColumnarValue::Array(arr) => {
+                    let floats = as_float64_array(&arr)
+                        .expect("failed to convert result to a Float64Array");
+
+                    assert_eq!(floats.len(), 1);
+                    assert!((floats.value(0) - 3.0).abs() < 1e-10);
+                }
+                ColumnarValue::Scalar(_) => {
+                    panic!("Expected an array value")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_decimal256_unary() {
+        let arg_field = Field::new(
+            "a",
+            DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
+            false,
+        )
+        .into();
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(
+                    Decimal256Array::from(vec![
+                        Some(i256::from(10)),
+                        Some(i256::from(100)),
+                        Some(i256::from(1000)),
+                        Some(i256::from(10000)),
+                        Some(i256::from(12600)),
+                        // Slightly lower than i128 max - can calculate
+                        Some(i256::from_i128(i128::MAX) - i256::from(1000)),
+                        // Give NaN for incorrect inputs, as in f64::log
+                        Some(i256::from(-123)),
+                    ])
+                    .with_precision_and_scale(DECIMAL256_MAX_PRECISION, 0)
+                    .unwrap(),
+                )), // num
+            ],
+            arg_fields: vec![arg_field],
+            number_rows: 7,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = LogFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 7);
+                eprintln!("floats {:?}", &floats);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+                assert!((floats.value(1) - 2.0).abs() < 1e-10);
+                assert!((floats.value(2) - 3.0).abs() < 1e-10);
+                assert!((floats.value(3) - 4.0).abs() < 1e-10);
+                assert!((floats.value(4) - 4.0).abs() < 1e-10); // Integer rounding for float log
+                assert!((floats.value(5) - 38.0).abs() < 1e-10);
+                assert!(floats.value(6).is_nan());
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_decimal128_wrong_base() {
+        let arg_fields = vec![
+            Field::new("b", DataType::Float64, false).into(),
+            Field::new("x", DataType::Decimal128(38, 0), false).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(-2.0))), // base
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(64), 38, 0)), // num
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = LogFunc::new().invoke_with_args(args);
+        assert!(result.is_err());
+        assert_eq!(
+            "Arrow error: Compute error: Log base must be greater than 1: -2",
+            result.unwrap_err().to_string().lines().next().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_log_decimal256_error() {
+        let arg_field = Field::new("a", DataType::Decimal256(38, 0), false).into();
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Decimal256Array::from(vec![
+                    // Slightly larger than i128
+                    Some(i256::from_i128(i128::MAX) + i256::from(1000)),
+                ]))), // num
+            ],
+            arg_fields: vec![arg_field],
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = LogFunc::new().invoke_with_args(args);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string().lines().next().unwrap(),
+            "Arrow error: Not yet implemented: Log of Decimal256 larger than Decimal128 is not yet supported: 170141183460469231731687303715884106727"
         );
     }
 }

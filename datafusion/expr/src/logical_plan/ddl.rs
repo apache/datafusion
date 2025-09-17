@@ -24,12 +24,15 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+#[cfg(not(feature = "sql"))]
+use crate::expr::Ident;
 use crate::expr::Sort;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
     Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
 };
+#[cfg(feature = "sql")]
 use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
@@ -292,7 +295,10 @@ impl PartialOrd for CreateExternalTable {
             unbounded: &other.unbounded,
             constraints: &other.constraints,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -348,6 +354,8 @@ impl PartialOrd for CreateCatalog {
             Some(Ordering::Equal) => self.if_not_exists.partial_cmp(&other.if_not_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -369,6 +377,8 @@ impl PartialOrd for CreateCatalogSchema {
             Some(Ordering::Equal) => self.if_not_exists.partial_cmp(&other.if_not_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -390,6 +400,8 @@ impl PartialOrd for DropTable {
             Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -411,6 +423,8 @@ impl PartialOrd for DropView {
             Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -437,6 +451,8 @@ impl PartialOrd for DropCatalogSchema {
             },
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -486,7 +502,10 @@ impl PartialOrd for CreateFunction {
             return_type: &other.return_type,
             params: &other.params,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -566,6 +585,8 @@ impl PartialOrd for DropFunction {
             Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -608,7 +629,10 @@ impl PartialOrd for CreateIndex {
             unique: &other.unique,
             if_not_exists: &other.if_not_exists,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 

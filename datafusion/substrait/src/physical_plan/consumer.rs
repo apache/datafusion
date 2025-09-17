@@ -166,7 +166,7 @@ pub async fn from_substrait_rel(
                 ),
             }
         }
-        _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+        _ => not_impl_err!("Unsupported Reltype: {:?}", rel.rel_type),
     }
 }
 

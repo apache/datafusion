@@ -29,7 +29,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
-use datafusion_catalog::{Session, TableProvider};
+use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
     stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
@@ -215,16 +215,16 @@ impl ListingTableConfig {
     ) -> Result<(String, Option<String>)> {
         let mut exts = path.rsplit('.');
 
-        let splitted = exts.next().unwrap_or("");
+        let split = exts.next().unwrap_or("");
 
-        let file_compression_type = FileCompressionType::from_str(splitted)
+        let file_compression_type = FileCompressionType::from_str(split)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
         if file_compression_type.is_compressed() {
-            let splitted2 = exts.next().unwrap_or("");
-            Ok((splitted2.to_string(), Some(splitted.to_string())))
+            let split2 = exts.next().unwrap_or("");
+            Ok((split2.to_string(), Some(split.to_string())))
         } else {
-            Ok((splitted.to_string(), None))
+            Ok((split.to_string(), None))
         }
     }
 
@@ -502,7 +502,7 @@ impl ListingOptions {
     ///
     /// Currently this sets `target_partitions` and `collect_stat`
     /// but if more options are added in the future that need to be coordinated
-    /// they will be synchronized thorugh this method.
+    /// they will be synchronized through this method.
     pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
         self = self.with_target_partitions(config.target_partitions());
         self = self.with_collect_stat(config.collect_statistics());
@@ -802,6 +802,9 @@ impl ListingOptions {
                     .rev()
                     .skip(1) // get parents only; skip the file itself
                     .rev()
+                    // Partitions are expected to follow the format "column_name=value", so we
+                    // should ignore any path part that cannot be parsed into the expected format
+                    .filter(|s| s.contains('='))
                     .map(|s| s.split('=').take(1).collect())
                     .collect_vec()
             })
@@ -1132,8 +1135,8 @@ impl ListingTable {
 }
 
 // Expressions can be used for parttion pruning if they can be evaluated using
-// only the partiton columns and there are partition columns.
-fn can_be_evaluted_for_partition_pruning(
+// only the partition columns and there are partition columns.
+fn can_be_evaluated_for_partition_pruning(
     partition_column_names: &[&str],
     expr: &Expr,
 ) -> bool {
@@ -1166,6 +1169,22 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let options = ScanArgs::default()
+            .with_projection(projection.map(|p| p.as_slice()))
+            .with_filters(Some(filters))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.into_inner())
+    }
+
+    async fn scan_with_args<'a>(
+        &self,
+        state: &dyn Session,
+        args: ScanArgs<'a>,
+    ) -> Result<ScanResult> {
+        let projection = args.projection().map(|p| p.to_vec());
+        let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
+        let limit = args.limit();
+
         // extract types of partition columns
         let table_partition_cols = self
             .options
@@ -1178,11 +1197,12 @@ impl TableProvider for ListingTable {
             .iter()
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
+
         // If the filters can be resolved using only partition cols, there is no need to
         // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
         let (partition_filters, filters): (Vec<_>, Vec<_>) =
             filters.iter().cloned().partition(|filter| {
-                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+                can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });
 
         // We should not limit the number of partitioned files to scan if there are filters and limit
@@ -1195,8 +1215,8 @@ impl TableProvider for ListingTable {
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
-            let projected_schema = project_schema(&self.schema(), projection)?;
-            return Ok(Arc::new(EmptyExec::new(projected_schema)));
+            let projected_schema = project_schema(&self.schema(), projection.as_ref())?;
+            return Ok(ScanResult::new(Arc::new(EmptyExec::new(projected_schema))));
         }
 
         let output_ordering = self.try_create_output_ordering()?;
@@ -1230,13 +1250,16 @@ impl TableProvider for ListingTable {
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
         else {
-            return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
+            return Ok(ScanResult::new(Arc::new(EmptyExec::new(Arc::new(
+                Schema::empty(),
+            )))));
         };
 
         let file_source = self.create_file_source_with_schema_adapter()?;
 
         // create the execution plan
-        self.options
+        let plan = self
+            .options
             .format
             .create_physical_plan(
                 state,
@@ -1248,14 +1271,16 @@ impl TableProvider for ListingTable {
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
                 .with_statistics(statistics)
-                .with_projection(projection.cloned())
+                .with_projection(projection)
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
                 .with_expr_adapter(self.expr_adapter_factory.clone())
                 .build(),
             )
-            .await
+            .await?;
+
+        Ok(ScanResult::new(plan))
     }
 
     fn supports_filters_pushdown(
@@ -1271,7 +1296,7 @@ impl TableProvider for ListingTable {
         filters
             .iter()
             .map(|filter| {
-                if can_be_evaluted_for_partition_pruning(&partition_column_names, filter)
+                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
                 {
                     // if filter can be handled by partition pruning, it is exact
                     return Ok(TableProviderFilterPushDown::Exact);

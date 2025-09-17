@@ -881,8 +881,21 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     ))
 }
 
-/// Create a dictionary array representing all the values in values
-fn dict_from_values<K: ArrowDictionaryKeyType>(
+/// Create a `DictionaryArray` from the provided values array.
+///
+/// Each element gets a unique key (`0..N-1`), without deduplication.
+/// Useful for wrapping arrays in dictionary form.
+///
+/// # Input
+/// ["alice", "bob", "alice", null, "carol"]
+///
+/// # Output
+/// `DictionaryArray<Int32>`
+/// {
+///   keys:   [0, 1, 2, 3, 4],
+///   values: ["alice", "bob", "alice", null, "carol"]
+/// }
+pub fn dict_from_values<K: ArrowDictionaryKeyType>(
     values_array: ArrayRef,
 ) -> Result<ArrayRef> {
     // Create a key array with `size` elements of 0..array_len for all
@@ -1124,7 +1137,7 @@ impl ScalarValue {
             DataType::Null => ScalarValue::Null,
             _ => {
                 return _not_impl_err!(
-                    "Can't create a null scalar from data_type \"{data_type:?}\""
+                    "Can't create a null scalar from data_type \"{data_type}\""
                 );
             }
         })
@@ -1180,7 +1193,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::PI)),
-            _ => _internal_err!("PI is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("PI is not supported for data type: {}", datatype),
         }
     }
 
@@ -1190,7 +1203,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
             _ => {
-                _internal_err!("PI_UPPER is not supported for data type: {:?}", datatype)
+                _internal_err!("PI_UPPER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1201,7 +1214,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F64)),
             _ => {
-                _internal_err!("-PI_LOWER is not supported for data type: {:?}", datatype)
+                _internal_err!("-PI_LOWER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1212,10 +1225,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F64)),
             _ => {
-                _internal_err!(
-                    "PI_UPPER/2 is not supported for data type: {:?}",
-                    datatype
-                )
+                _internal_err!("PI_UPPER/2 is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1230,10 +1240,7 @@ impl ScalarValue {
                 Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F64))
             }
             _ => {
-                _internal_err!(
-                    "-PI/2_LOWER is not supported for data type: {:?}",
-                    datatype
-                )
+                _internal_err!("-PI/2_LOWER is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1243,7 +1250,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::PI)),
-            _ => _internal_err!("-PI is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("-PI is not supported for data type: {}", datatype),
         }
     }
 
@@ -1252,7 +1259,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::FRAC_PI_2)),
             DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::FRAC_PI_2)),
-            _ => _internal_err!("PI/2 is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("PI/2 is not supported for data type: {}", datatype),
         }
     }
 
@@ -1261,7 +1268,7 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::FRAC_PI_2)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::FRAC_PI_2)),
-            _ => _internal_err!("-PI/2 is not supported for data type: {:?}", datatype),
+            _ => _internal_err!("-PI/2 is not supported for data type: {}", datatype),
         }
     }
 
@@ -1271,7 +1278,7 @@ impl ScalarValue {
             DataType::Float32 => Ok(ScalarValue::from(f32::INFINITY)),
             DataType::Float64 => Ok(ScalarValue::from(f64::INFINITY)),
             _ => {
-                _internal_err!("Infinity is not supported for data type: {:?}", datatype)
+                _internal_err!("Infinity is not supported for data type: {}", datatype)
             }
         }
     }
@@ -1283,7 +1290,7 @@ impl ScalarValue {
             DataType::Float64 => Ok(ScalarValue::from(f64::NEG_INFINITY)),
             _ => {
                 _internal_err!(
-                    "Negative Infinity is not supported for data type: {:?}",
+                    "Negative Infinity is not supported for data type: {}",
                     datatype
                 )
             }
@@ -1356,7 +1363,7 @@ impl ScalarValue {
             DataType::Date64 => ScalarValue::Date64(Some(0)),
             _ => {
                 return _not_impl_err!(
-                    "Can't create a zero scalar from data_type \"{datatype:?}\""
+                    "Can't create a zero scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1494,7 +1501,7 @@ impl ScalarValue {
             // Unsupported types for now
             _ => {
                 _not_impl_err!(
-                    "Default value for data_type \"{datatype:?}\" is not implemented yet"
+                    "Default value for data_type \"{datatype}\" is not implemented yet"
                 )
             }
         }
@@ -1544,7 +1551,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create an one scalar from data_type \"{datatype:?}\""
+                    "Can't create an one scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1590,7 +1597,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                    "Can't create a negative one scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -1615,7 +1622,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match i128::from(10).checked_pow((*scale + 1) as u32) {
@@ -1631,7 +1638,7 @@ impl ScalarValue {
                 ) {
                     return _internal_err!("Invalid precision and scale {err}");
                 }
-                if *scale <= 0 {
+                if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
                 match i256::from(10).checked_pow((*scale + 1) as u32) {
@@ -1643,7 +1650,7 @@ impl ScalarValue {
             }
             _ => {
                 return _not_impl_err!(
-                    "Can't create a ten scalar from data_type \"{datatype:?}\""
+                    "Can't create a ten scalar from data_type \"{datatype}\""
                 );
             }
         })
@@ -2351,7 +2358,7 @@ impl ScalarValue {
                     DataType::UInt16 => dict_from_values::<UInt16Type>(values)?,
                     DataType::UInt32 => dict_from_values::<UInt32Type>(values)?,
                     DataType::UInt64 => dict_from_values::<UInt64Type>(values)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 }
             }
             DataType::FixedSizeBinary(size) => {
@@ -2362,7 +2369,7 @@ impl ScalarValue {
                         } else {
                             _exec_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected {data_type:?}, got {sv:?}"
+                                Expected {data_type}, got {sv:?}"
                             )
                         }
                     })
@@ -2924,7 +2931,7 @@ impl ScalarValue {
                     DataType::UInt16 => dict_from_scalar::<UInt16Type>(v, size)?,
                     DataType::UInt32 => dict_from_scalar::<UInt32Type>(v, size)?,
                     DataType::UInt64 => dict_from_scalar::<UInt64Type>(v, size)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 }
             }
             ScalarValue::Null => get_or_create_cached_null_array(size),
@@ -3184,7 +3191,7 @@ impl ScalarValue {
                     DataType::UInt16 => get_dict_value::<UInt16Type>(array, index)?,
                     DataType::UInt32 => get_dict_value::<UInt32Type>(array, index)?,
                     DataType::UInt64 => get_dict_value::<UInt64Type>(array, index)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 };
                 // look up the index in the values dictionary
                 let value = match values_index {
@@ -3558,7 +3565,7 @@ impl ScalarValue {
                     DataType::UInt16 => get_dict_value::<UInt16Type>(array, index)?,
                     DataType::UInt32 => get_dict_value::<UInt32Type>(array, index)?,
                     DataType::UInt64 => get_dict_value::<UInt64Type>(array, index)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
+                    _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 };
                 // was the value in the array non null?
                 match values_index {
@@ -5416,8 +5423,7 @@ mod tests {
             ScalarValue::new_ten(&DataType::Decimal128(7, 2)).unwrap(),
             ScalarValue::Decimal128(Some(1000), 7, 2)
         );
-        // No negative or zero scale
-        assert!(ScalarValue::new_ten(&DataType::Decimal128(5, 0)).is_err());
+        // No negative scale
         assert!(ScalarValue::new_ten(&DataType::Decimal128(5, -1)).is_err());
         // Invalid combination
         assert!(ScalarValue::new_ten(&DataType::Decimal128(0, 2)).is_err());
@@ -5439,8 +5445,7 @@ mod tests {
             ScalarValue::new_ten(&DataType::Decimal256(7, 2)).unwrap(),
             ScalarValue::Decimal256(Some(1000.into()), 7, 2)
         );
-        // No negative or zero scale
-        assert!(ScalarValue::new_ten(&DataType::Decimal256(5, 0)).is_err());
+        // No negative scale
         assert!(ScalarValue::new_ten(&DataType::Decimal256(5, -1)).is_err());
         // Invalid combination
         assert!(ScalarValue::new_ten(&DataType::Decimal256(0, 2)).is_err());

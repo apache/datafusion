@@ -133,7 +133,7 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             fixed_size_array_reverse(array, field)
         }
         Null => Ok(Arc::clone(input_array)),
-        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
+        array_type => exec_err!("array_reverse does not support type '{array_type}'."),
     }
 }
 

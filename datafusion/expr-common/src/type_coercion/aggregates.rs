@@ -171,7 +171,7 @@ pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
     if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
-        plan_err!("VAR does not support {arg_type:?}")
+        plan_err!("VAR does not support {arg_type}")
     }
 }
 
@@ -180,7 +180,7 @@ pub fn covariance_return_type(arg_type: &DataType) -> Result<DataType> {
     if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
-        plan_err!("COVAR does not support {arg_type:?}")
+        plan_err!("COVAR does not support {arg_type}")
     }
 }
 
@@ -189,7 +189,7 @@ pub fn correlation_return_type(arg_type: &DataType) -> Result<DataType> {
     if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
-        plan_err!("CORR does not support {arg_type:?}")
+        plan_err!("CORR does not support {arg_type}")
     }
 }
 
@@ -304,7 +304,7 @@ pub fn coerce_avg_type(func_name: &str, arg_types: &[DataType]) -> Result<Vec<Da
             DataType::Dictionary(_, v) => coerced_type(func_name, v.as_ref()),
             _ => {
                 plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
+                    "The function {:?} does not support inputs of type {}.",
                     func_name,
                     data_type
                 )

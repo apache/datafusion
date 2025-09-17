@@ -94,9 +94,10 @@ impl ScalarUDFImpl for MapKeysFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let [map_type] = take_function_args(self.name(), arg_types)?;
         let map_fields = get_map_entry_field(map_type)?;
+        // internal array nullability is true to be in sync with DuckDB
         Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.first().unwrap().data_type().clone(),
-            false,
+            true,
         ))))
     }
 
@@ -121,7 +122,8 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new_list_field(map_array.key_type().clone(), false)),
+        // internal array nullability is true to be in sync with DuckDB
+        Arc::new(Field::new_list_field(map_array.key_type().clone(), true)),
         map_array.offsets().clone(),
         Arc::clone(map_array.keys()),
         map_array.nulls().cloned(),

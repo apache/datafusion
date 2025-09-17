@@ -521,7 +521,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
             DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
             DataType::Float64 => ScalarValue::Float64(Some(q)),
-            v => unreachable!("unexpected return type {:?}", v),
+            v => unreachable!("unexpected return type {}", v),
         })
     }
 
