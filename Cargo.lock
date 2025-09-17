@@ -401,7 +401,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "half",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "lexical-core",
  "memchr",
  "num",
@@ -500,22 +500,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "assert_cmd"
-version = "2.0.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd389a4b2970a01282ee455294913c0a43724daedcd1a24c3eb0ec1c1320b66"
-dependencies = [
- "anstyle",
- "bstr",
- "doc-comment",
- "libc",
- "predicates",
- "predicates-core",
- "predicates-tree",
- "wait-timeout",
 ]
 
 [[package]]
@@ -1235,7 +1219,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "234113d19d0d7d613b40e86fb654acf958910802bcceab913a4f9e7cda03b1a4"
 dependencies = [
  "memchr",
- "regex-automata",
  "serde",
 ]
 
@@ -1883,7 +1866,6 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
- "hex",
  "insta",
  "itertools 0.14.0",
  "log",
@@ -1930,7 +1912,6 @@ dependencies = [
  "serde_json",
  "snmalloc-rs",
  "structopt",
- "test-utils",
  "tokio",
  "tokio-util",
 ]
@@ -1950,7 +1931,6 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "datafusion-session",
- "datafusion-sql",
  "futures",
  "itertools 0.14.0",
  "log",
@@ -1985,7 +1965,6 @@ name = "datafusion-cli"
 version = "50.0.0"
 dependencies = [
  "arrow",
- "assert_cmd",
  "async-trait",
  "aws-config",
  "aws-credential-types",
@@ -2002,7 +1981,6 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
- "predicates",
  "regex",
  "rstest",
  "rustyline",
@@ -2024,7 +2002,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "hex",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "insta",
  "libc",
  "log",
@@ -2074,7 +2052,6 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store",
- "parquet",
  "rand 0.9.2",
  "tempfile",
  "tokio",
@@ -2092,21 +2069,15 @@ dependencies = [
  "arrow",
  "async-trait",
  "bytes",
- "chrono",
- "datafusion-catalog",
  "datafusion-common",
  "datafusion-datasource",
- "datafusion-execution",
- "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
  "num-traits",
  "object_store",
- "rstest",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -2116,13 +2087,11 @@ dependencies = [
  "arrow",
  "async-trait",
  "bytes",
- "datafusion-catalog",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-session",
@@ -2139,19 +2108,16 @@ dependencies = [
  "arrow",
  "async-trait",
  "bytes",
- "datafusion-catalog",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
  "object_store",
- "serde_json",
  "tokio",
 ]
 
@@ -2163,7 +2129,6 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "datafusion-catalog",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
@@ -2173,18 +2138,15 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
- "datafusion-physical-optimizer",
  "datafusion-physical-plan",
  "datafusion-pruning",
  "datafusion-session",
  "futures",
- "hex",
  "itertools 0.14.0",
  "log",
  "object_store",
  "parking_lot",
  "parquet",
- "rand 0.9.2",
  "tokio",
 ]
 
@@ -2262,8 +2224,9 @@ dependencies = [
  "datafusion-functions-window-common",
  "datafusion-physical-expr-common",
  "env_logger",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "insta",
+ "itertools 0.14.0",
  "paste",
  "recursive",
  "serde_json",
@@ -2276,7 +2239,7 @@ version = "50.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "itertools 0.14.0",
  "paste",
 ]
@@ -2378,6 +2341,7 @@ dependencies = [
  "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
@@ -2454,7 +2418,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-sql",
  "env_logger",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "insta",
  "itertools 0.14.0",
  "log",
@@ -2478,10 +2442,9 @@ dependencies = [
  "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.5",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "insta",
  "itertools 0.14.0",
- "log",
  "parking_lot",
  "paste",
  "petgraph 0.8.2",
@@ -2499,9 +2462,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
- "insta",
  "itertools 0.14.0",
- "rstest",
 ]
 
 [[package]]
@@ -2525,14 +2486,12 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-expr-common",
- "datafusion-functions-nested",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-pruning",
  "insta",
  "itertools 0.14.0",
- "log",
  "recursive",
  "tokio",
 ]
@@ -2561,7 +2520,7 @@ dependencies = [
  "futures",
  "half",
  "hashbrown 0.14.5",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "insta",
  "itertools 0.14.0",
  "log",
@@ -2570,7 +2529,6 @@ dependencies = [
  "rand 0.9.2",
  "rstest",
  "rstest_reuse",
- "tempfile",
  "tokio",
 ]
 
@@ -2607,7 +2565,6 @@ dependencies = [
  "pbjson",
  "prost",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2615,7 +2572,6 @@ name = "datafusion-pruning"
 version = "50.0.0"
 dependencies = [
  "arrow",
- "arrow-schema",
  "datafusion-common",
  "datafusion-datasource",
  "datafusion-expr",
@@ -2633,22 +2589,12 @@ dependencies = [
 name = "datafusion-session"
 version = "50.0.0"
 dependencies = [
- "arrow",
  "async-trait",
- "dashmap",
  "datafusion-common",
- "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr",
  "datafusion-physical-plan",
- "datafusion-sql",
- "futures",
- "itertools 0.14.0",
- "log",
- "object_store",
  "parking_lot",
- "tokio",
 ]
 
 [[package]]
@@ -2664,12 +2610,10 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
- "datafusion-macros",
  "log",
  "rand 0.9.2",
  "sha1",
  "url",
- "xxhash-rust",
 ]
 
 [[package]]
@@ -2686,7 +2630,7 @@ dependencies = [
  "datafusion-functions-nested",
  "datafusion-functions-window",
  "env_logger",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "insta",
  "log",
  "paste",
@@ -2765,7 +2709,6 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-sql",
  "getrandom 0.3.3",
- "insta",
  "object_store",
  "tokio",
  "url",
@@ -2788,12 +2731,6 @@ name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
-
-[[package]]
-name = "difflib"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6184e33543162437515c2e2b48714794e37845ec9851711914eec9d308f6ebe8"
 
 [[package]]
 name = "digest"
@@ -3087,15 +3024,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "float-cmp"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b09cf3155332e944990140d967ff5eceb70df778b34f77d8075db46e4704e6d8"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3331,7 +3259,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http 1.3.1",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "slab",
  "tokio",
  "tokio-util",
@@ -3753,13 +3681,14 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.11.1"
+version = "2.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "206a8042aec68fa4a62e8d3f7aa4ceb508177d9324faf261e1959e495b7a1921"
+checksum = "92119844f513ffa41556430369ab02c295a3578af21cf945caa3e9e0c2481ac3"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.5",
  "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -4280,12 +4209,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "normalize-line-endings"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
-
-[[package]]
 name = "ntapi"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4641,7 +4564,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
 dependencies = [
  "fixedbitset",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
 ]
 
 [[package]]
@@ -4652,7 +4575,7 @@ checksum = "54acf3a685220b533e437e264e4d932cfbdc4cc7ec0cd232ed73c08d03b8a7ca"
 dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "serde",
 ]
 
@@ -4838,36 +4761,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
-]
-
-[[package]]
-name = "predicates"
-version = "3.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5d19ee57562043d37e82899fade9a22ebab7be9cef5026b07fda9cdd4293573"
-dependencies = [
- "anstyle",
- "difflib",
- "float-cmp",
- "normalize-line-endings",
- "predicates-core",
- "regex",
-]
-
-[[package]]
-name = "predicates-core"
-version = "1.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "727e462b119fe9c93fd0eb1429a5f7647394014cf3c04ab2c0350eeb09095ffa"
-
-[[package]]
-name = "predicates-tree"
-version = "1.0.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72dd2d6d381dfb73a193c7fca536518d7caee39fc8503f74e7dc0be0531b425c"
-dependencies = [
- "predicates-core",
- "termtree",
 ]
 
 [[package]]
@@ -5541,9 +5434,9 @@ dependencies = [
 
 [[package]]
 name = "rust_decimal"
-version = "1.37.2"
+version = "1.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b203a6425500a03e0919c42d3c47caca51e79f1132046626d2c8871c5092035d"
+checksum = "c8975fc98059f365204d635119cf9c5a60ae67b841ed49b5422a9a7e56cdfac0"
 dependencies = [
  "arrayvec",
  "borsh",
@@ -5804,11 +5697,12 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.26"
+version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56e6fa9c48d24d85fb3de5ad847117517440f6beceb7798af16b4a87d616b8d0"
+checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 dependencies = [
  "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -5819,10 +5713,11 @@ checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
 
 [[package]]
 name = "serde"
-version = "1.0.219"
+version = "1.0.223"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f0e2c6ed6606019b4e29e69dbaba95b11854410e5347d525002456dbbb786b6"
+checksum = "a505d71960adde88e293da5cb5eda57093379f64e61cf77bf0e6a63af07a7bac"
 dependencies = [
+ "serde_core",
  "serde_derive",
 ]
 
@@ -5836,10 +5731,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_derive"
-version = "1.0.219"
+name = "serde_core"
+version = "1.0.223"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b0276cf7f2c73365f7157c8123c21cd9a50fbbd844757af28ca1f5925fc2a00"
+checksum = "20f57cbd357666aa7b3ac84a90b4ea328f1d4ddb6772b430caa5d9e1309bb9e9"
+dependencies = [
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.223"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d428d07faf17e306e699ec1e91996e5a165ba5d6bce5b5155173e91a8a01a56"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5859,14 +5763,15 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.143"
+version = "1.0.145"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d401abef1d108fbd9cbaebc3e46611f4b1021f714a0597a71f41ee463f5f4a5a"
+checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
 dependencies = [
  "itoa",
  "memchr",
  "ryu",
  "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -5914,7 +5819,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "schemars 0.9.0",
  "schemars 1.0.4",
  "serde",
@@ -5942,7 +5847,7 @@ version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
 dependencies = [
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "itoa",
  "ryu",
  "serde",
@@ -6347,12 +6252,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "termtree"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
-
-[[package]]
 name = "test-utils"
 version = "0.1.0"
 dependencies = [
@@ -6643,7 +6542,7 @@ version = "0.22.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
 dependencies = [
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "toml_datetime",
  "winnow",
 ]
@@ -6685,7 +6584,7 @@ checksum = "d039ad9159c98b70ecfd540b2573b97f7f52c3e8d9f8ad57a24b916a536975f9"
 dependencies = [
  "futures-core",
  "futures-util",
- "indexmap 2.11.1",
+ "indexmap 2.11.3",
  "pin-project-lite",
  "slab",
  "sync_wrapper",
@@ -7003,15 +6902,6 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
-
-[[package]]
-name = "wait-timeout"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "walkdir"
@@ -7557,12 +7447,6 @@ name = "xmlparser"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
-
-[[package]]
-name = "xxhash-rust"
-version = "0.8.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
 
 [[package]]
 name = "xz2"

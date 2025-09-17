@@ -21,7 +21,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
@@ -54,6 +53,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -2993,154 +2993,6 @@ impl PartialOrd for DescribeTable {
     fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
         // There is no relevant comparison for schemas
         None
-    }
-}
-
-/// Output formats for controlling for Explain plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ExplainFormat {
-    /// Indent mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format indent select x from values (1) t(x);
-    /// +---------------+-----------------------------------------------------+
-    /// | plan_type     | plan                                                |
-    /// +---------------+-----------------------------------------------------+
-    /// | logical_plan  | SubqueryAlias: t                                    |
-    /// |               |   Projection: column1 AS x                          |
-    /// |               |     Values: (Int64(1))                              |
-    /// | physical_plan | ProjectionExec: expr=[column1@0 as x]               |
-    /// |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
-    /// |               |                                                     |
-    /// +---------------+-----------------------------------------------------+
-    /// ```
-    Indent,
-    /// Tree mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format tree select x from values (1) t(x);
-    /// +---------------+-------------------------------+
-    /// | plan_type     | plan                          |
-    /// +---------------+-------------------------------+
-    /// | physical_plan | ┌───────────────────────────┐ |
-    /// |               | │       ProjectionExec      │ |
-    /// |               | │    --------------------   │ |
-    /// |               | │        x: column1@0       │ |
-    /// |               | └─────────────┬─────────────┘ |
-    /// |               | ┌─────────────┴─────────────┐ |
-    /// |               | │       DataSourceExec      │ |
-    /// |               | │    --------------------   │ |
-    /// |               | │         bytes: 128        │ |
-    /// |               | │       format: memory      │ |
-    /// |               | │          rows: 1          │ |
-    /// |               | └───────────────────────────┘ |
-    /// |               |                               |
-    /// +---------------+-------------------------------+
-    /// ```
-    Tree,
-    /// Postgres Json mode
-    ///
-    /// A displayable structure that produces plan in postgresql JSON format.
-    ///
-    /// Users can use this format to visualize the plan in existing plan
-    /// visualization tools, for example [dalibo](https://explain.dalibo.com/)
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format pgjson select x from values (1) t(x);
-    /// +--------------+--------------------------------------+
-    /// | plan_type    | plan                                 |
-    /// +--------------+--------------------------------------+
-    /// | logical_plan | [                                    |
-    /// |              |   {                                  |
-    /// |              |     "Plan": {                        |
-    /// |              |       "Alias": "t",                  |
-    /// |              |       "Node Type": "Subquery",       |
-    /// |              |       "Output": [                    |
-    /// |              |         "x"                          |
-    /// |              |       ],                             |
-    /// |              |       "Plans": [                     |
-    /// |              |         {                            |
-    /// |              |           "Expressions": [           |
-    /// |              |             "column1 AS x"           |
-    /// |              |           ],                         |
-    /// |              |           "Node Type": "Projection", |
-    /// |              |           "Output": [                |
-    /// |              |             "x"                      |
-    /// |              |           ],                         |
-    /// |              |           "Plans": [                 |
-    /// |              |             {                        |
-    /// |              |               "Node Type": "Values", |
-    /// |              |               "Output": [            |
-    /// |              |                 "column1"            |
-    /// |              |               ],                     |
-    /// |              |               "Plans": [],           |
-    /// |              |               "Values": "(Int64(1))" |
-    /// |              |             }                        |
-    /// |              |           ]                          |
-    /// |              |         }                            |
-    /// |              |       ]                              |
-    /// |              |     }                                |
-    /// |              |   }                                  |
-    /// |              | ]                                    |
-    /// +--------------+--------------------------------------+
-    /// ```
-    PostgresJSON,
-    /// Graphviz mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format graphviz select x from values (1) t(x);
-    /// +--------------+------------------------------------------------------------------------+
-    /// | plan_type    | plan                                                                   |
-    /// +--------------+------------------------------------------------------------------------+
-    /// | logical_plan |                                                                        |
-    /// |              | // Begin DataFusion GraphViz Plan,                                     |
-    /// |              | // display it online here: https://dreampuf.github.io/GraphvizOnline   |
-    /// |              |                                                                        |
-    /// |              | digraph {                                                              |
-    /// |              |   subgraph cluster_1                                                   |
-    /// |              |   {                                                                    |
-    /// |              |     graph[label="LogicalPlan"]                                         |
-    /// |              |     2[shape=box label="SubqueryAlias: t"]                              |
-    /// |              |     3[shape=box label="Projection: column1 AS x"]                      |
-    /// |              |     2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |     4[shape=box label="Values: (Int64(1))"]                            |
-    /// |              |     3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |   }                                                                    |
-    /// |              |   subgraph cluster_5                                                   |
-    /// |              |   {                                                                    |
-    /// |              |     graph[label="Detailed LogicalPlan"]                                |
-    /// |              |     6[shape=box label="SubqueryAlias: t\nSchema: [x:Int64;N]"]         |
-    /// |              |     7[shape=box label="Projection: column1 AS x\nSchema: [x:Int64;N]"] |
-    /// |              |     6 -> 7 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |     8[shape=box label="Values: (Int64(1))\nSchema: [column1:Int64;N]"] |
-    /// |              |     7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |   }                                                                    |
-    /// |              | }                                                                      |
-    /// |              | // End DataFusion GraphViz Plan                                        |
-    /// |              |                                                                        |
-    /// +--------------+------------------------------------------------------------------------+
-    /// ```
-    Graphviz,
-}
-
-/// Implement  parsing strings to `ExplainFormat`
-impl FromStr for ExplainFormat {
-    type Err = DataFusionError;
-
-    fn from_str(format: &str) -> std::result::Result<Self, Self::Err> {
-        match format.to_lowercase().as_str() {
-            "indent" => Ok(ExplainFormat::Indent),
-            "tree" => Ok(ExplainFormat::Tree),
-            "pgjson" => Ok(ExplainFormat::PostgresJSON),
-            "graphviz" => Ok(ExplainFormat::Graphviz),
-            _ => {
-                plan_err!("Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'")
-            }
-        }
     }
 }
 
