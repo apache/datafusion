@@ -1409,6 +1409,47 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 Transformed::yes(*then_)
             }
 
+            // Remove WHEN false clauses and handle WHEN true optimizations
+            Expr::Case(Case {
+                expr: None,
+                when_then_expr,
+                else_expr,
+            }) if !when_then_expr.is_empty() => {
+                let mut new_when_then_expr = Vec::new();
+                let mut found_true_index = None;
+
+                for (i, (when, then)) in when_then_expr.iter().enumerate() {
+                    if is_true(when.as_ref()) {
+                        // WHEN true makes all subsequent clauses unreachable
+                        found_true_index = Some(i);
+                        new_when_then_expr.push((when.clone(), then.clone()));
+                        break;
+                    } else if !is_false(when.as_ref()) {
+                        // Only keep non-false WHEN clauses
+                        new_when_then_expr.push((when.clone(), then.clone()));
+                    }
+                    // Skip WHEN false clauses (they're never executed)
+                }
+
+                if new_when_then_expr.len() != when_then_expr.len() || found_true_index.is_some() {
+                    // If we found WHEN true, we don't need the else clause
+                    let new_else_expr = if found_true_index.is_some() { None } else { else_expr };
+
+                    if new_when_then_expr.is_empty() {
+                        // No WHEN clauses left, return else expression
+                        Transformed::yes(new_else_expr.map(|e| *e).unwrap_or_else(|| lit(false)))
+                    } else {
+                        Transformed::yes(Expr::Case(Case::new(
+                            None,
+                            new_when_then_expr,
+                            new_else_expr,
+                        )))
+                    }
+                } else {
+                    Transformed::no(Expr::Case(Case::new(None, when_then_expr, else_expr)))
+                }
+            }
+
             // CASE
             //   WHEN X THEN A
             //   WHEN Y THEN B
