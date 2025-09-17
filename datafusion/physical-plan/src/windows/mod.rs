@@ -636,8 +636,8 @@ pub fn get_window_mode(
 
 fn sort_options_resolving_constant(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
     vec![
-        // TODO restore while avoiding exponential planning time
-        //PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
+        // TODO (https://github.com/apache/datafusion/issues/17624) restore while avoiding exponential planning time
+        //   PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
         PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
     ]
 }
