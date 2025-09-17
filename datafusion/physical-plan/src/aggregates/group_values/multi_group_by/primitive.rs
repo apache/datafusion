@@ -175,6 +175,10 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         Ok(())
     }
 
+    fn support_append_array_slice(&self) -> bool {
+        true
+    }
+
     fn append_array_slice(
         &mut self,
         array: &ArrayRef,

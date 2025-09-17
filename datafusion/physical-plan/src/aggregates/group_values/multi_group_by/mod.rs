@@ -88,6 +88,10 @@ pub trait GroupColumn: Send + Sync {
     /// The vectorized version `append_val`
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()>;
 
+    fn support_append_array_slice(&self) -> bool {
+        false
+    }
+
     /// Append slice of values from `array`, starting at `start` for `length` rows
     ///
     /// This is a special case of `vectorized_append` when the rows are continuous
@@ -98,12 +102,14 @@ pub trait GroupColumn: Send + Sync {
     /// to allow optimization that avoid the additional computation that can happen in a slice
     fn append_array_slice(
         &mut self,
-        array: &ArrayRef,
-        start: usize,
-        length: usize,
+        _array: &ArrayRef,
+        _start: usize,
+        _length: usize,
     ) -> Result<()> {
-        let rows = (start..start + length).collect::<Vec<_>>();
-        self.vectorized_append(array, &rows)
+        assert!(!self.support_append_array_slice(), "support_append_array_slice() return true while append_array_slice() is not implemented");
+        not_impl_err!(
+            "append_array_slice is not implemented for this GroupColumn, please implement it as well as support_append_array_slice"
+        )
     }
 
     /// Returns the number of rows stored in this builder
@@ -625,7 +631,14 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             let start = self.vectorized_operation_buffers.append_row_indices[0];
             let length = self.vectorized_operation_buffers.append_row_indices.len();
             for (group_column, col) in iter {
-                group_column.append_array_slice(col, start, length)?;
+                if group_column.support_append_array_slice() {
+                    group_column.append_array_slice(col, start, length)?;
+                } else {
+                    group_column.vectorized_append(
+                        col,
+                        &self.vectorized_operation_buffers.append_row_indices,
+                    )?;
+                }
             }
         } else {
             for (group_column, col) in iter {
