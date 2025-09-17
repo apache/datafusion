@@ -1833,7 +1833,6 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     Ok(())
 }
 
-<<<<<<< HEAD
 /// https://github.com/apache/datafusion/issues/17425
 #[tokio::test]
 async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
@@ -1843,17 +1842,6 @@ async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
     }
 
     impl Default for MakeExtension {
-=======
-/// https://github.com/apache/datafusion/issues/17422
-#[tokio::test]
-async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct ExtensionScalarPredicate {
-        signature: Signature,
-    }
-
-    impl Default for ExtensionScalarPredicate {
->>>>>>> apache/main
         fn default() -> Self {
             Self {
                 signature: Signature::user_defined(Volatility::Immutable),
@@ -1861,21 +1849,13 @@ async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
         }
     }
 
-<<<<<<< HEAD
     impl ScalarUDFImpl for MakeExtension {
-=======
-    impl ScalarUDFImpl for ExtensionScalarPredicate {
->>>>>>> apache/main
         fn as_any(&self) -> &dyn Any {
             self
         }
 
         fn name(&self) -> &str {
-<<<<<<< HEAD
             "make_extension"
-=======
-            "extension_predicate"
->>>>>>> apache/main
         }
 
         fn signature(&self) -> &Signature {
@@ -1891,7 +1871,6 @@ async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
         }
 
         fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-<<<<<<< HEAD
             Ok(args.arg_fields[0]
                 .as_ref()
                 .clone()
@@ -1932,7 +1911,47 @@ AS t(string, extension)
             .get("ARROW:extension:metadata"),
         Some(&"foofy.foofy".into())
     );
-=======
+    Ok(())
+}
+
+/// https://github.com/apache/datafusion/issues/17422
+#[tokio::test]
+async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct ExtensionScalarPredicate {
+        signature: Signature,
+    }
+
+    impl Default for ExtensionScalarPredicate {
+        fn default() -> Self {
+            Self {
+                signature: Signature::user_defined(Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for ExtensionScalarPredicate {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "extension_predicate"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            Ok(arg_types.to_vec())
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!("This shouldn't have been called")
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
             for arg in args.arg_fields {
                 assert!(arg.metadata().contains_key("ARROW:extension:name"));
             }
@@ -1990,6 +2009,5 @@ AS t(string, extension)
         )
         .await?;
     assert!(!df.collect().await?.is_empty());
->>>>>>> apache/main
     Ok(())
 }
