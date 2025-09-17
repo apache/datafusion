@@ -390,7 +390,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
 }
@@ -2871,8 +2871,8 @@ impl HashNode for Expr {
             Expr::Placeholder(place_holder) => {
                 place_holder.hash(state);
             }
-            Expr::OuterReferenceColumn(data_type, column) => {
-                data_type.hash(state);
+            Expr::OuterReferenceColumn(field, column) => {
+                field.hash(state);
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
@@ -4103,7 +4103,7 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/16199 for details
-        assert_eq!(size_of::<Expr>(), 128);
+        assert_eq!(size_of::<Expr>(), 112);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);

@@ -1833,6 +1833,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     Ok(())
 }
 
+<<<<<<< HEAD
 /// https://github.com/apache/datafusion/issues/17425
 #[tokio::test]
 async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
@@ -1842,6 +1843,17 @@ async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
     }
 
     impl Default for MakeExtension {
+=======
+/// https://github.com/apache/datafusion/issues/17422
+#[tokio::test]
+async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct ExtensionScalarPredicate {
+        signature: Signature,
+    }
+
+    impl Default for ExtensionScalarPredicate {
+>>>>>>> apache/main
         fn default() -> Self {
             Self {
                 signature: Signature::user_defined(Volatility::Immutable),
@@ -1849,13 +1861,21 @@ async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
         }
     }
 
+<<<<<<< HEAD
     impl ScalarUDFImpl for MakeExtension {
+=======
+    impl ScalarUDFImpl for ExtensionScalarPredicate {
+>>>>>>> apache/main
         fn as_any(&self) -> &dyn Any {
             self
         }
 
         fn name(&self) -> &str {
+<<<<<<< HEAD
             "make_extension"
+=======
+            "extension_predicate"
+>>>>>>> apache/main
         }
 
         fn signature(&self) -> &Signature {
@@ -1871,6 +1891,7 @@ async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
         }
 
         fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+<<<<<<< HEAD
             Ok(args.arg_fields[0]
                 .as_ref()
                 .clone()
@@ -1911,5 +1932,64 @@ AS t(string, extension)
             .get("ARROW:extension:metadata"),
         Some(&"foofy.foofy".into())
     );
+=======
+            for arg in args.arg_fields {
+                assert!(arg.metadata().contains_key("ARROW:extension:name"));
+            }
+
+            Ok(Field::new("", DataType::Boolean, true).into())
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            for arg in args.arg_fields {
+                assert!(arg.metadata().contains_key("ARROW:extension:name"));
+            }
+
+            let array =
+                ScalarValue::Boolean(Some(true)).to_array_of_size(args.number_rows)?;
+            Ok(ColumnarValue::Array(array))
+        }
+    }
+
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("geometry", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "foofy.foofy".to_string(),
+        )])),
+    ]);
+
+    let batch_lhs = RecordBatch::try_new(
+        schema.clone().into(),
+        vec![
+            create_array!(Int64, [1, 2]),
+            create_array!(Utf8, [Some("item1"), Some("item2")]),
+        ],
+    )?;
+
+    let batch_rhs = RecordBatch::try_new(
+        schema.clone().into(),
+        vec![
+            create_array!(Int64, [2, 3]),
+            create_array!(Utf8, [Some("item2"), Some("item3")]),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("l", batch_lhs)?;
+    ctx.register_batch("r", batch_rhs)?;
+    ctx.register_udf(ExtensionScalarPredicate::default().into());
+
+    let df = ctx
+        .sql(
+            "
+        SELECT L.id l_id FROM L
+        WHERE EXISTS (SELECT 1 FROM R WHERE extension_predicate(L.geometry, R.geometry))
+        ORDER BY l_id
+        ",
+        )
+        .await?;
+    assert!(!df.collect().await?.is_empty());
+>>>>>>> apache/main
     Ok(())
 }
