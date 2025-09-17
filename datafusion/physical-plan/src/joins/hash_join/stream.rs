@@ -388,8 +388,10 @@ impl HashJoinStream {
                 PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
             };
 
-            bounds_accumulator
-                .report_partition_bounds(left_side_partition_id, left_data.bounds.clone())?;
+            bounds_accumulator.report_partition_bounds(
+                left_side_partition_id,
+                left_data.bounds.clone(),
+            )?;
         }
 
         self.state = HashJoinStreamState::FetchProbeBatch;

@@ -34,10 +34,10 @@ use datafusion_functions::hash::Hash;
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
+use ahash::RandomState;
 use itertools::Itertools;
 use parking_lot::Mutex;
 use std::collections::HashSet;
-use ahash::RandomState;
 
 /// RandomState used by RepartitionExec for consistent hash partitioning
 /// This must match the seeds used in RepartitionExec to ensure our hash-based
@@ -385,7 +385,9 @@ impl SharedBoundsAccumulator {
             };
 
             if should_push {
-                inner.bounds.push(PartitionBounds::new(left_side_partition_id, bounds));
+                inner
+                    .bounds
+                    .push(PartitionBounds::new(left_side_partition_id, bounds));
             }
         }
         inner.completed_partitions.insert(left_side_partition_id);

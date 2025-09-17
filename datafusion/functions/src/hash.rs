@@ -81,10 +81,6 @@ impl Default for Hash {
 
 impl Hash {
     pub fn new() -> Self {
-        // Use the same seed as hash joins for consistency
-        let random_state =
-            RandomState::with_seeds('H' as u64, 'A' as u64, 'S' as u64, 'H' as u64);
-
         Self {
             signature: Signature::one_of(
                 vec![
@@ -93,7 +89,7 @@ impl Hash {
                 ],
                 Volatility::Immutable,
             ),
-            random_state,
+            random_state: RandomState::new(),
         }
     }
 
@@ -190,7 +186,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, _)| {
-                Arc::new(Field::new(format!("arg{}", i), DataType::Int32, true))
+                Arc::new(Field::new(format!("arg{i}"), DataType::Int32, true))
             })
             .collect();
 
@@ -323,7 +319,7 @@ mod tests {
 
         // Hash the same array multiple times
         let result1 = func
-            .invoke_with_args(create_test_args(vec![ColumnarValue::Array(array.clone())]))
+            .invoke_with_args(create_test_args(vec![ColumnarValue::Array(Arc::clone(&array))]))
             .unwrap();
         let result2 = func
             .invoke_with_args(create_test_args(vec![ColumnarValue::Array(array)]))
