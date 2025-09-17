@@ -1422,10 +1422,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                         return Ok(Transformed::yes(*then_));
                     }
                     // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
-                    let truncated_when_then_expr = when_then_expr[..i].to_vec();
+                    when_then_expr.truncate(i);
                     return Ok(Transformed::yes(Expr::Case(Case {
                         expr: None,
-                        when_then_expr: truncated_when_then_expr,
+                        when_then_expr,
                         else_expr: Some(then_),
                     })));
                 }
