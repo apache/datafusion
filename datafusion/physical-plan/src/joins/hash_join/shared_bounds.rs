@@ -37,6 +37,12 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr
 use itertools::Itertools;
 use parking_lot::Mutex;
 use std::collections::HashSet;
+use ahash::RandomState;
+
+/// RandomState used by RepartitionExec for consistent hash partitioning
+/// This must match the seeds used in RepartitionExec to ensure our hash-based
+/// filter expressions compute the same partition assignments as the actual partitioning
+const REPARTITION_RANDOM_STATE: RandomState = RandomState::with_seeds(0, 0, 0, 0);
 
 /// Represents the minimum and maximum values for a specific column.
 /// Used in dynamic filter pushdown to establish value boundaries.
@@ -113,6 +119,8 @@ pub(crate) struct SharedBoundsAccumulator {
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter bounds
     on_right: Vec<PhysicalExprRef>,
+    /// Cached ConfigOptions to avoid repeated allocations
+    config_options: Arc<ConfigOptions>,
 }
 
 /// State protected by SharedBoundsAccumulator's mutex
@@ -182,13 +190,18 @@ impl SharedBoundsAccumulator {
             total_partitions,
             dynamic_filter,
             on_right,
+            config_options: Arc::new(ConfigOptions::default()),
         }
     }
 
     /// Create hash expression for the join keys: hash(col1, col2, ...)
     fn create_hash_expression(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        // Use the hash function with the same random state as hash joins for consistency
-        let hash_udf = Arc::new(ScalarUDF::from(Hash::new()));
+        // Use the same random state as RepartitionExec for consistent partitioning
+        // This ensures hash(row) % num_partitions produces the same partition assignment
+        // as the original repartitioning operation
+        let hash_udf = Arc::new(ScalarUDF::from(Hash::new_with_random_state(
+            REPARTITION_RANDOM_STATE,
+        )));
 
         // Create the hash expression using ScalarFunctionExpr
         Ok(Arc::new(ScalarFunctionExpr::new(
@@ -196,7 +209,7 @@ impl SharedBoundsAccumulator {
             hash_udf,
             self.on_right.clone(),
             Field::new("hash_result", DataType::UInt64, false).into(),
-            Arc::new(ConfigOptions::default()),
+            Arc::clone(&self.config_options),
         )))
     }
 
@@ -355,7 +368,7 @@ impl SharedBoundsAccumulator {
     ) -> Result<()> {
         let mut inner = self.inner.lock();
 
-        // Skip if this partition already reported (using improved deduplication logic from HEAD)
+        // Skip processing if this partition has already reported its bounds to prevent duplicate updates
         if inner.completed_partitions.contains(&left_side_partition_id) {
             return Ok(());
         }
