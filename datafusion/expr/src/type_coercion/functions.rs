@@ -531,7 +531,7 @@ fn get_valid_types(
                     new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::String but received {logical_data_type}"
+                        "Function '{function_name}' expects NativeType::String but NativeType::received NativeType::{logical_data_type}"
                     );
                 }
             }
@@ -591,7 +591,7 @@ fn get_valid_types(
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
+                        "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
                     );
                 }
 
@@ -612,7 +612,7 @@ fn get_valid_types(
                 valid_type = DataType::Float64;
             } else if !logical_data_type.is_numeric() {
                 return plan_err!(
-                    "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
+                    "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
                 );
             }
 
