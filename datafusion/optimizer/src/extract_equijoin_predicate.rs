@@ -184,13 +184,25 @@ fn split_eq_and_noneq_join_predicate(
 ///
 /// # Example
 /// - Input: `a.id IS NOT DISTINCT FROM b.id AND a.x > 10 AND b.x > b.id`
-/// - Output: Ok([a.id IS NOT DISTINCT FROM b.id], Some((a.x > 10) AND (b.x > b.id)))
+/// - Output from this splitter: `Ok([a.id, b.id], Some((a.x > 10) AND (b.x > b.id)))`
 ///
 /// # Note
-/// Caller should be cautious -- `is not distinct from` is not equivalent to
-/// equal expression, caller should be responsible for correctly set the `nulls
-/// equals nulls` properties in the operator (if it supports), to make the
-/// transformation valid.
+/// Caller should be cautious -- `is not distinct from` is not equivalent to an
+/// equal expression; the caller is responsible for correctly setting the
+/// `nulls equals nulls` property in the join operator (if it supports it) to
+/// make the transformation valid.
+///
+/// For the above example: in downstream, a valid plan that uses the extracted
+/// equijoin keys should look like:
+///
+/// HashJoin
+/// - on: `a.id = b.id` (equality)
+/// - join_filter: `(a.x > 10) AND (b.x > b.id)`
+/// - nulls_equals_null: `true`
+///
+/// This reflects that `IS NOT DISTINCT FROM` treats `NULL = NULL` as true and
+/// thus requires setting `NullEquality::NullEqualsNull` in the join operator to
+/// preserve semantics while enabling an equi-join implementation (e.g., HashJoin).
 fn split_is_not_distinct_from_and_other_join_predicate(
     filter: Expr,
     left_schema: &DFSchema,
