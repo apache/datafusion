@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`EliminateEmptyUnion`] removes `UnionExec` with zero or one inputs.
+//! [`EliminateUnion`] removes `UnionExec` with zero or one inputs.
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
@@ -54,8 +54,15 @@ impl OptimizerRule for EliminateUnion {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         if let LogicalPlan::Union(u) = &plan {
-            // Removes `LogicalPlan::Union` if it has zero or one inputs
-            match u.inputs.len() {
+            let mut kept_inputs = Vec::with_capacity(u.inputs.len());
+            for child in &u.inputs {
+                match child.as_ref() {
+                    LogicalPlan::EmptyRelation(e) if !e.produce_one_row => {}
+                    _ => kept_inputs.push(Arc::clone(child)),
+                }
+            }
+
+            match kept_inputs.len() {
                 0 => {
                     return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                         EmptyRelation {
@@ -65,11 +72,22 @@ impl OptimizerRule for EliminateUnion {
                     )));
                 }
                 1 => {
-                    return Ok(Transformed::yes(u.inputs[0].as_ref().clone()));
+                    return Ok(Transformed::yes(kept_inputs[0].as_ref().clone()));
                 }
-                _ => return Ok(Transformed::no(plan)),
+                // Create new union plan with remaining inputs
+                remaining_inputs if remaining_inputs < u.inputs.len() => {
+                    let new_union = datafusion_expr::Union {
+                        inputs: kept_inputs,
+                        schema: Arc::clone(&u.schema),
+                    };
+                    return Ok(Transformed::yes(LogicalPlan::Union(new_union)));
+                }
+                _ => {
+                    return Ok(Transformed::no(plan));
+                }
             }
         }
+
         Ok(Transformed::no(plan))
     }
 }
@@ -77,8 +95,8 @@ impl OptimizerRule for EliminateUnion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::vec::Vec;
     use std::sync::Arc;
+    use std::vec::Vec;
 
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::{OptimizerContext, OptimizerRule};
@@ -114,26 +132,143 @@ mod tests {
         })
     }
 
-    // Helper function for no input
-    fn zero_input_union_like(plan_for_schema: &LogicalPlan) -> LogicalPlan {
-        LogicalPlan::Union(Union {
-            inputs: vec![],
-            schema: Arc::clone(plan_for_schema.schema()),
+    // Create an empty input
+    fn empty_input(like: &LogicalPlan) -> LogicalPlan {
+        LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::clone(like.schema()),
         })
     }
 
     #[test]
-    fn union_zero_inputs_eliminates_to_empty_relation() -> Result<()> {
+    fn union_all_empty_children_eliminates_to_empty_relation() -> Result<()> {
         let scan = test_table_scan()?;
         let base = LogicalPlanBuilder::from(scan)
             .project(vec![col("a")])?
             .build()?;
 
-        let plan = zero_input_union_like(&base);
+        let e1 = empty_input(&base);
+        let e2 = empty_input(&base);
+        let e3 = empty_input(&base);
+
+        let plan = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(e1), Arc::new(e2), Arc::new(e3)],
+            schema: Arc::clone(base.schema()),
+        });
 
         assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
+    #[test]
+    fn union_prunes_to_single_child_unwraps() -> Result<()> {
+        let scan = test_table_scan()?;
+        let survivor = LogicalPlanBuilder::from(scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        let e1 = empty_input(&survivor);
+        let e2 = empty_input(&survivor);
+
+        let plan = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(e1), Arc::new(survivor.clone()), Arc::new(e2)],
+            schema: Arc::clone(survivor.schema()),
+        });
+
+        // Expect union removed, just the survivor subtree remains
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test.a, test.b
+          TableScan: test
+        ")
+    }
+
+    #[test]
+    fn union_prunes_some_children_but_keeps_union() -> Result<()> {
+        let scan1 = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(scan1)
+            .project(vec![col("a")])?
+            .build()?;
+
+        let scan2 = test_table_scan()?;
+        let right = LogicalPlanBuilder::from(scan2)
+            .project(vec![col("a")])?
+            .build()?;
+
+        let empty = empty_input(&left);
+
+        let plan = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(left.clone()), Arc::new(empty), Arc::new(right.clone())],
+            schema: Arc::clone(left.schema()),
+        });
+
+        assert_optimized_plan_equal!(plan, @r"
+        Union
+          Projection: test.a
+            TableScan: test
+          Projection: test.a
+            TableScan: test
+        ")
+    }
+
+    #[test]
+    fn nested_union_inner_empty_collapses() -> Result<()> {
+        let scan = test_table_scan()?;
+        let leaf = LogicalPlanBuilder::from(scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        let inner = {
+            let e1 = empty_input(&leaf);
+            let e2 = empty_input(&leaf);
+            LogicalPlan::Union(Union {
+                inputs: vec![Arc::new(e1), Arc::new(e2)],
+                schema: Arc::clone(leaf.schema()),
+            })
+        };
+
+        let plan = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(inner), Arc::new(leaf.clone())],
+            schema: Arc::clone(leaf.schema()),
+        });
+
+        // After rewrite:
+        // - inner union -> EmptyRelation(rows=0)
+        // - outer union has two inputs (EmptyRelation + real plan) -> remains a Union
+        assert_optimized_plan_equal!(plan, @r"
+        Union
+          EmptyRelation: rows=0
+          Projection: test.a, test.b
+            TableScan: test
+        ")
+    }
+
+    // sanity check
+    #[test]
+    fn union_two_non_empty_children_is_unchanged() -> Result<()> {
+        let scan1 = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(scan1)
+            .project(vec![col("a")])?
+            .build()?;
+
+        let scan2 = test_table_scan()?;
+        let right = LogicalPlanBuilder::from(scan2)
+            .project(vec![col("a")])?
+            .build()?;
+
+        let plan = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(left.clone()), Arc::new(right.clone())],
+            schema: Arc::clone(left.schema()),
+        });
+
+        assert_optimized_plan_equal!(plan, @r"
+        Union
+          Projection: test.a
+            TableScan: test
+          Projection: test.a
+            TableScan: test
+        ")
+    }
+
+    // Also validate the simple single-input-union unwrap (no empties involved)
     #[test]
     fn union_single_input_is_unwrapped() -> Result<()> {
         let scan = test_table_scan()?;
@@ -147,83 +282,5 @@ mod tests {
         Projection: test.a, test.b
           TableScan: test
         ")
-    }
-
-    // Sanity check
-    #[test]
-    fn union_two_inputs() -> Result<()> {
-        let scan1 = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(scan1)
-            .project(vec![col("a")])?
-            .build()?;
-
-        let scan2 = test_table_scan()?;
-        let right = LogicalPlanBuilder::from(scan2)
-            .project(vec![col("a")])?
-            .build()?;
-
-        let plan = LogicalPlanBuilder::from(left.clone())
-            .union(right.clone())?
-            .build()?;
-
-        assert_optimized_plan_equal!(plan, @r"
-        Union
-          Projection: test.a
-            TableScan: test
-          Projection: test.a
-            TableScan: test
-        ")
-    }
-
-    #[test]
-    fn nested_union_inner_single_input_is_unwrapped() -> Result<()> {
-        let scan = test_table_scan()?;
-        let leaf = LogicalPlanBuilder::from(scan)
-            .project(vec![col("a"), col("b")])?
-            .build()?;
-
-        // build with single input which should be eliminated
-        let inner_union = single_input_union(&leaf);
-
-        // Outer union has 2 inputs
-        let plan = LogicalPlanBuilder::from(inner_union)
-            .union(leaf.clone())?
-            .build()?;
-
-        // After rewrite, the inner union disappears,
-        // but the outer union still has 2 inputs so it remains.
-        assert_optimized_plan_equal!(plan, @r"
-        Union
-          Projection: test.a, test.b
-            TableScan: test
-          Projection: test.a, test.b
-            TableScan: test
-        ")
-    }
-
-    #[test]
-    fn union_single_and_zero_input() -> Result<()> {
-        let scan = test_table_scan()?;
-        let leaf = LogicalPlanBuilder::from(scan)
-            .project(vec![col("a")])?
-            .build()?;
-
-        let empty_like = zero_input_union_like(&leaf);
-        let single_like = single_input_union(&leaf);
-
-        let plan = LogicalPlanBuilder::from(empty_like)
-            .union(single_like)?
-            .build()?;
-
-        // left side becomes `EmptyRelation: rows=0` (kept as a child),
-        // but since the outer union still has 2 children, it remains a Union
-        assert_optimized_plan_equal!(plan.clone(), @r"
-        Union
-          EmptyRelation: rows=0
-          Projection: test.a
-            TableScan: test
-        ")?;
-
-        Ok(())
     }
 }

@@ -945,6 +945,84 @@ physical_plan
 04)------DataSourceExec: partitions=1, partition_sizes=[2]
 05)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+statement ok
+set datafusion.explain.logical_plan_only = true
+
+query TT
+EXPLAIN
+SELECT * FROM (VALUES (1)) AS v(a) WHERE 1=0
+UNION ALL
+SELECT * FROM (VALUES (2)) AS w(a) WHERE 1=0
+UNION ALL
+SELECT * FROM (VALUES (3)) AS x(a) WHERE 1=0;
+----
+logical_plan EmptyRelation: rows=0
+
+query TT
+EXPLAIN
+SELECT * FROM (SELECT 1 AS a LIMIT 0)
+UNION ALL
+SELECT * FROM (SELECT 2 AS a LIMIT 0);
+----
+logical_plan EmptyRelation: rows=0
+
+query TT
+EXPLAIN
+SELECT * FROM (SELECT 1 AS a) WHERE 1=0
+UNION               -- DISTINCT
+SELECT * FROM (SELECT 2 AS a) WHERE 1=0;
+----
+logical_plan EmptyRelation: rows=0
+
+query TT
+EXPLAIN
+SELECT * FROM (VALUES (1)) AS v(a)          
+UNION ALL
+SELECT * FROM (VALUES (2)) AS w(a) WHERE 1=0;
+----
+logical_plan
+01)Projection: v.a AS a
+02)--SubqueryAlias: v
+03)----Projection: column1 AS a
+04)------Values: (Int64(1))
+
+query TT
+EXPLAIN
+SELECT * FROM (SELECT 1 AS a) WHERE 1=0
+UNION ALL
+SELECT * FROM (SELECT 42 AS a)           
+UNION ALL
+SELECT * FROM (SELECT 7 AS a) WHERE 1=0;
+----
+logical_plan
+01)Projection: Int64(42) AS a
+02)--EmptyRelation: rows=1
+
+query TT
+EXPLAIN
+SELECT * FROM (SELECT 1 AS a LIMIT 0)
+UNION ALL
+SELECT * FROM (VALUES (5)) AS t(a);          
+----
+logical_plan
+01)Projection: t.a AS a
+02)--SubqueryAlias: t
+03)----Projection: column1 AS a
+04)------Values: (Int64(5))
+
+query TT
+EXPLAIN
+SELECT * FROM (VALUES (1)) AS v(a) WHERE 1=0
+UNION             
+SELECT * FROM (VALUES (9)) AS w(a);
+----
+logical_plan 
+01)Aggregate: groupBy=[[a]], aggr=[[]]
+02)--Projection: w.a AS a
+03)----SubqueryAlias: w
+04)------Projection: column1 AS a
+05)--------Values: (Int64(9))
+
 statement count 0
 drop view v1;
 
