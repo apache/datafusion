@@ -43,10 +43,6 @@ fn hash_impl<T, H: Copy>(
     seed: &mut [H],
     func: impl Fn(H, T) -> H,
 ) -> Result<()> {
-    let len = arr.len();
-    if len != seed.len() {
-        return exec_err!("Array length mismatch: {} != {}", len, seed.len());
-    }
     for (hash, elem) in seed.iter_mut().zip(arr) {
         if let Some(elem) = elem {
             *hash = func(*hash, elem);
@@ -456,6 +452,10 @@ pub trait SparkHasher<H: Copy + std::fmt::Debug> {
                 let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
                 Self::hash_struct(arr, seed)?;
             }
+            DataType::Union(_, _) => {
+                let arr = arr.as_any().downcast_ref::<UnionArray>().unwrap();
+                Self::hash_union(arr, seed)?;
+            }
             DataType::Dictionary(key_type, _) => match key_type.as_ref() {
                 DataType::Int8 => {
                     let arr = arr
@@ -512,10 +512,6 @@ pub trait SparkHasher<H: Copy + std::fmt::Debug> {
                         .downcast_ref::<DictionaryArray<UInt64Type>>()
                         .unwrap();
                     Self::hash_dictionary(arr, seed)?;
-                }
-                DataType::Union(_, _) => {
-                    let arr = arr.as_any().downcast_ref::<UnionArray>().unwrap();
-                    Self::hash_union(arr, seed)?;
                 }
                 _ => {
                     return exec_err!("Unsupported key type: {}", key_type);
