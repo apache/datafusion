@@ -70,10 +70,8 @@ pub fn col(ident: impl Into<Column>) -> Expr {
 
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
-#[deprecated(
-    since = "51.0.0",
-    note = "Use `out_ref_col_with_metadata` instead to preserve the metadata of outer column"
-)]
+/// The expression created by this function does not preserve the metadata of the outer column.
+/// Please use `out_ref_col_with_metadata` if you want to preserve the metadata.
 pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
     out_ref_col_with_metadata(dt, HashMap::new(), ident)
 }
