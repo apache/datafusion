@@ -63,6 +63,7 @@ arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+ctor = { workspace = true }
 dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 base64 = "0.22.1"
@@ -77,6 +78,7 @@ mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "http"] }
 prost = { workspace = true }
 rand = { workspace = true }
+rand_distr = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
