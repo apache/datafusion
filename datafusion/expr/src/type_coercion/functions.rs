@@ -659,7 +659,7 @@ fn get_valid_types(
                     new_types.push(casted_type);
                 } else {
                     return internal_err!(
-                        "Expect {} but received {}, DataType: {}",
+                        "Expect {} but received NativeType::{}, DataType: {}",
                         param.desired_type(),
                         current_native_type,
                         current_type
