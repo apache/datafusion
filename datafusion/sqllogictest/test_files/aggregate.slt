@@ -1302,7 +1302,6 @@ SELECT COUNT(2) FROM aggregate_test_100
 ----
 100
 
-
 # csv_query_approx_count
 # FIX: https://github.com/apache/datafusion/issues/3353
 # query II
@@ -1323,10 +1322,10 @@ SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_10
 100 100
 
 # csv_query_approx_count_date_timestamp
-query III
-SELECT approx_distinct(c14) AS a, approx_distinct(c15) AS b, approx_distinct(arrow_cast(c15, 'Date64')) AS c FROM aggregate_test_100
+query IIIII
+SELECT approx_distinct(c14) AS a, approx_distinct(c15) AS b, approx_distinct(arrow_cast(c15, 'Date64')), approx_distinct(arrow_cast(c15, 'Time32(Second)')) as c, approx_distinct(arrow_cast(c15, 'Time64(Nanosecond)')) AS d FROM aggregate_test_100
 ----
-18 60 60
+18 60 60 60 60
 
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
