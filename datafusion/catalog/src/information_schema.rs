@@ -492,7 +492,7 @@ impl SchemaProvider for InformationSchemaProvider {
     fn table_names(&self) -> Vec<String> {
         INFORMATION_SCHEMA_TABLES
             .iter()
-            .map(|t| t.to_string())
+            .map(|t| (*t).to_string())
             .collect()
     }
 

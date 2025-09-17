@@ -1399,6 +1399,16 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // Rules for Case
             //
 
+            // CASE WHEN true THEN A ... END --> A
+            Expr::Case(Case {
+                expr: None,
+                mut when_then_expr,
+                else_expr: _,
+            }) if !when_then_expr.is_empty() && is_true(when_then_expr[0].0.as_ref()) => {
+                let (_, then_) = when_then_expr.swap_remove(0);
+                Transformed::yes(*then_)
+            }
+
             // CASE
             //   WHEN X THEN A
             //   WHEN Y THEN B
@@ -3550,6 +3560,76 @@ mod tests {
             )))),
             not_distinct_from(col("c3").gt(lit(0_i64)), lit(true))
         );
+    }
+
+    #[test]
+    fn simplify_expr_case_when_true() {
+        // CASE WHEN true THEN 1 ELSE x END --> 1
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(lit(1)),)],
+                Some(Box::new(col("x"))),
+            ))),
+            lit(1)
+        );
+
+        // CASE WHEN true THEN col("a") ELSE col("b") END --> col("a")
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(col("a")),)],
+                Some(Box::new(col("b"))),
+            ))),
+            col("a")
+        );
+
+        // CASE WHEN true THEN col("a") WHEN col("x") > 5 THEN col("b") ELSE col("c") END --> col("a")
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(lit(true)), Box::new(col("a"))),
+                    (Box::new(col("x").gt(lit(5))), Box::new(col("b"))),
+                ],
+                Some(Box::new(col("c"))),
+            ))),
+            col("a")
+        );
+
+        // CASE WHEN true THEN col("a") END --> col("a") (no else clause)
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(col("a")),)],
+                None,
+            ))),
+            col("a")
+        );
+
+        // Negative test: CASE WHEN a THEN 1 ELSE 2 END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("a")), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
+
+        // Negative test: CASE WHEN false THEN 1 ELSE 2 END should not use this rule
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(lit(false)), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_ne!(simplify(expr), lit(1));
+
+        // Negative test: CASE WHEN col("x") > 5 THEN 1 ELSE 2 END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("x").gt(lit(5))), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {

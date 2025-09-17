@@ -37,7 +37,7 @@ impl ParameterTest<'_> {
         let expected_types: HashMap<String, Option<DataType>> = self
             .expected_types
             .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
             .collect();
 
         assert_eq!(actual_types, expected_types);
