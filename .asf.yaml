@@ -27,18 +27,7 @@ notifications:
   discussions: github@datafusion.apache.org
   jira_options: link label worklog
 github:
-  description: "Apache DataFusion SQL Query Engine"
-  homepage: https://datafusion.apache.org/
-  labels:
-    - arrow
-    - big-data
-    - dataframe
-    - datafusion
-    - olap
-    - python
-    - query-engine
-    - rust
-    - sql
+  description: "DataFusion Test Sandbox"
   enabled_merge_buttons:
     squash: true
     merge: false
@@ -46,85 +35,8 @@ github:
   features:
     issues: true
     discussions: true
-  protected_branches:
-    main:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    # needs to be updated as part of the release process
-    # .asf.yaml doesn't support wildcard branch protection rules, only exact branch names
-    # https://github.com/apache/infrastructure-asfyaml?tab=readme-ov-file#branch-protection
-    # Keeping set of protected branches for future releases
-    # Meanwhile creating a prerelease script that will update the branch protection names
-    # automatically. Keep track on it https://github.com/apache/datafusion/issues/17134
-    branch-50:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-51:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-52:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-53:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-54:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-55:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-56:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-57:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-58:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-59:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-60:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-61:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-62:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-63:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-64:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-65:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-66:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-67:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-68:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-69:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-    branch-70:
-      required_pull_request_reviews:
-        required_approving_review_count: 1
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true
     allow_auto_merge: true
 
-# publishes the content of the `asf-site` branch to
-# https://datafusion.apache.org/
-publish:
-  whoami: asf-site
