@@ -90,16 +90,21 @@ SELECT make_interval(0, 0, 0, 0, 2147483647, 1, 0.0);
 ----
 NULL
 
-# seconds is now blank line
-#query ?
-#SELECT make_interval(0, 0, 0, 0, 0, 0, 0.0);
-#----
+# https://github.com/apache/datafusion/issues/17455
+# we expected
 #0.000000000 secs
+query ?
+SELECT make_interval(0, 0, 0, 0, 0, 0, 0.0);
+----
 
-#query ?
-#SELECT make_interval();
-#----
+
+# https://github.com/apache/datafusion/issues/17455
+# we expected
 #0.000000000 secs
+query ?
+SELECT make_interval();
+----
+
 
 
 query ?
