@@ -47,13 +47,15 @@ statement ok
 INSERT INTO t1 VALUES
 (1, 10),
 (2, NULL),
-(3, 30)
+(3, 30),
+(6, NULL)
 
 statement ok
 INSERT INTO t2 VALUES
 (1, 10),
 (2, NULL),
-(4, 40)
+(4, 40),
+(6, 6)
 
 # Test basic IS NOT DISTINCT FROM join functionality
 query IIII rowsort
@@ -63,6 +65,7 @@ JOIN t2 ON t1.val IS NOT DISTINCT FROM t2.val
 ----
 1 1 10 10
 2 2 NULL NULL
+6 2 NULL NULL
 
 # Test that IS NOT DISTINCT FROM join produces HashJoin when used alone
 query TT
@@ -115,6 +118,33 @@ physical_plan
 10)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
 11)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Mixed join predicate with `IS DISTINCT FROM` and `IS NOT DISTINCT FROM`
+query IIII rowsort
+SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON ((t1.val+1) IS NOT DISTINCT FROM (t2.val+1)) AND ((t1.val % 3) IS DISTINCT FROM (t2.val % 3));
+----
+
+# The plan should include HashJoin
+query TT
+EXPLAIN SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON ((t1.val+1) IS NOT DISTINCT FROM (t2.val+1)) AND ((t1.val % 3) IS DISTINCT FROM (t2.val % 3));
+----
+logical_plan
+01)Projection: t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+02)--Inner Join: CAST(t1.val AS Int64) + Int64(1) = CAST(t2.val AS Int64) + Int64(1) Filter: CAST(t1.val AS Int64) % Int64(3) IS DISTINCT FROM CAST(t2.val AS Int64) % Int64(3)
+03)----TableScan: t1 projection=[id, val]
+04)----TableScan: t2 projection=[id, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], filter=CAST(val@0 AS Int64) % 3 IS DISTINCT FROM CAST(val@1 AS Int64) % 3, projection=[id@0, val@1, id@3, val@4]
+04)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Test mixed equal and IS NOT DISTINCT FROM conditions
 # The `IS NOT DISTINCT FROM` expr should NOT in HashJoin's `on` predicate
 query TT
@@ -152,6 +182,7 @@ JOIN t0 ON t1.val IS NOT DISTINCT FROM t0.val
 ----
 1 1 10 10
 2 2 NULL NULL
+6 2 NULL NULL
 
 # Ensure there is HashJoin in the plan
 query TT

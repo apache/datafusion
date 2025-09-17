@@ -212,7 +212,11 @@ fn split_op_and_other_join_predicates(
     operator: Operator,
 ) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
     if !matches!(operator, Operator::Eq | Operator::IsNotDistinctFrom) {
-        return internal_err!("This function should only be used to split equal or 'IS NOT DISTINCT FROM' operator");
+        return internal_err!(
+            "split_op_and_other_join_predicates only supports 'Eq' or 'IsNotDistinctFrom' operators, \
+            but received: {:?}",
+            operator
+        );
     }
 
     let exprs = split_conjunction_owned(filter);
