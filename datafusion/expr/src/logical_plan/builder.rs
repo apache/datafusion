@@ -1518,10 +1518,17 @@ impl ValuesFields {
     }
 }
 
-// Return a list of aliases so that if applied to `fields` it would result in a unique name for each
-// column, regardless of qualification. The returned vector length is equal to the number of fields
-// as input and will optionally contain the alias that needs to be assigned to the column in the
-// same position in order to maintain the uniqueness property.
+/// Returns aliases to make field names unique.
+///
+/// Returns a vector of optional aliases, one per input field. `None` means keep the original name,
+/// `Some(alias)` means rename to the alias to ensure uniqueness.
+///
+/// Used when creating [`SubqueryAlias`] or similar operations that strip table qualifiers but need
+/// to maintain unique column names.
+///
+/// # Example
+/// Input fields: `[a, a, b, b, a, a:1]` ([`DFSchema`] valid when duplicate fields have different qualifiers)
+/// Returns: `[None, Some("a:1"), None, Some("b:1"), Some("a:2"), Some("a:1:1")]`
 pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
     // Some field names might already come to this function with the count (number of times it appeared)
     // as a suffix e.g. id:1, so there's still a chance of name collisions, for example,
@@ -2782,6 +2789,12 @@ mod tests {
 
         let remove_redundant = unique_field_aliases(&fields);
 
+        // Input [a, a, b, b, a, a:1] becomes [None, a:1, None, b:1, a:2, a:1:1]
+        // First occurrence of each field name keeps original name (None), duplicates get
+        // incremental suffixes (:1, :2, etc.).
+        // Crucially in this case the 2nd occurrence of `a` gets rewritten to `a:1` which later
+        // conflicts with the last column which is _actually_ called `a:1` so we need to rename it
+        // as well to `a:1:1`.
         assert_eq!(
             remove_redundant,
             vec![

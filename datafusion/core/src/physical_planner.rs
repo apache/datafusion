@@ -3449,6 +3449,23 @@ digraph {
         Ok(())
     }
 
+    // Reproducer for DataFusion issue #17405:
+    //
+    // The following SQL is semantically invalid. Notably, the `SELECT left_table.a, right_table.a`
+    // clause is missing from the explicit logical plan:
+    //
+    // SELECT a FROM (
+    //       -- SELECT left_table.a, right_table.a
+    //       FROM left_table
+    //       FULL JOIN right_table ON left_table.a = right_table.a
+    // ) AS alias
+    // GROUP BY a;
+    //
+    // As a result, the variables within `alias` subquery are not properly distinguished, which
+    // leads to a bug for logical and physical planning.
+    //
+    // The fix is to implicitly insert a Projection node to represent the missing SELECT clause to
+    // ensure each field is correctly aliased to a unique name when the SubqueryAlias node is added.
     #[tokio::test]
     async fn subquery_alias_confusing_the_optimizer() -> Result<()> {
         let state = make_session_state();
