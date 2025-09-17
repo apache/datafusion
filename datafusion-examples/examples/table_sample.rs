@@ -617,7 +617,7 @@ struct TableSamplePlanner<'a, S: ContextProvider> {
 }
 
 fn evaluate_number<
-    T: FromStr + Add<Output=T> + Sub<Output=T> + Mul<Output=T> + Div<Output=T>,
+    T: FromStr + Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Div<Output = T>,
 >(
     expr: &ast::Expr,
 ) -> Option<T> {
@@ -793,8 +793,10 @@ impl<'a, S: ContextProvider> TableSamplePlanner<'a, S> {
                 if let SetExpr::Select(select) = &*query.body {
                     if select.from.len() == 1 {
                         let table_with_joins = select.from.first().unwrap();
-                        if let TableFactor::Table { sample: Some(table_sample_kind), ..} =
-                            &table_with_joins.relation
+                        if let TableFactor::Table {
+                            sample: Some(table_sample_kind),
+                            ..
+                        } = &table_with_joins.relation
                         {
                             debug!("Constructing table sample plan from {:?}", &select);
                             return self.sample_to_logical_plan(
@@ -889,7 +891,7 @@ async fn main() -> Result<()> {
         &format!("{testdata}/alltypes_plain.parquet"),
         ParquetReadOptions::default(),
     )
-        .await?;
+    .await?;
 
     let table_source = provider_as_source(ctx.table_provider("alltypes_plain").await?);
     let context_provider = MockContextProvider {
@@ -984,7 +986,7 @@ mod tests {
             &format!("{testdata}/alltypes_plain.parquet"),
             ParquetReadOptions::default(),
         )
-            .await?;
+        .await?;
 
         let table_source =
             provider_as_source(ctx.table_provider("alltypes_plain").await?);
@@ -1085,9 +1087,7 @@ mod tests {
         let sql =
             "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE SYSTEM 42 where int_col = 1";
         let err = parse_to_logical_plan(sql).await.err().expect("should fail");
-        assert!(err
-            .to_string()
-            .contains("SYSTEM is not supported yet"));
+        assert!(err.to_string().contains("SYSTEM is not supported yet"));
         Ok(())
     }
 
@@ -1096,9 +1096,7 @@ mod tests {
         let sql =
             "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE BLOCK 42 where int_col = 1";
         let err = parse_to_logical_plan(sql).await.err().expect("should fail");
-        assert!(err
-            .to_string()
-            .contains("BLOCK is not supported yet"));
+        assert!(err.to_string().contains("BLOCK is not supported yet"));
         Ok(())
     }
 
@@ -1322,7 +1320,7 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )
-            .unwrap();
+        .unwrap();
 
         let result = bernoulli_sampler.sample(&batch).unwrap();
         assert_batches_eq!(
