@@ -45,7 +45,10 @@ SELECT hash([1, 2, 3], ['a', 'b', 'c']);
 -- Hash arrays from table columns
 SELECT hash(col1, col2) FROM table;
 ```"#,
-    standard_argument(name = "array1", prefix = "First array to hash (any supported type)")
+    standard_argument(
+        name = "array1",
+        prefix = "First array to hash (any supported type)"
+    )
 )]
 #[derive(Debug)]
 pub struct Hash {
@@ -79,7 +82,8 @@ impl Default for Hash {
 impl Hash {
     pub fn new() -> Self {
         // Use the same seed as hash joins for consistency
-        let random_state = RandomState::with_seeds('H' as u64, 'A' as u64, 'S' as u64, 'H' as u64);
+        let random_state =
+            RandomState::with_seeds('H' as u64, 'A' as u64, 'S' as u64, 'H' as u64);
 
         Self {
             signature: Signature::one_of(
@@ -182,9 +186,13 @@ mod tests {
             0
         };
 
-        let arg_fields: Vec<FieldRef> = args.iter().enumerate().map(|(i, _)| {
-            Arc::new(Field::new(format!("arg{}", i), DataType::Int32, true))
-        }).collect();
+        let arg_fields: Vec<FieldRef> = args
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                Arc::new(Field::new(format!("arg{}", i), DataType::Int32, true))
+            })
+            .collect();
 
         let return_field = Arc::new(Field::new("result", DataType::UInt64, false));
 
@@ -282,8 +290,10 @@ mod tests {
         let result = func.invoke_with_args(args);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Arguments has mixed length") ||
-                error_msg.contains("All input arrays must have the same length"));
+        assert!(
+            error_msg.contains("Arguments has mixed length")
+                || error_msg.contains("All input arrays must have the same length")
+        );
     }
 
     #[test]
@@ -312,11 +322,17 @@ mod tests {
         let array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
 
         // Hash the same array multiple times
-        let result1 = func.invoke_with_args(create_test_args(vec![ColumnarValue::Array(array.clone())])).unwrap();
-        let result2 = func.invoke_with_args(create_test_args(vec![ColumnarValue::Array(array)])).unwrap();
+        let result1 = func
+            .invoke_with_args(create_test_args(vec![ColumnarValue::Array(array.clone())]))
+            .unwrap();
+        let result2 = func
+            .invoke_with_args(create_test_args(vec![ColumnarValue::Array(array)]))
+            .unwrap();
 
         // Results should be identical
-        if let (ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)) = (result1, result2) {
+        if let (ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)) =
+            (result1, result2)
+        {
             let hash_array1 = arr1.as_any().downcast_ref::<UInt64Array>().unwrap();
             let hash_array2 = arr2.as_any().downcast_ref::<UInt64Array>().unwrap();
 

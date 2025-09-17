@@ -121,8 +121,6 @@ impl BuildSide {
 pub(super) enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
     WaitBuildSide,
-    /// Waiting for bounds to be reported by all partitions
-    WaitPartitionBoundsReport,
     /// Indicates that build-side has been collected, and stream is ready for fetching probe-side
     FetchProbeBatch,
     /// Indicates that non-empty batch has been fetched from probe-side, and is ready to be processed
@@ -208,9 +206,6 @@ pub(super) struct HashJoinStream {
     right_side_ordered: bool,
     /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
     bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
-    /// Optional future to signal when bounds have been reported by all partitions
-    /// and the dynamic filter has been updated
-    bounds_waiter: Option<OnceFut<()>>,
 
     /// Partitioning mode to use
     mode: PartitionMode,
@@ -335,7 +330,6 @@ impl HashJoinStream {
             hashes_buffer,
             right_side_ordered,
             bounds_accumulator,
-            bounds_waiter: None,
             mode,
         }
     }
@@ -351,9 +345,6 @@ impl HashJoinStream {
                 HashJoinStreamState::WaitBuildSide => {
                     handle_state!(ready!(self.collect_build_side(cx)))
                 }
-                HashJoinStreamState::WaitPartitionBoundsReport => {
-                    handle_state!(ready!(self.wait_for_partition_bounds_report(cx)))
-                }
                 HashJoinStreamState::FetchProbeBatch => {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
@@ -368,26 +359,6 @@ impl HashJoinStream {
                 HashJoinStreamState::Completed => Poll::Ready(None),
             };
         }
-    }
-
-    /// Optional step to wait until bounds have been reported by all partitions.
-    /// This state is only entered if a bounds accumulator is present.
-    ///
-    /// ## Why wait?
-    ///
-    /// The dynamic filter is only built once all partitions have reported their bounds.
-    /// If we do not wait here, the probe-side scan may start before the filter is ready.
-    /// This can lead to the probe-side scan missing the opportunity to apply the filter
-    /// and skip reading unnecessary data.
-    fn wait_for_partition_bounds_report(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        if let Some(ref mut fut) = self.bounds_waiter {
-            ready!(fut.get_shared(cx))?;
-        }
-        self.state = HashJoinStreamState::FetchProbeBatch;
-        Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
     /// Collects build-side data by polling `OnceFut` future from initialized build-side
@@ -408,28 +379,20 @@ impl HashJoinStream {
 
         // Handle dynamic filter bounds accumulation
         //
-        // Dynamic filter coordination between partitions:
-        // Report bounds to the accumulator which will handle synchronization and filter updates
+        // Progressive dynamic filter coordination:
+        // Report bounds immediately to inject progressive filters
         if let Some(ref bounds_accumulator) = self.bounds_accumulator {
-            let bounds_accumulator = Arc::clone(bounds_accumulator);
-
             let left_side_partition_id = match self.mode {
                 PartitionMode::Partitioned => self.partition,
                 PartitionMode::CollectLeft => 0,
                 PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
             };
 
-            let left_data_bounds = left_data.bounds.clone();
-            self.bounds_waiter = Some(OnceFut::new(async move {
-                bounds_accumulator
-                    .report_partition_bounds(left_side_partition_id, left_data_bounds)
-                    .await
-            }));
-            self.state = HashJoinStreamState::WaitPartitionBoundsReport;
-        } else {
-            self.state = HashJoinStreamState::FetchProbeBatch;
+            bounds_accumulator
+                .report_partition_bounds(left_side_partition_id, left_data.bounds.clone())?;
         }
 
+        self.state = HashJoinStreamState::FetchProbeBatch;
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
