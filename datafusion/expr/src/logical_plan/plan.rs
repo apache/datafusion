@@ -4155,10 +4155,7 @@ fn get_unnested_columns(
             }))
         }
         _ => {
-            return internal_err!(
-                "trying to unnest on invalid data type {:?}",
-                data_type
-            );
+            return internal_err!("trying to unnest on invalid data type {data_type}");
         }
     };
     Ok(qualified_columns)
@@ -4182,7 +4179,7 @@ fn get_unnested_list_datatype_recursive(
         _ => {}
     };
 
-    internal_err!("trying to unnest on invalid data type {:?}", data_type)
+    internal_err!("trying to unnest on invalid data type {data_type}")
 }
 
 #[cfg(test)]
@@ -5542,7 +5539,7 @@ mod tests {
             )?;
 
             let fields = join.schema.fields();
-            assert_eq!(fields.len(), 6, "Expected 6 fields for {join_type:?} join");
+            assert_eq!(fields.len(), 6, "Expected 6 fields for {join_type} join");
 
             for (i, field) in fields.iter().enumerate() {
                 let expected_nullable = match (i, &join_type) {

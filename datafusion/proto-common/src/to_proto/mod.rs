@@ -65,7 +65,7 @@ impl std::fmt::Display for Error {
                 write!(f, "{value:?} is invalid as a DataFusion scalar value")
             }
             Self::InvalidScalarType(data_type) => {
-                write!(f, "{data_type:?} is invalid as a DataFusion scalar type")
+                write!(f, "{data_type} is invalid as a DataFusion scalar type")
             }
             Self::InvalidTimeUnit(time_unit) => {
                 write!(

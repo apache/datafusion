@@ -67,5 +67,6 @@ datafusion-functions-nested = { workspace = true }
 datafusion-functions-window = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
+itertools = { workspace = true }
 paste = "^1.0"
 rstest = { workspace = true }

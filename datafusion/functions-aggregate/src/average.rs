@@ -640,7 +640,7 @@ where
 {
     pub fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F) -> Self {
         debug!(
-            "AvgGroupsAccumulator ({}, sum type: {sum_data_type:?}) --> {return_data_type:?}",
+            "AvgGroupsAccumulator ({}, sum type: {sum_data_type}) --> {return_data_type}",
             std::any::type_name::<T>()
         );
 

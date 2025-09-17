@@ -311,7 +311,7 @@ fn array_remove_internal(
             general_remove::<i64>(list_array, element_array, arr_n)
         }
         array_type => {
-            exec_err!("array_remove_all does not support type '{array_type:?}'.")
+            exec_err!("array_remove_all does not support type '{array_type}'.")
         }
     }
 }
