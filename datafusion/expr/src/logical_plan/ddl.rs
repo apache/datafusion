@@ -24,12 +24,15 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+#[cfg(not(feature = "sql"))]
+use crate::expr::Ident;
 use crate::expr::Sort;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
     Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
 };
+#[cfg(feature = "sql")]
 use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
