@@ -88,6 +88,8 @@ pub trait GroupColumn: Send + Sync {
     /// The vectorized version `append_val`
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()>;
 
+    /// Whether this builder supports [`Self::append_array_slice`] optimization
+    /// In case it returns true, [`Self::append_array_slice`] must be implemented
     fn support_append_array_slice(&self) -> bool {
         false
     }
@@ -100,6 +102,8 @@ pub trait GroupColumn: Send + Sync {
     ///
     /// This does not get the sliced array even though it would be more user-friendly
     /// to allow optimization that avoid the additional computation that can happen in a slice
+    ///
+    /// Note: in order for this to be used, [`Self::support_append_array_slice`] must return true
     fn append_array_slice(
         &mut self,
         _array: &ArrayRef,
