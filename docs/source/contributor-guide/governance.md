@@ -82,7 +82,7 @@ Notes:
 | Ifeanyi Ubah            | iffyio           | [iffyio](https://github.com/iffyio)                     |  Validio    | Committer |
 | Jeffrey Vo              | jeffreyvo        | [Jefffrey](https://github.com/Jefffrey)                 |             | Committer |
 | Liu Jiayu               | jiayuliu         | [jimexist](https://github.com/jimexist)                                                        |             | Committer |
-| Ruiqiu Cao              | kamille          | [Rachelint](https://github.com/Rachelint)               |             | Committer |
+| Ruiqiu Cao              | kamille          | [Rachelint](https://github.com/Rachelint)               |    Tencent         | Committer |
 | Kazuyuki Tanimura       | kazuyukitanimura | [kazuyukitanimura](https://github.com/kazuyukitanimura) |             | Committer |
 | Eduard Karacharov       | korowa           | [korowa](https://github.com/korowa)                     |             | Committer |
 | Siew Kam Onn            | kosiew           | [kosiew](https://github.com/kosiew)                     |             | Committer |
