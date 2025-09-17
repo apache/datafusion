@@ -185,9 +185,7 @@ mod tests {
         let arg_fields: Vec<FieldRef> = args
             .iter()
             .enumerate()
-            .map(|(i, _)| {
-                Arc::new(Field::new(format!("arg{i}"), DataType::Int32, true))
-            })
+            .map(|(i, _)| Arc::new(Field::new(format!("arg{i}"), DataType::Int32, true)))
             .collect();
 
         let return_field = Arc::new(Field::new("result", DataType::UInt64, false));
@@ -319,7 +317,9 @@ mod tests {
 
         // Hash the same array multiple times
         let result1 = func
-            .invoke_with_args(create_test_args(vec![ColumnarValue::Array(Arc::clone(&array))]))
+            .invoke_with_args(create_test_args(vec![ColumnarValue::Array(Arc::clone(
+                &array,
+            ))]))
             .unwrap();
         let result2 = func
             .invoke_with_args(create_test_args(vec![ColumnarValue::Array(array)]))
