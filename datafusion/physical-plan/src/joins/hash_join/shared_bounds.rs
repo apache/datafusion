@@ -26,6 +26,7 @@ use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 
 use datafusion_common::{Result, ScalarValue};
+use datafusion_functions::hash::Hash;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
