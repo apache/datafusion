@@ -1920,7 +1920,7 @@ mod tests {
     use arrow::{
         array::{
             ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Int32Array, Int64Array,
-            LargeBinaryArray, StringArray, StructArray, UInt64Array,
+            LargeBinaryArray, StringArray, StringViewArray, StructArray, UInt64Array,
         },
         datatypes::TimeUnit,
     };
@@ -2637,6 +2637,42 @@ mod tests {
         | omega        |
         +--------------+
         ");
+    }
+
+    #[test]
+    fn test_build_statistics_binary_view_to_utf8_view_valid_bytes() {
+        let required_columns = RequiredColumns::from(vec![(
+            phys_expr::Column::new("bin_view", 0),
+            StatisticsType::Min,
+            Field::new("bin_view_min", DataType::Utf8View, true),
+        )]);
+
+        let input_strings = vec!["alpha", "beta", "gamma"];
+        let input_bytes = input_strings
+            .iter()
+            .map(|value| Some(value.as_bytes()))
+            .collect::<Vec<_>>();
+
+        let statistics = TestStatistics::new().with(
+            "bin_view",
+            ContainerStats::new().with_min(
+                Arc::new(BinaryViewArray::from(input_bytes.clone())) as ArrayRef,
+            ),
+        );
+
+        let batch =
+            build_statistics_record_batch(&statistics, &required_columns).unwrap();
+
+        let utf8_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .expect("StringViewArray");
+
+        for (idx, expected) in input_strings.iter().enumerate() {
+            assert!(!utf8_array.is_null(idx));
+            assert_eq!(utf8_array.value(idx), *expected);
+        }
     }
 
     #[test]
