@@ -519,7 +519,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
             }
-
             Statement::CreateView {
                 or_replace,
                 materialized,
@@ -1504,6 +1503,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             unbounded,
             options,
             constraints,
+            or_replace,
         } = statement;
 
         // Merge inline constraints and existing constraints
@@ -1552,6 +1552,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 file_type,
                 table_partition_cols,
                 if_not_exists,
+                or_replace,
                 temporary,
                 definition,
                 order_exprs: ordered_exprs,

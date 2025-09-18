@@ -659,7 +659,7 @@ macro_rules! min_max_batch {
             other => {
                 // This should have been handled before
                 return datafusion_common::internal_err!(
-                    "Min/Max accumulator not implemented for type {:?}",
+                    "Min/Max accumulator not implemented for type {}",
                     other
                 );
             }

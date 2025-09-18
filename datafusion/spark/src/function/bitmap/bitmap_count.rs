@@ -71,7 +71,7 @@ impl ScalarUDFImpl for BitmapCount {
         match arg_types.first() {
             Some(Binary | BinaryView | FixedSizeBinary(_) | LargeBinary) => Ok(Int64),
             Some(data_type) => plan_err!(
-                "bitmap_count expects Binary/BinaryView/FixedSizeBinary/LargeBinary as argument, got {:?}", 
+                "bitmap_count expects Binary/BinaryView/FixedSizeBinary/LargeBinary as argument, got {:?}",
                 data_type
             ),
             None => internal_err!("bitmap_count does not support zero arguments"),
@@ -105,7 +105,7 @@ pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             downcast_and_count_ones!(input_array, FixedSizeBinaryArray)
         }
         data_type => {
-            internal_err!("bitmap_count does not support {:?}", data_type)
+            internal_err!("bitmap_count does not support {data_type}")
         }
     };
 

@@ -1475,7 +1475,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::ExtensionLeaf(_)) | Some(RelType::Read(_)) => Ok(()),
         _ => not_impl_err!(
-            "Unsupported RelType: {:?} in post join filter check",
+            "Unsupported Reltype: {:?} in post join filter check",
             rel.rel_type
         ),
     }
