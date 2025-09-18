@@ -17,14 +17,11 @@
 
 //! Hash utilities for repartitioning data
 
-use std::sync::Arc;
-
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{config::ConfigOptions, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl};
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
 use ahash::RandomState;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 /// Internal hash function used for repartitioning inputs.
 /// This is used for partitioned HashJoinExec and partitioned GroupByExec.
