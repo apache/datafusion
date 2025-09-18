@@ -77,6 +77,8 @@ impl ScalarUDFImpl for SparkMurmur3Hash {
     }
 }
 
+// The following code is copied from 
+// <https://github.com/apache/datafusion-comet/blob/main/native/spark-expr/src/hash_funcs/murmur3.rs>
 #[inline]
 pub fn murmur3_hash<T: AsRef<[u8]>>(data: T, seed: u32) -> u32 {
     #[inline]
