@@ -22,7 +22,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, BinaryViewBuilder};
+use arrow::array::{Array, AsArray, BinaryViewArray, BinaryViewBuilder};
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -973,7 +973,16 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 fn sanitize_binary_array_for_utf8(array: ArrayRef) -> ArrayRef {
     match array.data_type() {
         DataType::BinaryView => {
-            let binary_view = array.as_binary_view();
+            let binary_view: &BinaryViewArray = array.as_binary_view();
+
+            let has_invalid_bytes = binary_view.iter().any(
+                |value| matches!(value, Some(bytes) if str::from_utf8(bytes).is_err()),
+            );
+
+            if !has_invalid_bytes {
+                return array;
+            }
+
             let mut builder = BinaryViewBuilder::with_capacity(binary_view.len());
 
             for value in binary_view.iter() {
@@ -2653,11 +2662,14 @@ mod tests {
             .map(|value| Some(value.as_bytes()))
             .collect::<Vec<_>>();
 
+        let binary_view_array: ArrayRef =
+            Arc::new(BinaryViewArray::from(input_bytes)) as ArrayRef;
+        let sanitized = sanitize_binary_array_for_utf8(Arc::clone(&binary_view_array));
+        assert!(Arc::ptr_eq(&binary_view_array, &sanitized));
+
         let statistics = TestStatistics::new().with(
             "bin_view",
-            ContainerStats::new().with_min(
-                Arc::new(BinaryViewArray::from(input_bytes.clone())) as ArrayRef,
-            ),
+            ContainerStats::new().with_min(binary_view_array),
         );
 
         let batch =
