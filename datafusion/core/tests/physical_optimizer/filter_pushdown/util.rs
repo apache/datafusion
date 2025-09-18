@@ -37,11 +37,13 @@ use datafusion_physical_plan::{
         FilterPushdownPropagation,
     },
     metrics::ExecutionPlanMetricsSet,
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
+use std::fmt::Debug;
+use std::future::Future;
 use std::{
     any::Any,
     fmt::{Display, Formatter},
@@ -574,5 +576,122 @@ impl ExecutionPlan for TestNode {
             let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
+    }
+}
+
+pub struct SlowPartitionNode {
+    input: Arc<dyn ExecutionPlan>,
+    wait_receiver: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
+    wait_sender: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+}
+
+impl SlowPartitionNode {
+    pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        Self {
+            input,
+            wait_receiver: Arc::new(std::sync::Mutex::new(Some(receiver))),
+            wait_sender: Arc::new(std::sync::Mutex::new(Some(sender))),
+        }
+    }
+
+    pub fn notify(&self) -> tokio::sync::oneshot::Sender<()> {
+        self.wait_sender
+            .lock()
+            .unwrap()
+            .take()
+            .expect("notify() can only be called once")
+    }
+}
+
+impl Debug for SlowPartitionNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SlowPartitionNode")
+    }
+}
+
+impl DisplayAs for SlowPartitionNode {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "SlowPartitionNode")
+    }
+}
+
+impl ExecutionPlan for SlowPartitionNode {
+    fn name(&self) -> &str {
+        "SlowPartitionNode"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        self.input.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(children.len() == 1);
+        Ok(Arc::new(SlowPartitionNode {
+            input: children[0].clone(),
+            wait_receiver: Arc::clone(&self.wait_receiver),
+            wait_sender: Arc::clone(&self.wait_sender),
+        }))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
+        if partition == 0 {
+            let receiver = self
+                .wait_receiver
+                .lock()
+                .unwrap()
+                .take()
+                .expect("execute(0) can only be called once");
+            Ok(Box::pin(WaiterStream {
+                inner: self.input.execute(partition, context)?,
+                wait_receiver: Some(receiver),
+            }))
+        } else {
+            self.input.execute(partition, context)
+        }
+    }
+}
+
+/// Stream that waits for a notification before yielding the first batch
+struct WaiterStream {
+    inner: datafusion_execution::SendableRecordBatchStream,
+    wait_receiver: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+impl Stream for WaiterStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(receiver) = &mut this.wait_receiver {
+            match Pin::new(receiver).poll(cx) {
+                Poll::Ready(_) => {
+                    this.wait_receiver = None; // Signal received, remove receiver
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        Pin::new(&mut this.inner).poll_next(cx)
+    }
+}
+
+impl RecordBatchStream for WaiterStream {
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
     }
 }
