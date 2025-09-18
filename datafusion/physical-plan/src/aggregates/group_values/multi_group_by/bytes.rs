@@ -73,6 +73,12 @@ where
         }
     }
 
+
+    #[inline]
+    fn next_offset(&self) -> O {
+        O::from_usize(self.buffer.len()).expect("byte array offset overflow")
+    }
+
     fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
     where
         B: ByteArrayType,
@@ -181,8 +187,8 @@ where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
+        let offsets = &array.value_offsets()[start..=start + length];
 
-        let offsets = array.offsets();
         let bytes = array.value_data();
 
         // Is the slice all nulls
@@ -198,24 +204,83 @@ where
             self.nulls.append_n(length, false);
         }
 
-        let values_start = offsets[start].as_usize();
-        let values_end = offsets[start + length].as_usize();
+        let values_start = offsets[0].as_usize();
+        let values_end = offsets[offsets.len() - 1].as_usize();
 
         // 2. Append the offsets
 
         // Must be before adding the bytes to the buffer
-        let mut last_offset = self.buffer.len();
+
+        self.offsets.reserve(length);
 
         if all_nulls {
+            let last_offset = self.buffer.len();
+
             // If all nulls, we can just repeat the last offset
-            for _ in 0..length {
-                self.offsets.push(O::usize_as(last_offset));
-            }
+            self.offsets.extend(
+                std::iter::repeat_n(O::usize_as(last_offset), length)
+            );
         } else {
-            for start_and_end_values in offsets[start..=start + length].windows(2) {
-                let length = start_and_end_values[1] - start_and_end_values[0];
-                last_offset += length.as_usize();
-                self.offsets.push(O::usize_as(last_offset));
+
+            // If the offsets are contiguous, we can append them directly avoiding the need to align
+            // for example, when the first appended array is not sliced (starts at offset 0)
+            if self.next_offset() == self.offsets[0] {
+                // if B::Offset is the same type as O, we can directly extend the offsets
+                // transmuting the slice
+                if size_of::<B::Offset>() == size_of::<O>()
+                  && align_of::<B::Offset>() == align_of::<O>()
+                {
+                    let offsets: &[O] = unsafe {
+                        std::mem::transmute::<&[B::Offset], &[O]>(offsets)
+                    };
+                    self.offsets.extend_from_slice(&offsets[1..]);
+                } else {
+                    // Otherwise we need to convert the offsets
+                    self.offsets
+                      .extend(offsets[1..].iter().map(|o| O::from_usize(o.as_usize()).unwrap()));
+                }
+            } else {
+                // if B::Offset is the same type as O, we can directly extend the offsets
+                // transmuting the slice
+                if size_of::<B::Offset>() == size_of::<O>()
+                  && align_of::<B::Offset>() == align_of::<O>()
+                {
+                    let offsets: &[O] = unsafe {
+                        std::mem::transmute::<&[B::Offset], &[O]>(offsets)
+                    };
+
+                    // Shifting all the offsets
+                    let shift: O = self.next_offset() - offsets[0];
+
+                    // Creating intermediate offsets instead of pushing each offset is faster
+                    // (even if we make MutableBuffer to avoid updating length on each push
+                    //  and reserve the necessary capacity, it's still slower)
+                    let mut intermediate = Vec::with_capacity(offsets.len() - 1);
+
+                    for &offset in &offsets[1..] {
+                        intermediate.push(offset + shift)
+                    }
+
+                    self.offsets.extend_from_slice(&intermediate);
+                } else {
+                    // Otherwise we need to convert the offsets
+                    self.offsets
+                      .extend(offsets[1..].iter().map(|o| O::from_usize(o.as_usize()).unwrap()));
+
+                    // Shifting all the offsets
+                    let shift: O = self.next_offset() - O::usize_as(offsets[0].as_usize());
+
+                    // Creating intermediate offsets instead of pushing each offset is faster
+                    // (even if we make MutableBuffer to avoid updating length on each push
+                    //  and reserve the necessary capacity, it's still slower)
+                    let mut intermediate = Vec::with_capacity(offsets.len() - 1);
+
+                    for &offset in &offsets[1..] {
+                        intermediate.push(O::usize_as(offset.as_usize()) + shift)
+                    }
+
+                    self.offsets.extend_from_slice(&intermediate);
+                }
             }
         }
 
