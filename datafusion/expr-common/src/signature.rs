@@ -225,7 +225,7 @@ pub enum TypeSignature {
     OneOf(Vec<TypeSignature>),
     /// A function that has an [`ArrayFunctionSignature`]
     ArraySignature(ArrayFunctionSignature),
-    /// One or more arguments of numeric types.
+    /// One or more arguments of numeric types, coerced to a common numeric type.
     ///
     /// See [`NativeType::is_numeric`] to know which type is considered numeric
     ///
@@ -836,7 +836,7 @@ impl Signature {
         }
     }
 
-    /// A specified number of numeric arguments
+    /// A specified number of string arguments
     pub fn string(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::String(arg_count),

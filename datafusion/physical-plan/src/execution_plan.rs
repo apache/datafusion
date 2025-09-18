@@ -1335,7 +1335,7 @@ pub fn check_not_null_constraints(
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
-    actual.iter().map(|elem| elem.to_string()).collect()
+    actual.iter().map(|elem| (*elem).to_string()).collect()
 }
 
 /// Indicates the effect an execution plan operator will have on the cardinality

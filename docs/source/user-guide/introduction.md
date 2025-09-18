@@ -81,7 +81,7 @@ Here are some example systems built using DataFusion:
 - SQL support to another library, such as [dask sql]
 - Streaming data platforms such as [Synnada]
 - Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]
-- Native Spark runtime replacement such as [Blaze]
+- Native Spark runtime replacement such as [Auron]
 
 By using DataFusion, projects are freed to focus on their specific
 features, and avoid reimplementing general (but still necessary)
@@ -96,8 +96,8 @@ Here are some active projects using DataFusion:
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
 - [ArkFlow](https://github.com/arkflow-rs/arkflow) High-performance Rust stream processing engine
+- [Auron](https://github.com/apache/auron) The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing
 - [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
-- [Blaze](https://github.com/kwai/blaze) The Blaze accelerator for Apache Spark leverages native vectorized execution to accelerate query processing
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust) Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
@@ -138,7 +138,7 @@ Here are some less active projects that used DataFusion:
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 
 [ballista]: https://github.com/apache/datafusion-ballista
-[blaze]: https://github.com/blaze-init/blaze
+[auron]: https://github.com/apache/auron
 [cloudfuse buzz]: https://github.com/cloudfuse-io/buzz-rust
 [cnosdb]: https://github.com/cnosdb/cnosdb
 [cube store]: https://github.com/cube-js/cube.js/tree/master/rust

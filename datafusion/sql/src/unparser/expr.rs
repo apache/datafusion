@@ -1658,7 +1658,7 @@ impl Unparser<'_> {
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
         match data_type {
             DataType::Null => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Boolean => Ok(ast::DataType::Bool),
             DataType::Int8 => Ok(ast::DataType::TinyInt(None)),
@@ -1670,7 +1670,7 @@ impl Unparser<'_> {
             DataType::UInt32 => Ok(ast::DataType::IntegerUnsigned(None)),
             DataType::UInt64 => Ok(ast::DataType::BigIntUnsigned(None)),
             DataType::Float16 => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Float32 => Ok(ast::DataType::Float(None)),
             DataType::Float64 => Ok(self.dialect.float64_ast_dtype()),
@@ -1680,57 +1680,57 @@ impl Unparser<'_> {
             DataType::Date32 => Ok(self.dialect.date32_cast_dtype()),
             DataType::Date64 => Ok(self.ast_type_for_date64_in_cast()),
             DataType::Time32(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Time64(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Duration(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Interval(_) => Ok(ast::DataType::Interval),
             DataType::Binary => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::FixedSizeBinary(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::LargeBinary => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::BinaryView => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
             DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
             DataType::Utf8View => Ok(self.dialect.utf8_cast_dtype()),
             DataType::List(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::FixedSizeList(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::LargeList(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::ListView(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::LargeListView(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Struct(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Union(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
             DataType::Decimal32(_precision, _scale) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Decimal64(_precision, _scale) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Decimal128(precision, scale)
             | DataType::Decimal256(precision, scale) => {
@@ -1746,10 +1746,10 @@ impl Unparser<'_> {
                 ))
             }
             DataType::Map(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::RunEndEncoded(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
         }
     }
@@ -3170,6 +3170,26 @@ mod tests {
             let actual = format!("{}", unparser.expr_to_sql(&expr)?);
             assert_eq!(actual, expected);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_timestamp_sqlite() -> Result<()> {
+        let dialect: Arc<dyn Dialect> = Arc::new(SqliteDialect {});
+
+        let unparser = Unparser::new(dialect.as_ref());
+        let expr = Expr::Cast(Cast {
+            expr: Box::new(col("a")),
+            data_type: DataType::Timestamp(TimeUnit::Nanosecond, None),
+        });
+
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = ast.to_string();
+        let expected = "CAST(`a` AS TEXT)".to_string();
+
+        assert_eq!(actual, expected);
 
         Ok(())
     }

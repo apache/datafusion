@@ -148,6 +148,6 @@ fn from_substrait_jointype(join_type: i32) -> datafusion::common::Result<JoinTyp
             _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {
-        plan_err!("invalid join type variant {join_type:?}")
+        plan_err!("invalid join type variant {join_type}")
     }
 }

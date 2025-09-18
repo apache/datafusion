@@ -4633,7 +4633,7 @@ fn test_no_substring_registered() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: Please try with `unicode_expressions` DataFusion feature enabled"
     );
 }
 
@@ -4645,7 +4645,7 @@ fn test_no_substring_registered_alt_syntax() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: Please try with `unicode_expressions` DataFusion feature enabled"
     );
 }
 
@@ -4664,7 +4664,7 @@ fn test_custom_type_plan() -> Result<()> {
     let err = planner.statement_to_plan(ast.pop_front().unwrap());
     assert_contains!(
         err.unwrap_err().to_string(),
-        "This feature is not implemented: Unsupported SQL type Datetime(None)"
+        "This feature is not implemented: Unsupported SQL type DATETIME"
     );
 
     fn plan_sql(sql: &str) -> LogicalPlan {

@@ -60,10 +60,12 @@ use crate::schema_equivalence::schema_satisfied_by;
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
+use datafusion_common::TableReference;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
@@ -73,7 +75,7 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
     physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
-    WindowFunction, WindowFunctionParams,
+    NullTreatment, WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -93,8 +95,6 @@ use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_sql::TableReference;
-use sqlparser::ast::NullTreatment;
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
@@ -459,9 +459,13 @@ impl DefaultPhysicalPlanner {
                 // doesn't know (nor should care) how the relation was
                 // referred to in the query
                 let filters = unnormalize_cols(filters.iter().cloned());
-                source
-                    .scan(session_state, projection.as_ref(), &filters, *fetch)
-                    .await?
+                let filters_vec = filters.into_iter().collect::<Vec<_>>();
+                let opts = ScanArgs::default()
+                    .with_projection(projection.as_deref())
+                    .with_filters(Some(&filters_vec))
+                    .with_limit(*fetch);
+                let res = source.scan_with_args(session_state, opts).await?;
+                Arc::clone(res.plan())
             }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exec_schema = schema.as_ref().to_owned().into();
@@ -1245,7 +1249,7 @@ impl DefaultPhysicalPlanner {
             }
 
             // N Children
-            LogicalPlan::Union(_) => Arc::new(UnionExec::new(children.vec())),
+            LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
@@ -2111,7 +2115,7 @@ impl DefaultPhysicalPlanner {
 
             // "System supplied type" --> Use debug format of the datatype
             let data_type = field.data_type();
-            data_types.append_value(format!("{data_type:?}"));
+            data_types.append_value(format!("{data_type}"));
 
             // "YES if the column is possibly nullable, NO if it is known not nullable. "
             let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
@@ -2738,7 +2742,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct(foo Boolean), Utf8]"#
         );
 
         Ok(())

@@ -107,7 +107,7 @@ pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             downcast_and_count_ones!(input_array, FixedSizeBinaryArray)
         }
         data_type => {
-            internal_err!("bitmap_count does not support {:?}", data_type)
+            internal_err!("bitmap_count does not support {data_type}")
         }
     };
 

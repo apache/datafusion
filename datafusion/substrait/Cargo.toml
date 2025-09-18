@@ -34,7 +34,7 @@ workspace = true
 async-recursion = "1.0"
 async-trait = { workspace = true }
 chrono = { workspace = true }
-datafusion = { workspace = true }
+datafusion = { workspace = true, features = ["sql"] }
 itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = { workspace = true }
@@ -45,7 +45,7 @@ tokio = { workspace = true, features = ["fs"] }
 uuid = { version = "1.17.0", features = ["v4"] }
 
 [dev-dependencies]
-datafusion = { workspace = true, features = ["nested_expressions"] }
+datafusion = { workspace = true, features = ["nested_expressions", "unicode_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
 serde_json = "1.0"
 tokio = { workspace = true }

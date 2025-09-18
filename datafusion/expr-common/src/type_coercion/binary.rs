@@ -204,7 +204,7 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
-            // boolean or null arguments.                   
+            // boolean or null arguments.
             Ok(Signature::uniform(Boolean))
         } else {
             plan_err!(
@@ -694,7 +694,7 @@ pub fn try_type_union_resolution_with_struct(
                 keys_string = Some(keys);
             }
         } else {
-            return exec_err!("Expect to get struct but got {}", data_type);
+            return exec_err!("Expect to get struct but got {data_type}");
         }
     }
 
@@ -726,7 +726,7 @@ pub fn try_type_union_resolution_with_struct(
                 }
             }
         } else {
-            return exec_err!("Expect to get struct but got {}", data_type);
+            return exec_err!("Expect to get struct but got {data_type}");
         }
     }
 
