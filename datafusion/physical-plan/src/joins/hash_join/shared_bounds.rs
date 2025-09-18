@@ -85,16 +85,65 @@ impl PartitionBounds {
 ///
 /// ## Progressive Filtering Strategy
 ///
-/// 1. Each partition computes bounds from its build-side data and immediately injects a filter
-/// 2. Filters use hash-based expressions to avoid false negatives:
-///    `(hash(cols) % num_partitions != partition_id OR col >= min AND col <= max)`
-/// 3. As partitions complete, their specific bounds are added to the combined filter
-/// 4. When all partitions complete, hash checks are removed for optimization
+/// The key insight is that we can apply partial filters immediately without waiting for all
+/// partitions to complete, while maintaining correctness through hash-based expressions.
 ///
-/// ## Filter Expression Evolution
+/// 1. **Immediate Filter Injection**: Each partition computes bounds from its build-side data
+///    and immediately injects a progressive filter
+/// 2. **Hash-Based Correctness**: Filters use hash expressions to ensure no false negatives:
+///    `CASE hash(cols) % num_partitions WHEN partition_id THEN (col >= min AND col <= max) ELSE true END`
+/// 3. **Incremental Improvement**: As partitions complete, filter selectivity increases
+/// 4. **Final Optimization**: When all partitions complete, hash checks are removed
 ///
-/// **Progressive Phase**: `(hash(cols) % n != 0 OR bounds_0) AND (hash(cols) % n != 1 OR bounds_1) AND ...`
-/// **Final Phase**: `bounds_0 OR bounds_1 OR bounds_2 OR ...`
+/// ## Concrete Example
+///
+/// Consider a 3-partition hash join on column `id` with build-side values:
+/// - Partition 0: id ∈ [10, 20] (completes first)
+/// - Partition 1: id ∈ [30, 40] (completes second)
+/// - Partition 2: id ∈ [50, 60] (completes last)
+///
+/// ### Progressive Phase Filters:
+///
+/// **After Partition 0 completes:**
+/// ```sql
+/// CASE hash(id) % 3
+///   WHEN 0 THEN id >= 10 AND id <= 20
+///   ELSE true
+/// END
+/// ```
+/// → Filters partition-0 data immediately, passes through all other data
+///
+/// **After Partition 1 completes:**
+/// ```sql
+/// CASE hash(id) % 3
+///   WHEN 0 THEN id >= 10 AND id <= 20
+///   WHEN 1 THEN id >= 30 AND id <= 40
+///   ELSE true
+/// END
+/// ```
+/// → Now filters both partition-0 and partition-1 data
+///
+/// ### Final Phase Filter:
+/// **After all partitions complete:**
+/// ```sql
+/// (id >= 10 AND id <= 20) OR (id >= 30 AND id <= 40) OR (id >= 50 AND id <= 60)
+/// ```
+/// → Optimized bounds-only filter, no hash computation needed
+///
+/// ## Correctness Guarantee
+///
+/// The hash-based approach ensures **no false negatives**:
+/// - For rows belonging to completed partitions: bounds check filters correctly
+/// - For rows belonging to incomplete partitions: `ELSE true` passes everything through
+/// - Hash function matches the partitioning scheme, ensuring correct partition assignment
+///
+/// ## Performance Benefits
+///
+/// - **Early Filtering**: Probe-side scans start filtering immediately, not after barrier
+/// - **Progressive Improvement**: Filter selectivity increases with each completed partition
+/// - **Reduced I/O**: Less data read from probe-side sources as partitions complete
+/// - **No Coordination Overhead**: Eliminates barrier synchronization between partitions
+/// - **Final Optimization**: Removes hash computation cost when all partitions are done
 ///
 /// ## Thread Safety
 ///
@@ -220,25 +269,33 @@ impl SharedBoundsAccumulator {
     }
 
     /// Create progressive filter using hash-based expressions to avoid false negatives.
-    /// For example:
+    ///
+    /// This is the heart of progressive filtering. It creates a CASE expression that applies
+    /// bounds filtering only to rows belonging to completed partitions, while safely passing
+    /// through all data from incomplete partitions.
+    ///
+    /// ## Generated Expression Structure:
     /// ```sql
     /// CASE hash(cols) % num_partitions
     ///   WHEN 0 THEN (col1 >= min1 AND col1 <= max1 AND col2 >= min2 AND col2 <= max2)
     ///   WHEN 1 THEN (col1 >= min3 AND col1 <= max3 AND col2 >= min4 AND col2 <= max4)
     ///   ...
-    ///   ELSE true
+    ///   ELSE true  -- Critical: ensures no false negatives for incomplete partitions
     /// END
     /// ```
-    /// This means that even if we are missing some of the `WHEN` clauses, we will not
-    /// incorrectly filter out any rows (no false negatives). The tradeoff is that the
-    /// filter may be less selective until all partitions have reported.
-    /// Importantly the hash function (which may be expensive) is only computed once per row,
-    /// regardless of how many partitions have reported.
+    ///
+    /// ## Correctness Key Points:
+    /// - **Hash Function**: Uses the same hash as the join's partitioning scheme
+    /// - **Modulo Operation**: Maps hash values to partition IDs (0 to num_partitions-1)
+    /// - **WHEN Clauses**: Only created for partitions that have completed and reported bounds
+    /// - **ELSE true**: Ensures rows from incomplete partitions are never filtered out
+    /// - **Single Hash**: Hash is computed once per row, regardless of how many partitions completed
     pub(crate) fn create_progressive_filter_from_partition_bounds(
         &self,
         bounds: &HashMap<usize, PartitionBounds>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        // Create base expression: hash(cols) % num_partitions
+        // Step 1: Create the partition assignment expression: hash(join_cols) % num_partitions
+        // This must match the hash function used by RepartitionExec for correctness
         let hash_expr = repartition_hash(self.on_right.clone())?;
         let total_partitions_expr =
             lit(ScalarValue::UInt64(Some(self.total_partitions as u64)));
@@ -248,12 +305,16 @@ impl SharedBoundsAccumulator {
             total_partitions_expr,
         )) as Arc<dyn PhysicalExpr>;
 
-        // Create WHEN clauses: WHEN partition_id THEN bounds_predicate
+        // Step 2: Build WHEN clauses for each completed partition
+        // Format: WHEN partition_id THEN (bounds_predicate)
         let when_thens = bounds.values().sorted_by_key(|b| b.partition).try_fold(
             Vec::new(),
             |mut acc, partition_bounds| {
+                // Create literal for partition ID (e.g., WHEN 0, WHEN 1, etc.)
                 let when_value =
                     lit(ScalarValue::UInt64(Some(partition_bounds.partition as u64)));
+
+                // Create bounds predicate for this partition (e.g., col >= min AND col <= max)
                 if let Some(then_predicate) =
                     self.create_partition_bounds_predicate(partition_bounds)?
                 {
@@ -263,44 +324,72 @@ impl SharedBoundsAccumulator {
             },
         )?;
 
+        // Step 3: Build the complete CASE expression
         use datafusion_physical_expr::expressions::case;
         let expr = if when_thens.is_empty() {
-            // No bounds available, return a literal true to avoid filtering anything
+            // Edge case: No partitions have completed yet - pass everything through
             lit(ScalarValue::Boolean(Some(true)))
         } else {
-            // Create the CASE expression with an ELSE true to avoid false negatives
+            // Create CASE expression with critical ELSE true clause
+            // The ELSE true ensures we never filter out rows from incomplete partitions
             case(
-                Some(modulo_expr),
-                when_thens,
-                Some(lit(ScalarValue::Boolean(Some(true)))),
+                Some(modulo_expr),    // CASE hash(cols) % num_partitions
+                when_thens,           // WHEN clauses for completed partitions
+                Some(lit(ScalarValue::Boolean(Some(true)))),  // ELSE true - no false negatives!
             )?
         };
 
         Ok(expr)
     }
 
-    /// Create filter from completed partitions using OR logic.
-    /// For example: `(col1 >= min1 AND col1 <= max1) OR (col1 >= min2 AND col1 <= max2) OR ...`
-    /// Where each clause corresponds to one partition's bounds.
-    /// This is calculated after *all* partitions have completed.
+    /// Create final optimized filter when all partitions have completed
+    ///
+    /// This method represents the performance optimization phase of progressive filtering.
+    /// Once all partitions have reported their bounds, we can eliminate the hash-based
+    /// CASE expression and use a simpler, more efficient bounds-only filter.
+    ///
+    /// ## Optimization Benefits:
+    /// 1. **No Hash Computation**: Eliminates expensive hash calculations per row
+    /// 2. **Simpler Expression**: OR-based bounds are faster to evaluate than CASE expressions
+    /// 3. **Better Vectorization**: Simple bounds comparisons optimize better in Arrow
+    /// 4. **Reduced CPU Overhead**: Significant performance improvement for large datasets
+    ///
+    /// ## Generated Expression Structure:
+    /// ```sql
+    /// (col1 >= min1 AND col1 <= max1) OR    -- Partition 0 bounds
+    /// (col1 >= min2 AND col1 <= max2) OR    -- Partition 1 bounds
+    /// ...
+    /// (col1 >= minN AND col1 <= maxN)       -- Partition N bounds
+    /// ```
+    ///
+    /// ## Correctness Maintained:
+    /// - Each OR clause represents the exact bounds from one partition
+    /// - Union of all partition bounds = complete build-side value range
+    /// - No false negatives: if a value exists in build side, it passes this filter
+    /// - Same filtering effect as progressive filter, but much more efficient
+    ///
+    /// This transformation is only applied when ALL partitions have completed to ensure
+    /// we have complete bounds information.
     pub(crate) fn create_optimized_filter_from_partition_bounds(
         &self,
         bounds: &HashMap<usize, PartitionBounds>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        // Create a progressive filter for each completed partition
+        // Build individual partition predicates - each becomes one OR clause
         let mut partition_filters = Vec::with_capacity(bounds.len());
 
         for partition_bounds in bounds.values().sorted_by_key(|b| b.partition) {
             if let Some(filter) =
                 self.create_partition_bounds_predicate(partition_bounds)?
             {
-                // This partition has bounds, include it in the optimized filter
+                // This partition contributed bounds - include in optimized filter
                 partition_filters.push(filter);
             }
-            // Skip empty partitions - they don't contribute bounds but shouldn't prevent optimization
+            // Skip empty partitions gracefully - they don't contribute bounds but
+            // shouldn't prevent the optimization from proceeding
         }
 
-        // Combine all partition filters with AND
+        // Create the final OR expression: bounds_0 OR bounds_1 OR ... OR bounds_N
+        // This replaces the hash-based CASE expression with a much faster bounds-only check
         Ok(partition_filters.into_iter().reduce(|acc, filter| {
             Arc::new(BinaryExpr::new(acc, Operator::Or, filter)) as Arc<dyn PhysicalExpr>
         }))
@@ -308,11 +397,71 @@ impl SharedBoundsAccumulator {
 
     /// Report bounds from a completed partition and immediately update the dynamic filter
     ///
-    /// This method applies progressive filtering by immediately injecting a filter for each
-    /// completed partition. The filter uses hash-based expressions to ensure correctness:
-    /// `(hash(cols) % num_partitions != partition_id OR col >= min AND col <= max)`
+    /// This is the core method that implements progressive filtering. Unlike traditional approaches
+    /// that wait for all partitions to complete, this method immediately applies a partial filter
+    /// as soon as each partition finishes building its hash table.
     ///
-    /// When all partitions have completed, the filter is optimized to remove hash checks.
+    /// ## Progressive Filter Logic
+    ///
+    /// The method maintains correctness through careful filter design:
+    ///
+    /// **Key Insight**: We can safely filter rows that belong to completed partitions while
+    /// letting all other rows pass through, because the hash function determines partition
+    /// membership deterministically.
+    ///
+    /// ## Filter Evolution Example
+    ///
+    /// Consider a 2-partition join on column `price`:
+    ///
+    /// **Initial state**: No filter applied
+    /// ```sql
+    /// -- All probe-side rows pass through
+    /// SELECT * FROM probe_table  -- No filtering
+    /// ```
+    ///
+    /// **After Partition 0 completes** (found price range [100, 200]):
+    /// ```sql
+    /// -- Progressive filter applied
+    /// SELECT * FROM probe_table
+    /// WHERE CASE hash(price) % 2
+    ///         WHEN 0 THEN price >= 100 AND price <= 200  -- Filter partition-0 data
+    ///         ELSE true                                   -- Pass through partition-1 data
+    ///       END
+    /// ```
+    /// → Filters out probe rows with price ∉ [100, 200] that hash to partition 0
+    ///
+    /// **After Partition 1 completes** (found price range [500, 600]):
+    /// ```sql
+    /// -- Final optimized filter
+    /// SELECT * FROM probe_table
+    /// WHERE (price >= 100 AND price <= 200) OR (price >= 500 AND price <= 600)
+    /// ```
+    /// → Clean bounds-only filter, no hash computation needed
+    ///
+    /// ## Correctness Guarantee
+    ///
+    /// This approach ensures **zero false negatives** (never incorrectly excludes valid joins):
+    ///
+    /// 1. **Completed Partitions**: Rows are filtered by actual build-side bounds
+    /// 2. **Incomplete Partitions**: All rows pass through (`ELSE true`)
+    /// 3. **Partition Assignment**: Hash function matches the join's partitioning scheme exactly
+    /// 4. **Bounds Accuracy**: Min/max values computed from actual build-side data
+    ///
+    /// The filter may have **false positives** (includes rows that won't join) during the
+    /// progressive phase, but these are eliminated during the actual join operation.
+    ///
+    /// ## Concurrency Handling
+    ///
+    /// - **Thread Safety**: Uses mutex to coordinate between concurrent partition executions
+    /// - **Deduplication**: Handles multiple reports from same partition (CollectLeft mode)
+    /// - **Atomic Updates**: Filter updates are applied atomically to avoid inconsistent states
+    ///
+    /// ## Performance Impact
+    ///
+    /// - **Immediate Benefit**: Probe-side filtering starts as soon as first partition completes
+    /// - **I/O Reduction**: Less data read from storage/network as build partitions complete
+    /// - **CPU Optimization**: Final filter removes hash computation overhead
+    /// - **Scalability**: No barrier synchronization delays between partitions
     ///
     /// # Arguments
     /// * `left_side_partition_id` - The identifier for the **left-side** partition reporting its bounds
