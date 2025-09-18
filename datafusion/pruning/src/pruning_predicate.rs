@@ -937,8 +937,9 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
             array.data_type(),
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView
         );
+        let is_binary_view = matches!(array.data_type(), DataType::BinaryView);
 
-        if is_string && is_binary {
+        if is_string && is_binary_view {
             array = sanitize_binary_array_for_utf8(array);
         }
 
