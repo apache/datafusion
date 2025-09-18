@@ -701,7 +701,7 @@ mod tests {
                 ),
             })
             .collect();
-        let l_formatted: Vec<String> = l.iter().map(|i| i.to_string()).collect();
+        let l_formatted: Vec<String> = l.iter().map(|i| (*i).to_string()).collect();
         assert_eq!(l_formatted, r_formatted);
     }
 

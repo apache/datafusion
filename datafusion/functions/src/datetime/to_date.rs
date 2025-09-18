@@ -39,7 +39,7 @@ Returns the corresponding date.
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
     syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
     sql_example = r#"```sql
-> select to_date('2023-01-31'); 
+> select to_date('2023-01-31');
 +-------------------------------+
 | to_date(Utf8("2023-01-31")) |
 +-------------------------------+
@@ -150,7 +150,7 @@ impl ScalarUDFImpl for ToDateFunc {
             }
             Utf8View | LargeUtf8 | Utf8 => self.to_date(&args),
             other => {
-                exec_err!("Unsupported data type {:?} for function to_date", other)
+                exec_err!("Unsupported data type {} for function to_date", other)
             }
         }
     }
