@@ -2616,7 +2616,7 @@ mod tests {
             Field::new("bin_view_min", DataType::Utf8View, true),
         )]);
 
-        let input_strings = vec!["alpha", "beta", "gamma"];
+        let input_strings = ["alpha", "beta", "gamma"];
         let input_bytes = input_strings
             .iter()
             .map(|value| Some(value.as_bytes()))
@@ -2907,7 +2907,7 @@ mod tests {
         run_case(binary_array, DataType::Binary, "BinaryArray");
 
         let mut builder = BinaryViewBuilder::with_capacity(2);
-        builder.append_value(&[0xFF]);
+        builder.append_value([0xFF]);
         builder.append_value(b"valid");
         let binary_view_array: ArrayRef = Arc::new(builder.finish());
         run_case(binary_view_array, DataType::BinaryView, "BinaryViewArray");
