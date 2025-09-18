@@ -273,6 +273,8 @@ pub enum TypeSignatureClass {
     // TODO:
     // Numeric
     Integer,
+    /// Encompasses both the native Binary as well as arbitrarily sized FixedSizeBinary types
+    Binary,
 }
 
 impl Display for TypeSignatureClass {
@@ -310,6 +312,9 @@ impl TypeSignatureClass {
             TypeSignatureClass::Integer => {
                 vec![DataType::Int64]
             }
+            TypeSignatureClass::Binary => {
+                vec![DataType::Binary]
+            }
         }
     }
 
@@ -329,6 +334,7 @@ impl TypeSignatureClass {
             TypeSignatureClass::Interval if logical_type.is_interval() => true,
             TypeSignatureClass::Duration if logical_type.is_duration() => true,
             TypeSignatureClass::Integer if logical_type.is_integer() => true,
+            TypeSignatureClass::Binary if logical_type.is_binary() => true,
             _ => false,
         }
     }
@@ -357,6 +363,9 @@ impl TypeSignatureClass {
                 Ok(origin_type.to_owned())
             }
             TypeSignatureClass::Integer if native_type.is_integer() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Binary if native_type.is_binary() => {
                 Ok(origin_type.to_owned())
             }
             _ => internal_err!("May miss the matching logic in `matches_native_type`"),

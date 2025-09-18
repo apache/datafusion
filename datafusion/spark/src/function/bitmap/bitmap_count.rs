@@ -29,8 +29,8 @@ use arrow::datatypes::DataType::{
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_datafusion_err, internal_err, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
-    FIXED_SIZE_BINARY_WILDCARD,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 use datafusion_functions::{downcast_arg, downcast_named_arg};
@@ -49,14 +49,8 @@ impl Default for BitmapCount {
 impl BitmapCount {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![
-                    Binary,
-                    BinaryView,
-                    LargeBinary,
-                    FixedSizeBinary(FIXED_SIZE_BINARY_WILDCARD),
-                ],
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Binary)],
                 Volatility::Immutable,
             ),
         }
