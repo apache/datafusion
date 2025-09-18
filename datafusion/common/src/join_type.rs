@@ -74,9 +74,12 @@ pub enum JoinType {
     RightMark,
 }
 
+// Semi/anti joins intentionally omitted: they only emit subsets of the left input and thus do
+// not "preserve" every row for dynamic filter purposes.
 const LEFT_PRESERVING: &[JoinType] =
     &[JoinType::Left, JoinType::Full, JoinType::LeftMark];
 
+// Symmetric rationale applies on the right: semi/anti joins do not preserve all right rows.
 const RIGHT_PRESERVING: &[JoinType] =
     &[JoinType::Right, JoinType::Full, JoinType::RightMark];
 

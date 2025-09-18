@@ -1665,6 +1665,24 @@ mod tests {
         assert_contains!(err.to_string(), "dynamic filter side must be specified");
     }
 
+    #[rstest]
+    #[case(JoinType::Inner, JoinSide::Right)]
+    #[case(JoinType::Left, JoinSide::Right)]
+    #[case(JoinType::Right, JoinSide::Left)]
+    #[case(JoinType::Full, JoinSide::None)]
+    #[case(JoinType::LeftMark, JoinSide::Right)]
+    #[case(JoinType::RightMark, JoinSide::Left)]
+    #[case(JoinType::LeftSemi, JoinSide::Left)]
+    #[case(JoinType::RightSemi, JoinSide::Right)]
+    #[case(JoinType::LeftAnti, JoinSide::Left)]
+    #[case(JoinType::RightAnti, JoinSide::Right)]
+    fn dynamic_filter_side_prefers_non_preserved_input(
+        #[case] join_type: JoinType,
+        #[case] expected_side: JoinSide,
+    ) {
+        assert_eq!(join_type.dynamic_filter_side(), expected_side);
+    }
+
     #[test]
     fn full_join_skips_dynamic_filter_creation() -> Result<()> {
         use arrow::array::Int32Array;
