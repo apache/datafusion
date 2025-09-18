@@ -208,10 +208,10 @@ where
 
         if all_nulls {
             // If all nulls, we can just repeat the last offset
-            for _ in 0..length {
-                self.offsets.push(O::usize_as(last_offset));
-            }
+            self.offsets.extend(std::iter::repeat_n(O::usize_as(last_offset), length));
         } else {
+            self.offsets.reserve(length);
+
             for start_and_end_values in offsets[start..=start + length].windows(2) {
                 let length = start_and_end_values[1] - start_and_end_values[0];
                 last_offset += length.as_usize();
