@@ -31,7 +31,7 @@ use arrow::error::ArrowError;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
-    exec_err, not_impl_err, DataFusionError, GetExt, Result, Statistics,
+    not_impl_err, DataFusionError, GetExt, Result, Statistics,
     DEFAULT_CSV_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
@@ -497,7 +497,20 @@ impl FileFormat for CsvFormat {
 impl CsvFormat {
     /// Return the inferred schema reading up to records_to_read from a
     /// stream of delimited chunks returning the inferred schema and the
-    /// number of lines that were read
+    /// number of lines that were read.
+    ///
+    /// This method now supports CSV files with different numbers of columns.
+    /// The inferred schema will be the union of all columns found across all files.
+    /// Files with fewer columns will have missing columns filled with null values.
+    ///
+    /// # Example
+    /// 
+    /// If you have two CSV files:
+    /// - `file1.csv`: `col1,col2,col3`
+    /// - `file2.csv`: `col1,col2,col3,col4,col5`
+    ///
+    /// The inferred schema will contain all 5 columns, with files that don't 
+    /// have columns 4 and 5 having null values for those columns.
     pub async fn infer_schema_from_stream(
         &self,
         state: &dyn Session,
@@ -560,21 +573,28 @@ impl CsvFormat {
                     })
                     .unzip();
             } else {
-                if fields.len() != column_type_possibilities.len() {
-                    return exec_err!(
-                            "Encountered unequal lengths between records on CSV file whilst inferring schema. \
-                             Expected {} fields, found {} fields at record {}",
-                            column_type_possibilities.len(),
-                            fields.len(),
-                            record_number + 1
-                        );
+                // Handle files with different numbers of columns by extending the schema
+                if fields.len() > column_type_possibilities.len() {
+                    // New columns found - extend our tracking structures
+                    for field in fields.iter().skip(column_type_possibilities.len()) {
+                        column_names.push(field.name().clone());
+                        let mut possibilities = HashSet::new();
+                        if records_read > 0 {
+                            possibilities.insert(field.data_type().clone());
+                        }
+                        column_type_possibilities.push(possibilities);
+                    }
                 }
-
-                column_type_possibilities.iter_mut().zip(&fields).for_each(
-                    |(possibilities, field)| {
-                        possibilities.insert(field.data_type().clone());
-                    },
-                );
+                
+                // Update type possibilities for columns that exist in this file
+                // We take the minimum of fields.len() and column_type_possibilities.len() 
+                // to avoid index out of bounds when a file has fewer columns
+                let max_fields_to_process = fields.len().min(column_type_possibilities.len());
+                for field_idx in 0..max_fields_to_process {
+                    if let Some(field) = fields.get(field_idx) {
+                        column_type_possibilities[field_idx].insert(field.data_type().clone());
+                    }
+                }
             }
 
             if records_to_read == 0 {
@@ -587,7 +607,7 @@ impl CsvFormat {
     }
 }
 
-fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schema {
+pub(crate) fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schema {
     let fields = names
         .into_iter()
         .zip(types)

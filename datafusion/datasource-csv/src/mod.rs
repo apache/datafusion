@@ -21,6 +21,8 @@
 
 pub mod file_format;
 pub mod source;
+#[cfg(test)]
+mod tests;
 
 use std::sync::Arc;
 
