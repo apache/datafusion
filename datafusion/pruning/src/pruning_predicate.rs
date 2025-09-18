@@ -2540,6 +2540,12 @@ mod tests {
 
     #[test]
     fn test_build_statistics_large_binary_to_large_utf8_invalid_bytes() {
+        // When casting binary/byte statistics to Utf8/large-utf8, invalid
+        // UTF-8 sequences should be converted to nulls instead of causing
+        // an error. This test supplies a LargeBinaryArray containing an
+        // invalid byte sequence and ensures the corresponding Utf8
+        // output column contains a NULL for that entry while preserving
+        // valid strings.
         let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("bin", 0),
             StatisticsType::Min,
@@ -2575,6 +2581,9 @@ mod tests {
 
     #[test]
     fn test_build_statistics_binary_view_to_utf8_view_invalid_bytes() {
+        // Similar to `test_build_statistics_large_binary_to_large_utf8_invalid_bytes`,
+        // but exercises the BinaryView -> Utf8View conversion path. Invalid
+        // UTF-8 in the source should produce NULLs in the Utf8View output.
         let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("bin_view", 0),
             StatisticsType::Min,
@@ -2610,6 +2619,11 @@ mod tests {
 
     #[test]
     fn test_build_statistics_binary_view_to_utf8_view_valid_bytes() {
+        // If the underlying BinaryViewArray already contains valid UTF-8
+        // bytes we should avoid unnecessary cloning or conversion. This test
+        // verifies that `sanitize_binary_array_for_utf8` returns the same
+        // array pointer when the bytes are already valid UTF-8 and that
+        // the resulting record batch contains the expected string values.
         let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("bin_view", 0),
             StatisticsType::Min,
@@ -2649,6 +2663,10 @@ mod tests {
 
     #[test]
     fn test_build_statistics_struct_column() {
+        // Verify that struct-typed statistics are preserved and reconstructed
+        // correctly into StructArray columns in the record batch. The test
+        // constructs nested struct min/max arrays and ensures the produced
+        // columns keep the nested layout and values.
         let flag_field = Arc::new(Field::new("flag", DataType::Boolean, true));
         let label_field = Arc::new(Field::new("label", DataType::Utf8, true));
         let nested_struct_fields =
@@ -2796,7 +2814,10 @@ mod tests {
 
     #[test]
     fn test_build_statistics_invalid_utf8_safe_cast() {
-        // Request a record batch for a Utf8 column but provide invalid binary statistics
+        // When casting binary statistics to Utf8 with 'safe' semantics, invalid
+        // UTF-8 byte sequences should be converted to NULL values rather than
+        // causing an error. This test feeds an invalid single-byte sequence
+        // and asserts the produced Utf8 column contains a NULL.
         let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("s3", 3),
             StatisticsType::Min,
@@ -2826,6 +2847,11 @@ mod tests {
 
     #[test]
     fn test_build_statistics_nested_invalid_utf8_safe_cast() {
+        // Ensure nested struct statistics that contain binary fields with
+        // invalid UTF-8 are cast safely to Utf8, converting invalid
+        // entries to NULL while preserving valid entries. This exercises
+        // nested struct casting and the safe-cast behavior for Binary and
+        // BinaryView arrays.
         fn run_case(binary_array: ArrayRef, binary_data_type: DataType, case_name: &str) {
             let num_containers = binary_array.len();
 
@@ -2939,7 +2965,10 @@ mod tests {
 
     #[test]
     fn test_build_statistics_struct_incompatible_layout_error() {
-        // Request struct statistics but provide an incompatible nested layout
+        // Request struct statistics but provide a source struct layout that
+        // doesn't match the requested nested layout. This should produce
+        // an explanatory cast error indicating the incompatible nested
+        // field types.
         let requested_field = Field::new(
             "struct_col_min",
             DataType::Struct(
@@ -2979,7 +3008,9 @@ mod tests {
 
     #[test]
     fn test_build_statistics_struct_non_struct_source_error() {
-        // Request struct statistics but provide a non-struct statistics array
+        // Request struct statistics but provide a non-struct (primitive)
+        // statistics array as the underlying data. This should error out
+        // because a primitive array cannot be cast to a struct layout.
         let requested_field = Field::new(
             "struct_col_min",
             DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
@@ -3007,7 +3038,9 @@ mod tests {
 
     #[test]
     fn test_build_statistics_struct_inconsistent_length() {
-        // Ensure mismatched statistics lengths for struct arrays still error out
+        // Verify that struct statistics arrays with mismatched lengths (the
+        // `num_containers` value vs the actual struct array length) result
+        // in a clear error message indicating the mismatch.
         let requested_field = Field::new(
             "struct_col_min",
             DataType::Struct(vec![Field::new("value", DataType::Int32, true)].into()),
