@@ -257,7 +257,6 @@ pub fn make_interval_month_day_nano(
     min: i32,
     sec: f64,
 ) -> Result<Option<IntervalMonthDayNano>> {
-
     // checks if overflow
     let months = match year.checked_mul(12).and_then(|v| v.checked_add(month)) {
         Some(m) => m,
