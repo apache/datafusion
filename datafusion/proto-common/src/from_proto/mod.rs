@@ -999,6 +999,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => Some(v),
             }).unwrap_or(None),
             skip_arrow_metadata: value.skip_arrow_metadata,
+            max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
+                protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
+            }).unwrap_or(None),
         })
     }
 }
