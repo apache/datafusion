@@ -33,7 +33,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr
 /// Currently this is *not* stable across machines since AHash is not stable across platforms,
 /// thus this should only be used in a single node context.
 #[derive(Debug)]
-pub struct RepartitionHash {
+pub(crate) struct RepartitionHash {
     signature: datafusion_expr::Signature,
     /// RandomState for consistent hashing - using the same seed as hash joins
     random_state: RandomState,
@@ -57,7 +57,7 @@ impl std::hash::Hash for RepartitionHash {
 
 impl RepartitionHash {
     /// Create a new RepartitionHash
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             signature: datafusion_expr::Signature::one_of(
                 vec![datafusion_expr::TypeSignature::VariadicAny],
@@ -68,12 +68,14 @@ impl RepartitionHash {
     }
 }
 
-pub fn repartition_hash(args: Vec<PhysicalExprRef>) -> Result<Arc<dyn PhysicalExpr>> {
-    let hash = RepartitionHash::new();
+pub(crate) fn repartition_hash(
+    args: Vec<PhysicalExprRef>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let hash = ScalarUDF::new_from_impl(RepartitionHash::new());
     let name = hash.name().to_string();
     Ok(Arc::new(ScalarFunctionExpr::new(
         &name,
-        Arc::new(ScalarUDF::new_from_impl(hash)),
+        Arc::new(hash),
         args,
         Arc::new(Field::new(&name, DataType::UInt64, false)),
         Arc::new(ConfigOptions::default()),
@@ -98,13 +100,15 @@ impl ScalarUDFImpl for RepartitionHash {
         Ok(DataType::UInt64)
     }
 
-    fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
         use arrow::array::{Array, UInt64Array};
         use datafusion_common::hash_utils::create_hashes;
         use std::sync::Arc;
 
         if args.args.is_empty() {
-            panic!();
             return datafusion_common::plan_err!("hash requires at least one argument");
         }
 

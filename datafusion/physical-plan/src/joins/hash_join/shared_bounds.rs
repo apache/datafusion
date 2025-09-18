@@ -23,18 +23,16 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::joins::PartitionMode;
-use crate::repartition::hash::RepartitionHash;
+use crate::repartition::hash::repartition_hash;
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
-use crate::repartition::hash::repartition_hash;
 
-use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use itertools::Itertools;
 use parking_lot::Mutex;
-
 
 /// Represents the minimum and maximum values for a specific column.
 /// Used in dynamic filter pushdown to establish value boundaries.
@@ -111,8 +109,6 @@ pub(crate) struct SharedBoundsAccumulator {
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter bounds
     on_right: Vec<PhysicalExprRef>,
-    /// Cached ConfigOptions to avoid repeated allocations
-    config_options: Arc<ConfigOptions>,
 }
 
 /// State protected by SharedBoundsAccumulator's mutex
@@ -182,7 +178,6 @@ impl SharedBoundsAccumulator {
             total_partitions,
             dynamic_filter,
             on_right,
-            config_options: Arc::new(ConfigOptions::default()),
         }
     }
 
@@ -219,14 +214,9 @@ impl SharedBoundsAccumulator {
         }
 
         // Combine all column predicates for this partition with AND
-        Ok(
-            column_predicates
-                .into_iter()
-                .reduce(|acc, pred| {
-                    Arc::new(BinaryExpr::new(acc, Operator::And, pred))
-                        as Arc<dyn PhysicalExpr>
-                })
-        )
+        Ok(column_predicates.into_iter().reduce(|acc, pred| {
+            Arc::new(BinaryExpr::new(acc, Operator::And, pred)) as Arc<dyn PhysicalExpr>
+        }))
     }
 
     /// Create progressive filter using hash-based expressions to avoid false negatives.
@@ -250,7 +240,8 @@ impl SharedBoundsAccumulator {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         // Create base expression: hash(cols) % num_partitions
         let hash_expr = repartition_hash(self.on_right.clone())?;
-        let total_partitions_expr = lit(ScalarValue::UInt64(Some(self.total_partitions as u64)));
+        let total_partitions_expr =
+            lit(ScalarValue::UInt64(Some(self.total_partitions as u64)));
         let modulo_expr = Arc::new(BinaryExpr::new(
             hash_expr,
             Operator::Modulo,
@@ -258,16 +249,19 @@ impl SharedBoundsAccumulator {
         )) as Arc<dyn PhysicalExpr>;
 
         // Create WHEN clauses: WHEN partition_id THEN bounds_predicate
-        let when_thens = bounds
-            .values()
-            .sorted_by_key(|b| b.partition)
-            .try_fold(Vec::new(), |mut acc, partition_bounds| {
-                let when_value = lit(ScalarValue::UInt64(Some(partition_bounds.partition as u64)));
-                if let Some(then_predicate) = self.create_partition_bounds_predicate(partition_bounds)? {
+        let when_thens = bounds.values().sorted_by_key(|b| b.partition).try_fold(
+            Vec::new(),
+            |mut acc, partition_bounds| {
+                let when_value =
+                    lit(ScalarValue::UInt64(Some(partition_bounds.partition as u64)));
+                if let Some(then_predicate) =
+                    self.create_partition_bounds_predicate(partition_bounds)?
+                {
                     acc.push((when_value, then_predicate));
                 }
                 Ok::<_, datafusion_common::DataFusionError>(acc)
-            })?;
+            },
+        )?;
 
         use datafusion_physical_expr::expressions::case;
         let expr = if when_thens.is_empty() {
@@ -297,7 +291,9 @@ impl SharedBoundsAccumulator {
         let mut partition_filters = Vec::with_capacity(bounds.len());
 
         for partition_bounds in bounds.values().sorted_by_key(|b| b.partition) {
-            if let Some(filter) = self.create_partition_bounds_predicate(partition_bounds)? {
+            if let Some(filter) =
+                self.create_partition_bounds_predicate(partition_bounds)?
+            {
                 // This partition has bounds, include it in the optimized filter
                 partition_filters.push(filter);
             }
@@ -305,14 +301,9 @@ impl SharedBoundsAccumulator {
         }
 
         // Combine all partition filters with AND
-        Ok(
-            partition_filters
-                .into_iter()
-                .reduce(|acc, filter| {
-                    Arc::new(BinaryExpr::new(acc, Operator::Or, filter))
-                        as Arc<dyn PhysicalExpr>
-                })
-        )
+        Ok(partition_filters.into_iter().reduce(|acc, filter| {
+            Arc::new(BinaryExpr::new(acc, Operator::Or, filter)) as Arc<dyn PhysicalExpr>
+        }))
     }
 
     /// Report bounds from a completed partition and immediately update the dynamic filter
@@ -342,18 +333,14 @@ impl SharedBoundsAccumulator {
         // Store bounds from this partition (avoid duplicates)
         // In CollectLeft mode, multiple streams may report the same partition_id,
         // but we only want to store bounds once
-        if !inner.bounds.contains_key(&left_side_partition_id) {
+        inner.bounds.entry(left_side_partition_id).or_insert_with(|| {
             if let Some(bounds) = partition_bounds {
-                inner
-                    .bounds
-                    .insert(left_side_partition_id, PartitionBounds::new(left_side_partition_id, bounds));
+                PartitionBounds::new(left_side_partition_id, bounds)
             } else {
                 // Insert an empty bounds entry to track this partition
-                inner
-                    .bounds
-                    .insert(left_side_partition_id, PartitionBounds::new(left_side_partition_id, vec![]));
+                PartitionBounds::new(left_side_partition_id, vec![])
             }
-        }
+        });
 
         let completed = inner.completed_count;
         let total = self.total_partitions;
@@ -388,15 +375,14 @@ impl fmt::Debug for SharedBoundsAccumulator {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::Array;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_boolean_array;
-    use arrow::array::Array;
     use datafusion_expr::ColumnarValue;
     use std::sync::Arc;
 
@@ -412,22 +398,38 @@ mod tests {
         let bounds1 = PartitionBounds::new(
             0,
             vec![
-                ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))),
-                ColumnBounds::new(ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(15))),
+                ColumnBounds::new(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(10)),
+                ),
+                ColumnBounds::new(
+                    ScalarValue::Int32(Some(5)),
+                    ScalarValue::Int32(Some(15)),
+                ),
             ],
         );
         let bounds2 = PartitionBounds::new(
             1,
             vec![
-                ColumnBounds::new(ScalarValue::Int32(Some(20)), ScalarValue::Int32(Some(30))),
-                ColumnBounds::new(ScalarValue::Int32(Some(25)), ScalarValue::Int32(Some(35))),
+                ColumnBounds::new(
+                    ScalarValue::Int32(Some(20)),
+                    ScalarValue::Int32(Some(30)),
+                ),
+                ColumnBounds::new(
+                    ScalarValue::Int32(Some(25)),
+                    ScalarValue::Int32(Some(35)),
+                ),
             ],
         );
 
         // Create mock accumulator (we only need the parts that create_optimized_filter uses)
         let on_right = vec![
-            Arc::new(datafusion_physical_expr::expressions::Column::new("col1", 0)) as Arc<dyn PhysicalExpr>,
-            Arc::new(datafusion_physical_expr::expressions::Column::new("col2", 1)) as Arc<dyn PhysicalExpr>,
+            Arc::new(datafusion_physical_expr::expressions::Column::new(
+                "col1", 0,
+            )) as Arc<dyn PhysicalExpr>,
+            Arc::new(datafusion_physical_expr::expressions::Column::new(
+                "col2", 1,
+            )) as Arc<dyn PhysicalExpr>,
         ];
 
         let accumulator = SharedBoundsAccumulator {
@@ -439,24 +441,24 @@ mod tests {
             total_partitions: 2,
             dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(
                 on_right.clone(),
-                Arc::new(datafusion_physical_expr::expressions::Literal::new(ScalarValue::Boolean(Some(true)))),
+                Arc::new(datafusion_physical_expr::expressions::Literal::new(
+                    ScalarValue::Boolean(Some(true)),
+                )),
             )),
             on_right,
-            config_options: Arc::new(ConfigOptions::default()),
         };
 
         // Test the optimized filter creation
-        let bounds = HashMap::from([
-            (0, bounds1.clone()),
-            (1, bounds2.clone()),
-        ]);
-        let filter = accumulator.create_optimized_filter_from_partition_bounds(&bounds)?.unwrap();
+        let bounds = HashMap::from([(0, bounds1.clone()), (1, bounds2.clone())]);
+        let filter = accumulator
+            .create_optimized_filter_from_partition_bounds(&bounds)?
+            .unwrap();
 
         // Verify the filter is a CaseExpr (indirectly by checking it doesn't panic and has reasonable behavior)
         let test_batch = RecordBatch::try_new(
             Arc::new(schema),
             vec![
-                Arc::new(Int32Array::from(vec![5, 25, 100])),  // col1 values
+                Arc::new(Int32Array::from(vec![5, 25, 100])), // col1 values
                 Arc::new(Int32Array::from(vec![10, 30, 200])), // col2 values
             ],
         )?;
@@ -471,7 +473,10 @@ mod tests {
         // The exact results depend on hash values, but we should get boolean results
         for i in 0..3 {
             // Just verify we get boolean values (true/false, not null for this simple case)
-            assert!(!result_array.is_null(i), "Result should not be null at index {}", i);
+            assert!(
+                !result_array.is_null(i),
+                "Result should not be null at index {i}"
+            );
         }
 
         Ok(())
@@ -479,9 +484,9 @@ mod tests {
 
     #[test]
     fn test_empty_bounds_returns_true() -> Result<()> {
-        let on_right = vec![
-            Arc::new(datafusion_physical_expr::expressions::Column::new("col1", 0)) as Arc<dyn PhysicalExpr>,
-        ];
+        let on_right = vec![Arc::new(datafusion_physical_expr::expressions::Column::new(
+            "col1", 0,
+        )) as Arc<dyn PhysicalExpr>];
 
         let accumulator = SharedBoundsAccumulator {
             inner: Mutex::new(SharedBoundsState {
@@ -492,14 +497,17 @@ mod tests {
             total_partitions: 2,
             dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(
                 on_right.clone(),
-                Arc::new(datafusion_physical_expr::expressions::Literal::new(ScalarValue::Boolean(Some(true)))),
+                Arc::new(datafusion_physical_expr::expressions::Literal::new(
+                    ScalarValue::Boolean(Some(true)),
+                )),
             )),
             on_right,
-            config_options: Arc::new(ConfigOptions::default()),
         };
 
         // Test with empty bounds
-        let filter = accumulator.create_optimized_filter_from_partition_bounds(&HashMap::new())?.unwrap();
+        let filter = accumulator
+            .create_optimized_filter_from_partition_bounds(&HashMap::new())?
+            .unwrap();
 
         // Should return a literal true
         let schema = Schema::new(vec![Field::new("col1", DataType::Int32, false)]);

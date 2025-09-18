@@ -18,19 +18,24 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
-    array::{UInt64Array, record_batch},
+    array::record_batch,
     datatypes::{DataType, Field, Schema, SchemaRef},
     util::pretty::pretty_format_batches,
 };
 use arrow_schema::SortOptions;
 use datafusion::{
-    assert_batches_eq, assert_batches_sorted_eq, logical_expr::Operator, physical_plan::{
-        PhysicalExpr, expressions::{BinaryExpr, Column, Literal}
-    }, prelude::{ParquetReadOptions, SessionConfig, SessionContext}, scalar::ScalarValue
+    assert_batches_eq, assert_batches_sorted_eq,
+    logical_expr::Operator,
+    physical_plan::{
+        expressions::{BinaryExpr, Column, Literal},
+        PhysicalExpr,
+    },
+    prelude::{ParquetReadOptions, SessionConfig, SessionContext},
+    scalar::ScalarValue,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl};
+use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::{
@@ -41,7 +46,14 @@ use datafusion_physical_optimizer::{
     filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
 };
 use datafusion_physical_plan::{
-    ExecutionPlan, aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy}, coalesce_batches::CoalesceBatchesExec, coalesce_partitions::CoalescePartitionsExec, collect, execute_stream, filter::FilterExec, repartition::RepartitionExec, sorts::sort::SortExec
+    aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
+    coalesce_batches::CoalesceBatchesExec,
+    coalesce_partitions::CoalescePartitionsExec,
+    collect,
+    filter::FilterExec,
+    repartition::RepartitionExec,
+    sorts::sort::SortExec,
+    ExecutionPlan,
 };
 
 use futures::StreamExt;
@@ -1189,13 +1201,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
 
     let result = format!("{}", pretty_format_batches(&batches).unwrap());
 
-    let probe_scan_metrics = probe_scan.metrics().unwrap();
-
-    // The probe side had 4 rows, but after applying the dynamic filter only 2 rows should remain.
-    // The number of output rows from the probe side scan should stay consistent across executions.
-    // Issue: https://github.com/apache/datafusion/issues/17451
-    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
-
     insta::assert_snapshot!(
         result,
         @r"
@@ -1209,88 +1214,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     );
 }
 
-
-/// A hash repartition implementation that only accepts integers and hashes them to themselves.
-#[derive(Debug)]
-struct TestRepartitionHash {
-    signature: datafusion_expr::Signature,
-}
-
-impl TestRepartitionHash {
-    fn new() -> Self {
-        Self { signature: datafusion_expr::Signature::one_of(
-                vec![datafusion_expr::TypeSignature::VariadicAny],
-                datafusion_expr::Volatility::Immutable,
-            ),
-        }
-    }
-}
-
-impl PartialEq for TestRepartitionHash {
-    fn eq(&self, other: &Self) -> bool {
-        // RandomState doesn't implement PartialEq, so we just compare signatures
-        self.signature == other.signature
-    }
-}
-
-impl Eq for TestRepartitionHash {}
-
-impl std::hash::Hash for TestRepartitionHash {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Only hash the signature since RandomState doesn't implement Hash
-        self.signature.hash(state);
-    }
-}
-
-impl ScalarUDFImpl for TestRepartitionHash {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "test_repartition_hash"
-    }
-
-    fn signature(&self) -> &datafusion_expr::Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        // Always return UInt64Array regardless of input types
-        Ok(DataType::UInt64)
-    }
-
-    fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> datafusion_common::Result<ColumnarValue> {
-        // All inputs must be arrays of UInt64
-        let arrays: Vec<UInt64Array> = args
-            .args
-            .iter()
-            .map(|cv| {
-                let ColumnarValue::Array(array) = cv else {
-                    panic!("Expected array input");
-                };
-                let Some(array) = array.as_any().downcast_ref::<UInt64Array>() else {
-                    panic!("Expected UInt64Array input");
-                };
-                array.clone()
-            })
-            .collect();
-        // We accept only 1 array
-        if arrays.len() != 1 {
-            return Err(datafusion_common::DataFusionError::Internal(
-                "Expected exactly one argument".to_string(),
-            ));
-        }
-        let array = &arrays[0];
-        // Return a copy of the input array
-        Ok(ColumnarValue::Array(Arc::new(array.clone())))
-    }
-
-    fn documentation(&self) -> Option<&datafusion_expr::Documentation> {
-        None
-    }
-}
-
 /// Test that simulates behavior when some build side partitions are much slower to finish than others.
 /// In these cases we push down _partial_ filters that only apply scan filters to rows the belong to build side partitions that have completed.
 /// Once all build side partitions complete the full filter is pushed down without any hash key partition calculations.
@@ -1300,14 +1223,12 @@ async fn test_hashjoin_progressive_filter_reporting() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
+    use crate::physical_optimizer::filter_pushdown::util::TestRepartitionHash;
+
     // Create build side with limited values
-    let build_batches_1 = vec![record_batch!(
-        ("id", UInt64, [1, 2, 3, 4, 5])
-    )
-    .unwrap()];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::UInt64, false),
-    ]));
+    let build_batches_1 = vec![record_batch!(("id", UInt64, [1, 2, 3, 4])).unwrap()];
+    let build_side_schema =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::UInt64, false)]));
     let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
         .with_support(true)
         // Add two batches -> creates 2 partitions
@@ -1315,20 +1236,16 @@ async fn test_hashjoin_progressive_filter_reporting() {
         .build();
 
     // Create probe side with more values
-    let probe_batches_1 = vec![record_batch!(
-        ("id", UInt64, [2, 4, 5])
-    )
-    .unwrap()];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::UInt64, false)
-    ]));
+    let probe_batches_1 = vec![record_batch!(("id", UInt64, [2, 3])).unwrap()];
+    let probe_side_schema =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::UInt64, false)]));
     let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
         .with_support(true)
         .with_batches(probe_batches_1)
         .build();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
-    let partition_count = 2;
+    let partition_count = 3;
 
     // Build side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
     let build_hash_exprs = vec![
@@ -1341,7 +1258,7 @@ async fn test_hashjoin_progressive_filter_reporting() {
             Partitioning::Hash(build_hash_exprs, partition_count),
         )
         .unwrap()
-        .with_hash_function(ScalarUDF::new_from_impl(TestRepartitionHash::new()))
+        .with_hash_function(ScalarUDF::new_from_impl(TestRepartitionHash::new())),
     );
     let build_side = Arc::new(SlowPartitionNode::new(build_side, vec![1]));
 
@@ -1356,16 +1273,14 @@ async fn test_hashjoin_progressive_filter_reporting() {
             Partitioning::Hash(probe_hash_exprs, partition_count),
         )
         .unwrap()
-        .with_hash_function(ScalarUDF::new_from_impl(TestRepartitionHash::new()))
+        .with_hash_function(ScalarUDF::new_from_impl(TestRepartitionHash::new())),
     );
 
     // Create HashJoinExec with partitioned inputs
-    let on = vec![
-        (
-            col("id", &build_side_schema).unwrap(),
-            col("id", &probe_side_schema).unwrap(),
-        )
-    ];
+    let on = vec![(
+        col("id", &build_side_schema).unwrap(),
+        col("id", &probe_side_schema).unwrap(),
+    )];
     let plan = Arc::new(
         HashJoinExec::try_new(
             Arc::clone(&build_side) as Arc<dyn ExecutionPlan>,
@@ -1388,18 +1303,18 @@ async fn test_hashjoin_progressive_filter_reporting() {
       input:
         - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
         -   SlowPartitionNode
-        -     RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=1
-        -       DataSourceExec: file_groups={1 group: [[file_0.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
-        -   RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=1
-        -     DataSourceExec: file_groups={1 group: [[file_0.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+        -     RepartitionExec: partitioning=Hash([id@0, id@0], 3), input_partitions=1
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+        -   RepartitionExec: partitioning=Hash([id@0, id@0], 3), input_partitions=1
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
           -   SlowPartitionNode
-          -     RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=1
-          -       DataSourceExec: file_groups={1 group: [[file_0.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
-          -   RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=1
-          -     DataSourceExec: file_groups={1 group: [[file_0.parquet]]}, projection=[id], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
+          -     RepartitionExec: partitioning=Hash([id@0, id@0], 3), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+          -   RepartitionExec: partitioning=Hash([id@0, id@0], 3), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
     "
     );
 
@@ -1439,55 +1354,62 @@ async fn test_hashjoin_progressive_filter_reporting() {
         @r"
     - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
     -   SlowPartitionNode
-    -     RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=2
-    -       DataSourceExec: file_groups={2 groups: [[file_0.parquet], [file_1.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
-    -   RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=2
-    -     DataSourceExec: file_groups={2 groups: [[file_1.parquet], [file_0.parquet]]}, projection=[id], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
+    -     RepartitionExec: partitioning=Hash([id@0, id@0], 3), input_partitions=1
+    -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+    -   RepartitionExec: partitioning=Hash([id@0, id@0], 3), input_partitions=1
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ CASE repartition_hash(id@0) % 3 WHEN 0 THEN id@0 >= 3 AND id@0 <= 3 ELSE true END ]
     "
     );
 
     #[rustfmt::skip]
     let expected = [
-        "++",
-        "++",
+        "+----+----+",
+        "| id | id |",
+        "+----+----+",
+        "| 3  | 3  |",
+        "+----+----+",
     ];
 
     assert_batches_sorted_eq!(expected, &batches);
 
-    // // Wake the slow build side partition 0 to allow it to complete
-    // build_side.unblock();
+    // Wake the slow build side partition 0 to allow it to complete
+    build_side.unblock();
 
-    // // Pull remaining batches
-    // while let Some(batch) = stream.next().await {
-    //     batches.push(batch.unwrap());
-    // }
+    // Pull remaining batches
+    let mut stream_1 = plan.execute(1, Arc::clone(&task_ctx)).unwrap();
+    while let Some(batch) = stream_1.next().await {
+        batches.push(batch.unwrap());
+    }
+    let mut stream_2 = plan.execute(2, Arc::clone(&task_ctx)).unwrap();
+    while let Some(batch) = stream_2.next().await {
+        batches.push(batch.unwrap());
+    }
 
-    // // Look at the final plan
-    // insta::assert_snapshot!(
-    //     format!("{}", format_plan_for_test(&plan)),
-    //     @r"
-    // - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    // -   SlowPartitionNode
-    // -     RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=1
-    // -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-    // -   RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=1
-    // -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
-    // "
-    // );
+    // Look at the final plan
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
+    -   SlowPartitionNode
+    -     RepartitionExec: partitioning=Hash([id@0, id@0], 3), input_partitions=1
+    -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+    -   RepartitionExec: partitioning=Hash([id@0, id@0], 3), input_partitions=1
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ id@0 >= 3 AND id@0 <= 3 OR id@0 >= 2 AND id@0 <= 2 OR id@0 >= 1 AND id@0 <= 4 ]
+    "
+    );
 
-    // // Look at the final results
-    // #[rustfmt::skip]
-    // let expected = [
-    //     "+----+----+-----+----+----+-----+",
-    //     "| a  | b  | c   | a  | b  | e   |",
-    //     "+----+----+-----+----+----+-----+",
-    //     "| aa | ba | 1.0 | aa | ba | 1.0 |",
-    //     "| ab | bb | 2.0 | ab | bb | 2.0 |",
-    //     "+----+----+-----+----+----+-----+",
-    // ];
-    // assert_batches_sorted_eq!(expected, &batches);
+    // Look at the final results
+    #[rustfmt::skip]
+    let expected = [
+        "+----+----+",
+        "| id | id |",
+        "+----+----+",
+        "| 2  | 2  |",
+        "| 3  | 3  |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
 }
-
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {

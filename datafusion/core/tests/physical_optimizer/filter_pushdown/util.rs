@@ -15,17 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::UInt64Array;
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
+use arrow_schema::DataType;
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
-use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::{
     file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
+use datafusion_execution::RecordBatchStream;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
@@ -38,13 +41,11 @@ use datafusion_physical_plan::{
         FilterPushdownPropagation,
     },
     metrics::ExecutionPlanMetricsSet,
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
-use std::collections::HashMap;
-use std::fmt::Debug;
 use std::future::Future;
 use std::{
     any::Any,
@@ -54,8 +55,7 @@ use std::{
     task::{Context, Poll},
 };
 pub struct TestOpener {
-    partition: usize,
-    batches: HashMap<String, Vec<RecordBatch>>,
+    batches: Vec<RecordBatch>,
     batch_size: Option<usize>,
     schema: Option<SchemaRef>,
     projection: Option<Vec<usize>>,
@@ -66,11 +66,9 @@ impl FileOpener for TestOpener {
     fn open(
         &self,
         _file_meta: FileMeta,
-        file: PartitionedFile,
+        _file: PartitionedFile,
     ) -> Result<FileOpenFuture> {
-        let filename = file.object_meta.location.as_ref();
-        println!("Opening file {filename} in partition {}", self.partition);
-        let mut batches = self.batches.get(filename).cloned().unwrap();
+        let mut batches = self.batches.clone();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
             let mut new_batches = Vec::new();
@@ -118,7 +116,7 @@ pub struct TestSource {
     predicate: Option<Arc<dyn PhysicalExpr>>,
     statistics: Option<Statistics>,
     batch_size: Option<usize>,
-    batches: HashMap<String, Vec<RecordBatch>>,
+    batches: Vec<RecordBatch>,
     schema: Option<SchemaRef>,
     metrics: ExecutionPlanMetricsSet,
     projection: Option<Vec<usize>>,
@@ -126,7 +124,7 @@ pub struct TestSource {
 }
 
 impl TestSource {
-    fn new(support: bool, batches: HashMap<String, Vec<RecordBatch>>) -> Self {
+    fn new(support: bool, batches: Vec<RecordBatch>) -> Self {
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -141,10 +139,9 @@ impl FileSource for TestSource {
         &self,
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
-        partition: usize,
+        _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(TestOpener {
-            partition,
             batches: self.batches.clone(),
             batch_size: self.batch_size,
             schema: self.schema.clone(),
@@ -272,8 +269,7 @@ impl FileSource for TestSource {
 #[derive(Debug, Clone)]
 pub struct TestScanBuilder {
     support: bool,
-    // Collection of batches per file name
-    batches: HashMap<String, Vec<RecordBatch>>,
+    batches: Vec<RecordBatch>,
     schema: SchemaRef,
 }
 
@@ -281,7 +277,7 @@ impl TestScanBuilder {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             support: false,
-            batches: HashMap::new(),
+            batches: vec![],
             schema,
         }
     }
@@ -292,22 +288,20 @@ impl TestScanBuilder {
     }
 
     pub fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
-        self.batches.insert(format!("file_{}.parquet", self.batches.len()), batches);
+        self.batches = batches;
         self
     }
 
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
-        // Each file becomes it's own file group
-        let source = Arc::new(TestSource::new(self.support, self.batches.clone()));
-        let mut base_config = FileScanConfigBuilder::new(
+        let source = Arc::new(TestSource::new(self.support, self.batches));
+        let base_config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test://").unwrap(),
             Arc::clone(&self.schema),
             source,
-        );
-        for file in self.batches.keys() {
-            base_config = base_config.with_file_group(FileGroup::new(vec![PartitionedFile::new(file, 123)]));
-        }
-        DataSourceExec::from_data_source(base_config.build())
+        )
+        .with_file(PartitionedFile::new("test.parquet", 123))
+        .build();
+        DataSourceExec::from_data_source(base_config)
     }
 }
 
@@ -646,7 +640,7 @@ impl SlowPartitionNode {
     }
 }
 
-impl Debug for SlowPartitionNode {
+impl std::fmt::Debug for SlowPartitionNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "SlowPartitionNode")
     }
@@ -699,7 +693,8 @@ impl ExecutionPlan for SlowPartitionNode {
                 flag: Arc::clone(&self.flag),
                 flag_checked: false,
             };
-            Ok(Box::pin(waiter_stream) as datafusion_execution::SendableRecordBatchStream)
+            Ok(Box::pin(waiter_stream)
+                as datafusion_execution::SendableRecordBatchStream)
         } else {
             self.input.execute(partition, context)
         }
@@ -745,5 +740,104 @@ impl Stream for WaiterStream {
 impl RecordBatchStream for WaiterStream {
     fn schema(&self) -> SchemaRef {
         self.inner.schema()
+    }
+}
+
+/// A hash repartition implementation that only accepts integers and hashes them to themselves.
+#[derive(Debug)]
+pub struct TestRepartitionHash {
+    signature: datafusion_expr::Signature,
+}
+
+impl TestRepartitionHash {
+    pub fn new() -> Self {
+        Self {
+            signature: datafusion_expr::Signature::one_of(
+                vec![datafusion_expr::TypeSignature::VariadicAny],
+                datafusion_expr::Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl PartialEq for TestRepartitionHash {
+    fn eq(&self, other: &Self) -> bool {
+        // RandomState doesn't implement PartialEq, so we just compare signatures
+        self.signature == other.signature
+    }
+}
+
+impl Eq for TestRepartitionHash {}
+
+impl std::hash::Hash for TestRepartitionHash {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Only hash the signature since RandomState doesn't implement Hash
+        self.signature.hash(state);
+    }
+}
+
+impl ScalarUDFImpl for TestRepartitionHash {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "test_repartition_hash"
+    }
+
+    fn signature(&self) -> &datafusion_expr::Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // Always return UInt64Array regardless of input types
+        Ok(DataType::UInt64)
+    }
+
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        // All inputs must be arrays of UInt64
+        let arrays: Vec<UInt64Array> = args
+            .args
+            .iter()
+            .map(|cv| {
+                let ColumnarValue::Array(array) = cv else {
+                    panic!("Expected array input");
+                };
+                let Some(array) = array.as_any().downcast_ref::<UInt64Array>() else {
+                    panic!("Expected UInt64Array input");
+                };
+                array.clone()
+            })
+            .collect();
+        // We accept only 1 array
+        if arrays.is_empty() {
+            return Err(datafusion_common::DataFusionError::Internal(
+                "Expected at least one argument".to_string(),
+            ));
+        }
+
+        let num_rows = arrays[0].len();
+        let mut result_values = Vec::with_capacity(num_rows);
+
+        // Add together all the integer values from all input arrays
+        for row_idx in 0..num_rows {
+            let mut sum = 0u64;
+            for array in &arrays {
+                let value = array.value(row_idx);
+                sum = sum.wrapping_add(value);
+            }
+            result_values.push(sum);
+        }
+        // Return the summed values as a UInt64Array
+        Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
+            result_values,
+        ))))
+    }
+
+    fn documentation(&self) -> Option<&datafusion_expr::Documentation> {
+        None
     }
 }

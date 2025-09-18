@@ -31,13 +31,12 @@ use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
-use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
 };
-use crate::repartition::hash::{RepartitionHash, repartition_hash};
+use crate::repartition::hash::RepartitionHash;
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
@@ -153,6 +152,7 @@ impl RepartitionExecState {
         Ok(())
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn consume_input_streams(
         &mut self,
         input: Arc<dyn ExecutionPlan>,
@@ -161,7 +161,7 @@ impl RepartitionExecState {
         preserve_order: bool,
         name: String,
         context: Arc<TaskContext>,
-        hash: ScalarUDF
+        hash: ScalarUDF,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
@@ -266,6 +266,7 @@ enum BatchPartitionerState {
     Hash {
         hash: Arc<dyn PhysicalExpr>,
         num_partitions: usize,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
     },
     RoundRobin {
         num_partitions: usize,
@@ -292,32 +293,30 @@ impl BatchPartitioner {
                     hash: Arc::new(ScalarFunctionExpr::new(
                         &name,
                         Arc::new(hash),
-                        exprs,
+                        exprs.clone(),
                         Arc::new(Field::new(&name, DataType::UInt64, false)),
                         Arc::new(ConfigOptions::default()),
                     )),
                     num_partitions,
+                    exprs,
                 }
-            },
+            }
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
         };
         Ok(Self { state, timer })
     }
 
     /// Set the hash function to use for hash partitioning.
-    pub fn with_hash_function(mut self, hash: ScalarUDF) -> Self {
-        match &mut self.state {
-            BatchPartitionerState::Hash { hash: h, .. } => {
-                let name = hash.name().to_string();
-                *h = Arc::new(ScalarFunctionExpr::new(
-                    &name,
-                    Arc::new(hash),
-                    vec![],
-                    Arc::new(Field::new(&name, DataType::UInt64, false)),
-                    Arc::new(ConfigOptions::default()),
-                ));
-            }
-            _ => {}
+    pub(crate) fn with_hash_function(mut self, hash: ScalarUDF) -> Self {
+        if let BatchPartitionerState::Hash { hash: h, exprs, .. } = &mut self.state {
+            let name = hash.name().to_string();
+            *h = Arc::new(ScalarFunctionExpr::new(
+                &name,
+                Arc::new(hash),
+                exprs.clone(),
+                Arc::new(Field::new(&name, DataType::UInt64, false)),
+                Arc::new(ConfigOptions::default()),
+            ));
         }
         self
     }
@@ -363,6 +362,7 @@ impl BatchPartitioner {
                 BatchPartitionerState::Hash {
                     hash,
                     num_partitions: partitions,
+                    ..
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
@@ -372,7 +372,8 @@ impl BatchPartitioner {
                             "Hash partitioning expression did not return an array"
                         );
                     };
-                    let Some(hashes) = hashes.as_any().downcast_ref::<UInt64Array>() else {
+                    let Some(hashes) = hashes.as_any().downcast_ref::<UInt64Array>()
+                    else {
                         return internal_err!(
                             "Hash partitioning expression did not return a UInt64Array"
                         );
@@ -658,7 +659,8 @@ impl ExecutionPlan for RepartitionExec {
         let mut repartition = RepartitionExec::try_new(
             children.swap_remove(0),
             self.partitioning().clone(),
-        )?;
+        )?
+        .with_hash_function(self.hash.clone());
         if self.preserve_order {
             repartition = repartition.with_preserve_order();
         }
@@ -913,7 +915,7 @@ impl RepartitionExec {
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
             cache,
-            hash: ScalarUDF::new_from_impl(RepartitionHash::new())
+            hash: ScalarUDF::new_from_impl(RepartitionHash::new()),
         })
     }
 
@@ -1009,7 +1011,7 @@ impl RepartitionExec {
     ) -> Result<()> {
         let mut partitioner =
             BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?
-            .with_hash_function(hash);
+                .with_hash_function(hash);
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
