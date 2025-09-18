@@ -185,6 +185,8 @@ impl AggregateUDFImpl for FirstValue {
                     | Float16
                     | Float32
                     | Float64
+                    | Decimal32(_, _)
+                    | Decimal64(_, _)
                     | Decimal128(_, _)
                     | Decimal256(_, _)
                     | Date32
@@ -1126,6 +1128,8 @@ impl AggregateUDFImpl for LastValue {
                     | Float16
                     | Float32
                     | Float64
+                    | Decimal32(_, _)
+                    | Decimal64(_, _)
                     | Decimal128(_, _)
                     | Decimal256(_, _)
                     | Date32
@@ -1177,6 +1181,8 @@ impl AggregateUDFImpl for LastValue {
             DataType::Float32 => create_accumulator::<Float32Type>(args),
             DataType::Float64 => create_accumulator::<Float64Type>(args),
 
+            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(args),
+            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(args),
             DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
             DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
 

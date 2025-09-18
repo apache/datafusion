@@ -286,6 +286,7 @@ impl AggregateUDFImpl for Avg {
                 | DataType::Decimal32(_, _)
                 | DataType::Decimal64(_, _)
                 | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
                 | DataType::Duration(_)
         ) && !args.is_distinct
     }

@@ -239,6 +239,8 @@ impl AggregateUDFImpl for Max {
                 | Float16
                 | Float32
                 | Float64
+                | Decimal32(_, _)
+                | Decimal64(_, _)
                 | Decimal128(_, _)
                 | Decimal256(_, _)
                 | Date32

@@ -881,7 +881,8 @@ fn coerced_from<'a>(
             | Float64
             | Decimal32(_, _)
             | Decimal64(_, _)
-            | Decimal128(_, _),
+            | Decimal128(_, _)
+            | Decimal256(_, _),
         ) => Some(type_into.clone()),
         (
             Timestamp(TimeUnit::Nanosecond, None),
