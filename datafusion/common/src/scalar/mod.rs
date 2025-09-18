@@ -834,8 +834,9 @@ impl Hash for ScalarValue {
 }
 
 fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
-    let arrays = vec![arr.to_owned()];
-    let hashes_buffer = &mut vec![0; arr.len()];
+    let len = arr.len();
+    let arrays = vec![arr];
+    let hashes_buffer = &mut vec![0; len];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
     let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
     // Hash back to std::hash::Hasher
