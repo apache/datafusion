@@ -23,6 +23,9 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
 use ahash::RandomState;
 
+/// RandomState used for consistent hash partitioning
+const REPARTITION_RANDOM_STATE: RandomState = RandomState::with_seeds(0, 0, 0, 0);
+
 /// Internal hash function used for repartitioning inputs.
 /// This is used for partitioned HashJoinExec and partitioned GroupByExec.
 /// Currently we use AHash with fixed seeds, but this is subject to change.
@@ -130,6 +133,3 @@ impl ScalarUDFImpl for RepartitionHash {
         None
     }
 }
-
-/// RandomState used for consistent hash partitioning
-const REPARTITION_RANDOM_STATE: RandomState = RandomState::with_seeds(0, 0, 0, 0);
