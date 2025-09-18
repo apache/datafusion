@@ -333,14 +333,17 @@ impl SharedBoundsAccumulator {
         // Store bounds from this partition (avoid duplicates)
         // In CollectLeft mode, multiple streams may report the same partition_id,
         // but we only want to store bounds once
-        inner.bounds.entry(left_side_partition_id).or_insert_with(|| {
-            if let Some(bounds) = partition_bounds {
-                PartitionBounds::new(left_side_partition_id, bounds)
-            } else {
-                // Insert an empty bounds entry to track this partition
-                PartitionBounds::new(left_side_partition_id, vec![])
-            }
-        });
+        inner
+            .bounds
+            .entry(left_side_partition_id)
+            .or_insert_with(|| {
+                if let Some(bounds) = partition_bounds {
+                    PartitionBounds::new(left_side_partition_id, bounds)
+                } else {
+                    // Insert an empty bounds entry to track this partition
+                    PartitionBounds::new(left_side_partition_id, vec![])
+                }
+            });
 
         let completed = inner.completed_count;
         let total = self.total_partitions;
