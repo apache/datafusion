@@ -17,14 +17,11 @@
 
 //! Hash utilities for repartitioning data
 
-use std::sync::Arc;
-
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{config::ConfigOptions, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl};
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
 use ahash::RandomState;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 /// Internal hash function used for repartitioning inputs.
 /// This is used for partitioned HashJoinExec and partitioned GroupByExec.
@@ -66,20 +63,6 @@ impl RepartitionHash {
             random_state: REPARTITION_RANDOM_STATE,
         }
     }
-}
-
-pub(crate) fn repartition_hash(
-    args: Vec<PhysicalExprRef>,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let hash = ScalarUDF::new_from_impl(RepartitionHash::new());
-    let name = hash.name().to_string();
-    Ok(Arc::new(ScalarFunctionExpr::new(
-        &name,
-        Arc::new(hash),
-        args,
-        Arc::new(Field::new(&name, DataType::UInt64, false)),
-        Arc::new(ConfigOptions::default()),
-    )))
 }
 
 impl ScalarUDFImpl for RepartitionHash {
