@@ -38,7 +38,7 @@ use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{
     cast_column, internal_err, plan_datafusion_err, plan_err,
-    tree_node::{Transformed, TreeNode},
+    tree_node::{Transformed, TransformedResult, TreeNode},
     Column, DFSchema, ScalarValue,
 };
 use datafusion_expr_common::operator::Operator;
