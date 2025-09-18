@@ -154,23 +154,11 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
     use arrow::array::AsArray;
     use arrow::datatypes::{Float64Type, Int32Type};
 
-    if args.len() > 7 {
-        return exec_err!(
-            "make_interval expects between 0 and 7 arguments, got {}",
-            args.len()
-        );
-    }
-
     let n_rows = args[0].len();
 
-    let years = args
-        .first()
-        .map(|a| {
-            a.as_primitive_opt::<Int32Type>().ok_or_else(|| {
-                plan_datafusion_err!("make_dt_interval arg[0] must be Int32")
-            })
-        })
-        .transpose()?;
+    let years = args[0]
+        .as_primitive_opt::<Int32Type>()
+        .ok_or_else(|| plan_datafusion_err!("make_interval arg[0] must be Int32"))?;
     let months = args
         .get(1)
         .map(|a| {
@@ -224,14 +212,14 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
 
     for i in 0..n_rows {
         // if one column is NULL → result NULL
-        let any_null_present = years.as_ref().is_some_and(|a| a.is_null(i))
+        let any_null_present = years.is_null(i)
             || months.as_ref().is_some_and(|a| a.is_null(i))
             || weeks.as_ref().is_some_and(|a| a.is_null(i))
             || days.as_ref().is_some_and(|a| a.is_null(i))
             || hours.as_ref().is_some_and(|a| a.is_null(i))
             || mins.as_ref().is_some_and(|a| a.is_null(i))
             || secs.as_ref().is_some_and(|a| {
-                a.is_null(i) || a.value(i).is_infinite() || a.value(i).is_nan()
+                a.is_null(i) || !a.value(i).is_finite() || a.value(i).is_nan()
             });
 
         if any_null_present {
@@ -240,7 +228,7 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
         }
 
         // default values 0 or 0.0
-        let y = years.as_ref().map_or(0, |a| a.value(i));
+        let y = years.value(i);
         let mo = months.as_ref().map_or(0, |a| a.value(i));
         let w = weeks.as_ref().map_or(0, |a| a.value(i));
         let d = days.as_ref().map_or(0, |a| a.value(i));
@@ -270,12 +258,6 @@ pub fn make_interval_month_day_nano(
     sec: f64,
 ) -> Result<Option<IntervalMonthDayNano>> {
     use datafusion_common::DataFusionError;
-
-    if !sec.is_finite() {
-        return Err(DataFusionError::Execution(
-            "seconds cannot be NaN or Inf".into(),
-        ));
-    }
 
     // checks if overflow
     let months = match year.checked_mul(12).and_then(|v| v.checked_add(month)) {
