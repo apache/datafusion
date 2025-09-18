@@ -328,7 +328,7 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[]], aggr=[[max(test.b)]] [max(test.b):UInt32;N]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -348,7 +348,7 @@ mod tests {
         Projection: count(alias1) AS count(DISTINCT test.b) [count(DISTINCT test.b):Int64]
           Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
             Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+              TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -371,8 +371,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[GROUPING SETS ((test.a), (test.b))]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[GROUPING SETS ((test.a), (test.b))]], aggr=[[count(DISTINCT test.c)]] [test.a:UInt32;N, test.b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -392,8 +392,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[CUBE (test.a, test.b)]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[CUBE (test.a, test.b)]], aggr=[[count(DISTINCT test.c)]] [test.a:UInt32;N, test.b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -414,8 +414,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[ROLLUP (test.a, test.b)]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[ROLLUP (test.a, test.b)]], aggr=[[count(DISTINCT test.c)]] [test.a:UInt32;N, test.b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -434,7 +434,7 @@ mod tests {
         Projection: count(alias1) AS count(DISTINCT Int32(2) * test.b) [count(DISTINCT Int32(2) * test.b):Int64]
           Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
             Aggregate: groupBy=[[Int32(2) * test.b AS alias1]], aggr=[[]] [alias1:Int64]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+              TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -451,10 +451,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [test.a:UInt32, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [test.a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [test.a:UInt32, alias1:UInt32]
+              TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -474,8 +474,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(DISTINCT test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, count(DISTINCT test.c):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(DISTINCT test.c)]] [test.a:UInt32, count(DISTINCT test.b):Int64, count(DISTINCT test.c):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -495,10 +495,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b), max(alias1) AS max(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), max(alias1)]] [a:UInt32, count(alias1):Int64, max(alias1):UInt32;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b), max(alias1) AS max(DISTINCT test.b) [test.a:UInt32, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), max(alias1)]] [test.a:UInt32, count(alias1):Int64, max(alias1):UInt32;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [test.a:UInt32, alias1:UInt32]
+              TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -518,8 +518,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, count(test.c):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(test.c)]] [test.a:UInt32, count(DISTINCT test.b):Int64, count(test.c):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -539,7 +539,7 @@ mod tests {
         Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.c) [test.a + Int32(1):Int64, count(DISTINCT test.c):Int64]
           Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int64, count(alias1):Int64]
             Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+              TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -563,10 +563,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: test.a, sum(alias2) AS sum(test.c), count(alias1) AS count(DISTINCT test.b), max(alias1) AS max(DISTINCT test.b) [a:UInt32, sum(test.c):UInt64;N, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
-          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), count(alias1), max(alias1)]] [a:UInt32, sum(alias2):UInt64;N, count(alias1):Int64, max(alias1):UInt32;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:UInt64;N]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.a, sum(alias2) AS sum(test.c), count(alias1) AS count(DISTINCT test.b), max(alias1) AS max(DISTINCT test.b) [test.a:UInt32, sum(test.c):UInt64;N, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), count(alias1), max(alias1)]] [test.a:UInt32, sum(alias2):UInt64;N, count(alias1):Int64, max(alias1):UInt32;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2]] [test.a:UInt32, alias1:UInt32, alias2:UInt64;N]
+              TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -586,10 +586,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: test.a, sum(alias2) AS sum(test.c), max(alias3) AS max(test.c), count(alias1) AS count(DISTINCT test.b) [a:UInt32, sum(test.c):UInt64;N, max(test.c):UInt32;N, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), max(alias3), count(alias1)]] [a:UInt32, sum(alias2):UInt64;N, max(alias3):UInt32;N, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2, max(test.c) AS alias3]] [a:UInt32, alias1:UInt32, alias2:UInt64;N, alias3:UInt32;N]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.a, sum(alias2) AS sum(test.c), max(alias3) AS max(test.c), count(alias1) AS count(DISTINCT test.b) [test.a:UInt32, sum(test.c):UInt64;N, max(test.c):UInt32;N, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), max(alias3), count(alias1)]] [test.a:UInt32, sum(alias2):UInt64;N, max(alias3):UInt32;N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2, max(test.c) AS alias3]] [test.a:UInt32, alias1:UInt32, alias2:UInt64;N, alias3:UInt32;N]
+              TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -609,10 +609,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: test.c, min(alias2) AS min(test.a), count(alias1) AS count(DISTINCT test.b) [c:UInt32, min(test.a):UInt32;N, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.c]], aggr=[[min(alias2), count(alias1)]] [c:UInt32, min(alias2):UInt32;N, count(alias1):Int64]
-            Aggregate: groupBy=[[test.c, test.b AS alias1]], aggr=[[min(test.a) AS alias2]] [c:UInt32, alias1:UInt32, alias2:UInt32;N]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.c, min(alias2) AS min(test.a), count(alias1) AS count(DISTINCT test.b) [test.c:UInt32, min(test.a):UInt32;N, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[test.c]], aggr=[[min(alias2), count(alias1)]] [test.c:UInt32, min(alias2):UInt32;N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.c, test.b AS alias1]], aggr=[[min(test.a) AS alias2]] [test.c:UInt32, alias1:UInt32, alias2:UInt32;N]
+              TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -638,8 +638,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a) FILTER (WHERE test.a > Int32(5)), count(DISTINCT test.b)]] [c:UInt32, sum(test.a) FILTER (WHERE test.a > Int32(5)):UInt64;N, count(DISTINCT test.b):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a) FILTER (WHERE test.a > Int32(5)), count(DISTINCT test.b)]] [test.c:UInt32, sum(test.a) FILTER (WHERE test.a > Int32(5)):UInt64;N, count(DISTINCT test.b):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -662,8 +662,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5))]] [c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5))]] [test.c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -689,8 +689,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a) ORDER BY [test.a ASC NULLS LAST], count(DISTINCT test.b)]] [c:UInt32, sum(test.a) ORDER BY [test.a ASC NULLS LAST]:UInt64;N, count(DISTINCT test.b):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a) ORDER BY [test.a ASC NULLS LAST], count(DISTINCT test.b)]] [test.c:UInt32, sum(test.a) ORDER BY [test.a ASC NULLS LAST]:UInt64;N, count(DISTINCT test.b):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -713,8 +713,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) ORDER BY [test.a ASC NULLS LAST]]] [c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) ORDER BY [test.a ASC NULLS LAST]:Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) ORDER BY [test.a ASC NULLS LAST]]] [test.c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) ORDER BY [test.a ASC NULLS LAST]:Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }
@@ -738,8 +738,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]]] [c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]:Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]]] [test.c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]:Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
         "
         )
     }

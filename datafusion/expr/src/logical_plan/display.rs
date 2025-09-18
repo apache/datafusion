@@ -72,7 +72,7 @@ impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         write!(self.f, "{}", plan.display())?;
         if self.with_schema {
-            write!(self.f, " {}", display_df_schema(&plan.schema().as_ref()))?;
+            write!(self.f, " {}", display_df_schema(plan.schema().as_ref()))?;
         }
 
         self.indent += 1;

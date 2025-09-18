@@ -1595,8 +1595,8 @@ impl LogicalPlan {
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: t1.id = Int32(5) [id:Int32]\
-    ///             \n  TableScan: t1 [id:Int32]",
+    /// assert_eq!("Filter: t1.id = Int32(5) [t1.id:Int32]\
+    ///             \n  TableScan: t1 [t1.id:Int32]",
     ///             display_string);
     /// ```
     pub fn display_indent_schema(&self) -> impl Display + '_ {
@@ -4270,11 +4270,11 @@ mod tests {
         let plan = display_plan()?;
 
         assert_snapshot!(plan.display_indent_schema(), @r"
-        Projection: employee_csv.id [id:Int32]
-          Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]
-            Subquery: [state:Utf8]
-              TableScan: employee_csv projection=[state] [state:Utf8]
-            TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]
+        Projection: employee_csv.id [employee_csv.id:Int32]
+          Filter: employee_csv.state IN (<subquery>) [employee_csv.id:Int32, employee_csv.state:Utf8]
+            Subquery: [employee_csv.state:Utf8]
+              TableScan: employee_csv projection=[state] [employee_csv.state:Utf8]
+            TableScan: employee_csv projection=[id, state] [employee_csv.id:Int32, employee_csv.state:Utf8]
         ");
         Ok(())
     }

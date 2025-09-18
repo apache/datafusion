@@ -182,9 +182,9 @@ async fn csv_explain_plans() {
         actual,
         @r"
     Explain [plan_type:Utf8, plan:Utf8]
-      Projection: aggregate_test_100.c1 [c1:Utf8View]
-        Filter: aggregate_test_100.c2 > Int64(10) [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]
-          TableScan: aggregate_test_100 [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]
+      Projection: aggregate_test_100.c1 [aggregate_test_100.c1:Utf8View]
+        Filter: aggregate_test_100.c2 > Int64(10) [aggregate_test_100.c1:Utf8View, aggregate_test_100.c2:Int8, aggregate_test_100.c3:Int16, aggregate_test_100.c4:Int16, aggregate_test_100.c5:Int32, aggregate_test_100.c6:Int64, aggregate_test_100.c7:Int16, aggregate_test_100.c8:Int32, aggregate_test_100.c9:UInt32, aggregate_test_100.c10:UInt64, aggregate_test_100.c11:Float32, aggregate_test_100.c12:Float64, aggregate_test_100.c13:Utf8View]
+          TableScan: aggregate_test_100 [aggregate_test_100.c1:Utf8View, aggregate_test_100.c2:Int8, aggregate_test_100.c3:Int16, aggregate_test_100.c4:Int16, aggregate_test_100.c5:Int32, aggregate_test_100.c6:Int64, aggregate_test_100.c7:Int16, aggregate_test_100.c8:Int32, aggregate_test_100.c9:UInt32, aggregate_test_100.c10:UInt64, aggregate_test_100.c11:Float32, aggregate_test_100.c12:Float64, aggregate_test_100.c13:Utf8View]
     "
     );
     //
@@ -253,9 +253,9 @@ async fn csv_explain_plans() {
         actual,
         @r"
     Explain [plan_type:Utf8, plan:Utf8]
-      Projection: aggregate_test_100.c1 [c1:Utf8View]
-        Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8View, c2:Int8]
-          TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8View, c2:Int8]
+      Projection: aggregate_test_100.c1 [aggregate_test_100.c1:Utf8View]
+        Filter: aggregate_test_100.c2 > Int8(10) [aggregate_test_100.c1:Utf8View, aggregate_test_100.c2:Int8]
+          TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [aggregate_test_100.c1:Utf8View, aggregate_test_100.c2:Int8]
     "
     );
     //
@@ -399,9 +399,9 @@ async fn csv_explain_verbose_plans() {
         actual,
         @r"
     Explain [plan_type:Utf8, plan:Utf8]
-      Projection: aggregate_test_100.c1 [c1:Utf8View]
-        Filter: aggregate_test_100.c2 > Int64(10) [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]
-          TableScan: aggregate_test_100 [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]
+      Projection: aggregate_test_100.c1 [aggregate_test_100.c1:Utf8View]
+        Filter: aggregate_test_100.c2 > Int64(10) [aggregate_test_100.c1:Utf8View, aggregate_test_100.c2:Int8, aggregate_test_100.c3:Int16, aggregate_test_100.c4:Int16, aggregate_test_100.c5:Int32, aggregate_test_100.c6:Int64, aggregate_test_100.c7:Int16, aggregate_test_100.c8:Int32, aggregate_test_100.c9:UInt32, aggregate_test_100.c10:UInt64, aggregate_test_100.c11:Float32, aggregate_test_100.c12:Float64, aggregate_test_100.c13:Utf8View]
+          TableScan: aggregate_test_100 [aggregate_test_100.c1:Utf8View, aggregate_test_100.c2:Int8, aggregate_test_100.c3:Int16, aggregate_test_100.c4:Int16, aggregate_test_100.c5:Int32, aggregate_test_100.c6:Int64, aggregate_test_100.c7:Int16, aggregate_test_100.c8:Int32, aggregate_test_100.c9:UInt32, aggregate_test_100.c10:UInt64, aggregate_test_100.c11:Float32, aggregate_test_100.c12:Float64, aggregate_test_100.c13:Utf8View]
     "
     );
     //
@@ -470,9 +470,9 @@ async fn csv_explain_verbose_plans() {
         actual,
         @r"
     Explain [plan_type:Utf8, plan:Utf8]
-      Projection: aggregate_test_100.c1 [c1:Utf8View]
-        Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8View, c2:Int8]
-          TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8View, c2:Int8]
+      Projection: aggregate_test_100.c1 [aggregate_test_100.c1:Utf8View]
+        Filter: aggregate_test_100.c2 > Int8(10) [aggregate_test_100.c1:Utf8View, aggregate_test_100.c2:Int8]
+          TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [aggregate_test_100.c1:Utf8View, aggregate_test_100.c2:Int8]
     "
     );
     //

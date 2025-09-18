@@ -495,10 +495,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t2.c < UInt32(20) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -522,10 +522,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t1.a = t2.a OR t2.b = t1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t1.a = t2.a OR t2.b = t1.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Cross Join:  [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -548,10 +548,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -578,10 +578,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -608,10 +608,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.b = t2.b AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.b = t2.b AND t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Cross Join:  [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -634,10 +634,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.a = t2.a OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.a = t2.a OR t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Cross Join:  [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -663,13 +663,13 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t1.a > UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Filter: t1.a > UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-              TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t1.a > UInt32(15) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Filter: t1.a > UInt32(20) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              Inner Join: t1.a = t3.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+                TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+              TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -709,13 +709,13 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Inner Join: t3.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-              TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+          Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+            Inner Join: t3.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              Inner Join: t1.a = t3.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+                TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+              TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -782,16 +782,16 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
-            Filter: t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+          Inner Join: t1.a = t3.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+            Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+                TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            Filter: t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+              Inner Join: t3.a = t4.a [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+                TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+                TableScan: t4 [t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
         "
         )
     }
@@ -856,16 +856,16 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t3.a = t1.a AND t4.c < UInt32(15) OR t3.a = t1.a OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
-            Filter: t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t3.a = t1.a AND t4.c < UInt32(15) OR t3.a = t1.a OR t4.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+          Cross Join:  [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+            Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+                TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            Filter: t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+              Inner Join: t3.a = t4.a [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+                TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+                TableScan: t4 [t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
         "
         )
     }
@@ -930,16 +930,16 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
-            Filter: t3.a = t4.a AND t4.c < UInt32(15) OR t3.a = t4.a AND t3.c = UInt32(688) OR t3.a = t4.a OR t3.b = t4.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+          Inner Join: t1.a = t3.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+            Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+                TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            Filter: t3.a = t4.a AND t4.c < UInt32(15) OR t3.a = t4.a AND t3.c = UInt32(688) OR t3.a = t4.a OR t3.b = t4.b [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+              Cross Join:  [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+                TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+                TableScan: t4 [t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
         "
         )
     }
@@ -1008,16 +1008,16 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Filter: t1.a = t2.a OR t2.c < UInt32(15) OR t1.a = t2.a AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
-            Filter: t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+          Inner Join: t1.a = t3.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+            Filter: t1.a = t2.a OR t2.c < UInt32(15) OR t1.a = t2.a AND t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              Cross Join:  [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+                TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            Filter: t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+              Inner Join: t3.a = t4.a [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+                TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+                TableScan: t4 [t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
         "
         )
     }
@@ -1096,15 +1096,15 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: (t4.c < UInt32(15) OR t4.c = UInt32(688)) AND (t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Filter: t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
-              TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: (t4.c < UInt32(15) OR t4.c = UInt32(688)) AND (t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+          Inner Join: t3.a = t4.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+            Inner Join: t1.a = t3.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+              Filter: t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+                Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+                  TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                  TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+            TableScan: t4 [t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
         "
         )
     }
@@ -1189,14 +1189,14 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: (t4.c < UInt32(15) OR t4.c = UInt32(688)) AND (t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b) AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
-              TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: (t4.c < UInt32(15) OR t4.c = UInt32(688)) AND (t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b) AND t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+          Inner Join: t3.a = t4.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
+            Inner Join: t1.a = t3.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+              Inner Join: t1.a = t2.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+                TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+            TableScan: t4 [t4.a:UInt32, t4.b:UInt32, t4.c:UInt32]
         "
         )
     }
@@ -1219,10 +1219,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t2.c < UInt32(20) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -1246,10 +1246,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t1.a + UInt32(100) = t2.a * UInt32(2) OR t2.b = t1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t1.a + UInt32(100) = t2.a * UInt32(2) OR t2.b = t1.a [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Cross Join:  [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -1273,10 +1273,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -1300,10 +1300,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+          Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+            TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+            TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
@@ -1336,13 +1336,13 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-            Inner Join: t3.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Inner Join: t1.a * UInt32(2) = t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-              TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+          Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+            Inner Join: t3.a + UInt32(100) = t2.a * UInt32(2) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32, t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
+              Inner Join: t1.a * UInt32(2) = t3.a + UInt32(100) [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32, t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+                TableScan: t1 [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]
+                TableScan: t3 [t3.a:UInt32, t3.b:UInt32, t3.c:UInt32]
+              TableScan: t2 [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]
         "
         )
     }
