@@ -585,6 +585,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
         self.sql_with_options(sql, SQLOptions::new()).await
     }
@@ -615,6 +616,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub async fn sql_with_options(
         &self,
         sql: &str,
@@ -648,6 +650,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn parse_sql_expr(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
         self.state.read().create_logical_expr(sql, df_schema)
     }
@@ -789,19 +792,44 @@ impl SessionContext {
             return not_impl_err!("Temporary tables not supported");
         }
 
-        if exist {
-            match cmd.if_not_exists {
-                true => return self.return_empty_dataframe(),
-                false => {
-                    return exec_err!("Table '{}' already exists", cmd.name);
+        match (cmd.if_not_exists, cmd.or_replace, exist) {
+            (true, false, true) => self.return_empty_dataframe(),
+            (false, true, true) => {
+                let result = self
+                    .find_and_deregister(cmd.name.clone(), TableType::Base)
+                    .await;
+
+                match result {
+                    Ok(true) => {
+                        let table_provider: Arc<dyn TableProvider> =
+                            self.create_custom_table(cmd).await?;
+                        self.register_table(cmd.name.clone(), table_provider)?;
+                        self.return_empty_dataframe()
+                    }
+                    Ok(false) => {
+                        let table_provider: Arc<dyn TableProvider> =
+                            self.create_custom_table(cmd).await?;
+                        self.register_table(cmd.name.clone(), table_provider)?;
+                        self.return_empty_dataframe()
+                    }
+                    Err(e) => {
+                        exec_err!("Errored while deregistering external table: {}", e)
+                    }
                 }
             }
+            (true, true, true) => {
+                exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+            }
+            (_, _, false) => {
+                let table_provider: Arc<dyn TableProvider> =
+                    self.create_custom_table(cmd).await?;
+                self.register_table(cmd.name.clone(), table_provider)?;
+                self.return_empty_dataframe()
+            }
+            (false, false, true) => {
+                exec_err!("External table '{}' already exists", cmd.name)
+            }
         }
-
-        let table_provider: Arc<dyn TableProvider> =
-            self.create_custom_table(cmd).await?;
-        self.register_table(cmd.name.clone(), table_provider)?;
-        self.return_empty_dataframe()
     }
 
     async fn create_memory_table(&self, cmd: CreateMemoryTable) -> Result<DataFrame> {

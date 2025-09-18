@@ -191,7 +191,7 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&arg[0])?;
             general_list_resize::<i64>(array, new_len, field, new_element)
         }
-        array_type => exec_err!("array_resize does not support type '{array_type:?}'."),
+        array_type => exec_err!("array_resize does not support type '{array_type}'."),
     }
 }
 

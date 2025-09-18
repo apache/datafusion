@@ -280,6 +280,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/execution && cargo publish)
 (cd datafusion/functions && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
+(cd datafusion/physical-expr-adapter && cargo publish)
 (cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/functions-window && cargo publish)
 (cd datafusion/functions-nested && cargo publish)

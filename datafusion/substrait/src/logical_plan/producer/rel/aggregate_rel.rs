@@ -174,7 +174,7 @@ pub fn to_substrait_agg_measure(
             to_substrait_agg_measure(producer, expr, schema)
         }
         _ => internal_err!(
-            "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
+            "Expression must be compatible with aggregation. Unsupported expression: {:?}. Expressiontype: {}",
             expr,
             expr.variant_name()
         ),

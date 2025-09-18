@@ -251,6 +251,8 @@ pub struct CreateExternalTableNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
+    #[prost(bool, tag = "15")]
+    pub or_replace: bool,
     #[prost(bool, tag = "14")]
     pub temporary: bool,
     #[prost(string, tag = "7")]

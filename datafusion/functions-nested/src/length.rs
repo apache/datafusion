@@ -149,7 +149,7 @@ pub fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         List(_) => general_array_length::<i32>(args),
         LargeList(_) => general_array_length::<i64>(args),
         FixedSizeList(_, _) => fixed_size_array_length(args),
-        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
+        array_type => exec_err!("array_length does not support type '{array_type}'"),
     }
 }
 

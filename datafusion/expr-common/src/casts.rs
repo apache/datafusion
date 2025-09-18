@@ -339,7 +339,7 @@ mod tests {
         let actual_value = try_cast_literal_to_type(&literal, &target_type);
 
         println!("expect_cast: ");
-        println!("  {literal:?} --> {target_type:?}");
+        println!("  {literal:?} --> {target_type}");
         println!("  expected_result: {expected_result:?}");
         println!("  actual_result:   {actual_value:?}");
 

@@ -185,7 +185,7 @@ pub enum NativeType {
 
 impl Display for NativeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NativeType::{self:?}")
+        write!(f, "{self:?}") // TODO: nicer formatting
     }
 }
 
@@ -352,10 +352,10 @@ impl LogicalType for NativeType {
             }
             _ => {
                 return _internal_err!(
-                "Unavailable default cast for native type {:?} from physical type {:?}",
-                self,
-                origin
-            )
+                    "Unavailable default cast for native type {} from physical type {}",
+                    self,
+                    origin
+                )
             }
         })
     }
