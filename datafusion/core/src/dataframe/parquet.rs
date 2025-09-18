@@ -205,7 +205,7 @@ mod tests {
             &HashMap::from_iter(
                 [("datafusion.execution.batch_size", "10")]
                     .iter()
-                    .map(|(s1, s2)| (s1.to_string(), s2.to_string())),
+                    .map(|(s1, s2)| ((*s1).to_string(), (*s2).to_string())),
             ),
         )?);
         register_aggregate_csv(&ctx, "aggregate_test_100").await?;

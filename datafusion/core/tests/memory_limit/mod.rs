@@ -806,7 +806,7 @@ impl TestCase {
 
     /// Specify an expected plan to review
     pub fn with_expected_plan(mut self, expected_plan: &[&str]) -> Self {
-        self.expected_plan = expected_plan.iter().map(|s| s.to_string()).collect();
+        self.expected_plan = expected_plan.iter().map(|s| (*s).to_string()).collect();
         self
     }
 

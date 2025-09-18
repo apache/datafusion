@@ -27,6 +27,7 @@ use arrow::datatypes::{
     i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
     DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
@@ -40,7 +41,9 @@ use datafusion_expr::{
     ReversedUDAF, Signature,
 };
 
-use datafusion_functions_aggregate_common::aggregate::avg_distinct::Float64DistinctAvgAccumulator;
+use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
+    DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
@@ -120,13 +123,36 @@ impl AggregateUDFImpl for Avg {
 
         // instantiate specialized accumulator based for the type
         if acc_args.is_distinct {
-            match &data_type {
+            match (&data_type, acc_args.return_type()) {
                 // Numeric types are converted to Float64 via `coerce_avg_type` during logical plan creation
-                Float64 => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
-                _ => exec_err!("AVG(DISTINCT) for {} not supported", data_type),
+                (Float64, _) => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
+
+                (
+                    Decimal128(_, scale),
+                    Decimal128(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal128Type>::with_decimal_params(
+                    *scale,
+                    *target_precision,
+                    *target_scale,
+                ))),
+
+                (
+                    Decimal256(_, scale),
+                    Decimal256(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalDistinctAvgAccumulator::<Decimal256Type>::with_decimal_params(
+                    *scale,
+                    *target_precision,
+                    *target_scale,
+                ))),
+
+                (dt, return_type) => exec_err!(
+                    "AVG(DISTINCT) for ({} --> {}) not supported",
+                    dt,
+                    return_type
+                ),
             }
         } else {
-            match (&data_type, acc_args.return_field.data_type()) {
+            match (&data_type, acc_args.return_type()) {
                 (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
                 (
                     Decimal128(sum_precision, sum_scale),
@@ -161,22 +187,31 @@ impl AggregateUDFImpl for Avg {
                     }))
                 }
 
-                _ => exec_err!(
-                    "AvgAccumulator for ({} --> {})",
-                    &data_type,
-                    acc_args.return_field.data_type()
-                ),
+                (dt, return_type) => {
+                    exec_err!("AvgAccumulator for ({} --> {})", dt, return_type)
+                }
             }
         }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
-            // Copied from datafusion_functions_aggregate::sum::Sum::state_fields
+            // Decimal accumulator actually uses a different precision during accumulation,
+            // see DecimalDistinctAvgAccumulator::with_decimal_params
+            let dt = match args.input_fields[0].data_type() {
+                DataType::Decimal128(_, scale) => {
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, *scale)
+                }
+                DataType::Decimal256(_, scale) => {
+                    DataType::Decimal256(DECIMAL256_MAX_PRECISION, *scale)
+                }
+                _ => args.return_type().clone(),
+            };
+            // Similar to datafusion_functions_aggregate::sum::Sum::state_fields
             // since the accumulator uses DistinctSumAccumulator internally.
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "avg distinct"),
-                Field::new_list_field(args.return_type().clone(), true),
+                Field::new_list_field(dt, true),
                 false,
             )
             .into()])
@@ -605,7 +640,7 @@ where
 {
     pub fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F) -> Self {
         debug!(
-            "AvgGroupsAccumulator ({}, sum type: {sum_data_type:?}) --> {return_data_type:?}",
+            "AvgGroupsAccumulator ({}, sum type: {sum_data_type}) --> {return_data_type}",
             std::any::type_name::<T>()
         );
 

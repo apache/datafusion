@@ -1054,6 +1054,7 @@ impl ExecutionPlan for HashJoinExec {
             self.right.output_ordering().is_some(),
             bounds_accumulator,
             probe_bounds_accumulators,
+            self.mode,
         )))
     }
 

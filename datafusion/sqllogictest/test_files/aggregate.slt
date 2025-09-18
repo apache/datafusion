@@ -148,10 +148,10 @@ SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_
 statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Int16, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Float64, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
@@ -2367,7 +2367,7 @@ drop table t;
 
 # test count with largeutf8
 statement ok
-create table t (c string) as values 
+create table t (c string) as values
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast(null, 'LargeUtf8')),
@@ -5047,7 +5047,7 @@ statement ok
 create table t (c1 decimal(10, 0), c2 int) as values (null, null), (null, null), (null, null);
 
 query RTIT
-select 
+select
   sum(c1), arrow_typeof(sum(c1)),
   sum(c2), arrow_typeof(sum(c2))
 from t;
@@ -5299,7 +5299,7 @@ drop table dict_null_test;
 # avg_duration
 
 statement ok
-create table d as values 
+create table d as values
   (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'), arrow_cast(3, 'Duration(Microsecond)'), arrow_cast(4, 'Duration(Nanosecond)'), 1),
   (arrow_cast(11, 'Duration(Second)'), arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1);
 
@@ -5353,7 +5353,7 @@ FROM d WHERE column1 IS NOT NULL;
 
 # Centered average window function
 query I??
-SELECT column5, column1, avg(column1) OVER (ORDER BY column5 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as centered_avg 
+SELECT column5, column1, avg(column1) OVER (ORDER BY column5 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as centered_avg
 FROM d WHERE column1 IS NOT NULL;
 ----
 1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 6 secs
@@ -5806,7 +5806,7 @@ NULL NULL 3 NULL 1 4 0 8 0
 
 # regr_*() basic tests
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5821,7 +5821,7 @@ from (values (1,2), (2,4), (3,6));
 2 0 3 1 2 4 2 8 4
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5839,7 +5839,7 @@ from aggregate_test_100;
 
 # regr_*() functions ignore NULLs
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5854,7 +5854,7 @@ from (values (1,NULL), (2,4), (3,6));
 2 0 2 1 2.5 5 0.5 2 1
 
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5869,7 +5869,7 @@ from (values (1,NULL), (NULL,4), (3,6));
 NULL NULL 1 NULL 3 6 0 0 0
 
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5884,8 +5884,8 @@ from (values (1,NULL), (NULL,4), (NULL,NULL));
 NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
 query TRRIRRRRRR rowsort
-select 
-    column3, 
+select
+    column3,
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5909,7 +5909,7 @@ statement ok
 set datafusion.execution.batch_size = 1;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5927,7 +5927,7 @@ statement ok
 set datafusion.execution.batch_size = 2;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5945,7 +5945,7 @@ statement ok
 set datafusion.execution.batch_size = 3;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -6185,7 +6185,7 @@ select string_agg(k, ',' order by
     when k = 'a' then 3
     when k = 'b' then 0
     when k = 'c' then 2
-    when k = 'd' then 1 
+    when k = 'd' then 1
   end)
 from t;
 ----
@@ -6197,7 +6197,7 @@ select string_agg(k, ',' order by
     when k = 'a' then 3
     when k = 'b' then 0
     when k = 'c' then 2
-    when k = 'd' then 1 
+    when k = 'd' then 1
   end desc)
 from t;
 ----
@@ -6208,7 +6208,7 @@ query TT
 explain select string_agg(k, ',' order by v) from t;
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v ASC NULLS LAST]]]     
+01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v ASC NULLS LAST]]]
 02)--TableScan: t projection=[k, v]
 physical_plan
 01)AggregateExec: mode=Single, gby=[], aggr=[string_agg(t.k,Utf8(",")) ORDER BY [t.v ASC NULLS LAST]]
@@ -6224,7 +6224,7 @@ query TT
 explain select string_agg(k, ',' order by v desc) from t;
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]]   
+01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]]
 02)--TableScan: t projection=[k, v]
 physical_plan
 01)AggregateExec: mode=Single, gby=[], aggr=[string_agg(t.k,Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]
@@ -6273,7 +6273,7 @@ CREATE TABLE float_table (
 
 # Test string_agg with largeutf8
 statement ok
-create table string_agg_large_utf8 (c string) as values 
+create table string_agg_large_utf8 (c string) as values
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast('c', 'LargeUtf8'))
@@ -6328,7 +6328,7 @@ select count(*) from (select count(*) a, count(*) b from (select 1));
 
 # UTF8 string matters for string to &[u8] conversion, add it to prevent regression
 statement ok
-create table distinct_count_string_table as values 
+create table distinct_count_string_table as values
     (1, 'a', 'longstringtest_a', '台灣'),
     (2, 'b', 'longstringtest_b1', '日本'),
     (2, 'b', 'longstringtest_b2', '中國'),
@@ -7322,6 +7322,38 @@ SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP B
 group0 NULL Int32
 group1 NULL Int32
 
+statement ok
+create table t_decimal (c decimal(10, 4)) as values (100.00), (125.00), (175.00), (200.00), (200.00), (300.00), (null), (null);
+
+# Test avg_distinct for Decimal128
+query RT
+select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal;
+----
+180 Decimal128(14, 8)
+
+statement ok
+drop table t_decimal;
+
+# Test avg_distinct for Decimal256
+statement ok
+create table t_decimal256 (c decimal(50, 2)) as values
+  (100.00),
+  (125.00),
+  (175.00),
+  (200.00),
+  (200.00),
+  (300.00),
+  (null),
+  (null);
+
+query RT
+select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal256;
+----
+180 Decimal256(54, 6)
+
+statement ok
+drop table t_decimal256;
+
 query I
 with test AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
 select count(*) from test WHERE 1 = 1;
@@ -7444,55 +7476,65 @@ FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
 
 # distinct average
 statement ok
-create table distinct_avg (a int, b double) as values
-  (3, null),
-  (2, null),
-  (5, 100.5),
-  (5, 1.0),
-  (5, 44.112),
-  (null, 1.0),
-  (5, 100.5),
-  (1, 4.09),
-  (5, 100.5),
-  (5, 100.5),
-  (4, null),
-  (null, null)
+create table distinct_avg (a int, b double, c decimal(10, 4), d decimal(50, 2)) as values
+  (3, null, 100.2562, 90251.21),
+  (2, null, 100.2562, null),
+  (5, 100.5, null, 10000000.11),
+  (5, 1.0, 100.2563, -1.0),
+  (5, 44.112, -132.12, null),
+  (null, 1.0, 100.2562, 90251.21),
+  (5, 100.5, -100.2562, -10000000.11),
+  (1, 4.09, 4222.124, 0.0),
+  (5, 100.5, null, 10000000.11),
+  (5, 100.5, 1.1, 1.0),
+  (4, null, 4222.124, null),
+  (null, null, null, null)
 ;
 
 # Need two columns to ensure single_distinct_to_group_by rule doesn't kick in, so we know our actual avg(distinct) code is being tested
-query RTRTRR
+query RTRTRTRTRRRR
 select
     avg(distinct a),
     arrow_typeof(avg(distinct a)),
     avg(distinct b),
     arrow_typeof(avg(distinct b)),
+    avg(distinct c),
+    arrow_typeof(avg(distinct c)),
+    avg(distinct d),
+    arrow_typeof(avg(distinct d)),
     avg(a),
-	avg(b)
+	avg(b),
+    avg(c),
+	avg(d)
 from distinct_avg;
 ----
-3 Float64 37.4255 Float64 4 56.52525
+3 Float64 37.4255 Float64 698.56005 Decimal128(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.11074444 1272562.81625
 
-query RR rowsort
+query RRRR rowsort
 select
     avg(distinct a),
-    avg(distinct b)
+    avg(distinct b),
+    avg(distinct c),
+    avg(distinct d)
 from distinct_avg
 group by b;
 ----
-1 4.09
-3 NULL
-5 1
-5 100.5
-5 44.112
+1 4.09 4222.124 0
+3 NULL 2161.1901 90251.21
+5 1 100.25625 45125.105
+5 100.5 -49.5781 0.333333
+5 44.112 -132.12 NULL
 
-query RR
+query RRRR
 select
     avg(distinct a),
-    avg(distinct b)
+    avg(distinct b),
+    avg(distinct c),
+    avg(distinct d)
 from distinct_avg
-where a is null and b is null;
+where a is null and b is null and c is null and d is null;
 ----
-NULL NULL
+NULL NULL NULL NULL
 
 statement ok
 drop table distinct_avg;

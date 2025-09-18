@@ -17,6 +17,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef};
+use itertools::Itertools as _;
 use std::fmt::{self, Display};
 use std::sync::{Arc, LazyLock};
 
@@ -110,7 +111,7 @@ impl Statement {
                     Statement::Prepare(Prepare {
                         name, data_types, ..
                     }) => {
-                        write!(f, "Prepare: {name:?} {data_types:?}")
+                        write!(f, "Prepare: {name:?} [{}]", data_types.iter().join(", "))
                     }
                     Statement::Execute(Execute {
                         name, parameters, ..

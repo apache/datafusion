@@ -22,6 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
+use crate::format::ExplainFormat;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -879,7 +880,7 @@ config_namespace! {
 
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
-        pub format: String, default = "indent".to_string()
+        pub format: ExplainFormat, default = ExplainFormat::Indent
 
         /// (format=tree only) Maximum total width of the rendered tree.
         /// When set to 0, the tree will have no width limit.
@@ -2689,9 +2690,11 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "parquet")]
+    use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions, TableParquetOptions,
+        Extensions, TableOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;
