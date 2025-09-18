@@ -558,7 +558,7 @@ impl DependentJoinDecorrelator {
         // TODO: not sure if rewrite should stop once found replacement expr
         // if a expr found in projection has been rewritten
         // then the upper expr no longer needs to be transformed
-        plan.transform_up(|p| {
+        plan.transform_down(|p| {
             if let LogicalPlan::DependentJoin(_) = &p {
                 return internal_err!(
                     "calling rewrite_correlated_exprs while some of \
