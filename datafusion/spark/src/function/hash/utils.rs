@@ -18,9 +18,10 @@
 use arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, BinaryViewArray,
     BooleanArray, Date32Array, Date64Array, Decimal128Array, Decimal256Array,
-    DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray, Float32Array,
-    Float64Array, GenericBinaryArray, Int16Array, Int32Array, Int64Array, Int8Array,
+    Decimal32Array, Decimal64Array, DictionaryArray, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray,
+    FixedSizeBinaryArray, FixedSizeListArray, Float16Array, Float32Array, Float64Array,
+    GenericBinaryArray, Int16Array, Int32Array, Int64Array, Int8Array,
     IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
     LargeListArray, LargeListViewArray, LargeStringArray, ListArray, ListViewArray,
     MapArray, PrimitiveArray, StringArray, StringViewArray, StructArray,
@@ -273,6 +274,10 @@ pub trait SparkHasher<H: Copy + std::fmt::Debug> {
                 let arr = arr.as_any().downcast_ref::<UInt64Array>().unwrap();
                 Self::hash_primitive::<_, u64>(arr, seed)?;
             }
+            DataType::Float16 => {
+                let arr = arr.as_any().downcast_ref::<Float16Array>().unwrap();
+                Self::hash_primitive_float::<_, i32>(arr, seed)?;
+            }
             DataType::Float32 => {
                 let arr = arr.as_any().downcast_ref::<Float32Array>().unwrap();
                 Self::hash_primitive_float::<_, i32>(arr, seed)?;
@@ -403,31 +408,41 @@ pub trait SparkHasher<H: Copy + std::fmt::Debug> {
                     .unwrap();
                 Self::hash_primitive::<_, i64>(arr, seed)?;
             }
-            DataType::Time32(TimeUnit::Second) => {
-                let arr = arr.as_any().downcast_ref::<Time32SecondArray>().unwrap();
-                Self::hash_primitive::<_, i32>(arr, seed)?;
-            }
-            DataType::Time32(TimeUnit::Millisecond) => {
-                let arr = arr
-                    .as_any()
-                    .downcast_ref::<Time32MillisecondArray>()
-                    .unwrap();
-                Self::hash_primitive::<_, i32>(arr, seed)?;
-            }
-            DataType::Time64(TimeUnit::Nanosecond) => {
-                let arr = arr
-                    .as_any()
-                    .downcast_ref::<Time64NanosecondArray>()
-                    .unwrap();
-                Self::hash_primitive::<_, i64>(arr, seed)?;
-            }
-            DataType::Time64(TimeUnit::Microsecond) => {
-                let arr = arr
-                    .as_any()
-                    .downcast_ref::<Time64MicrosecondArray>()
-                    .unwrap();
-                Self::hash_primitive::<_, i64>(arr, seed)?;
-            }
+            DataType::Time32(unit) => match unit {
+                TimeUnit::Second => {
+                    let arr = arr.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+                    Self::hash_primitive::<_, i32>(arr, seed)?;
+                }
+                TimeUnit::Millisecond => {
+                    let arr = arr
+                        .as_any()
+                        .downcast_ref::<Time32MillisecondArray>()
+                        .unwrap();
+                    Self::hash_primitive::<_, i32>(arr, seed)?;
+                }
+                _ => {
+                    return exec_err!("Unsupported time unit: {:?}", unit);
+                }
+            },
+            DataType::Time64(unit) => match unit {
+                TimeUnit::Nanosecond => {
+                    let arr = arr
+                        .as_any()
+                        .downcast_ref::<Time64NanosecondArray>()
+                        .unwrap();
+                    Self::hash_primitive::<_, i64>(arr, seed)?;
+                }
+                TimeUnit::Microsecond => {
+                    let arr = arr
+                        .as_any()
+                        .downcast_ref::<Time64MicrosecondArray>()
+                        .unwrap();
+                    Self::hash_primitive::<_, i64>(arr, seed)?;
+                }
+                _ => {
+                    return exec_err!("Unsupported time unit: {:?}", unit);
+                }
+            },
             DataType::List(_) => {
                 let arr = arr.as_any().downcast_ref::<ListArray>().unwrap();
                 Self::hash_list(arr.iter(), seed)?;
@@ -455,6 +470,18 @@ pub trait SparkHasher<H: Copy + std::fmt::Debug> {
             DataType::Union(_, _) => {
                 let arr = arr.as_any().downcast_ref::<UnionArray>().unwrap();
                 Self::hash_union(arr, seed)?;
+            }
+            DataType::FixedSizeList(_, _) => {
+                let arr = arr.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+                Self::hash_list(arr.iter(), seed)?;
+            }
+            DataType::Decimal32(_, _) => {
+                let arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+                Self::hash_primitive::<_, i32>(arr, seed)?;
+            }
+            DataType::Decimal64(_, _) => {
+                let arr = arr.as_any().downcast_ref::<Decimal64Array>().unwrap();
+                Self::hash_primitive::<_, i64>(arr, seed)?;
             }
             DataType::Dictionary(key_type, _) => match key_type.as_ref() {
                 DataType::Int8 => {
@@ -517,7 +544,7 @@ pub trait SparkHasher<H: Copy + std::fmt::Debug> {
                     return exec_err!("Unsupported key type: {}", key_type);
                 }
             },
-            _ => {
+            DataType::RunEndEncoded(_, _) => {
                 return exec_err!("Unsupported data type: {}", arr.data_type());
             }
         };
