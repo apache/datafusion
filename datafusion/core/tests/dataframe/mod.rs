@@ -155,6 +155,8 @@ async fn test_array_agg_ord_schema() -> Result<()> {
     Ok(())
 }
 
+type WindowFnCase = (fn() -> Expr, &'static str);
+
 #[tokio::test]
 async fn with_column_window_functions() -> DataFusionResult<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
@@ -170,10 +172,10 @@ async fn with_column_window_functions() -> DataFusionResult<()> {
     ctx.register_table("t", Arc::new(provider))?;
 
     // Define test cases: (expr builder, alias name)
-    let test_cases: Vec<(Box<dyn Fn() -> Expr>, &str)> = vec![
-        (Box::new(|| lag(col("a"), Some(1), None)), "lag_val"),
-        (Box::new(|| lead(col("a"), Some(1), None)), "lead_val"),
-        (Box::new(|| row_number()), "row_num"),
+    let test_cases: Vec<WindowFnCase> = vec![
+        (|| lag(col("a"), Some(1), None), "lag_val"),
+        (|| lead(col("a"), Some(1), None), "lead_val"),
+        (row_number, "row_num"),
     ];
 
     for (make_expr, alias) in test_cases {
@@ -184,8 +186,7 @@ async fn with_column_window_functions() -> DataFusionResult<()> {
 
         assert!(
             df_schema.has_column_with_unqualified_name(alias),
-            "Schema does not contain expected column {}",
-            alias
+            "Schema does not contain expected column {alias}",
         );
 
         assert_eq!(2, df_schema.columns().len());
