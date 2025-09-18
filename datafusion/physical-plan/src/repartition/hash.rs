@@ -92,7 +92,7 @@ impl ScalarUDFImpl for RepartitionHash {
         use std::sync::Arc;
 
         if args.args.is_empty() {
-            return datafusion_common::plan_err!("hash requires at least one argument");
+            return datafusion_common::plan_err!("repartition_hash requires at least one argument");
         }
 
         // Convert all arguments to arrays
