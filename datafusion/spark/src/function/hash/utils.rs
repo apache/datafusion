@@ -247,7 +247,7 @@ pub trait SparkHasher<H: Copy + std::fmt::Debug> {
             }
             DataType::UInt8 => {
                 let arr = arr.as_any().downcast_ref::<UInt8Array>().unwrap();
-                Self::hash_primitive::<_, i32>(arr, seed)?;
+                Self::hash_primitive::<_, u32>(arr, seed)?;
             }
             DataType::Int16 => {
                 let arr = arr.as_any().downcast_ref::<Int16Array>().unwrap();
@@ -255,7 +255,7 @@ pub trait SparkHasher<H: Copy + std::fmt::Debug> {
             }
             DataType::UInt16 => {
                 let arr = arr.as_any().downcast_ref::<UInt16Array>().unwrap();
-                Self::hash_primitive::<_, i32>(arr, seed)?;
+                Self::hash_primitive::<_, u32>(arr, seed)?;
             }
             DataType::Int32 => {
                 let arr = arr.as_any().downcast_ref::<Int32Array>().unwrap();
