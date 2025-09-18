@@ -372,36 +372,21 @@ fn build_join(
         _ => return Ok(None),
     };
 
-    let right_schema = sub_query_alias.schema();
+    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
+        let right_schema = sub_query_alias.schema();
 
-    let mut needed = std::collections::HashSet::new();
-    expr_to_columns(&join_filter, &mut needed)?;
-    if let Some(ref in_pred) = in_predicate_opt {
-        expr_to_columns(in_pred, &mut needed)?;
-    }
+        let mut needed = std::collections::HashSet::new();
+        expr_to_columns(&join_filter, &mut needed)?;
+        if let Some(ref in_pred) = in_predicate_opt {
+            expr_to_columns(in_pred, &mut needed)?;
+        }
 
-    // Keep only columns that actually belong to the RIGHT child, and sort by their
-    // position in the right schema for deterministic order.
-    let mut right_cols_idx_and_col: Vec<(usize, Column)> = needed
-        .into_iter()
-        .filter_map(|c| right_schema.index_of_column(&c).ok().map(|idx| (idx, c)))
-        .collect();
-
-    right_cols_idx_and_col.sort_by_key(|(idx, _)| *idx);
-
-    let right_proj_exprs: Vec<Expr> = right_cols_idx_and_col
-        .into_iter()
-        .map(|(_, c)| Expr::Column(c))
-        .collect();
-
-    let right_projected = if !right_proj_exprs.is_empty() {
-        LogicalPlanBuilder::from(sub_query_alias.clone())
-            .project(right_proj_exprs)?
-            .build()?
-    } else {
-        // Degenerate case: no right columns referenced by the predicate(s)
-        sub_query_alias.clone()
-    };
+        // Keep only columns that actually belong to the RIGHT child, and sort by their
+        // position in the right schema for deterministic order.
+        let mut right_cols_idx_and_col: Vec<(usize, Column)> = needed
+            .into_iter()
+            .filter_map(|c| right_schema.index_of_column(&c).ok().map(|idx| (idx, c)))
+            .collect();
 
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(left.clone())
