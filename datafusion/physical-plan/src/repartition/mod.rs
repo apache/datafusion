@@ -152,6 +152,7 @@ impl RepartitionExecState {
         Ok(())
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn consume_input_streams(
         &mut self,
         input: Arc<dyn ExecutionPlan>,
@@ -307,18 +308,15 @@ impl BatchPartitioner {
 
     /// Set the hash function to use for hash partitioning.
     pub(crate) fn with_hash_function(mut self, hash: ScalarUDF) -> Self {
-        match &mut self.state {
-            BatchPartitionerState::Hash { hash: h, exprs, .. } => {
-                let name = hash.name().to_string();
-                *h = Arc::new(ScalarFunctionExpr::new(
-                    &name,
-                    Arc::new(hash),
-                    exprs.clone(),
-                    Arc::new(Field::new(&name, DataType::UInt64, false)),
-                    Arc::new(ConfigOptions::default()),
-                ));
-            }
-            _ => {}
+        if let BatchPartitionerState::Hash { hash: h, exprs, .. } = &mut self.state {
+            let name = hash.name().to_string();
+            *h = Arc::new(ScalarFunctionExpr::new(
+                &name,
+                Arc::new(hash),
+                exprs.clone(),
+                Arc::new(Field::new(&name, DataType::UInt64, false)),
+                Arc::new(ConfigOptions::default()),
+            ));
         }
         self
     }
@@ -661,7 +659,8 @@ impl ExecutionPlan for RepartitionExec {
         let mut repartition = RepartitionExec::try_new(
             children.swap_remove(0),
             self.partitioning().clone(),
-        )?;
+        )?
+        .with_hash_function(self.hash.clone());
         if self.preserve_order {
             repartition = repartition.with_preserve_order();
         }
