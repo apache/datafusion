@@ -397,8 +397,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         let plan_schema = plan.schema();
 
-        let arrow_schema = (&**plan_schema).into();
-        let message = SchemaAsIpc::new(&arrow_schema, &IpcWriteOptions::default())
+        let arrow_schema = plan_schema.as_ref().into();
+        let message = SchemaAsIpc::new(arrow_schema, &IpcWriteOptions::default())
             .try_into()
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;

@@ -855,7 +855,7 @@ impl SessionContext {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let schema = Arc::new(input.schema().as_ref().into());
+                let schema = input.schema().as_ref().into();
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
@@ -874,7 +874,7 @@ impl SessionContext {
             }
             (_, _, Err(_)) => {
                 let df_schema = input.schema();
-                let schema = Arc::new(df_schema.as_ref().into());
+                let schema = df_schema.as_ref().into();
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;

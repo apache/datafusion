@@ -594,7 +594,7 @@ impl DFSchema {
         &self,
         arrow_schema: &Schema,
     ) -> Result<()> {
-        let self_arrow_schema: Schema = self.into();
+        let self_arrow_schema: &Schema = self.into();
         self_arrow_schema
             .fields()
             .iter()
@@ -1081,9 +1081,16 @@ impl From<&DFSchema> for Schema {
     }
 }
 
-impl From<DFSchema> for SchemaRef {
-    fn from(df_schema: DFSchema) -> Self {
-        SchemaRef::new(df_schema.into())
+impl<'a> From<&'a DFSchema> for &'a Schema {
+    /// Convert DFSchema reference into a Schema
+    fn from(df_schema: &'a DFSchema) -> Self {
+        df_schema.as_arrow()
+    }
+}
+
+impl From<&DFSchema> for SchemaRef {
+    fn from(df_schema: &DFSchema) -> Self {
+        Arc::clone(df_schema.inner())
     }
 }
 
@@ -1413,7 +1420,7 @@ mod tests {
     #[test]
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let arrow_schema: Schema = schema.into();
+        let arrow_schema = schema.as_arrow();
         let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
         Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }";
         assert_eq!(expected, arrow_schema.to_string());

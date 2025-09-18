@@ -105,7 +105,7 @@ impl TableProviderFactory for ListingTableFactory {
                     .collect::<Vec<_>>(),
             )
         } else {
-            let schema: SchemaRef = Arc::new(cmd.schema.as_ref().to_owned().into());
+            let schema: SchemaRef = cmd.schema.as_ref().into();
             let table_partition_cols = cmd
                 .table_partition_cols
                 .iter()

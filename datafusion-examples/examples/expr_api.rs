@@ -518,10 +518,7 @@ fn type_coercion_demo() -> Result<()> {
         HashMap::new(),
     )?;
     let i8_array = Int8Array::from_iter_values(vec![0, 1, 2]);
-    let batch = RecordBatch::try_new(
-        Arc::new(df_schema.as_arrow().to_owned()),
-        vec![Arc::new(i8_array) as _],
-    )?;
+    let batch = RecordBatch::try_new((&df_schema).into(), vec![Arc::new(i8_array) as _])?;
 
     // Constructs a binary expression for demo.
     // By default, the literal `1` is translated into the Int32 type and cannot be directly compared with the Int8 type.

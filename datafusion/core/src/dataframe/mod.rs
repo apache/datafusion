@@ -2440,8 +2440,7 @@ impl TableProvider for DataFrameTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        let schema: Schema = self.plan.schema().as_ref().into();
-        Arc::new(schema)
+        self.plan.schema().as_ref().into()
     }
 
     fn table_type(&self) -> TableType {
