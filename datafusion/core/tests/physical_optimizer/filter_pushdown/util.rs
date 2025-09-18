@@ -19,6 +19,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::{
     file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
@@ -42,6 +43,7 @@ use datafusion_physical_plan::{
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::{
@@ -52,7 +54,8 @@ use std::{
     task::{Context, Poll},
 };
 pub struct TestOpener {
-    batches: Vec<RecordBatch>,
+    partition: usize,
+    batches: HashMap<String, Vec<RecordBatch>>,
     batch_size: Option<usize>,
     schema: Option<SchemaRef>,
     projection: Option<Vec<usize>>,
@@ -63,9 +66,11 @@ impl FileOpener for TestOpener {
     fn open(
         &self,
         _file_meta: FileMeta,
-        _file: PartitionedFile,
+        file: PartitionedFile,
     ) -> Result<FileOpenFuture> {
-        let mut batches = self.batches.clone();
+        let filename = file.object_meta.location.as_ref();
+        println!("Opening file {filename} in partition {}", self.partition);
+        let mut batches = self.batches.get(filename).cloned().unwrap();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
             let mut new_batches = Vec::new();
@@ -113,7 +118,7 @@ pub struct TestSource {
     predicate: Option<Arc<dyn PhysicalExpr>>,
     statistics: Option<Statistics>,
     batch_size: Option<usize>,
-    batches: Vec<RecordBatch>,
+    batches: HashMap<String, Vec<RecordBatch>>,
     schema: Option<SchemaRef>,
     metrics: ExecutionPlanMetricsSet,
     projection: Option<Vec<usize>>,
@@ -121,7 +126,7 @@ pub struct TestSource {
 }
 
 impl TestSource {
-    fn new(support: bool, batches: Vec<RecordBatch>) -> Self {
+    fn new(support: bool, batches: HashMap<String, Vec<RecordBatch>>) -> Self {
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -136,9 +141,10 @@ impl FileSource for TestSource {
         &self,
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
-        _partition: usize,
+        partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(TestOpener {
+            partition,
             batches: self.batches.clone(),
             batch_size: self.batch_size,
             schema: self.schema.clone(),
@@ -266,7 +272,8 @@ impl FileSource for TestSource {
 #[derive(Debug, Clone)]
 pub struct TestScanBuilder {
     support: bool,
-    batches: Vec<RecordBatch>,
+    // Collection of batches per file name
+    batches: HashMap<String, Vec<RecordBatch>>,
     schema: SchemaRef,
 }
 
@@ -274,7 +281,7 @@ impl TestScanBuilder {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             support: false,
-            batches: vec![],
+            batches: HashMap::new(),
             schema,
         }
     }
@@ -285,20 +292,22 @@ impl TestScanBuilder {
     }
 
     pub fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
-        self.batches = batches;
+        self.batches.insert(format!("file_{}.parquet", self.batches.len()), batches);
         self
     }
 
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
-        let source = Arc::new(TestSource::new(self.support, self.batches));
-        let base_config = FileScanConfigBuilder::new(
+        // Each file becomes it's own file group
+        let source = Arc::new(TestSource::new(self.support, self.batches.clone()));
+        let mut base_config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test://").unwrap(),
             Arc::clone(&self.schema),
             source,
-        )
-        .with_file(PartitionedFile::new("test.parquet", 123))
-        .build();
-        DataSourceExec::from_data_source(base_config)
+        );
+        for file in self.batches.keys() {
+            base_config = base_config.with_file_group(FileGroup::new(vec![PartitionedFile::new(file, 123)]));
+        }
+        DataSourceExec::from_data_source(base_config.build())
     }
 }
 
@@ -579,28 +588,61 @@ impl ExecutionPlan for TestNode {
     }
 }
 
-pub struct SlowPartitionNode {
-    input: Arc<dyn ExecutionPlan>,
-    wait_receiver: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
-    wait_sender: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+pub struct Flag {
+    sender: tokio::sync::watch::Sender<bool>,
 }
 
-impl SlowPartitionNode {
-    pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        let (sender, receiver) = tokio::sync::oneshot::channel();
+impl Flag {
+    /// Creates a new flag object.
+    pub fn new() -> Self {
         Self {
-            input,
-            wait_receiver: Arc::new(std::sync::Mutex::new(Some(receiver))),
-            wait_sender: Arc::new(std::sync::Mutex::new(Some(sender))),
+            sender: tokio::sync::watch::channel(false).0,
         }
     }
 
-    pub fn notify(&self) -> tokio::sync::oneshot::Sender<()> {
-        self.wait_sender
-            .lock()
-            .unwrap()
-            .take()
-            .expect("notify() can only be called once")
+    /// Enables the flag.
+    pub fn enable(&self) {
+        self.sender.send_if_modified(|value| {
+            if *value {
+                false
+            } else {
+                *value = true;
+
+                true
+            }
+        });
+    }
+
+    /// Waits the flag to become enabled.
+    pub async fn wait_enabled(&self) {
+        if !*self.sender.borrow() {
+            let mut receiver = self.sender.subscribe();
+
+            if !*receiver.borrow() {
+                receiver.changed().await.ok();
+            }
+        }
+    }
+}
+
+/// An execution plan node that waits for a notification before yielding any data from designated partitions.
+pub struct SlowPartitionNode {
+    input: Arc<dyn ExecutionPlan>,
+    flag: Arc<Flag>,
+    slow_partitions: Vec<usize>,
+}
+
+impl SlowPartitionNode {
+    pub fn new(input: Arc<dyn ExecutionPlan>, slow_partitions: Vec<usize>) -> Self {
+        Self {
+            input,
+            flag: Arc::new(Flag::new()),
+            slow_partitions,
+        }
+    }
+
+    pub fn unblock(&self) {
+        self.flag.enable();
     }
 }
 
@@ -640,8 +682,8 @@ impl ExecutionPlan for SlowPartitionNode {
         assert!(children.len() == 1);
         Ok(Arc::new(SlowPartitionNode {
             input: children[0].clone(),
-            wait_receiver: Arc::clone(&self.wait_receiver),
-            wait_sender: Arc::clone(&self.wait_sender),
+            flag: Arc::clone(&self.flag),
+            slow_partitions: self.slow_partitions.clone(),
         }))
     }
 
@@ -650,17 +692,14 @@ impl ExecutionPlan for SlowPartitionNode {
         partition: usize,
         context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
-        if partition == 0 {
-            let receiver = self
-                .wait_receiver
-                .lock()
-                .unwrap()
-                .take()
-                .expect("execute(0) can only be called once");
-            Ok(Box::pin(WaiterStream {
-                inner: self.input.execute(partition, context)?,
-                wait_receiver: Some(receiver),
-            }))
+        if self.slow_partitions.contains(&partition) {
+            let stream = self.input.execute(partition, context)?;
+            let waiter_stream = WaiterStream {
+                inner: stream,
+                flag: Arc::clone(&self.flag),
+                flag_checked: false,
+            };
+            Ok(Box::pin(waiter_stream) as datafusion_execution::SendableRecordBatchStream)
         } else {
             self.input.execute(partition, context)
         }
@@ -670,7 +709,8 @@ impl ExecutionPlan for SlowPartitionNode {
 /// Stream that waits for a notification before yielding the first batch
 struct WaiterStream {
     inner: datafusion_execution::SendableRecordBatchStream,
-    wait_receiver: Option<tokio::sync::oneshot::Receiver<()>>,
+    flag: Arc<Flag>,
+    flag_checked: bool,
 }
 
 impl Stream for WaiterStream {
@@ -678,14 +718,26 @@ impl Stream for WaiterStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        if let Some(receiver) = &mut this.wait_receiver {
-            match Pin::new(receiver).poll(cx) {
-                Poll::Ready(_) => {
-                    this.wait_receiver = None; // Signal received, remove receiver
+
+        // If we haven't checked the flag yet, wait for it to be enabled
+        if !this.flag_checked {
+            let flag = Arc::clone(&this.flag);
+            let wait_future = flag.wait_enabled();
+            futures::pin_mut!(wait_future);
+
+            match wait_future.poll(cx) {
+                Poll::Ready(()) => {
+                    // Flag is now enabled, mark as checked and continue
+                    this.flag_checked = true;
                 }
-                Poll::Pending => return Poll::Pending,
+                Poll::Pending => {
+                    // Still waiting for flag to be enabled
+                    return Poll::Pending;
+                }
             }
         }
+
+        // Flag has been checked and is enabled, delegate to inner stream
         Pin::new(&mut this.inner).poll_next(cx)
     }
 }

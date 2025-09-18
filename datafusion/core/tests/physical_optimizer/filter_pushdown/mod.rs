@@ -24,14 +24,9 @@ use arrow::{
 };
 use arrow_schema::SortOptions;
 use datafusion::{
-    assert_batches_eq,
-    logical_expr::Operator,
-    physical_plan::{
-        expressions::{BinaryExpr, Column, Literal},
-        PhysicalExpr,
-    },
-    prelude::{ParquetReadOptions, SessionConfig, SessionContext},
-    scalar::ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, logical_expr::Operator, physical_plan::{
+        PhysicalExpr, expressions::{BinaryExpr, Column, Literal}
+    }, prelude::{ParquetReadOptions, SessionConfig, SessionContext}, scalar::ScalarValue
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -46,19 +41,14 @@ use datafusion_physical_optimizer::{
     filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
 };
 use datafusion_physical_plan::{
-    aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
-    coalesce_batches::CoalesceBatchesExec,
-    coalesce_partitions::CoalescePartitionsExec,
-    collect,
-    filter::FilterExec,
-    repartition::RepartitionExec,
-    sorts::sort::SortExec,
-    ExecutionPlan,
+    ExecutionPlan, aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy}, coalesce_batches::CoalesceBatchesExec, coalesce_partitions::CoalescePartitionsExec, collect, execute_stream, filter::FilterExec, repartition::RepartitionExec, sorts::sort::SortExec
 };
 
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};
 use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
+
+use crate::physical_optimizer::filter_pushdown::util::SlowPartitionNode;
 
 mod util;
 
@@ -1218,6 +1208,202 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     ",
     );
 }
+
+/// Test that simulates behavior when some build side partitions are much slower to finish than others.
+/// In these cases we push down _partial_ filters that only apply scan filters to rows the belong to build side partitions that have completed.
+/// Once all build side partitions complete the full filter is pushed down without any hash key partition calculations.
+#[tokio::test]
+#[cfg(not(feature = "force_hash_collisions"))] // this test relies on hash partitioning to separate rows
+async fn test_hashjoin_progressive_filter_reporting() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Create build side with limited values
+    let build_batches_1 = vec![record_batch!(
+        ("id", Utf8, ["x", "a", "y", "d"])
+    )
+    .unwrap()];
+    let build_batches_2 = vec![record_batch!(
+        ("id", Utf8, ["b", "c"])
+    )
+    .unwrap()];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        // Add two batches -> creates 2 partitions
+        .with_batches(build_batches_1)
+        .with_batches(build_batches_2)
+        .build();
+
+    // Create probe side with more values
+    let probe_batches = vec![record_batch!(
+        ("id", Utf8, ["a", "b", "c", "d"])
+    )
+    .unwrap()];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false)
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create RepartitionExec nodes for both sides with hash partitioning on join keys
+    let partition_count = 2;
+
+    // Build side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    let build_hash_exprs = vec![
+        col("id", &build_side_schema).unwrap(),
+        col("id", &build_side_schema).unwrap(),
+    ];
+    let build_side = Arc::new(
+        RepartitionExec::try_new(
+            build_scan,
+            Partitioning::Hash(build_hash_exprs, partition_count),
+        )
+        .unwrap(),
+    );
+    let build_side = Arc::new(SlowPartitionNode::new(build_side, vec![0]));
+
+    // Probe side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    let probe_hash_exprs = vec![
+        col("id", &probe_side_schema).unwrap(),
+        col("id", &probe_side_schema).unwrap(),
+    ];
+    let probe_side = Arc::new(
+        RepartitionExec::try_new(
+            Arc::clone(&probe_scan),
+            Partitioning::Hash(probe_hash_exprs, partition_count),
+        )
+        .unwrap(),
+    );
+
+    // Create HashJoinExec with partitioned inputs
+    let on = vec![
+        (
+            col("id", &build_side_schema).unwrap(),
+            col("id", &probe_side_schema).unwrap(),
+        )
+    ];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&build_side) as Arc<dyn ExecutionPlan>,
+            probe_side,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // expect the predicate to be pushed down into the probe side DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
+        -   SlowPartitionNode
+        -     RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=2
+        -       DataSourceExec: file_groups={2 groups: [[file_0.parquet], [file_1.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+        -   RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=1
+        -     DataSourceExec: file_groups={1 group: [[file_0.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
+          -   SlowPartitionNode
+          -     RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=2
+          -       DataSourceExec: file_groups={2 groups: [[file_0.parquet], [file_1.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+          -   RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[file_0.parquet]]}, projection=[id], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
+    "
+    );
+
+    // Actually apply the optimization to the plan and execute to see the filter in action
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let config = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut batches = Vec::new();
+    let mut stream = execute_stream(Arc::clone(&plan), task_ctx).unwrap();
+    // Pull one batch
+    batches.push(stream.next().await.unwrap().unwrap());
+
+    // // Now check what our filter looks like
+    // #[cfg(not(feature = "force_hash_collisions"))]
+    // insta::assert_snapshot!(
+    //     format!("{}", format_plan_for_test(&plan)),
+    //     @r"
+    // - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
+    // -   SlowPartitionNode
+    // -     RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=2
+    // -       DataSourceExec: file_groups={2 groups: [[file_0.parquet], [file_1.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+    // -   RepartitionExec: partitioning=Hash([id@0, id@0], 2), input_partitions=1
+    // -     DataSourceExec: file_groups={1 group: [[file_0.parquet]]}, projection=[id], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ id@0 >= a AND id@0 <= z ]
+    // "
+    // );
+
+    #[rustfmt::skip]
+    let expected = [
+        "+----+----+-----+----+----+-----+",
+        "| a  | b  | c   | a  | b  | e   |",
+        "+----+----+-----+----+----+-----+",
+        "| aa | ba | 1.0 | aa | ba | 1.0 |",
+        "| ab | bb | 2.0 | ab | bb | 2.0 |",
+        "+----+----+-----+----+----+-----+",
+    ];
+
+    assert_batches_sorted_eq!(expected, &batches);
+
+    // // Wake the slow build side partition 0 to allow it to complete
+    // build_side.unblock();
+
+    // // Pull remaining batches
+    // while let Some(batch) = stream.next().await {
+    //     batches.push(batch.unwrap());
+    // }
+
+    // // Look at the final plan
+    // insta::assert_snapshot!(
+    //     format!("{}", format_plan_for_test(&plan)),
+    //     @r"
+    // - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    // -   SlowPartitionNode
+    // -     RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=1
+    // -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    // -   RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=1
+    // -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
+    // "
+    // );
+
+    // // Look at the final results
+    // #[rustfmt::skip]
+    // let expected = [
+    //     "+----+----+-----+----+----+-----+",
+    //     "| a  | b  | c   | a  | b  | e   |",
+    //     "+----+----+-----+----+----+-----+",
+    //     "| aa | ba | 1.0 | aa | ba | 1.0 |",
+    //     "| ab | bb | 2.0 | ab | bb | 2.0 |",
+    //     "+----+----+-----+----+----+-----+",
+    // ];
+    // assert_batches_sorted_eq!(expected, &batches);
+}
+
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {

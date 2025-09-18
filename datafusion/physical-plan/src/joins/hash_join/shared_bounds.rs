@@ -232,6 +232,8 @@ struct SharedBoundsState {
     bounds: HashMap<usize, PartitionBounds>,
     /// Whether we've optimized the filter to remove hash checks
     filter_optimized: bool,
+    /// Number of partitions that have reported completion (for tracking when all are done)
+    completed_count: usize,
 }
 
 impl SharedBoundsAccumulator {
@@ -285,6 +287,7 @@ impl SharedBoundsAccumulator {
             inner: Mutex::new(SharedBoundsState {
                 bounds: HashMap::with_capacity(total_partitions),
                 filter_optimized: false,
+                completed_count: 0,
             }),
             total_partitions,
             dynamic_filter,
@@ -396,9 +399,19 @@ impl SharedBoundsAccumulator {
             })?;
 
         use datafusion_physical_expr::expressions::case;
-        let case_expr = case(Some(modulo_expr), when_thens, Some(lit(true)))?;
+        let expr = if when_thens.is_empty() {
+            // No bounds available, return a literal true to avoid filtering anything
+            lit(ScalarValue::Boolean(Some(true)))
+        } else {
+            // Create the CASE expression with an ELSE true to avoid false negatives
+            case(
+                Some(modulo_expr),
+                when_thens,
+                Some(lit(ScalarValue::Boolean(Some(true)))),
+            )?
+        };
 
-        Ok(case_expr)
+        Ok(expr)
     }
 
     /// Create filter from completed partitions using OR logic.
@@ -413,11 +426,11 @@ impl SharedBoundsAccumulator {
         let mut partition_filters = Vec::with_capacity(bounds.len());
 
         for partition_bounds in bounds.values().sorted_by_key(|b| b.partition) {
-            let Some(filter) = self.create_partition_bounds_predicate(partition_bounds)? else {
-                // No bounds for this partition, we can't compute an optimized filter
-                return Ok(None);
-            };
-            partition_filters.push(filter);
+            if let Some(filter) = self.create_partition_bounds_predicate(partition_bounds)? {
+                // This partition has bounds, include it in the optimized filter
+                partition_filters.push(filter);
+            }
+            // Skip empty partitions - they don't contribute bounds but shouldn't prevent optimization
         }
 
         // Combine all partition filters with AND
@@ -452,24 +465,29 @@ impl SharedBoundsAccumulator {
     ) -> Result<()> {
         let mut inner = self.inner.lock();
 
-        // In `PartitionMode::CollectLeft`, all streams on the left side share the same partition id (0).
-        // Avoid duplicate entries by checking if we've already recorded bounds for this partition.
-        if inner.bounds.contains_key(&left_side_partition_id) {
-            return Ok(());
+        // Always increment completion counter - every partition reports exactly once
+        inner.completed_count += 1;
+
+        // Store bounds from this partition (avoid duplicates)
+        // In CollectLeft mode, multiple streams may report the same partition_id,
+        // but we only want to store bounds once
+        if !inner.bounds.contains_key(&left_side_partition_id) {
+            if let Some(bounds) = partition_bounds {
+                inner
+                    .bounds
+                    .insert(left_side_partition_id, PartitionBounds::new(left_side_partition_id, bounds));
+            } else {
+                // Insert an empty bounds entry to track this partition
+                inner
+                    .bounds
+                    .insert(left_side_partition_id, PartitionBounds::new(left_side_partition_id, vec![]));
+            }
         }
 
-        // Store bounds and mark partition as completed
-        if let Some(bounds) = partition_bounds {
-            inner
-                .bounds
-                .insert(left_side_partition_id, PartitionBounds::new(left_side_partition_id, bounds));
-        }
-        let completed = inner.bounds.len();
+        let completed = inner.completed_count;
         let total = self.total_partitions;
 
         let all_partitions_complete = completed == total;
-
-        println!("all_partitions_complete: {all_partitions_complete} ({completed}/{total})");
 
         // Create the appropriate filter based on completion status
         let filter_expr = if all_partitions_complete && !inner.filter_optimized {
@@ -544,6 +562,7 @@ mod tests {
             inner: Mutex::new(SharedBoundsState {
                 bounds: HashMap::new(),
                 filter_optimized: false,
+                completed_count: 0,
             }),
             total_partitions: 2,
             dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(
@@ -596,6 +615,7 @@ mod tests {
             inner: Mutex::new(SharedBoundsState {
                 bounds: HashMap::new(),
                 filter_optimized: false,
+                completed_count: 0,
             }),
             total_partitions: 2,
             dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(
