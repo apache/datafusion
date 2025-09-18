@@ -31,8 +31,7 @@ use arrow::error::ArrowError;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
-    not_impl_err, DataFusionError, GetExt, Result, Statistics,
-    DEFAULT_CSV_EXTENSION,
+    not_impl_err, DataFusionError, GetExt, Result, Statistics, DEFAULT_CSV_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::decoder::Decoder;
@@ -499,17 +498,17 @@ impl CsvFormat {
     /// stream of delimited chunks returning the inferred schema and the
     /// number of lines that were read.
     ///
-    /// This method now supports CSV files with different numbers of columns.
+    /// This method can handle CSV files with different numbers of columns.
     /// The inferred schema will be the union of all columns found across all files.
     /// Files with fewer columns will have missing columns filled with null values.
     ///
     /// # Example
-    /// 
+    ///
     /// If you have two CSV files:
     /// - `file1.csv`: `col1,col2,col3`
     /// - `file2.csv`: `col1,col2,col3,col4,col5`
     ///
-    /// The inferred schema will contain all 5 columns, with files that don't 
+    /// The inferred schema will contain all 5 columns, with files that don't
     /// have columns 4 and 5 having null values for those columns.
     pub async fn infer_schema_from_stream(
         &self,
@@ -585,14 +584,13 @@ impl CsvFormat {
                         column_type_possibilities.push(possibilities);
                     }
                 }
-                
+
                 // Update type possibilities for columns that exist in this file
-                // We take the minimum of fields.len() and column_type_possibilities.len() 
-                // to avoid index out of bounds when a file has fewer columns
-                let max_fields_to_process = fields.len().min(column_type_possibilities.len());
-                for field_idx in 0..max_fields_to_process {
-                    if let Some(field) = fields.get(field_idx) {
-                        column_type_possibilities[field_idx].insert(field.data_type().clone());
+                // Only process fields that exist in both the current file and our tracking structures
+                for (field_idx, field) in fields.iter().enumerate() {
+                    if field_idx < column_type_possibilities.len() {
+                        column_type_possibilities[field_idx]
+                            .insert(field.data_type().clone());
                     }
                 }
             }
@@ -607,7 +605,10 @@ impl CsvFormat {
     }
 }
 
-pub(crate) fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schema {
+pub(crate) fn build_schema_helper(
+    names: Vec<String>,
+    types: &[HashSet<DataType>],
+) -> Schema {
     let fields = names
         .into_iter()
         .zip(types)
@@ -779,5 +780,84 @@ impl DataSink for CsvSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_schema_helper;
+    use arrow::datatypes::DataType;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_build_schema_helper_different_column_counts() {
+        // Test the core schema building logic with different column counts
+        let mut column_names =
+            vec!["col1".to_string(), "col2".to_string(), "col3".to_string()];
+
+        // Simulate adding two more columns from another file
+        column_names.push("col4".to_string());
+        column_names.push("col5".to_string());
+
+        let column_type_possibilities = vec![
+            HashSet::from([DataType::Int64]),
+            HashSet::from([DataType::Utf8]),
+            HashSet::from([DataType::Float64]),
+            HashSet::from([DataType::Utf8]), // col4
+            HashSet::from([DataType::Utf8]), // col5
+        ];
+
+        let schema = build_schema_helper(column_names, &column_type_possibilities);
+
+        // Verify schema has 5 columns
+        assert_eq!(schema.fields().len(), 5);
+        assert_eq!(schema.field(0).name(), "col1");
+        assert_eq!(schema.field(1).name(), "col2");
+        assert_eq!(schema.field(2).name(), "col3");
+        assert_eq!(schema.field(3).name(), "col4");
+        assert_eq!(schema.field(4).name(), "col5");
+
+        // All fields should be nullable
+        for field in schema.fields() {
+            assert!(
+                field.is_nullable(),
+                "Field {} should be nullable",
+                field.name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_schema_helper_type_merging() {
+        // Test type merging logic
+        let column_names = vec!["col1".to_string(), "col2".to_string()];
+
+        let column_type_possibilities = vec![
+            HashSet::from([DataType::Int64, DataType::Float64]), // Should resolve to Float64
+            HashSet::from([DataType::Utf8]),                     // Should remain Utf8
+        ];
+
+        let schema = build_schema_helper(column_names, &column_type_possibilities);
+
+        // col1 should be Float64 due to Int64 + Float64 = Float64
+        assert_eq!(*schema.field(0).data_type(), DataType::Float64);
+
+        // col2 should remain Utf8
+        assert_eq!(*schema.field(1).data_type(), DataType::Utf8);
+    }
+
+    #[test]
+    fn test_build_schema_helper_conflicting_types() {
+        // Test when we have incompatible types - should default to Utf8
+        let column_names = vec!["col1".to_string()];
+
+        let column_type_possibilities = vec![
+            HashSet::from([DataType::Boolean, DataType::Int64, DataType::Utf8]), // Should resolve to Utf8 due to conflicts
+        ];
+
+        let schema = build_schema_helper(column_names, &column_type_possibilities);
+
+        // Should default to Utf8 for conflicting types
+        assert_eq!(*schema.field(0).data_type(), DataType::Utf8);
     }
 }

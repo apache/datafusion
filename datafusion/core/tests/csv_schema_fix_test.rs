@@ -51,8 +51,8 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
     // Enable truncated_rows to handle files with different column counts
     let df = ctx
         .read_csv(
-            temp_path.to_str().unwrap(), 
-            CsvReadOptions::new().truncated_rows(true)
+            temp_path.to_str().unwrap(),
+            CsvReadOptions::new().truncated_rows(true),
         )
         .await
         .expect("Should successfully read CSV directory with different column counts");
@@ -60,10 +60,15 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
     // Verify the schema contains all 6 columns (union of both files)
     let df_clone = df.clone();
     let schema = df_clone.schema();
-    assert_eq!(schema.fields().len(), 6, "Schema should contain all 6 columns");
+    assert_eq!(
+        schema.fields().len(),
+        6,
+        "Schema should contain all 6 columns"
+    );
 
     // Check that we have all expected columns
-    let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    let field_names: Vec<&str> =
+        schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert!(field_names.contains(&"service_id"));
     assert!(field_names.contains(&"route_type"));
     assert!(field_names.contains(&"agency_id"));
@@ -82,7 +87,7 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
 
     // Verify we can actually read the data
     let results = df.collect().await?;
-    
+
     // Calculate total rows across all batches
     let total_rows: usize = results.iter().map(|batch| batch.num_rows()).sum();
     assert_eq!(total_rows, 6, "Should have 6 total rows across all batches");
@@ -90,21 +95,55 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
     // All batches should have 6 columns (the union schema)
     for batch in &results {
         assert_eq!(batch.num_columns(), 6, "All batches should have 6 columns");
+        assert_eq!(
+            batch.schema().fields().len(),
+            6,
+            "Each batch should use the union schema with 6 fields"
+        );
     }
 
-    // Verify that the union schema is being used correctly
-    // We should be able to find records from both files
-    println!("✅ Successfully read {} record batches with {} total rows", results.len(), total_rows);
+    // Verify the actual content of the data
+    // Since we don't know the exact order of rows, just verify the overall structure
     
-    // Verify schema has all expected columns
+    // Check that all batches have nulls in the correct places
+    let mut null_count_col3 = 0;
+    let mut null_count_col4 = 0;
+    let mut null_count_col5 = 0;
+    let mut non_null_count_col3 = 0;
+    let mut non_null_count_col4 = 0;
+    let mut non_null_count_col5 = 0;
+    
     for batch in &results {
-        assert_eq!(batch.schema().fields().len(), 6, "Each batch should use the union schema with 6 fields");
+        // Count nulls and non-nulls for columns 3-5 (platform_number, direction, stop_sequence)
+        for i in 0..batch.num_rows() {
+            if batch.column(3).is_null(i) {
+                null_count_col3 += 1;
+            } else {
+                non_null_count_col3 += 1;
+            }
+            
+            if batch.column(4).is_null(i) {
+                null_count_col4 += 1;
+            } else {
+                non_null_count_col4 += 1;
+            }
+            
+            if batch.column(5).is_null(i) {
+                null_count_col5 += 1;
+            } else {
+                non_null_count_col5 += 1;
+            }
+        }
     }
-
-    println!("✅ Successfully verified CSV schema inference fix!");
-    println!("   - Read {} files with different column counts (3 vs 6)", temp_dir.path().read_dir().unwrap().count());
-    println!("   - Inferred schema with {} columns", schema.fields().len());
-    println!("   - Processed {} total rows", total_rows);
+    
+    // Verify that we have the expected pattern:
+    // 3 rows with nulls (from file1) and 3 rows with non-nulls (from file2)
+    assert_eq!(null_count_col3, 3, "Should have 3 null values in platform_number column");
+    assert_eq!(non_null_count_col3, 3, "Should have 3 non-null values in platform_number column");
+    assert_eq!(null_count_col4, 3, "Should have 3 null values in direction column");
+    assert_eq!(non_null_count_col4, 3, "Should have 3 non-null values in direction column");
+    assert_eq!(null_count_col5, 3, "Should have 3 null values in stop_sequence column");
+    assert_eq!(non_null_count_col5, 3, "Should have 3 non-null values in stop_sequence column");
 
     Ok(())
 }
