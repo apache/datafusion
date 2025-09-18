@@ -257,6 +257,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let batch_columns = batch.num_columns();
+        println!("batch columns: {}", batch.num_columns());
+        println!("args: {:?}", self.args);
         let args = self
             .args
             .iter()

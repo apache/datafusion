@@ -23,128 +23,18 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::joins::PartitionMode;
+use crate::repartition::hash::RepartitionHash;
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
+use crate::repartition::hash::repartition_hash;
 
-use arrow::datatypes::{DataType, Field};
 use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
 use datafusion_expr::Operator;
-use datafusion_expr::ScalarUDF;
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
-
-use ahash::RandomState;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use itertools::Itertools;
 use parking_lot::Mutex;
 
-/// Hash Arrays UDF: A scalar function that hashes one or more arrays using the same algorithm as DataFusion's join operations
-///
-/// This is a specialized hash function used exclusively for hash join bounds calculation.
-/// It uses the same RandomState as the partition operations to ensure consistency.
-#[derive(Debug)]
-struct Hash {
-    signature: datafusion_expr::Signature,
-    /// RandomState for consistent hashing - using the same seed as hash joins
-    random_state: RandomState,
-}
-
-impl PartialEq for Hash {
-    fn eq(&self, other: &Self) -> bool {
-        // RandomState doesn't implement PartialEq, so we just compare signatures
-        self.signature == other.signature
-    }
-}
-
-impl Eq for Hash {}
-
-impl std::hash::Hash for Hash {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Only hash the signature since RandomState doesn't implement Hash
-        self.signature.hash(state);
-    }
-}
-
-impl Hash {
-    /// Create a new HashArraysFunc with a custom RandomState
-    fn new_with_random_state(random_state: RandomState) -> Self {
-        Self {
-            signature: datafusion_expr::Signature::one_of(
-                vec![datafusion_expr::TypeSignature::VariadicAny],
-                datafusion_expr::Volatility::Immutable,
-            ),
-            random_state,
-        }
-    }
-}
-
-impl datafusion_expr::ScalarUDFImpl for Hash {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "hash"
-    }
-
-    fn signature(&self) -> &datafusion_expr::Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // Always return UInt64Array regardless of input types
-        Ok(DataType::UInt64)
-    }
-
-    fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
-        use arrow::array::{Array, UInt64Array};
-        use datafusion_common::hash_utils::create_hashes;
-        use std::sync::Arc;
-
-        if args.args.is_empty() {
-            return datafusion_common::plan_err!("hash requires at least one argument");
-        }
-
-        // Convert all arguments to arrays
-        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
-
-        // Check that all arrays have the same length
-        let array_len = arrays[0].len();
-        for (i, array) in arrays.iter().enumerate() {
-            if array.len() != array_len {
-                return datafusion_common::plan_err!(
-                    "All input arrays must have the same length. Array 0 has length {}, but array {} has length {}",
-                    array_len, i, array.len()
-                );
-            }
-        }
-
-        // If no rows, return an empty UInt64Array
-        if array_len == 0 {
-            return Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
-                Vec::<u64>::new(),
-            ))));
-        }
-
-        // Create hash buffer and compute hashes using DataFusion's internal algorithm
-        let mut hashes_buffer = vec![0u64; array_len];
-        create_hashes(&arrays, &self.random_state, &mut hashes_buffer)?;
-
-        // Return the hash values as a UInt64Array
-        Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
-            hashes_buffer,
-        ))))
-    }
-
-    fn documentation(&self) -> Option<&datafusion_expr::Documentation> {
-        None
-    }
-}
-
-/// RandomState used by RepartitionExec for consistent hash partitioning
-/// This must match the seeds used in RepartitionExec to ensure our hash-based
-/// filter expressions compute the same partition assignments as the actual partitioning
-const REPARTITION_RANDOM_STATE: RandomState = RandomState::with_seeds(0, 0, 0, 0);
 
 /// Represents the minimum and maximum values for a specific column.
 /// Used in dynamic filter pushdown to establish value boundaries.
@@ -296,25 +186,6 @@ impl SharedBoundsAccumulator {
         }
     }
 
-    /// Create hash expression for the join keys: hash(col1, col2, ...)
-    fn create_hash_expression(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        // Use the same random state as RepartitionExec for consistent partitioning
-        // This ensures hash(row) % num_partitions produces the same partition assignment
-        // as the original repartitioning operation
-        let hash_udf = Arc::new(ScalarUDF::from(Hash::new_with_random_state(
-            REPARTITION_RANDOM_STATE,
-        )));
-
-        // Create the hash expression using ScalarFunctionExpr
-        Ok(Arc::new(ScalarFunctionExpr::new(
-            "hash",
-            hash_udf,
-            self.on_right.clone(),
-            Field::new("hash_result", DataType::UInt64, false).into(),
-            Arc::clone(&self.config_options),
-        )))
-    }
-
     /// Create a bounds predicate for a single partition: (col >= min AND col <= max) for all columns.
     /// This is used in both progressive and final filter creation.
     /// Returns None if no bounds are available for this partition.
@@ -378,7 +249,7 @@ impl SharedBoundsAccumulator {
         bounds: &HashMap<usize, PartitionBounds>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         // Create base expression: hash(cols) % num_partitions
-        let hash_expr = self.create_hash_expression()?;
+        let hash_expr = repartition_hash(self.on_right.clone())?;
         let total_partitions_expr = lit(ScalarValue::UInt64(Some(self.total_partitions as u64)));
         let modulo_expr = Arc::new(BinaryExpr::new(
             hash_expr,
@@ -526,6 +397,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_boolean_array;
     use arrow::array::Array;
+    use datafusion_expr::ColumnarValue;
     use std::sync::Arc;
 
     #[test]
