@@ -285,9 +285,9 @@ impl ClassicPWMJStream {
             Arc::clone(&self.buffered_side.try_as_ready().unwrap().buffered_data);
 
         // Check if the same batch needs to be checked for values again
-        if let Some(start_idx) = self.batch_process_state.process_rest {
+        if let Some(stream_idx) = self.batch_process_state.process_rest {
             if let Some(buffered_indices) = &self.batch_process_state.buffered_indices {
-                let remaining = buffered_indices.len() - start_idx;
+                let remaining = buffered_indices.len() - stream_idx;
 
                 // Branch into this and return value if there are more rows to deal with
                 if remaining > self.batch_size {
@@ -296,7 +296,7 @@ impl ClassicPWMJStream {
                         RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
 
                     let buffered_chunk_ref =
-                        buffered_indices.slice(start_idx, self.batch_size);
+                        buffered_indices.slice(stream_idx, self.batch_size);
                     let new_buffered_indices = buffered_chunk_ref
                         .as_any()
                         .downcast_ref::<UInt64Array>()
@@ -314,7 +314,7 @@ impl ClassicPWMJStream {
                     )?;
 
                     self.batch_process_state
-                        .set_process_rest(Some(start_idx + self.batch_size));
+                        .set_process_rest(Some(stream_idx + self.batch_size));
                     self.batch_process_state.continue_process = true;
 
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
@@ -324,7 +324,7 @@ impl ClassicPWMJStream {
                 let empty_stream_batch =
                     RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
 
-                let buffered_chunk_ref = buffered_indices.slice(start_idx, remaining);
+                let buffered_chunk_ref = buffered_indices.slice(stream_idx, remaining);
                 let new_buffered_indices = buffered_chunk_ref
                     .as_any()
                     .downcast_ref::<UInt64Array>()
@@ -368,7 +368,7 @@ impl ClassicPWMJStream {
                 RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
 
             let indices_chunk_ref = buffered_indices
-                .slice(self.batch_process_state.start_idx, self.batch_size);
+                .slice(self.batch_process_state.stream_idx, self.batch_size);
 
             let indices_chunk = indices_chunk_ref
                 .as_any()
@@ -412,11 +412,25 @@ impl ClassicPWMJStream {
 }
 
 // Holds all information for processing incremental output
+// 
+// Responsibilities:
+// - Keeps track of the current stream row index (`stream_idx`) so we can resume
+//   processing the same stream batch if we return early due to `batch_size`.
+// - Remembers the last buffered row index we probed (`buffer_idx`) so we don’t
+//   restart from 0 for every stream row.
+// - Stores `process_rest` to continue outputting matches for the same stream row
+//   when we previously hit the batch size limit mid-output.
+// - Tracks how many rows we’ve produced so far (`num_rows`) to know when to flush.
+// - Uses `not_found` to signal that the last stream row had no matches and we
+//   may need to emit NULLs for RIGHT/FULL OUTER joins.
+// - Uses `continue_process` to tell the executor we are not done yet and must
+//   be called again with the same stream batch.
+// - Optionally holds `buffered_indices` when resuming output of remaining matches.
 struct BatchProcessState {
     // Used to pick up from the last index on the stream side
-    start_idx: usize,
+    stream_idx: usize,
     // Used to pick up from the last index on the buffered side
-    pivot: usize,
+    buffer_idx: usize,
     // Tracks the number of rows processed; default starts at 0
     num_rows: usize,
     // Processes the rest of the batch
@@ -432,9 +446,9 @@ struct BatchProcessState {
 impl BatchProcessState {
     pub fn new() -> Self {
         Self {
-            start_idx: 0,
+            stream_idx: 0,
             num_rows: 0,
-            pivot: 0,
+            buffer_idx: 0,
             process_rest: None,
             not_found: false,
             continue_process: false,
@@ -443,25 +457,25 @@ impl BatchProcessState {
     }
 
     fn reset(&mut self) {
-        self.start_idx = 0;
+        self.stream_idx = 0;
         self.num_rows = 0;
-        self.pivot = 0;
+        self.buffer_idx = 0;
         self.process_rest = None;
         self.not_found = false;
         self.continue_process = false;
         self.buffered_indices = None;
     }
 
-    fn pivot(&self) -> usize {
-        self.pivot
+    fn buffer_idx(&self) -> usize {
+        self.buffer_idx
     }
 
-    fn set_pivot(&mut self, pivot: usize) {
-        self.pivot = pivot;
+    fn set_buffer_idx(&mut self, buffer_idx: usize) {
+        self.buffer_idx = buffer_idx;
     }
 
-    fn set_start_idx(&mut self, start_idx: usize) {
-        self.start_idx = start_idx;
+    fn set_stream_idx(&mut self, stream_idx: usize) {
+        self.stream_idx = stream_idx;
     }
 
     fn set_rows(&mut self, num_rows: usize) {
@@ -485,6 +499,7 @@ impl Stream for ClassicPWMJStream {
 }
 
 // For Left, Right, Full, and Inner joins, incoming stream batches will already be sorted.
+// 
 #[allow(clippy::too_many_arguments)]
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
@@ -503,28 +518,28 @@ fn resolve_classic_join(
     let mut buffered_indices = UInt64Builder::default();
     let mut stream_indices = UInt32Builder::default();
 
-    // Our pivot variable allows us to start probing on the buffered side where we last matched
+    // Our buffer_idx variable allows us to start probing on the buffered side where we last matched
     // in the previous stream row.
-    let mut pivot = batch_process_state.pivot();
-    for row_idx in batch_process_state.start_idx..stream_values[0].len() {
+    let mut buffer_idx = batch_process_state.buffer_idx();
+    for row_idx in batch_process_state.stream_idx..stream_values[0].len() {
         let mut found = false;
 
         // Check once to see if it is a redo of a null value if not we do not try to process the batch
         if !batch_process_state.not_found {
-            while pivot < buffered_values.len()
+            while buffer_idx < buffered_values.len()
                 || batch_process_state.process_rest.is_some()
             {
                 // If there is still data left in the batch to process, use the index and output
-                if let Some(start_idx) = batch_process_state.process_rest {
-                    let count = buffered_values.len() - start_idx;
+                if let Some(stream_idx) = batch_process_state.process_rest {
+                    let count = buffered_values.len() - stream_idx;
                     if count >= batch_size {
                         let stream_repeated = vec![row_idx as u32; batch_size];
                         batch_process_state
-                            .set_process_rest(Some(start_idx + batch_size));
+                            .set_process_rest(Some(stream_idx + batch_size));
                         batch_process_state
                             .set_rows(batch_process_state.num_rows + batch_size);
-                        let buffered_range: Vec<u64> = (start_idx as u64
-                            ..((start_idx as u64) + (batch_size as u64)))
+                        let buffered_range: Vec<u64> = (stream_idx as u64
+                            ..((stream_idx as u64) + (batch_size as u64)))
                             .collect();
                         stream_indices.append_slice(&stream_repeated);
                         buffered_indices.append_slice(&buffered_range);
@@ -546,7 +561,7 @@ fn resolve_classic_join(
                     batch_process_state.set_rows(batch_process_state.num_rows + count);
                     let stream_repeated = vec![row_idx as u32; count];
                     let buffered_range: Vec<u64> =
-                        (start_idx as u64..buffered_len as u64).collect();
+                        (stream_idx as u64..buffered_len as u64).collect();
                     stream_indices.append_slice(&stream_repeated);
                     buffered_indices.append_slice(&buffered_range);
                     batch_process_state.process_rest = None;
@@ -560,7 +575,7 @@ fn resolve_classic_join(
                     &[Arc::clone(&stream_values[0])],
                     row_idx,
                     &[Arc::clone(buffered_values)],
-                    pivot,
+                    buffer_idx,
                     &[sort_options],
                     NullEquality::NullEqualsNothing,
                 )?;
@@ -569,7 +584,7 @@ fn resolve_classic_join(
                 match operator {
                     Operator::Gt | Operator::Lt => {
                         if matches!(compare, Ordering::Less) {
-                            let count = buffered_values.len() - pivot;
+                            let count = buffered_values.len() - buffer_idx;
 
                             // If the current output + new output is over our process value then we want to be
                             // able to change that
@@ -582,8 +597,8 @@ fn resolve_classic_join(
                                     batch_process_state.num_rows + process_batch_size,
                                 );
 
-                                let buffered_range: Vec<u64> = (pivot as u64
-                                    ..(pivot + process_batch_size) as u64)
+                                let buffered_range: Vec<u64> = (buffer_idx as u64
+                                    ..(buffer_idx + process_batch_size) as u64)
                                     .collect();
                                 stream_indices.append_slice(&stream_repeated);
                                 buffered_indices.append_slice(&buffered_range);
@@ -598,11 +613,11 @@ fn resolve_classic_join(
                                 )?;
 
                                 batch_process_state
-                                    .set_process_rest(Some(pivot + process_batch_size));
+                                    .set_process_rest(Some(buffer_idx + process_batch_size));
                                 batch_process_state.continue_process = true;
                                 // Update the start index so it repeats the process
-                                batch_process_state.set_start_idx(row_idx);
-                                batch_process_state.set_pivot(pivot);
+                                batch_process_state.set_stream_idx(row_idx);
+                                batch_process_state.set_buffer_idx(buffer_idx);
                                 batch_process_state.set_rows(0);
 
                                 return Ok(batch);
@@ -614,7 +629,7 @@ fn resolve_classic_join(
 
                             let stream_repeated = vec![row_idx as u32; count];
                             let buffered_range: Vec<u64> =
-                                (pivot as u64..buffered_len as u64).collect();
+                                (buffer_idx as u64..buffered_len as u64).collect();
 
                             stream_indices.append_slice(&stream_repeated);
                             buffered_indices.append_slice(&buffered_range);
@@ -625,26 +640,26 @@ fn resolve_classic_join(
                     }
                     Operator::GtEq | Operator::LtEq => {
                         if matches!(compare, Ordering::Equal | Ordering::Less) {
-                            let count = buffered_values.len() - pivot;
+                            let count = buffered_values.len() - buffer_idx;
 
                             // If the current output + new output is over our process value then we want to be
                             // able to change that
                             if batch_process_state.num_rows + count >= batch_size {
                                 // Update the start index so it repeats the process
-                                batch_process_state.set_start_idx(row_idx);
-                                batch_process_state.set_pivot(pivot);
+                                batch_process_state.set_stream_idx(row_idx);
+                                batch_process_state.set_buffer_idx(buffer_idx);
 
                                 let process_batch_size =
                                     batch_size - batch_process_state.num_rows;
                                 let stream_repeated =
                                     vec![row_idx as u32; process_batch_size];
                                 batch_process_state
-                                    .set_process_rest(Some(pivot + process_batch_size));
+                                    .set_process_rest(Some(buffer_idx + process_batch_size));
                                 batch_process_state.set_rows(
                                     batch_process_state.num_rows + process_batch_size,
                                 );
-                                let buffered_range: Vec<u64> = (pivot as u64
-                                    ..(pivot + process_batch_size) as u64)
+                                let buffered_range: Vec<u64> = (buffer_idx as u64
+                                    ..(buffer_idx + process_batch_size) as u64)
                                     .collect();
                                 stream_indices.append_slice(&stream_repeated);
                                 buffered_indices.append_slice(&buffered_range);
@@ -669,7 +684,7 @@ fn resolve_classic_join(
                                 .set_rows(batch_process_state.num_rows + count);
                             let stream_repeated = vec![row_idx as u32; count];
                             let buffered_range: Vec<u64> =
-                                (pivot as u64..buffered_len as u64).collect();
+                                (buffer_idx as u64..buffered_len as u64).collect();
 
                             stream_indices.append_slice(&stream_repeated);
                             buffered_indices.append_slice(&buffered_range);
@@ -686,8 +701,8 @@ fn resolve_classic_join(
                     }
                 };
 
-                // Increment pivot after every row
-                pivot += 1;
+                // Increment buffer_idx after every row
+                buffer_idx += 1;
             }
         }
 
@@ -707,8 +722,8 @@ fn resolve_classic_join(
                 )?;
 
                 // Update the start index so it repeats the process
-                batch_process_state.set_start_idx(row_idx);
-                batch_process_state.set_pivot(pivot);
+                batch_process_state.set_stream_idx(row_idx);
+                batch_process_state.set_buffer_idx(buffer_idx);
                 batch_process_state.not_found = true;
                 batch_process_state.continue_process = true;
                 batch_process_state.set_rows(0);
