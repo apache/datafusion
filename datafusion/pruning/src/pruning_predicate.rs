@@ -19,31 +19,28 @@
 //! based on statistics (e.g. Parquet Row Groups)
 //!
 //! [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
-use std::collections::HashSet;
-use std::sync::Arc;
-
-use arrow::array::{Array, AsArray};
 use arrow::{
-    array::{new_null_array, ArrayRef, BooleanArray},
+    array::{new_null_array, Array, ArrayRef, AsArray, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
+use std::{collections::HashSet, sync::Arc};
 // pub use for backwards compatibility
 pub use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
-use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+#[cfg(test)]
+use datafusion_common::nested_struct::sanitize_binary_array_for_utf8;
 use datafusion_common::{
-    cast_column, internal_err, plan_datafusion_err, plan_err,
+    cast_column,
+    error::{DataFusionError, Result},
+    format::DEFAULT_CAST_OPTIONS,
+    internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Column, DFSchema, ScalarValue,
 };
-
-#[cfg(test)]
-use datafusion_common::nested_struct::sanitize_binary_array_for_utf8;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
@@ -1888,12 +1885,11 @@ mod tests {
     use datafusion_expr::{and, col, lit, or};
     use insta::assert_snapshot;
 
-    use arrow::array::{Array, Decimal128Array};
     use arrow::{
         array::{
-            ArrayRef, BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray,
-            Int32Array, Int64Array, LargeBinaryArray, StringArray, StringViewArray,
-            StructArray, UInt64Array,
+            Array, ArrayRef, BinaryArray, BinaryViewArray, BinaryViewBuilder,
+            BooleanArray, Decimal128Array, Int32Array, Int64Array, LargeBinaryArray,
+            StringArray, StringViewArray, StructArray, UInt64Array,
         },
         datatypes::TimeUnit,
     };
