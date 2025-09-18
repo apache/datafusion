@@ -43,13 +43,6 @@ pub const TIMEZONE_WILDCARD: &str = "+TZ";
 /// valid length. It exists to avoid the need to enumerate all possible fixed size list lengths.
 pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
 
-/// Constant that is used as a placeholder for any valid fixed size binary.
-/// This is used where a function can accept a fixed size binary type with any
-/// valid length. It exists to avoid the need to enumerate all possible fixed size binary lengths.
-///
-/// The value is offset by 1 to make it distinct from [`FIXED_SIZE_LIST_WILDCARD`].
-pub const FIXED_SIZE_BINARY_WILDCARD: i32 = i32::MIN + 1;
-
 /// How a function's output changes with respect to a fixed input
 ///
 /// The volatility of a function determines eligibility for certain

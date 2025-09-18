@@ -32,10 +32,7 @@ use datafusion_common::{
 use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
-    signature::{
-        ArrayFunctionSignature, FIXED_SIZE_BINARY_WILDCARD, FIXED_SIZE_LIST_WILDCARD,
-        TIMEZONE_WILDCARD,
-    },
+    signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
     type_coercion::binary::comparison_coercion_numeric,
     type_coercion::binary::string_coercion,
 };
@@ -918,10 +915,6 @@ fn coerced_from<'a>(
             Some(_) => Some(FixedSizeList(Arc::clone(f_into), *size_from)),
             _ => None,
         },
-        // should be able to coerce wildcard fixed size binary to non wildcard fixed size binary
-        (FixedSizeBinary(FIXED_SIZE_BINARY_WILDCARD), FixedSizeBinary(size_from)) => {
-            Some(FixedSizeBinary(*size_from))
-        }
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {
@@ -1389,35 +1382,6 @@ mod tests {
                 DataType::new_list(DataType::Int64, false),
             ]]
         );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_fixed_binary_wildcard_coerce() -> Result<()> {
-        let current_types = vec![
-            DataType::FixedSizeBinary(2), // able to coerce for any size
-        ];
-
-        let signature = Signature::exact(
-            vec![DataType::FixedSizeBinary(FIXED_SIZE_BINARY_WILDCARD)],
-            Volatility::Stable,
-        );
-
-        let coerced_data_types = data_types("test", &current_types, &signature)?;
-        assert_eq!(coerced_data_types, current_types);
-
-        // make sure it can't coerce to a different size
-        let signature =
-            Signature::exact(vec![DataType::FixedSizeBinary(3)], Volatility::Stable);
-        let coerced_data_types = data_types("test", &current_types, &signature);
-        assert!(coerced_data_types.is_err());
-
-        // make sure it works with the same type.
-        let signature =
-            Signature::exact(vec![DataType::FixedSizeBinary(2)], Volatility::Stable);
-        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
-        assert_eq!(coerced_data_types, current_types);
 
         Ok(())
     }
