@@ -104,7 +104,7 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
 
     // Verify the actual content of the data
     // Since we don't know the exact order of rows, just verify the overall structure
-    
+
     // Check that all batches have nulls in the correct places
     let mut null_count_col3 = 0;
     let mut null_count_col4 = 0;
@@ -112,7 +112,7 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
     let mut non_null_count_col3 = 0;
     let mut non_null_count_col4 = 0;
     let mut non_null_count_col5 = 0;
-    
+
     for batch in &results {
         // Count nulls and non-nulls for columns 3-5 (platform_number, direction, stop_sequence)
         for i in 0..batch.num_rows() {
@@ -121,13 +121,13 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
             } else {
                 non_null_count_col3 += 1;
             }
-            
+
             if batch.column(4).is_null(i) {
                 null_count_col4 += 1;
             } else {
                 non_null_count_col4 += 1;
             }
-            
+
             if batch.column(5).is_null(i) {
                 null_count_col5 += 1;
             } else {
@@ -135,15 +135,33 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
             }
         }
     }
-    
+
     // Verify that we have the expected pattern:
     // 3 rows with nulls (from file1) and 3 rows with non-nulls (from file2)
-    assert_eq!(null_count_col3, 3, "Should have 3 null values in platform_number column");
-    assert_eq!(non_null_count_col3, 3, "Should have 3 non-null values in platform_number column");
-    assert_eq!(null_count_col4, 3, "Should have 3 null values in direction column");
-    assert_eq!(non_null_count_col4, 3, "Should have 3 non-null values in direction column");
-    assert_eq!(null_count_col5, 3, "Should have 3 null values in stop_sequence column");
-    assert_eq!(non_null_count_col5, 3, "Should have 3 non-null values in stop_sequence column");
+    assert_eq!(
+        null_count_col3, 3,
+        "Should have 3 null values in platform_number column"
+    );
+    assert_eq!(
+        non_null_count_col3, 3,
+        "Should have 3 non-null values in platform_number column"
+    );
+    assert_eq!(
+        null_count_col4, 3,
+        "Should have 3 null values in direction column"
+    );
+    assert_eq!(
+        non_null_count_col4, 3,
+        "Should have 3 non-null values in direction column"
+    );
+    assert_eq!(
+        null_count_col5, 3,
+        "Should have 3 null values in stop_sequence column"
+    );
+    assert_eq!(
+        non_null_count_col5, 3,
+        "Should have 3 non-null values in stop_sequence column"
+    );
 
     Ok(())
 }
