@@ -375,9 +375,17 @@ pub(crate) fn window_equivalence_properties(
         // variations for them. Then, we will check each one whether it satisfies
         // the existing ordering provided by the input plan.
         let mut all_satisfied_lexs = vec![];
+        // TODO ok_to_trigger_exponential_planning_time_limit is a workaround for https://github.com/apache/datafusion/issues/17624
+        let mut ok_to_trigger_exponential_planning_time_limit = 4;
         for lex in partitioning_exprs
             .iter()
-            .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)))
+            .map(|pb_order| {
+                ok_to_trigger_exponential_planning_time_limit -= 1;
+                sort_options_resolving_constant(
+                    Arc::clone(pb_order),
+                    ok_to_trigger_exponential_planning_time_limit >= 0,
+                )
+            })
             .multi_cartesian_product()
             .filter_map(LexOrdering::new)
         {
@@ -409,9 +417,14 @@ pub(crate) fn window_equivalence_properties(
                 } else {
                     // Window function results in a partial constant value in
                     // some ordering. Adjust the ordering equivalences accordingly:
+                    // TODO ok_to_trigger_exponential_planning_time_limit is a workaround for https://github.com/apache/datafusion/issues/17624
+                    let mut ok_to_trigger_exponential_planning_time_limit = 4;
                     let new_lexs = all_satisfied_lexs.into_iter().flat_map(|lex| {
-                        let new_partial_consts =
-                            sort_options_resolving_constant(Arc::clone(&window_col));
+                        ok_to_trigger_exponential_planning_time_limit -= 1;
+                        let new_partial_consts = sort_options_resolving_constant(
+                            Arc::clone(&window_col),
+                            ok_to_trigger_exponential_planning_time_limit >= 0,
+                        );
 
                         new_partial_consts.into_iter().map(move |partial| {
                             let mut existing = lex.clone();
@@ -467,11 +480,19 @@ pub(crate) fn window_equivalence_properties(
                 // utilize set-monotonicity since the set shrinks as the frame
                 // boundary starts "touching" the end of the table.
                 else if frame.is_causal() {
+                    // TODO ok_to_trigger_exponential_planning_time_limit is a workaround for https://github.com/apache/datafusion/issues/17624
+                    let mut ok_to_trigger_exponential_planning_time_limit = 4;
                     let args_all_lexs = sliding_expr
                         .get_aggregate_expr()
                         .expressions()
                         .into_iter()
-                        .map(sort_options_resolving_constant)
+                        .map(|expr| {
+                            ok_to_trigger_exponential_planning_time_limit -= 1;
+                            sort_options_resolving_constant(
+                                expr,
+                                ok_to_trigger_exponential_planning_time_limit >= 0,
+                            )
+                        })
                         .multi_cartesian_product();
 
                     let (mut asc, mut satisfied) = (false, false);
@@ -634,12 +655,22 @@ pub fn get_window_mode(
     Ok(None)
 }
 
-fn sort_options_resolving_constant(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
-    vec![
-        // TODO (https://github.com/apache/datafusion/issues/17624) restore while avoiding exponential planning time
-        //   PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
-        PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
-    ]
+fn sort_options_resolving_constant(
+    expr: Arc<dyn PhysicalExpr>,
+    ok_to_trigger_exponential_planning_time: bool,
+) -> Vec<PhysicalSortExpr> {
+    if ok_to_trigger_exponential_planning_time {
+        vec![
+            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
+            PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
+        ]
+    } else {
+        vec![
+            // TODO (https://github.com/apache/datafusion/issues/17624) restore while avoiding exponential planning time
+            //   PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
+            PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
+        ]
+    }
 }
 
 #[cfg(test)]
