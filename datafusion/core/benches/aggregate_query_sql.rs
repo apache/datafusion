@@ -153,6 +153,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("aggregate_query_group_by_wide_u64_and_string_without_aggregate_expressions", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                // Due to the large number of distinct values in u64_wide,
+                // this query test the actual grouping performance for more than 1 column
+                "SELECT u64_wide, utf8 \
+                 FROM t GROUP BY u64_wide, utf8",
+            )
+        })
+    });
+
     c.bench_function("aggregate_query_approx_percentile_cont_on_u64", |b| {
         b.iter(|| {
             query(
