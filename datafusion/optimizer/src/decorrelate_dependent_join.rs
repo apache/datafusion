@@ -17,13 +17,14 @@
 
 //! [`DependentJoinRewriter`] converts correlated subqueries to `DependentJoin`
 
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::rewrite_dependent_join::DependentJoinRewriter;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_datafusion_err, internal_err, Column, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, Column, HashSet, Result};
 use datafusion_expr::expr::{
     self, Exists, InSubquery, WindowFunction, WindowFunctionParams,
 };
@@ -555,26 +556,28 @@ impl DependentJoinDecorrelator {
         plan: LogicalPlan,
     ) -> Result<LogicalPlan> {
         // TODO: not sure if rewrite should stop once found replacement expr
-        plan.transform_down(|p| {
+        // if a expr found in projection has been rewritten
+        // then the upper expr no longer needs to be transformed
+        plan.transform_up(|p| {
             if let LogicalPlan::DependentJoin(_) = &p {
                 return internal_err!(
                     "calling rewrite_correlated_exprs while some of \
                     the plan is still dependent join plan"
                 );
             }
-            if let LogicalPlan::Projection(_proj) = &p {
-                p.map_expressions(|e| {
-                    e.transform(|e| {
-                        if let Some(to_replace) = replacement.get(&e.to_string()) {
-                            Ok(Transformed::yes(to_replace.clone()))
-                        } else {
-                            Ok(Transformed::no(e))
-                        }
+            match &p {
+                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => {
+                    p.map_expressions(|e| {
+                        e.transform(|e| {
+                            if let Some(to_replace) = replacement.get(&e.to_string()) {
+                                return Ok(Transformed::yes(to_replace.clone()));
+                            }
+
+                            return Ok(Transformed::no(e));
+                        })
                     })
-                })
-            } else {
-                Ok(Transformed::no(p))
-                // unimplemented!()
+                }
+                _ => Ok(Transformed::no(p)),
             }
         })?
         .data
@@ -738,7 +741,7 @@ impl DependentJoinDecorrelator {
                         aggr_expr,
                         input,
                         ..
-                    }) = new_plan
+                    }) = &new_plan
                     {
                         (group_expr.clone(), aggr_expr.clone(), input.clone())
                     } else {
@@ -822,11 +825,17 @@ impl DependentJoinDecorrelator {
                                 if func.name() == "count" {
                                     let expr_name = agg_expr.to_string();
                                     let expr_to_replace =
-                                        when(agg_expr.clone().is_null(), lit(0))
-                                            .otherwise(agg_expr.clone())?;
-                                    // Have to replace this expr with CASE exr.
-                                    self.replacement_map
-                                        .insert(expr_name, expr_to_replace);
+                                        when(col(&expr_name).is_null(), lit(0))
+                                            .otherwise(col(&expr_name))?;
+                                    // type_coerce to ensure int-typed exprs are correct
+                                    let mut expr_rewrite = TypeCoercionRewriter {
+                                        schema: new_plan.schema(),
+                                    };
+                                    let typed_expr =
+                                        expr_to_replace.rewrite(&mut expr_rewrite)?.data;
+                                    // any above expr which reference this count(1) will be replaced by "case"
+                                    self.replacement_map.insert(expr_name, typed_expr);
+
                                     continue;
                                 }
                             }
@@ -843,7 +852,8 @@ impl DependentJoinDecorrelator {
 
                     let right = LogicalPlanBuilder::new(LogicalPlan::Aggregate(new_agg))
                         // TODO: a hack to ensure aggregated expr are ordered first in the output
-                        .project(agg_output_cols.rev())?
+                        // Check if we can remove this logic now
+                        // .project(agg_output_cols.rev())?
                         .build()?;
                     natural_join(
                         LogicalPlanBuilder::new(dscan),
@@ -1505,7 +1515,7 @@ impl OptimizerRule for DecorrelateDependentJoin {
             let mut decorrelator = DependentJoinDecorrelator::new_root();
             let ret = decorrelator.decorrelate(&rewrite_result.data, true, 0)?;
 
-            // println!("{}", ret.display_indent_schema());
+            println!("{}", ret.display_indent_schema());
             return Ok(Transformed::yes(ret));
             // return Ok(Transformed::yes(decorrelator.decorrelate(
             //     &rewrite_result.data,
