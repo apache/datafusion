@@ -131,7 +131,5 @@ impl ScalarUDFImpl for RepartitionHash {
     }
 }
 
-/// RandomState used by RepartitionExec for consistent hash partitioning
-/// This must match the seeds used in RepartitionExec to ensure our hash-based
-/// filter expressions compute the same partition assignments as the actual partitioning
+/// RandomState used for consistent hash partitioning
 const REPARTITION_RANDOM_STATE: RandomState = RandomState::with_seeds(0, 0, 0, 0);
