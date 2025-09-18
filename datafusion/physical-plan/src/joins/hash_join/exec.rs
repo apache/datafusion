@@ -97,6 +97,11 @@ fn dynamic_filter_pushdown_side(join_type: JoinType) -> JoinSide {
         (true, false) => Right,
         (false, true) => Left,
         (false, false) => match join_type {
+            // Semi/anti joins do not preserve the build-side rows, but we still
+            // want dynamic filters that reference those rows to run there.  By
+            // keeping them on the non-preserving side we avoid pushing the
+            // filter to the opposite input and incorrectly filtering the
+            // non-preserved (outer) rows instead.
             JoinType::LeftSemi | JoinType::LeftAnti => Left,
             JoinType::RightSemi | JoinType::RightAnti => Right,
             _ => Right,
