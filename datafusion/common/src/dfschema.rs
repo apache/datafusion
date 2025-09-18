@@ -1083,6 +1083,12 @@ impl From<&DFSchema> for Schema {
     }
 }
 
+impl From<DFSchema> for SchemaRef {
+    fn from(df_schema: DFSchema) -> Self {
+        SchemaRef::new(df_schema.into())
+    }
+}
+
 /// Allow DFSchema to be converted into an Arrow `&Schema`
 impl AsRef<Schema> for DFSchema {
     fn as_ref(&self) -> &Schema {
@@ -1117,12 +1123,6 @@ impl TryFrom<SchemaRef> for DFSchema {
         };
         dfschema.check_names()?;
         Ok(dfschema)
-    }
-}
-
-impl From<DFSchema> for SchemaRef {
-    fn from(df_schema: DFSchema) -> Self {
-        SchemaRef::new(df_schema.into())
     }
 }
 
