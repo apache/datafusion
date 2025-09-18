@@ -183,14 +183,18 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
         // For example, [DataFusion Comet](https://github.com/apache/datafusion-comet) has a [custom cast kernel](https://github.com/apache/datafusion-comet/blob/b4ac876ab420ed403ac7fc8e1b29f42f1f442566/native/spark-expr/src/conversion_funcs/cast.rs#L133-L138).
         expr.transform(|expr| {
             if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
-                let input_data_type = cast.expr().data_type(&self.physical_file_schema)?;
+                let input_data_type =
+                    cast.expr().data_type(&self.physical_file_schema)?;
                 let output_data_type = cast.data_type(&self.physical_file_schema)?;
                 if !cast.is_bigger_cast(&input_data_type) {
-                    return not_impl_err!("Unsupported CAST from {input_data_type:?} to {output_data_type:?}")
+                    return not_impl_err!(
+                        "Unsupported CAST from {input_data_type} to {output_data_type}"
+                    );
                 }
             }
             Ok(Transformed::no(expr))
-        }).data()
+        })
+        .data()
     }
 
     fn with_partition_values(

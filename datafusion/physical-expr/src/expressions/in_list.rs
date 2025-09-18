@@ -470,6 +470,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use itertools::Itertools as _;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 
@@ -488,7 +489,8 @@ mod tests {
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
             None => plan_err!(
-                "Can not find compatible types to compare {expr_type:?} with {list_types:?}"
+                "Can not find compatible types to compare {expr_type} with [{}]",
+                list_types.iter().join(", ")
             ),
             Some(data_type) => {
                 // find the coerced type

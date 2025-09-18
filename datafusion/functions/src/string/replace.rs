@@ -145,7 +145,7 @@ impl ScalarUDFImpl for ReplaceFunc {
             }
         } else {
             exec_err!(
-                "Unsupported data type {:?}, {:?}, {:?} for function replace.",
+                "Unsupported data type {}, {:?}, {:?} for function replace.",
                 data_types[0],
                 data_types[1],
                 data_types[2]

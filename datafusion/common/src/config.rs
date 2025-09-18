@@ -566,6 +566,14 @@ config_namespace! {
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
+        /// (reading) The maximum predicate cache size, in bytes. When
+        /// `pushdown_filters` is enabled, sets the maximum memory used to cache
+        /// the results of predicate evaluation between filter evaluation and
+        /// output generation. Decreasing this value will reduce memory usage,
+        /// but may increase IO and CPU usage. None means use the default
+        /// parquet reader setting. 0 means no caching.
+        pub max_predicate_cache_size: Option<usize>, default = None
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -2690,9 +2698,11 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "parquet")]
+    use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions, TableParquetOptions,
+        Extensions, TableOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;

@@ -477,7 +477,7 @@ mod test {
     ) -> DFSchema {
         let fields = fields
             .iter()
-            .map(|f| Arc::new(Field::new(f.to_string(), DataType::Int8, false)))
+            .map(|f| Arc::new(Field::new((*f).to_string(), DataType::Int8, false)))
             .collect::<Vec<_>>();
         let schema = Arc::new(Schema::new(fields));
         DFSchema::from_field_specific_qualified_schema(qualifiers, &schema).unwrap()
