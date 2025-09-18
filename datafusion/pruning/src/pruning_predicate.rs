@@ -966,6 +966,9 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     })
 }
 
+/// Preprocesses `BinaryViewArray` statistics so that invalid UTF-8 sequences are
+/// converted to nulls before the array is cast to UTF-8 strings.
+/// Binary arrays with other storage representations are returned unchanged.
 fn sanitize_binary_array_for_utf8(array: ArrayRef) -> ArrayRef {
     match array.data_type() {
         DataType::BinaryView => {
