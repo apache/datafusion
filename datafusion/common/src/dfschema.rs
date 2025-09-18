@@ -1070,16 +1070,14 @@ fn format_simple_data_type(data_type: &DataType) -> String {
 impl From<DFSchema> for Schema {
     /// Convert DFSchema into a Schema
     fn from(df_schema: DFSchema) -> Self {
-        let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
+        (&df_schema).into()
     }
 }
 
 impl From<&DFSchema> for Schema {
     /// Convert DFSchema reference into a Schema
     fn from(df_schema: &DFSchema) -> Self {
-        let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
+        df_schema.as_arrow().clone()
     }
 }
 
