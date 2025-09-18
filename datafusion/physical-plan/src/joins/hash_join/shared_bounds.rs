@@ -386,7 +386,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_boolean_array;
-    use datafusion_expr::ColumnarValue;
     use std::sync::Arc;
 
     #[test]
@@ -486,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_bounds_returns_true() -> Result<()> {
+    fn test_empty_bounds() -> Result<()> {
         let on_right = vec![Arc::new(datafusion_physical_expr::expressions::Column::new(
             "col1", 0,
         )) as Arc<dyn PhysicalExpr>];
@@ -508,24 +507,9 @@ mod tests {
         };
 
         // Test with empty bounds
-        let filter = accumulator
-            .create_optimized_filter_from_partition_bounds(&HashMap::new())?
-            .unwrap();
-
-        // Should return a literal true
-        let schema = Schema::new(vec![Field::new("col1", DataType::Int32, false)]);
-        let test_batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )?;
-
-        let result = filter.evaluate(&test_batch)?;
-        match result {
-            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {
-                // Expected: literal true
-            }
-            _ => panic!("Expected scalar true for empty bounds"),
-        }
+        let res =
+            accumulator.create_optimized_filter_from_partition_bounds(&HashMap::new())?;
+        assert!(res.is_none(), "Expected None for empty bounds");
 
         Ok(())
     }
