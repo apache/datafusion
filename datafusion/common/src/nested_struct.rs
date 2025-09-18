@@ -185,11 +185,12 @@ pub fn cast_column(
     }
 }
 
-/// Preprocesses `BinaryViewArray` statistics so that invalid UTF-8 sequences are
-/// converted to nulls before casting to a UTF-8 string array.
+/// Sanitizes a `BinaryView` array so that any element containing invalid UTF-8
+/// is converted to null before casting to a UTF-8 string array.
 ///
-/// Other binary array representations are returned unchanged as Arrow's safe
-/// casts already convert invalid UTF-8 sequences to null.
+/// This only transforms the array's values (not any external statistics). Other
+/// binary array representations are returned unchanged because Arrow's safe
+/// casts already convert invalid UTF-8 sequences to null for those types.
 pub fn sanitize_binary_array_for_utf8(array: ArrayRef) -> ArrayRef {
     match array.data_type() {
         DataType::BinaryView => {
