@@ -31,7 +31,7 @@ use crate::dml::CopyTo;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{Column, DFSchema, DataFusionError};
 use serde_json::json;
 
 /// Formats plans with a single line per node. For example:
@@ -72,11 +72,7 @@ impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         write!(self.f, "{}", plan.display())?;
         if self.with_schema {
-            write!(
-                self.f,
-                " {}",
-                display_schema(&plan.schema().as_ref().to_owned().into())
-            )?;
+            write!(self.f, " {}", display_df_schema(&plan.schema().as_ref()))?;
         }
 
         self.indent += 1;
@@ -92,7 +88,7 @@ impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
     }
 }
 
-/// Print the schema in a compact representation to `buf`
+/// Print the schema in a compact representation
 ///
 /// For example: `foo:Utf8` if `foo` can not be null, and
 /// `foo:Utf8;N` if `foo` is nullable.
@@ -124,6 +120,38 @@ pub fn display_schema(schema: &Schema) -> impl fmt::Display + '_ {
                 write!(
                     f,
                     "{}:{:?}{}",
+                    field.name(),
+                    field.data_type(),
+                    nullable_str
+                )?;
+            }
+            write!(f, "]")
+        }
+    }
+    Wrapper(schema)
+}
+
+/// Print the schema in a compact representation.
+/// Similar to `display_schema`, but includes field qualifiers if any.
+pub fn display_df_schema(schema: &DFSchema) -> impl fmt::Display + '_ {
+    struct Wrapper<'a>(&'a DFSchema);
+
+    impl fmt::Display for Wrapper<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "[")?;
+            for (idx, (qualifier, field)) in self.0.iter().enumerate() {
+                if idx > 0 {
+                    write!(f, ", ")?;
+                }
+                let nullable_str = if field.is_nullable() { ";N" } else { "" };
+                write!(
+                    f,
+                    "{}{}:{:?}{}",
+                    if let Some(q) = qualifier {
+                        format!("{q}.")
+                    } else {
+                        "".to_string()
+                    },
                     field.name(),
                     field.data_type(),
                     nullable_str
