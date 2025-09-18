@@ -427,6 +427,12 @@ impl ParquetSource {
         self.table_parquet_options.global.bloom_filter_on_read
     }
 
+    /// Return the maximum predicate cache size, in bytes, used when
+    /// `pushdown_filters`
+    pub fn max_predicate_cache_size(&self) -> Option<usize> {
+        self.table_parquet_options.global.max_predicate_cache_size
+    }
+
     /// Applies schema adapter factory from the FileScanConfig if present.
     ///
     /// # Arguments
@@ -583,6 +589,7 @@ impl FileSource for ParquetSource {
             expr_adapter_factory,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
+            max_predicate_cache_size: self.max_predicate_cache_size(),
         })
     }
 
