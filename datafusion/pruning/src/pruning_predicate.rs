@@ -22,7 +22,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, BinaryViewArray, BinaryViewBuilder};
+use arrow::array::{Array, AsArray};
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -41,6 +41,9 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
     Column, DFSchema, ScalarValue,
 };
+
+#[cfg(test)]
+use datafusion_common::nested_struct::sanitize_binary_array_for_utf8;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
@@ -916,8 +919,7 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
             StatisticsType::NullCount => statistics.null_counts(&column),
             StatisticsType::RowCount => statistics.row_counts(&column),
         };
-        let mut array =
-            array.unwrap_or_else(|| new_null_array(data_type, num_containers));
+        let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
         if num_containers != array.len() {
             return internal_err!(
@@ -937,12 +939,6 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
             array.data_type(),
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView
         );
-        let is_binary_view = matches!(array.data_type(), DataType::BinaryView);
-
-        if is_string && is_binary_view {
-            array = sanitize_binary_array_for_utf8(array);
-        }
-
         let mut cast_options = DEFAULT_CAST_OPTIONS;
         if is_string && is_binary {
             // Use safe casting so that any invalid UTF8 bytes are converted to NULL
@@ -965,39 +961,6 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
         plan_datafusion_err!("Can not create statistics record batch: {err}")
     })
-}
-
-/// Preprocesses `BinaryViewArray` statistics so that invalid UTF-8 sequences are
-/// converted to nulls before the array is cast to UTF-8 strings.
-/// Binary arrays with other storage representations are returned unchanged.
-fn sanitize_binary_array_for_utf8(array: ArrayRef) -> ArrayRef {
-    match array.data_type() {
-        DataType::BinaryView => {
-            let binary_view: &BinaryViewArray = array.as_binary_view();
-
-            let has_invalid_bytes = binary_view.iter().any(
-                |value| matches!(value, Some(bytes) if str::from_utf8(bytes).is_err()),
-            );
-
-            if !has_invalid_bytes {
-                return array;
-            }
-
-            let mut builder = BinaryViewBuilder::with_capacity(binary_view.len());
-
-            for value in binary_view.iter() {
-                match value {
-                    Some(bytes) if str::from_utf8(bytes).is_ok() => {
-                        builder.append_value(bytes)
-                    }
-                    _ => builder.append_null(),
-                }
-            }
-
-            Arc::new(builder.finish()) as ArrayRef
-        }
-        _ => array,
-    }
 }
 
 struct PruningExpressionBuilder<'a> {
@@ -1928,8 +1891,9 @@ mod tests {
     use arrow::array::{Array, Decimal128Array};
     use arrow::{
         array::{
-            ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Int32Array, Int64Array,
-            LargeBinaryArray, StringArray, StringViewArray, StructArray, UInt64Array,
+            ArrayRef, BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray,
+            Int32Array, Int64Array, LargeBinaryArray, StringArray, StringViewArray,
+            StructArray, UInt64Array,
         },
         datatypes::TimeUnit,
     };
@@ -2862,6 +2826,95 @@ mod tests {
             column.is_null(0),
             "Invalid UTF-8 should be converted to null with safe casting"
         );
+    }
+
+    #[test]
+    fn test_build_statistics_nested_invalid_utf8_safe_cast() {
+        fn run_case(binary_array: ArrayRef, binary_data_type: DataType, case_name: &str) {
+            let num_containers = binary_array.len();
+
+            let label_source_field =
+                Arc::new(Field::new("label", binary_data_type, true));
+            let label_target_field = Arc::new(Field::new("label", DataType::Utf8, true));
+            let nested_source_field = Arc::new(Field::new(
+                "nested",
+                DataType::Struct(vec![label_source_field.as_ref().clone()].into()),
+                true,
+            ));
+            let nested_target_field = Arc::new(Field::new(
+                "nested",
+                DataType::Struct(vec![label_target_field.as_ref().clone()].into()),
+                true,
+            ));
+            let target_struct_type =
+                DataType::Struct(vec![nested_target_field.as_ref().clone()].into());
+
+            let nested_values: ArrayRef = Arc::new(StructArray::from(vec![(
+                Arc::clone(&label_source_field),
+                Arc::clone(&binary_array),
+            )]));
+            let struct_min: ArrayRef = Arc::new(StructArray::from(vec![(
+                Arc::clone(&nested_source_field),
+                Arc::clone(&nested_values),
+            )]));
+
+            let required_columns = RequiredColumns::from(vec![(
+                phys_expr::Column::new("struct_col", 0),
+                StatisticsType::Min,
+                Field::new("struct_col_min", target_struct_type.clone(), true),
+            )]);
+
+            let statistics = OneContainerStats {
+                min_values: Some(struct_min),
+                max_values: None,
+                num_containers,
+            };
+
+            let batch =
+                build_statistics_record_batch(&statistics, &required_columns).unwrap();
+
+            assert_eq!(batch.num_columns(), 1, "{case_name}: expected one column");
+            assert_eq!(batch.num_rows(), num_containers);
+
+            let struct_array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("StructArray");
+            assert_eq!(struct_array.data_type(), &target_struct_type);
+
+            let nested_array = struct_array
+                .column(0)
+                .as_ref()
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("nested StructArray");
+            let label_array = nested_array
+                .column(0)
+                .as_ref()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("StringArray");
+
+            assert!(
+                label_array.is_null(0),
+                "{case_name}: invalid UTF-8 should cast to NULL",
+            );
+            assert!(label_array.is_valid(1));
+            assert_eq!(label_array.value(1), "valid");
+        }
+
+        let binary_array: ArrayRef = Arc::new(BinaryArray::from(vec![
+            Some(&[0xFFu8][..]),
+            Some(b"valid".as_slice()),
+        ]));
+        run_case(binary_array, DataType::Binary, "BinaryArray");
+
+        let mut builder = BinaryViewBuilder::with_capacity(2);
+        builder.append_value(&[0xFF]);
+        builder.append_value(b"valid");
+        let binary_view_array: ArrayRef = Arc::new(builder.finish());
+        run_case(binary_view_array, DataType::BinaryView, "BinaryViewArray");
     }
 
     #[test]

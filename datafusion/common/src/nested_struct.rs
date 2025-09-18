@@ -17,11 +17,13 @@
 
 use crate::error::{Result, _plan_err};
 use arrow::{
-    array::{new_null_array, Array, ArrayRef, StructArray},
+    array::{
+        new_null_array, Array, ArrayRef, AsArray as _, BinaryViewBuilder, StructArray,
+    },
     compute::{cast_with_options, CastOptions},
-    datatypes::{DataType::Struct, Field, FieldRef},
+    datatypes::{DataType, Field, FieldRef},
 };
-use std::sync::Arc;
+use std::{str, sync::Arc};
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
@@ -151,14 +153,71 @@ pub fn cast_column(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     match target_field.data_type() {
-        Struct(target_fields) => {
+        DataType::Struct(target_fields) => {
             cast_struct_column(source_col, target_fields, cast_options)
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            let mut options = cast_options.clone();
+            let mut source: ArrayRef = Arc::clone(source_col);
+
+            if matches!(
+                source_col.data_type(),
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+            ) {
+                options.safe = true;
+
+                if matches!(source_col.data_type(), DataType::BinaryView) {
+                    source = sanitize_binary_array_for_utf8(source);
+                }
+            }
+
+            Ok(cast_with_options(
+                &source,
+                target_field.data_type(),
+                &options,
+            )?)
         }
         _ => Ok(cast_with_options(
             source_col,
             target_field.data_type(),
             cast_options,
         )?),
+    }
+}
+
+/// Preprocesses `BinaryViewArray` statistics so that invalid UTF-8 sequences are
+/// converted to nulls before casting to a UTF-8 string array.
+///
+/// Other binary array representations are returned unchanged as Arrow's safe
+/// casts already convert invalid UTF-8 sequences to null.
+pub fn sanitize_binary_array_for_utf8(array: ArrayRef) -> ArrayRef {
+    match array.data_type() {
+        DataType::BinaryView => {
+            let binary_view = array.as_binary_view();
+
+            // Check if all bytes are already valid UTF-8
+            let has_invalid_bytes = binary_view.iter().any(
+                |value| matches!(value, Some(bytes) if str::from_utf8(bytes).is_err()),
+            );
+
+            if !has_invalid_bytes {
+                return array;
+            }
+
+            let mut builder = BinaryViewBuilder::with_capacity(binary_view.len());
+
+            for value in binary_view.iter() {
+                match value {
+                    Some(bytes) if str::from_utf8(bytes).is_ok() => {
+                        builder.append_value(bytes)
+                    }
+                    _ => builder.append_null(),
+                }
+            }
+
+            Arc::new(builder.finish()) as ArrayRef
+        }
+        _ => array,
     }
 }
 
@@ -220,7 +279,7 @@ pub fn validate_struct_compatibility(
             // Check if the matching field types are compatible
             match (source_field.data_type(), target_field.data_type()) {
                 // Recursively validate nested structs
-                (Struct(source_nested), Struct(target_nested)) => {
+                (DataType::Struct(source_nested), DataType::Struct(target_nested)) => {
                     validate_struct_compatibility(source_nested, target_nested)?;
                 }
                 // For non-struct types, use the existing castability check
@@ -284,7 +343,7 @@ mod tests {
     }
 
     fn struct_type(fields: Vec<Field>) -> DataType {
-        Struct(fields.into())
+        DataType::Struct(fields.into())
     }
 
     fn struct_field(name: &str, fields: Vec<Field>) -> Field {
