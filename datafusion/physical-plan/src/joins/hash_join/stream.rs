@@ -238,6 +238,8 @@ pub(super) struct HashJoinStream {
     filter: Option<JoinFilter>,
     /// type of the join (left, right, semi, etc)
     join_type: JoinType,
+    /// Preferred input side for dynamic filter installation
+    dynamic_filter_side: JoinSide,
     /// right (probe) input
     right: SendableRecordBatchStream,
     /// Random state used for hashing initialization
@@ -360,6 +362,7 @@ impl HashJoinStream {
         on_right: Vec<PhysicalExprRef>,
         filter: Option<JoinFilter>,
         join_type: JoinType,
+        dynamic_filter_side: JoinSide,
         right: SendableRecordBatchStream,
         random_state: RandomState,
         join_metrics: BuildProbeJoinMetrics,
@@ -380,6 +383,7 @@ impl HashJoinStream {
             on_right,
             filter,
             join_type,
+            dynamic_filter_side,
             right,
             random_state,
             join_metrics,
@@ -469,7 +473,7 @@ impl HashJoinStream {
         // Dynamic filter coordination between partitions:
         // Report bounds to the accumulator which will handle synchronization and filter updates
         if let Some(ref bounds_accumulator) = self.bounds_accumulator {
-            if self.join_type.dynamic_filter_side() == JoinSide::Right {
+            if self.dynamic_filter_side == JoinSide::Right {
                 let bounds_accumulator = Arc::clone(bounds_accumulator);
 
                 let left_side_partition_id = match self.mode {
@@ -508,7 +512,7 @@ impl HashJoinStream {
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
                 if let Some(ref bounds_accumulator) = self.bounds_accumulator {
-                    if self.join_type.dynamic_filter_side() == JoinSide::Left {
+                    if self.dynamic_filter_side == JoinSide::Left {
                         if let Some(accs) = self.probe_bounds_accumulators.take() {
                             let right_bounds = if self.probe_side_row_count > 0 {
                                 Some(

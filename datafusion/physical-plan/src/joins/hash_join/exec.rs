@@ -86,6 +86,24 @@ use parking_lot::Mutex;
 const HASH_JOIN_SEED: RandomState =
     RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
+fn dynamic_filter_pushdown_side(join_type: JoinType) -> JoinSide {
+    use JoinSide::*;
+
+    let preserves_left = join_type.preserves_left();
+    let preserves_right = join_type.preserves_right();
+
+    match (preserves_left, preserves_right) {
+        (true, true) => None,
+        (true, false) => Right,
+        (false, true) => Left,
+        (false, false) => match join_type {
+            JoinType::LeftSemi | JoinType::LeftAnti => Left,
+            JoinType::RightSemi | JoinType::RightAnti => Right,
+            _ => Right,
+        },
+    }
+}
+
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
@@ -494,6 +512,11 @@ impl HashJoinExec {
     /// right (probe) side which are filtered by the hash table
     pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
         &self.right
+    }
+
+    /// Preferred input side for installing a dynamic filter.
+    pub fn dynamic_filter_side(&self) -> JoinSide {
+        dynamic_filter_pushdown_side(self.join_type)
     }
 
     /// Set of common columns used to join on
@@ -927,7 +950,7 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
-        let df_side = self.join_type.dynamic_filter_side();
+        let df_side = self.dynamic_filter_side();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
@@ -1042,6 +1065,7 @@ impl ExecutionPlan for HashJoinExec {
             on_right,
             self.filter.clone(),
             self.join_type,
+            df_side,
             right_stream,
             self.random_state.clone(),
             join_metrics,
@@ -1131,7 +1155,7 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        let df_side = self.join_type.dynamic_filter_side();
+        let df_side = self.dynamic_filter_side();
         self.gather_filters_for_pushdown_with_side(phase, parent_filters, config, df_side)
     }
 
@@ -1141,7 +1165,7 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        let df_side = self.join_type.dynamic_filter_side();
+        let df_side = self.dynamic_filter_side();
         self.handle_child_pushdown_result_with_side(
             phase,
             child_pushdown_result,
@@ -1680,7 +1704,7 @@ mod tests {
         #[case] join_type: JoinType,
         #[case] expected_side: JoinSide,
     ) {
-        assert_eq!(join_type.dynamic_filter_side(), expected_side);
+        assert_eq!(dynamic_filter_pushdown_side(join_type), expected_side);
     }
 
     #[test]

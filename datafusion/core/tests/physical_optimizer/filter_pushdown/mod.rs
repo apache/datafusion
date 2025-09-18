@@ -1606,7 +1606,7 @@ fn test_hashjoin_handle_child_pushdown_result_dynamic_filter_left() {
     )
     .unwrap();
 
-    assert_eq!(join.join_type.dynamic_filter_side(), JoinSide::Left);
+    assert_eq!(join.dynamic_filter_side(), JoinSide::Left);
 
     let keys: Vec<_> = on.iter().map(|(l, _)| l.clone()).collect();
     let df_expr = Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true)));
