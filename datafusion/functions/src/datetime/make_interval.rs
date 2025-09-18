@@ -257,7 +257,6 @@ pub fn make_interval_month_day_nano(
     min: i32,
     sec: f64,
 ) -> Result<Option<IntervalMonthDayNano>> {
-    use datafusion_common::DataFusionError;
 
     // checks if overflow
     let months = match year.checked_mul(12).and_then(|v| v.checked_add(month)) {
@@ -290,15 +289,19 @@ pub fn make_interval_month_day_nano(
         }
     }
 
-    let secs_nanos = sec_int
-        .checked_mul(1_000_000_000)
-        .ok_or_else(|| DataFusionError::Execution("overflow summing nanoseconds: (hours+mins)={} + secs_nanos={} exceeds i64 range".into()))?;
+    let secs_nanos = match sec_int.checked_mul(1_000_000_000) {
+        Some(n) => n,
+        None => return Ok(None),
+    };
 
-    let total_nanos = hours_nanos
+    let total_nanos = match hours_nanos
         .checked_add(mins_nanos)
         .and_then(|v| v.checked_add(secs_nanos))
         .and_then(|v| v.checked_add(frac_nanos))
-        .ok_or_else(|| DataFusionError::Execution("overflow summing nanoseconds: (hours+mins+secs)={} + frac_nanos={} exceeds i64 range".into()))?;
+    {
+        Some(n) => n,
+        None => return Ok(None),
+    };
 
     Ok(Some(IntervalMonthDayNano::new(
         months,
