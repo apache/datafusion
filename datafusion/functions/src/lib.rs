@@ -99,7 +99,6 @@ pub mod macros;
 pub mod string;
 make_stub_package!(string, "string_expressions");
 
-pub mod hash;
 
 /// Core datafusion expressions
 /// These are always available and not controlled by a feature flag

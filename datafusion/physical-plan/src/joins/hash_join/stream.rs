@@ -498,7 +498,7 @@ impl HashJoinStream {
         if need_produce_result_in_final(self.join_type) {
             let mut bitmap = build_side.left_data.visited_indices_bitmap().lock();
             left_indices.iter().flatten().for_each(|x| {
-                bitmap.set_bit(x as usize, true);
+                bitmap.set_bit(usize::try_from(x).expect("fits in a usize"), true);
             });
         }
 

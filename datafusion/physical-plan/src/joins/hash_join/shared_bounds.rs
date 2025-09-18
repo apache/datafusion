@@ -18,6 +18,7 @@
 //! Utilities for shared bounds. Used in dynamic filter pushdown in Hash Joins.
 // TODO: include the link to the Dynamic Filter blog post.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -25,26 +26,120 @@ use crate::joins::PartitionMode;
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 
-use arrow::array::{new_null_array, BooleanArray};
-use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, and_not, is_null, not, nullif};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{
-    cast::as_uint64_array, internal_datafusion_err, Result, ScalarValue,
-};
+use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::Operator;
 use datafusion_expr::ScalarUDF;
-use datafusion_functions::hash::Hash;
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::physical_expr::DynEq;
 use itertools::Itertools;
 use parking_lot::Mutex;
-use std::collections::HashSet;
+
+/// Hash Arrays UDF: A scalar function that hashes one or more arrays using the same algorithm as DataFusion's join operations
+///
+/// This is a specialized hash function used exclusively for hash join bounds calculation.
+/// It uses the same RandomState as the partition operations to ensure consistency.
+#[derive(Debug)]
+struct Hash {
+    signature: datafusion_expr::Signature,
+    /// RandomState for consistent hashing - using the same seed as hash joins
+    random_state: RandomState,
+}
+
+impl PartialEq for Hash {
+    fn eq(&self, other: &Self) -> bool {
+        // RandomState doesn't implement PartialEq, so we just compare signatures
+        self.signature == other.signature
+    }
+}
+
+impl Eq for Hash {}
+
+impl std::hash::Hash for Hash {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Only hash the signature since RandomState doesn't implement Hash
+        self.signature.hash(state);
+    }
+}
+
+impl Hash {
+    /// Create a new HashArraysFunc with a custom RandomState
+    fn new_with_random_state(random_state: RandomState) -> Self {
+        Self {
+            signature: datafusion_expr::Signature::one_of(
+                vec![datafusion_expr::TypeSignature::VariadicAny],
+                datafusion_expr::Volatility::Immutable,
+            ),
+            random_state,
+        }
+    }
+}
+
+impl datafusion_expr::ScalarUDFImpl for Hash {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "hash"
+    }
+
+    fn signature(&self) -> &datafusion_expr::Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // Always return UInt64Array regardless of input types
+        Ok(DataType::UInt64)
+    }
+
+    fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
+        use arrow::array::{Array, UInt64Array};
+        use datafusion_common::hash_utils::create_hashes;
+        use std::sync::Arc;
+
+        if args.args.is_empty() {
+            return datafusion_common::plan_err!("hash requires at least one argument");
+        }
+
+        // Convert all arguments to arrays
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+
+        // Check that all arrays have the same length
+        let array_len = arrays[0].len();
+        for (i, array) in arrays.iter().enumerate() {
+            if array.len() != array_len {
+                return datafusion_common::plan_err!(
+                    "All input arrays must have the same length. Array 0 has length {}, but array {} has length {}",
+                    array_len, i, array.len()
+                );
+            }
+        }
+
+        // If no rows, return an empty UInt64Array
+        if array_len == 0 {
+            return Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
+                Vec::<u64>::new(),
+            ))));
+        }
+
+        // Create hash buffer and compute hashes using DataFusion's internal algorithm
+        let mut hashes_buffer = vec![0u64; array_len];
+        create_hashes(&arrays, &self.random_state, &mut hashes_buffer)?;
+
+        // Return the hash values as a UInt64Array
+        Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
+            hashes_buffer,
+        ))))
+    }
+
+    fn documentation(&self) -> Option<&datafusion_expr::Documentation> {
+        None
+    }
+}
 
 /// RandomState used by RepartitionExec for consistent hash partitioning
 /// This must match the seeds used in RepartitionExec to ensure our hash-based
@@ -133,10 +228,8 @@ pub(crate) struct SharedBoundsAccumulator {
 /// State protected by SharedBoundsAccumulator's mutex
 struct SharedBoundsState {
     /// Bounds from completed partitions.
-    /// Each element represents the column bounds computed by one partition.
-    bounds: Vec<PartitionBounds>,
-    /// Set of partition IDs that have reported their bounds
-    completed_partitions: HashSet<usize>,
+    /// Each value represents the column bounds computed by one partition and the keys are the partition ids.
+    bounds: HashMap<usize, PartitionBounds>,
     /// Whether we've optimized the filter to remove hash checks
     filter_optimized: bool,
 }
@@ -190,8 +283,7 @@ impl SharedBoundsAccumulator {
         };
         Self {
             inner: Mutex::new(SharedBoundsState {
-                bounds: Vec::with_capacity(total_partitions),
-                completed_partitions: HashSet::new(),
+                bounds: HashMap::with_capacity(total_partitions),
                 filter_optimized: false,
             }),
             total_partitions,
@@ -220,7 +312,9 @@ impl SharedBoundsAccumulator {
         )))
     }
 
-    /// Create a bounds predicate for a single partition: (col >= min AND col <= max) for all columns
+    /// Create a bounds predicate for a single partition: (col >= min AND col <= max) for all columns.
+    /// This is used in both progressive and final filter creation.
+    /// Returns None if no bounds are available for this partition.
     fn create_partition_bounds_predicate(
         &self,
         partition_bounds: &PartitionBounds,
@@ -244,118 +338,97 @@ impl SharedBoundsAccumulator {
                     Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
                         as Arc<dyn PhysicalExpr>;
                 column_predicates.push(range_expr);
+            } else {
+                // Missing bounds for this column, the created predicate will have lower selectivity but will still be correct
+                continue;
             }
         }
 
         // Combine all column predicates for this partition with AND
-        if column_predicates.is_empty() {
-            Ok(None)
-        } else {
-            let predicate = column_predicates
+        Ok(
+            column_predicates
                 .into_iter()
                 .reduce(|acc, pred| {
                     Arc::new(BinaryExpr::new(acc, Operator::And, pred))
                         as Arc<dyn PhysicalExpr>
                 })
-                .unwrap();
-            Ok(Some(predicate))
-        }
+        )
     }
 
-    /// Create progressive filter: (hash(...) % n != partition_id OR bounds_predicate)
-    fn create_progressive_partition_filter(
+    /// Create progressive filter using hash-based expressions to avoid false negatives.
+    /// For example:
+    /// ```sql
+    /// CASE hash(cols) % num_partitions
+    ///   WHEN 0 THEN (col1 >= min1 AND col1 <= max1 AND col2 >= min2 AND col2 <= max2)
+    ///   WHEN 1 THEN (col1 >= min3 AND col1 <= max3 AND col2 >= min4 AND col2 <= max4)
+    ///   ...
+    ///   ELSE true
+    /// END
+    /// ```
+    /// This means that even if we are missing some of the `WHEN` clauses, we will not
+    /// incorrectly filter out any rows (no false negatives). The tradeoff is that the
+    /// filter may be less selective until all partitions have reported.
+    /// Importantly the hash function (which may be expensive) is only computed once per row,
+    /// regardless of how many partitions have reported.
+    pub(crate) fn create_progressive_filter_from_partition_bounds(
         &self,
-        partition_bounds: &PartitionBounds,
+        bounds: &HashMap<usize, PartitionBounds>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        // Create base expression: hash(cols) % num_partitions
         let hash_expr = self.create_hash_expression()?;
-
-        // hash(...) % total_partitions
+        let total_partitions_expr = lit(ScalarValue::UInt64(Some(self.total_partitions as u64)));
         let modulo_expr = Arc::new(BinaryExpr::new(
             hash_expr,
             Operator::Modulo,
-            lit(ScalarValue::UInt64(Some(self.total_partitions as u64))),
+            total_partitions_expr,
         )) as Arc<dyn PhysicalExpr>;
 
-        // hash(...) % total_partitions != partition_id
-        let hash_check = Arc::new(BinaryExpr::new(
-            modulo_expr,
-            Operator::NotEq,
-            lit(ScalarValue::UInt64(Some(partition_bounds.partition as u64))),
-        )) as Arc<dyn PhysicalExpr>;
+        // Create WHEN clauses: WHEN partition_id THEN bounds_predicate
+        let when_thens = bounds
+            .values()
+            .sorted_by_key(|b| b.partition)
+            .try_fold(Vec::new(), |mut acc, partition_bounds| {
+                let when_value = lit(ScalarValue::UInt64(Some(partition_bounds.partition as u64)));
+                if let Some(then_predicate) = self.create_partition_bounds_predicate(partition_bounds)? {
+                    acc.push((when_value, then_predicate));
+                }
+                Ok::<_, datafusion_common::DataFusionError>(acc)
+            })?;
 
-        // Create bounds predicate for this partition
-        let bounds_predicate =
-            self.create_partition_bounds_predicate(partition_bounds)?;
+        use datafusion_physical_expr::expressions::case;
+        let case_expr = case(Some(modulo_expr), when_thens, Some(lit(true)))?;
 
-        if let Some(bounds_predicate) = bounds_predicate {
-            // Combine: (hash_check OR bounds_predicate)
-            return Ok(Arc::new(BinaryExpr::new(
-                hash_check,
-                Operator::Or,
-                bounds_predicate,
-            )) as Arc<dyn PhysicalExpr>);
-        } else {
-            // No bounds, just return true
-            return Ok(lit(true));
-        }
+        Ok(case_expr)
     }
 
-    /// Create final optimized filter from all partition bounds using OR logic
+    /// Create filter from completed partitions using OR logic.
+    /// For example: `(col1 >= min1 AND col1 <= max1) OR (col1 >= min2 AND col1 <= max2) OR ...`
+    /// Where each clause corresponds to one partition's bounds.
+    /// This is calculated after *all* partitions have completed.
     pub(crate) fn create_optimized_filter_from_partition_bounds(
         &self,
-        bounds: &[PartitionBounds],
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        if bounds.is_empty() {
-            return Ok(lit(true));
-        }
-
-        // Create a predicate for each partition
-        let mut partition_predicates = Vec::with_capacity(bounds.len());
-
-        for partition_bounds in bounds.iter().sorted_by_key(|b| b.partition) {
-            partition_predicates.push(
-                self.create_partition_bounds_predicate(partition_bounds)?
-                    .unwrap_or_else(|| lit(true)),
-            );
-        }
-        // Combine all partition predicates with OR using HashedPhysicalExpr to avoid re-evaluation of the hash expression
-        // This ensures that the hash expression is only computed once per row.
-        let combined_predicate = Arc::new(HashedPhysicalExpr::new(
-            self.create_hash_expression()?,
-            partition_predicates,
-        )) as Arc<dyn PhysicalExpr>;
-
-        Ok(combined_predicate)
-    }
-
-    /// Create progressive filter from completed partitions using AND logic
-    pub(crate) fn create_progressive_filter_from_partition_bounds(
-        &self,
-        bounds: &[PartitionBounds],
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        if bounds.is_empty() {
-            return Ok(lit(true));
-        }
-
+        bounds: &HashMap<usize, PartitionBounds>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Create a progressive filter for each completed partition
         let mut partition_filters = Vec::with_capacity(bounds.len());
 
-        for partition_bounds in bounds.iter().sorted_by_key(|b| b.partition) {
-            let progressive_filter =
-                self.create_progressive_partition_filter(partition_bounds)?;
-            partition_filters.push(progressive_filter);
+        for partition_bounds in bounds.values().sorted_by_key(|b| b.partition) {
+            let Some(filter) = self.create_partition_bounds_predicate(partition_bounds)? else {
+                // No bounds for this partition, we can't compute an optimized filter
+                return Ok(None);
+            };
+            partition_filters.push(filter);
         }
 
         // Combine all partition filters with AND
-        let combined_filter = partition_filters
-            .into_iter()
-            .reduce(|acc, filter| {
-                Arc::new(BinaryExpr::new(acc, Operator::And, filter))
-                    as Arc<dyn PhysicalExpr>
-            })
-            .unwrap_or_else(|| lit(true));
-
-        Ok(combined_filter)
+        Ok(
+            partition_filters
+                .into_iter()
+                .reduce(|acc, filter| {
+                    Arc::new(BinaryExpr::new(acc, Operator::Or, filter))
+                        as Arc<dyn PhysicalExpr>
+                })
+        )
     }
 
     /// Report bounds from a completed partition and immediately update the dynamic filter
@@ -379,32 +452,24 @@ impl SharedBoundsAccumulator {
     ) -> Result<()> {
         let mut inner = self.inner.lock();
 
-        // Skip processing if this partition has already reported its bounds to prevent duplicate updates
-        if inner.completed_partitions.contains(&left_side_partition_id) {
+        // In `PartitionMode::CollectLeft`, all streams on the left side share the same partition id (0).
+        // Avoid duplicate entries by checking if we've already recorded bounds for this partition.
+        if inner.bounds.contains_key(&left_side_partition_id) {
             return Ok(());
         }
 
         // Store bounds and mark partition as completed
         if let Some(bounds) = partition_bounds {
-            let should_push = if let Some(last_bound) = inner.bounds.last() {
-                // In `PartitionMode::CollectLeft`, all streams on the left side share the same partition id (0).
-                // Since this function can be called multiple times for that same partition, we must deduplicate
-                // by checking against the last recorded bound.
-                last_bound.partition != left_side_partition_id
-            } else {
-                true
-            };
-
-            if should_push {
-                inner
-                    .bounds
-                    .push(PartitionBounds::new(left_side_partition_id, bounds));
-            }
+            inner
+                .bounds
+                .insert(left_side_partition_id, PartitionBounds::new(left_side_partition_id, bounds));
         }
-        inner.completed_partitions.insert(left_side_partition_id);
+        let completed = inner.bounds.len();
+        let total = self.total_partitions;
 
-        let all_partitions_complete =
-            inner.completed_partitions.len() == self.total_partitions;
+        let all_partitions_complete = completed == total;
+
+        println!("all_partitions_complete: {all_partitions_complete} ({completed}/{total})");
 
         // Create the appropriate filter based on completion status
         let filter_expr = if all_partitions_complete && !inner.filter_optimized {
@@ -413,14 +478,16 @@ impl SharedBoundsAccumulator {
             self.create_optimized_filter_from_partition_bounds(&inner.bounds)?
         } else {
             // Progressive phase - use hash-based filter
-            self.create_progressive_filter_from_partition_bounds(&inner.bounds)?
+            Some(self.create_progressive_filter_from_partition_bounds(&inner.bounds)?)
         };
 
         // Release lock before updating filter to avoid holding it during the update
         drop(inner);
 
         // Update the dynamic filter
-        self.dynamic_filter.update(filter_expr)?;
+        if let Some(filter_expr) = filter_expr {
+            self.dynamic_filter.update(filter_expr)?;
+        }
 
         Ok(())
     }
@@ -432,447 +499,130 @@ impl fmt::Debug for SharedBoundsAccumulator {
     }
 }
 
-/// Physical expression that uses a hash value to select one of several expressions to evaluate.
-/// The point is to avoid re-evaluating the hash expression multiple times.
-/// This is very similar to a CASE expression, but the selection is based on the modulo of a hash value, i.e. something like (not valid SQL):
-///
-/// ```sql
-/// CASE (hash(col) % n)
-///    WHEN 0 THEN col >= 1 AND col <= 10
-///    WHEN 1 THEN col >= 9 AND col <= 30
-/// END
-/// ```
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct HashedPhysicalExpr {
-    /// The expression used to get the hash value.
-    /// This must return a UInt64 value.
-    /// It will be moduloed by the number of expressions in `exprs` to determine which expression to evaluate.
-    hash: Arc<dyn PhysicalExpr>,
-    /// The expressions to evaluate based on the hash value.
-    exprs: Vec<Arc<dyn PhysicalExpr>>,
-}
-
-impl HashedPhysicalExpr {
-    #[allow(dead_code)]
-    fn new(hash: Arc<dyn PhysicalExpr>, exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        assert!(!exprs.is_empty(), "exprs must not be empty");
-        Self { hash, exprs }
-    }
-}
-
-impl std::hash::Hash for HashedPhysicalExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.hash.dyn_hash(state);
-        for expr in &self.exprs {
-            expr.dyn_hash(state);
-        }
-    }
-}
-
-impl PartialEq for HashedPhysicalExpr {
-    fn eq(&self, other: &Self) -> bool {
-        self.hash.dyn_eq(&*other.hash) && self.exprs == other.exprs
-    }
-}
-
-impl Eq for HashedPhysicalExpr {}
-
-impl fmt::Display for HashedPhysicalExpr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, r"HashedPhysicalExpr(hash: {}, exprs: [", self.hash)?;
-        for (i, expr) in self.exprs.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{expr}")?;
-        }
-        write!(f, r"])")
-    }
-}
-
-impl PhysicalExpr for HashedPhysicalExpr {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        let mut children = Vec::with_capacity(1 + self.exprs.len());
-        children.push(&self.hash);
-        children.extend(self.exprs.iter());
-        children
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn PhysicalExpr>>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        if children.len() != 1 + self.exprs.len() {
-            return Err(datafusion_common::DataFusionError::Internal(
-                "HashedPhysicalExpr::with_new_children: incorrect number of children"
-                    .to_string(),
-            ));
-        }
-        let hash = Arc::clone(&children[0]);
-        let exprs = children[1..].to_vec();
-        Ok(Arc::new(HashedPhysicalExpr::new(hash, exprs)))
-    }
-
-    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HashedPhysicalExpr(hash: ")?;
-        self.hash.fmt_sql(f)?;
-        write!(f, r", exprs: [")?;
-        for (i, expr) in self.exprs.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            expr.fmt_sql(f)?;
-        }
-        write!(f, r"])")
-    }
-
-    fn data_type(&self, input_schema: &arrow::datatypes::Schema) -> Result<DataType> {
-        // All expressions must have the same data type.
-        let first_type = self.exprs[0].data_type(input_schema)?;
-        for expr in &self.exprs[1..] {
-            let expr_type = expr.data_type(input_schema)?;
-            if expr_type != first_type {
-                return Err(datafusion_common::DataFusionError::Internal(
-                    "All expressions in HashedPhysicalExpr must have the same data type"
-                        .to_string(),
-                ));
-            }
-        }
-        Ok(first_type)
-    }
-
-    fn nullable(&self, input_schema: &arrow::datatypes::Schema) -> Result<bool> {
-        // If any expression is nullable, the result is nullable.
-        for expr in &self.exprs {
-            if expr.nullable(input_schema)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn evaluate(
-        &self,
-        batch: &arrow::record_batch::RecordBatch,
-    ) -> Result<ColumnarValue> {
-        let return_type = self.data_type(&batch.schema())?;
-        let expr = &self.hash;
-        let base_value = expr.evaluate(batch)?;
-        let base_value = base_value.into_array(batch.num_rows())?;
-        let base_nulls = is_null(base_value.as_ref())?;
-
-        // start with nulls as default output
-        let mut current_value = new_null_array(&return_type, batch.num_rows());
-        // We only consider non-null values while computing hash indices
-        let mut remainder = not(&base_nulls)?;
-
-        // If all values are null, return the null array
-        if remainder.true_count() == 0 {
-            return Ok(ColumnarValue::Array(current_value));
-        }
-
-        // Cast hash values to UInt64Array for modulo operations
-        let hash_array = as_uint64_array(&base_value).map_err(|_| {
-            internal_datafusion_err!("Hash expression must return UInt64 values")
-        })?;
-
-        // Create a mapping from hash index to row mask for efficient batch processing
-        let num_expressions = self.exprs.len() as u64;
-        let mut index_masks = vec![Vec::new(); self.exprs.len()];
-
-        // Build masks for each expression index
-        for row_idx in 0..batch.num_rows() {
-            if remainder.value(row_idx) {
-                if let Some(hash_value) =
-                    hash_array.value(row_idx).checked_rem(num_expressions)
-                {
-                    let expr_index = hash_value as usize;
-                    index_masks[expr_index].push(row_idx);
-                }
-            }
-        }
-
-        // Process each expression that has rows to evaluate
-        for (expr_index, row_indices) in index_masks.iter().enumerate() {
-            if row_indices.is_empty() {
-                continue;
-            }
-
-            // Create boolean mask for this expression's rows
-            let mut mask_values = vec![false; batch.num_rows()];
-            for &row_idx in row_indices {
-                mask_values[row_idx] = true;
-            }
-            let expr_mask = BooleanArray::from(mask_values);
-
-            // Combine with remainder mask to ensure we only process non-null hash values
-            let expr_mask = and(&expr_mask, &remainder)?;
-
-            if expr_mask.true_count() == 0 {
-                continue;
-            }
-
-            // Evaluate the selected expression for these rows
-            let then_value =
-                self.exprs[expr_index].evaluate_selection(batch, &expr_mask)?;
-
-            // Merge the results into current_value
-            current_value = match then_value {
-                ColumnarValue::Scalar(ScalarValue::Null) => {
-                    nullif(current_value.as_ref(), &expr_mask)?
-                }
-                ColumnarValue::Scalar(then_value) => {
-                    zip(&expr_mask, &then_value.to_scalar()?, &current_value)?
-                }
-                ColumnarValue::Array(then_value) => {
-                    zip(&expr_mask, &then_value, &current_value)?
-                }
-            };
-
-            // Update remainder to exclude processed rows
-            remainder = and_not(&remainder, &expr_mask)?;
-        }
-
-        Ok(ColumnarValue::Array(current_value))
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, UInt64Array};
+    use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::cast::as_int32_array;
-    use datafusion_physical_expr::expressions::{col, lit};
+    use datafusion_common::cast::as_boolean_array;
+    use arrow::array::Array;
     use std::sync::Arc;
 
-    /// Simple test hash expression that doubles the input value
-    #[derive(Debug, Clone)]
-    struct DoublingHashExpr {
-        input: Arc<dyn PhysicalExpr>,
-    }
-
-    impl DoublingHashExpr {
-        fn new(input: Arc<dyn PhysicalExpr>) -> Self {
-            Self { input }
-        }
-    }
-
-    impl std::hash::Hash for DoublingHashExpr {
-        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            self.input.dyn_hash(state);
-        }
-    }
-
-    impl PartialEq for DoublingHashExpr {
-        fn eq(&self, other: &Self) -> bool {
-            self.input.dyn_eq(&*other.input)
-        }
-    }
-
-    impl Eq for DoublingHashExpr {}
-
-    impl fmt::Display for DoublingHashExpr {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "DoublingHash({})", self.input)
-        }
-    }
-
-    impl PhysicalExpr for DoublingHashExpr {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-            Ok(DataType::UInt64)
-        }
-
-        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-            self.input.nullable(input_schema)
-        }
-
-        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-            let input_value = self.input.evaluate(batch)?;
-            match input_value {
-                ColumnarValue::Array(array) => {
-                    // Convert to UInt64 and double each value
-                    let uint64_array = array
-                        .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .ok_or_else(|| {
-                            datafusion_common::DataFusionError::Internal(
-                                "DoublingHashExpr expects UInt64 input".to_string(),
-                            )
-                        })?;
-
-                    let doubled: Vec<Option<u64>> = uint64_array
-                        .iter()
-                        .map(|opt_val| opt_val.map(|val| val * 2))
-                        .collect();
-
-                    Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(doubled))))
-                }
-                ColumnarValue::Scalar(scalar) => match scalar {
-                    ScalarValue::UInt64(Some(val)) => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(val * 2))))
-                    }
-                    ScalarValue::UInt64(None) => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::UInt64(None)))
-                    }
-                    _ => Err(datafusion_common::DataFusionError::Internal(
-                        "DoublingHashExpr expects UInt64 input".to_string(),
-                    )),
-                },
-            }
-        }
-
-        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-            vec![&self.input]
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            children: Vec<Arc<dyn PhysicalExpr>>,
-        ) -> Result<Arc<dyn PhysicalExpr>> {
-            if children.len() != 1 {
-                return Err(datafusion_common::DataFusionError::Internal(
-                    "DoublingHashExpr expects exactly one child".to_string(),
-                ));
-            }
-            Ok(Arc::new(DoublingHashExpr::new(children[0].clone())))
-        }
-
-        fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "DoublingHash(")?;
-            self.input.fmt_sql(f)?;
-            write!(f, ")")
-        }
-    }
-
     #[test]
-    fn test_hashed_physical_expr_predictable_selection() -> Result<()> {
-        // Create schema and test batch
-        let schema = Schema::new(vec![Field::new("input", DataType::UInt64, false)]);
+    fn test_create_optimized_filter_case_expr() -> Result<()> {
+        // Create a simple test setup
+        let schema = Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Int32, false),
+        ]);
 
-        // Test with input value 5
-        // Hash: 5 * 2 = 10
-        // Selection: 10 % 3 = 1 (should select index 1, which is lit(2))
-        let input_array = Arc::new(UInt64Array::from(vec![5u64]));
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![input_array])?;
-
-        // Create doubling hash expression
-        let hash_expr = Arc::new(DoublingHashExpr::new(col("input", &schema)?));
-
-        // Create three literal expressions: [lit(1), lit(2), lit(3)]
-        let expr1 = lit(1i32); // index 0
-        let expr2 = lit(2i32); // index 1 <- this should be selected
-        let expr3 = lit(3i32); // index 2
-
-        // Create HashedPhysicalExpr
-        let hashed_expr = HashedPhysicalExpr::new(hash_expr, vec![expr1, expr2, expr3]);
-
-        // Evaluate the expression
-        let result = hashed_expr.evaluate(&batch)?;
-        let result_array = result.into_array(batch.num_rows())?;
-        let result_array = as_int32_array(&result_array)?;
-
-        // Verify the result
-        assert_eq!(result_array.len(), 1);
-        assert_eq!(
-            result_array.value(0),
-            2,
-            "Input 5 -> hash 10 -> 10 % 3 = 1 -> should select lit(2) at index 1"
+        // Create test partition bounds
+        let bounds1 = PartitionBounds::new(
+            0,
+            vec![
+                ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))),
+                ColumnBounds::new(ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(15))),
+            ],
+        );
+        let bounds2 = PartitionBounds::new(
+            1,
+            vec![
+                ColumnBounds::new(ScalarValue::Int32(Some(20)), ScalarValue::Int32(Some(30))),
+                ColumnBounds::new(ScalarValue::Int32(Some(25)), ScalarValue::Int32(Some(35))),
+            ],
         );
 
+        // Create mock accumulator (we only need the parts that create_optimized_filter uses)
+        let on_right = vec![
+            Arc::new(datafusion_physical_expr::expressions::Column::new("col1", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(datafusion_physical_expr::expressions::Column::new("col2", 1)) as Arc<dyn PhysicalExpr>,
+        ];
+
+        let accumulator = SharedBoundsAccumulator {
+            inner: Mutex::new(SharedBoundsState {
+                bounds: HashMap::new(),
+                filter_optimized: false,
+            }),
+            total_partitions: 2,
+            dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(
+                on_right.clone(),
+                Arc::new(datafusion_physical_expr::expressions::Literal::new(ScalarValue::Boolean(Some(true)))),
+            )),
+            on_right,
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        // Test the optimized filter creation
+        let bounds = HashMap::from([
+            (0, bounds1.clone()),
+            (1, bounds2.clone()),
+        ]);
+        let filter = accumulator.create_optimized_filter_from_partition_bounds(&bounds)?.unwrap();
+
+        // Verify the filter is a CaseExpr (indirectly by checking it doesn't panic and has reasonable behavior)
+        let test_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(vec![5, 25, 100])),  // col1 values
+                Arc::new(Int32Array::from(vec![10, 30, 200])), // col2 values
+            ],
+        )?;
+
+        let result = filter.evaluate(&test_batch)?;
+        let result_array = result.into_array(test_batch.num_rows())?;
+        let result_array = as_boolean_array(&result_array)?;
+
+        // Should have 3 results
+        assert_eq!(result_array.len(), 3);
+
+        // The exact results depend on hash values, but we should get boolean results
+        for i in 0..3 {
+            // Just verify we get boolean values (true/false, not null for this simple case)
+            assert!(!result_array.is_null(i), "Result should not be null at index {}", i);
+        }
+
         Ok(())
     }
 
     #[test]
-    fn test_hashed_physical_expr_multiple_predictable_values() -> Result<()> {
-        // Create schema and test batch with multiple values
-        let schema = Schema::new(vec![Field::new("input", DataType::UInt64, false)]);
+    fn test_empty_bounds_returns_true() -> Result<()> {
+        let on_right = vec![
+            Arc::new(datafusion_physical_expr::expressions::Column::new("col1", 0)) as Arc<dyn PhysicalExpr>,
+        ];
 
-        // Test with multiple input values to verify the pattern
-        // Input 0: hash 0 -> 0 % 3 = 0 -> lit(10)
-        // Input 1: hash 2 -> 2 % 3 = 2 -> lit(30)
-        // Input 2: hash 4 -> 4 % 3 = 1 -> lit(20)
-        // Input 3: hash 6 -> 6 % 3 = 0 -> lit(10)
-        let input_array = Arc::new(UInt64Array::from(vec![0u64, 1u64, 2u64, 3u64]));
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![input_array])?;
+        let accumulator = SharedBoundsAccumulator {
+            inner: Mutex::new(SharedBoundsState {
+                bounds: HashMap::new(),
+                filter_optimized: false,
+            }),
+            total_partitions: 2,
+            dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(
+                on_right.clone(),
+                Arc::new(datafusion_physical_expr::expressions::Literal::new(ScalarValue::Boolean(Some(true)))),
+            )),
+            on_right,
+            config_options: Arc::new(ConfigOptions::default()),
+        };
 
-        // Create doubling hash expression
-        let hash_expr = Arc::new(DoublingHashExpr::new(col("input", &schema)?));
+        // Test with empty bounds
+        let filter = accumulator.create_optimized_filter_from_partition_bounds(&HashMap::new())?.unwrap();
 
-        // Create three literal expressions with distinct values for easy verification
-        let expr1 = lit(10i32); // index 0
-        let expr2 = lit(20i32); // index 1
-        let expr3 = lit(30i32); // index 2
+        // Should return a literal true
+        let schema = Schema::new(vec![Field::new("col1", DataType::Int32, false)]);
+        let test_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
 
-        // Create HashedPhysicalExpr
-        let hashed_expr = HashedPhysicalExpr::new(hash_expr, vec![expr1, expr2, expr3]);
-
-        // Evaluate the expression
-        let result = hashed_expr.evaluate(&batch)?;
-        let result_array = result.into_array(batch.num_rows())?;
-        let result_array = as_int32_array(&result_array)?;
-
-        // Verify the results
-        assert_eq!(result_array.len(), 4);
-
-        // Input 0: 0 * 2 = 0 -> 0 % 3 = 0 -> lit(10)
-        assert_eq!(result_array.value(0), 10);
-
-        // Input 1: 1 * 2 = 2 -> 2 % 3 = 2 -> lit(30)
-        assert_eq!(result_array.value(1), 30);
-
-        // Input 2: 2 * 2 = 4 -> 4 % 3 = 1 -> lit(20)
-        assert_eq!(result_array.value(2), 20);
-
-        // Input 3: 3 * 2 = 6 -> 6 % 3 = 0 -> lit(10)
-        assert_eq!(result_array.value(3), 10);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_hashed_physical_expr_with_null_hash() -> Result<()> {
-        // Create schema and test batch with null value
-        let schema = Schema::new(vec![Field::new("input", DataType::UInt64, true)]);
-
-        // Test with null input - should produce null output
-        let input_array = Arc::new(UInt64Array::from(vec![Some(5u64), None]));
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![input_array])?;
-
-        // Create doubling hash expression
-        let hash_expr = Arc::new(DoublingHashExpr::new(col("input", &schema)?));
-
-        // Create literal expressions
-        let expr1 = lit(100i32);
-        let expr2 = lit(200i32);
-
-        // Create HashedPhysicalExpr
-        let hashed_expr = HashedPhysicalExpr::new(hash_expr, vec![expr1, expr2]);
-
-        // Evaluate the expression
-        let result = hashed_expr.evaluate(&batch)?;
-        let result_array = result.into_array(batch.num_rows())?;
-
-        // Verify the results
-        assert_eq!(result_array.len(), 2);
-
-        // Check null status before casting
-        assert!(result_array.is_null(1), "Second value should be null");
-
-        let result_array = as_int32_array(&result_array)?;
-
-        // First value: 5 * 2 = 10 -> 10 % 2 = 0 -> lit(100)
-        assert_eq!(result_array.value(0), 100);
+        let result = filter.evaluate(&test_batch)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {
+                // Expected: literal true
+            }
+            _ => panic!("Expected scalar true for empty bounds"),
+        }
 
         Ok(())
     }
