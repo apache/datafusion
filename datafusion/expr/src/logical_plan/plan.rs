@@ -122,7 +122,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// //   Filter(salary > 1000)
 /// //     TableScan(employee)
 /// # fn main() -> Result<()> {
-/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+/// let plan = table_scan(Some("employee"), employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
 ///  .project(vec![col("name")])?
 ///  .build()?;
@@ -171,7 +171,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// //     TableScan(employee)
 /// # fn main() -> Result<()> {
 /// use datafusion_common::tree_node::Transformed;
-/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+/// let plan = table_scan(Some("employee"), employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
 ///  .project(vec![col("name")])?
 ///  .build()?;
@@ -271,7 +271,7 @@ pub enum LogicalPlan {
     /// with execution metric. This is used to implement SQL
     /// `EXPLAIN ANALYZE`.
     Analyze(Analyze),
-    /// Extension operator defined outside of DataFusion. This is used
+    /// Extension operator defined outside DataFusion. This is used
     /// to extend DataFusion with custom relational operations that
     Extension(Extension),
     /// Remove duplicate rows from the input. This is used to
@@ -1225,14 +1225,15 @@ impl LogicalPlan {
     ///
     /// # Example
     /// ```
-    /// # use arrow::datatypes::{Field, Schema, DataType};
+    /// # use std::sync::Arc;
+    /// use arrow::datatypes::{Field, Schema, DataType};
     /// use datafusion_common::ScalarValue;
     /// # use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan, placeholder};
-    /// # let schema = Schema::new(vec![
+    /// # let schema = Arc::new(Schema::new(vec![
     /// #     Field::new("id", DataType::Int32, false),
-    /// # ]);
+    /// # ]));
     /// // Build SELECT * FROM t1 WHERE id = $1
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), Arc::clone(&schema), None).unwrap()
     ///     .filter(col("id").eq(placeholder("$1"))).unwrap()
     ///     .build().unwrap();
     ///
@@ -1253,9 +1254,9 @@ impl LogicalPlan {
     ///    plan.display_indent().to_string()
     ///  );
     ///
-    /// // Note you can also used named parameters
+    /// // Note you can also use named parameters
     /// // Build SELECT * FROM t1 WHERE id = $my_param
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), schema, None).unwrap()
     ///     .filter(col("id").eq(placeholder("$my_param"))).unwrap()
     ///     .build().unwrap()
     ///     // Fill in the parameter $my_param with a literal 3
@@ -1546,7 +1547,7 @@ impl LogicalPlan {
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
@@ -1588,7 +1589,7 @@ impl LogicalPlan {
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
@@ -1650,7 +1651,7 @@ impl LogicalPlan {
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
@@ -1708,7 +1709,7 @@ impl LogicalPlan {
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), schema, None).unwrap()
     ///     .build().unwrap();
     ///
     /// // Format using display
@@ -4242,10 +4243,10 @@ mod tests {
     }
 
     fn display_plan() -> Result<LogicalPlan> {
-        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
+        let plan1 = table_scan(Some("employee_csv"), employee_schema(), Some(vec![3]))?
             .build()?;
 
-        table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+        table_scan(Some("employee_csv"), employee_schema(), Some(vec![0, 3]))?
             .filter(in_subquery(col("state"), Arc::new(plan1)))?
             .project(vec![col("id")])?
             .build()
@@ -4281,14 +4282,13 @@ mod tests {
 
     #[test]
     fn test_display_subquery_alias() -> Result<()> {
-        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
+        let plan1 = table_scan(Some("employee_csv"), employee_schema(), Some(vec![3]))?
             .build()?;
         let plan1 = Arc::new(plan1);
 
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-                .project(vec![col("id"), exists(plan1).alias("exists")])?
-                .build();
+        let plan = table_scan(Some("employee_csv"), employee_schema(), Some(vec![0, 3]))?
+            .project(vec![col("id"), exists(plan1).alias("exists")])?
+            .build();
 
         assert_snapshot!(plan?.display_indent(), @r"
         Projection: employee_csv.id, EXISTS (<subquery>) AS exists
@@ -4711,7 +4711,7 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
         ]);
 
-        table_scan(TableReference::none(), &schema, Some(vec![0, 1]))
+        table_scan(TableReference::none(), schema, Some(vec![0, 1]))
             .unwrap()
             .filter(col("state").eq(lit("CO")))
             .unwrap()
@@ -4726,7 +4726,7 @@ mod tests {
         // test empty placeholder
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-        let plan = table_scan(TableReference::none(), &schema, None)
+        let plan = table_scan(TableReference::none(), schema, None)
             .unwrap()
             .filter(col("id").eq(placeholder("")))
             .unwrap()
@@ -4740,7 +4740,7 @@ mod tests {
         // test $0 placeholder
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-        let plan = table_scan(TableReference::none(), &schema, None)
+        let plan = table_scan(TableReference::none(), schema, None)
             .unwrap()
             .filter(col("id").eq(placeholder("$0")))
             .unwrap()
@@ -4753,7 +4753,7 @@ mod tests {
         // test $00 placeholder
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-        let plan = table_scan(TableReference::none(), &schema, None)
+        let plan = table_scan(TableReference::none(), schema, None)
             .unwrap()
             .filter(col("id").eq(placeholder("$00")))
             .unwrap()
@@ -4771,7 +4771,7 @@ mod tests {
             Field::new("bar", DataType::Int32, false),
         ]);
 
-        let plan = table_scan(TableReference::none(), &schema, None)
+        let plan = table_scan(TableReference::none(), schema, None)
             .unwrap()
             .aggregate(
                 vec![Expr::GroupingSet(GroupingSet::GroupingSets(vec![
@@ -4862,7 +4862,7 @@ mod tests {
             Field::new("bar", DataType::Int32, false),
         ]);
 
-        let plan = table_scan(TableReference::none(), &schema, None)
+        let plan = table_scan(TableReference::none(), schema, None)
             .unwrap()
             .explain(false, false)
             .unwrap()
@@ -4994,7 +4994,7 @@ mod tests {
             Schema::new(vec![Field::new("sub_id", DataType::Int32, false)]);
 
         let subquery_plan =
-            table_scan(TableReference::none(), &subquery_schema, Some(vec![0]))
+            table_scan(TableReference::none(), subquery_schema, Some(vec![0]))
                 .unwrap()
                 .filter(col("sub_id").eq(lit(0)))
                 .unwrap()
@@ -5003,7 +5003,7 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-        let plan = table_scan(TableReference::none(), &schema, Some(vec![0]))
+        let plan = table_scan(TableReference::none(), schema, Some(vec![0]))
             .unwrap()
             .filter(col("id").eq(lit(0)))
             .unwrap()
@@ -5128,7 +5128,7 @@ mod tests {
         let placeholder_value = "$1";
         let schema = Schema::new(vec![Field::new(field_name, DataType::Int32, false)]);
 
-        let plan = table_scan(TableReference::none(), &schema, None)
+        let plan = table_scan(TableReference::none(), schema, None)
             .unwrap()
             .filter(col(field_name).eq(placeholder(placeholder_value)))
             .unwrap()
@@ -5156,25 +5156,22 @@ mod tests {
 
             let left_schema = DFSchema::try_from_qualified_schema("t1", &schema)?;
             let right_schema = DFSchema::try_from_qualified_schema("t2", &schema)?;
+            let schema = Arc::new(left_schema.join(&right_schema)?);
 
             Ok(LogicalPlan::Join(Join {
-                left: Arc::new(
-                    table_scan(Some("t1"), left_schema.as_arrow(), None)?.build()?,
-                ),
-                right: Arc::new(
-                    table_scan(Some("t2"), right_schema.as_arrow(), None)?.build()?,
-                ),
+                left: Arc::new(table_scan(Some("t1"), left_schema, None)?.build()?),
+                right: Arc::new(table_scan(Some("t2"), right_schema, None)?.build()?),
                 on,
                 filter,
                 join_type: JoinType::Inner,
                 join_constraint: JoinConstraint::On,
-                schema: Arc::new(left_schema.join(&right_schema)?),
+                schema,
                 null_equality: NullEquality::NullEqualsNothing,
             }))
         }
 
         {
-            let join = create_test_join(vec![(col("t1.a"), (col("t2.a")))], None)?;
+            let join = create_test_join(vec![(col("t1.a"), col("t2.a"))], None)?;
             let LogicalPlan::Join(join) = join.with_new_exprs(
                 join.expressions(),
                 join.inputs().into_iter().cloned().collect(),
@@ -5182,7 +5179,7 @@ mod tests {
             else {
                 unreachable!()
             };
-            assert_eq!(join.on, vec![(col("t1.a"), (col("t2.a")))]);
+            assert_eq!(join.on, vec![(col("t1.a"), col("t2.a"))]);
             assert_eq!(join.filter, None);
         }
 
@@ -5201,7 +5198,7 @@ mod tests {
 
         {
             let join = create_test_join(
-                vec![(col("t1.a"), (col("t2.a")))],
+                vec![(col("t1.a"), col("t2.a"))],
                 Some(col("t1.b").gt(col("t2.b"))),
             )?;
             let LogicalPlan::Join(join) = join.with_new_exprs(
@@ -5211,13 +5208,13 @@ mod tests {
             else {
                 unreachable!()
             };
-            assert_eq!(join.on, vec![(col("t1.a"), (col("t2.a")))]);
+            assert_eq!(join.on, vec![(col("t1.a"), col("t2.a"))]);
             assert_eq!(join.filter, Some(col("t1.b").gt(col("t2.b"))));
         }
 
         {
             let join = create_test_join(
-                vec![(col("t1.a"), (col("t2.a"))), (col("t1.b"), (col("t2.b")))],
+                vec![(col("t1.a"), col("t2.a")), (col("t1.b"), col("t2.b"))],
                 None,
             )?;
             let LogicalPlan::Join(join) = join.with_new_exprs(
@@ -5240,7 +5237,7 @@ mod tests {
                         binary_expr(col("t1.a"), Operator::Plus, lit(1)),
                         binary_expr(col("t2.a"), Operator::Plus, lit(2))
                     ),
-                    (col("t1.b"), (col("t2.b")))
+                    (col("t1.b"), col("t2.b"))
                 ]
             );
             assert_eq!(join.filter, Some(lit(true)));
@@ -5251,14 +5248,13 @@ mod tests {
 
     #[test]
     fn test_join_try_new() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
-        ]);
+        ]));
 
-        let left_scan = table_scan(Some("t1"), &schema, None)?.build()?;
-
-        let right_scan = table_scan(Some("t2"), &schema, None)?.build()?;
+        let left_scan = table_scan(Some("t1"), Arc::clone(&schema), None)?.build()?;
+        let right_scan = table_scan(Some("t2"), schema, None)?.build()?;
 
         let join_types = vec![
             JoinType::Inner,
@@ -5410,9 +5406,8 @@ mod tests {
             Field::new("value", DataType::Float64, true), // Common column, different meaning
         ]);
 
-        let left_plan = table_scan(Some("t1"), &left_schema, None)?.build()?;
-
-        let right_plan = table_scan(Some("t2"), &right_schema, None)?.build()?;
+        let left_plan = table_scan(Some("t1"), left_schema, None)?.build()?;
+        let right_plan = table_scan(Some("t2"), right_schema, None)?.build()?;
 
         // Test 1: USING constraint with a common column
         {
@@ -5548,9 +5543,8 @@ mod tests {
             Field::new("code", DataType::Int16, false),
         ]);
 
-        let left_plan = table_scan(Some("t1"), &left_schema, None)?.build()?;
-
-        let right_plan = table_scan(Some("t2"), &right_schema, None)?.build()?;
+        let left_plan = table_scan(Some("t1"), left_schema, None)?.build()?;
+        let right_plan = table_scan(Some("t2"), right_schema, None)?.build()?;
 
         let join_types = vec![
             JoinType::Inner,

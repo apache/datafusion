@@ -1843,7 +1843,7 @@ mod tests {
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         #[expect(deprecated)]
-        let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
+        let dummy_logical_plan = table_scan(Some("t"), dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
                 options: Box::new(WildcardOptions::default()),

@@ -193,7 +193,7 @@ mod tests {
             Field::new("t1_id", DataType::UInt32, true),
             Field::new("t2_id", DataType::UInt32, true),
         ]);
-        let t3 = table_scan(Some("t3"), &schema, None)?.build()?;
+        let t3 = table_scan(Some("t3"), schema, None)?.build()?;
         let plan = LogicalPlanBuilder::from(t3)
             .join(
                 plan,
@@ -351,12 +351,12 @@ mod tests {
     }
 
     fn test_tables() -> Result<(LogicalPlan, LogicalPlan)> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::UInt32, false),
             Field::new("optional_id", DataType::UInt32, true),
-        ]);
-        let t1 = table_scan(Some("t1"), &schema, None)?.build()?;
-        let t2 = table_scan(Some("t2"), &schema, None)?.build()?;
+        ]));
+        let t1 = table_scan(Some("t1"), Arc::clone(&schema), None)?.build()?;
+        let t2 = table_scan(Some("t2"), schema, None)?.build()?;
         Ok((t1, t2))
     }
 }
