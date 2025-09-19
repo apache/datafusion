@@ -81,9 +81,51 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
 02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], Null Equality: NULL equals NULL
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.explain.format = "tree";
+
+# Tree explain should highlight null equality semantics
+query TT
+EXPLAIN SELECT t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
+FROM t1
+JOIN t2 ON t1.val IS NOT DISTINCT FROM t2.val
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│         t1_id: id         │
+05)│         t2_id: id         │
+06)│          val: val         │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│    CoalesceBatchesExec    │
+10)│    --------------------   │
+11)│     target_batch_size:    │
+12)│            8192           │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│        HashJoinExec       │
+16)│    --------------------   │
+17)│ Null Equality: NULL equals│
+18)│            NULL           ├──────────────┐
+19)│                           │              │
+20)│      on: (val = val)      │              │
+21)└─────────────┬─────────────┘              │
+22)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+23)│       DataSourceExec      ││       DataSourceExec      │
+24)│    --------------------   ││    --------------------   │
+25)│         bytes: 288        ││         bytes: 288        │
+26)│       format: memory      ││       format: memory      │
+27)│          rows: 1          ││          rows: 1          │
+28)└───────────────────────────┘└───────────────────────────┘
+
+statement ok
+set datafusion.explain.format = "indent";
 
 # For nested expression comparision, it should still able to be converted to Hash Join
 query IIII rowsort
@@ -108,7 +150,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
 02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], projection=[id@0, val@1, id@3, val@4]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], projection=[id@0, val@1, id@3, val@4], Null Equality: NULL equals NULL
 04)------CoalescePartitionsExec
 05)--------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -139,7 +181,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
 02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], filter=CAST(val@0 AS Int64) % 3 IS DISTINCT FROM CAST(val@1 AS Int64) % 3, projection=[id@0, val@1, id@3, val@4]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], filter=CAST(val@0 AS Int64) % 3 IS DISTINCT FROM CAST(val@1 AS Int64) % 3, projection=[id@0, val@1, id@3, val@4], Null Equality: NULL equals NULL
 04)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
@@ -201,11 +243,11 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
 02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@0, val@1)], projection=[id@1, val@2, id@3, val@4]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@0, val@1)], projection=[id@1, val@2, id@3, val@4], Null Equality: NULL equals NULL
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)--------CoalesceBatchesExec: target_batch_size=8192
-07)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)]
+07)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], Null Equality: NULL equals NULL
 08)------------DataSourceExec: partitions=1, partition_sizes=[1]
 09)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -246,7 +288,7 @@ JOIN t4 ON (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.val2 IS NOT DISTINCT F
 01)ProjectionExec: expr=[id@0 as t3_id, id@3 as t4_id, val1@1 as val1, val1@4 as val1, val2@2 as val2, val2@5 as val2]
 02)--CoalesceBatchesExec: target_batch_size=8192
 02)--Inner Join: t3.val1 = t4.val1, t3.val2 = t4.val2
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val1@1, val1@1), (val2@2, val2@2)]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val1@1, val1@1), (val2@2, val2@2)], Null Equality: NULL equals NULL
 03)----TableScan: t3 projection=[id, val1, val2]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 04)----TableScan: t4 projection=[id, val1, val2]
