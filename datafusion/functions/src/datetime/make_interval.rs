@@ -218,9 +218,9 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
             || days.as_ref().is_some_and(|a| a.is_null(i))
             || hours.as_ref().is_some_and(|a| a.is_null(i))
             || mins.as_ref().is_some_and(|a| a.is_null(i))
-            || secs.as_ref().is_some_and(|a| {
-                a.is_null(i) || !a.value(i).is_finite() || a.value(i).is_nan()
-            });
+            || secs
+                .as_ref()
+                .is_some_and(|a| a.is_null(i) || !a.value(i).is_finite());
 
         if any_null_present {
             builder.append_null();
@@ -236,7 +236,7 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
         let mi = mins.as_ref().map_or(0, |a| a.value(i));
         let s = secs.as_ref().map_or(0.0, |a| a.value(i));
 
-        match make_interval_month_day_nano(y, mo, w, d, h, mi, s)? {
+        match make_interval_month_day_nano(y, mo, w, d, h, mi, s) {
             Some(v) => builder.append_value(v),
             None => {
                 builder.append_null();
@@ -256,24 +256,24 @@ pub fn make_interval_month_day_nano(
     hour: i32,
     min: i32,
     sec: f64,
-) -> Result<Option<IntervalMonthDayNano>> {
+) -> Option<IntervalMonthDayNano> {
     // checks if overflow
     let months = match year.checked_mul(12).and_then(|v| v.checked_add(month)) {
         Some(m) => m,
-        None => return Ok(None),
+        None => return None,
     };
     let total_days = match week.checked_mul(7).and_then(|v| v.checked_add(day)) {
         Some(dy) => dy,
-        None => return Ok(None),
+        None => return None,
     };
 
     let hours_nanos = match (hour as i64).checked_mul(3_600_000_000_000) {
         Some(n) => n,
-        None => return Ok(None),
+        None => return None,
     };
     let mins_nanos = match (min as i64).checked_mul(60_000_000_000) {
         Some(n) => n,
-        None => return Ok(None),
+        None => return None,
     };
 
     let sec_int = sec.trunc() as i64;
@@ -290,7 +290,7 @@ pub fn make_interval_month_day_nano(
 
     let secs_nanos = match sec_int.checked_mul(1_000_000_000) {
         Some(n) => n,
-        None => return Ok(None),
+        None => return None,
     };
 
     let total_nanos = match hours_nanos
@@ -299,14 +299,10 @@ pub fn make_interval_month_day_nano(
         .and_then(|v| v.checked_add(frac_nanos))
     {
         Some(n) => n,
-        None => return Ok(None),
+        None => return None,
     };
 
-    Ok(Some(IntervalMonthDayNano::new(
-        months,
-        total_days,
-        total_nanos,
-    )))
+    Some(IntervalMonthDayNano::new(months, total_days, total_nanos))
 }
 
 #[cfg(test)]
@@ -455,6 +451,58 @@ mod tests {
         let hour = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
         let min = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
         let sec = Arc::new(Float64Array::from(vec![Some(0.0)])) as ArrayRef;
+
+        let out = run_make_interval_month_day_nano(vec![
+            year, month, week, day, hour, min, sec,
+        ])
+        .unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .ok_or_else(|| {
+                DataFusionError::Internal("expected IntervalMonthDayNano".into())
+            })
+            .unwrap();
+
+        for i in 0..out.len() {
+            assert!(out.is_null(i), "row {i} should be NULL");
+        }
+    }
+    #[test]
+    fn error_min_overflow_should_be_null() {
+        let year = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let month = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let week = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let day = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let hour = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let min = Arc::new(Int32Array::from(vec![Some(i32::MAX)])) as ArrayRef;
+        let sec = Arc::new(Float64Array::from(vec![Some(0.0)])) as ArrayRef;
+
+        let out = run_make_interval_month_day_nano(vec![
+            year, month, week, day, hour, min, sec,
+        ])
+        .unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .ok_or_else(|| {
+                DataFusionError::Internal("expected IntervalMonthDayNano".into())
+            })
+            .unwrap();
+
+        for i in 0..out.len() {
+            assert!(out.is_null(i), "row {i} should be NULL");
+        }
+    }
+    #[test]
+    fn error_sec_overflow_should_be_null() {
+        let year = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let month = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let week = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let day = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let hour = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let min = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let sec = Arc::new(Float64Array::from(vec![Some(f64::MAX)])) as ArrayRef;
 
         let out = run_make_interval_month_day_nano(vec![
             year, month, week, day, hour, min, sec,
