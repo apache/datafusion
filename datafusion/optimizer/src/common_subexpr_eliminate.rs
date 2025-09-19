@@ -1055,7 +1055,7 @@ mod test {
     #[test]
     fn aggregate_with_relations_and_dots() -> Result<()> {
         let schema = Schema::new(vec![Field::new("col.a", DataType::UInt32, false)]);
-        let table_scan = table_scan(Some("table.test"), &schema, None)?.build()?;
+        let table_scan = table_scan(Some("table.test"), schema, None)?.build()?;
 
         let col_a = Expr::Column(Column::new(Some("table.test"), "col.a"));
 
@@ -1202,7 +1202,7 @@ mod test {
             Field::new("c", DataType::UInt64, false),
         ]);
 
-        let plan = table_scan(Some("table"), &schema, None)
+        let plan = table_scan(Some("table"), schema, None)
             .unwrap()
             .filter(
                 cast(col("a"), DataType::Int64)

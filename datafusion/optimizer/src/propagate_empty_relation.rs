@@ -386,17 +386,17 @@ mod tests {
     #[test]
     fn propagate_union_children_different_schema() -> Result<()> {
         let one_schema = Schema::new(vec![Field::new("t1a", DataType::UInt32, false)]);
-        let t1_scan = table_scan(Some("test1"), &one_schema, None)?.build()?;
+        let t1_scan = table_scan(Some("test1"), one_schema, None)?.build()?;
         let one = LogicalPlanBuilder::from(t1_scan)
             .filter(lit(false))?
             .build()?;
 
         let two_schema = Schema::new(vec![Field::new("t2a", DataType::UInt32, false)]);
-        let t2_scan = table_scan(Some("test2"), &two_schema, None)?.build()?;
+        let t2_scan = table_scan(Some("test2"), two_schema, None)?.build()?;
         let two = LogicalPlanBuilder::from(t2_scan).build()?;
 
         let three_schema = Schema::new(vec![Field::new("t3a", DataType::UInt32, false)]);
-        let t3_scan = table_scan(Some("test3"), &three_schema, None)?.build()?;
+        let t3_scan = table_scan(Some("test3"), three_schema, None)?.build()?;
         let three = LogicalPlanBuilder::from(t3_scan).build()?;
 
         let plan = LogicalPlanBuilder::from(one)
