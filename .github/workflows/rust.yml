@@ -288,6 +288,8 @@ jobs:
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
+          # Use dedicated tmp dir with more space for tests that may spill to disk
+          TMPDIR: ${{ runner.temp }}
         run: |
           cargo test \
             --profile ci \
@@ -561,6 +563,9 @@ jobs:
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
+        env:
+          # Use dedicated tmp dir with more space for tests that may spill to disk
+          TMPDIR: ${{ runner.temp }}
         run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
 
   test-datafusion-pyarrow:
