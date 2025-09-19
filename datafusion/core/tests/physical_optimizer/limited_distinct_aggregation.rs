@@ -25,13 +25,15 @@ use crate::physical_optimizer::test_utils::{
     TestAggregate,
 };
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Schema};
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::expressions::{self, cast, col};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode},
@@ -39,6 +41,16 @@ use datafusion_physical_plan::{
     limit::{GlobalLimitExec, LocalLimitExec},
     ExecutionPlan,
 };
+
+fn binary_test(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let exec_props = ExecutionProps::new();
+    expressions::binary(lhs, op, rhs, schema, &exec_props)
+}
 
 async fn run_plan_and_format(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let cfg = SessionConfig::new().with_target_partitions(1);
@@ -367,7 +379,7 @@ fn test_has_filter() -> Result<()> {
 
     // `SELECT a FROM DataSourceExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
     // the `a > 1` filter is applied in the AggregateExec
-    let filter_expr = Some(expressions::binary(
+    let filter_expr = Some(binary_test(
         col("a", &schema)?,
         Operator::Gt,
         cast(expressions::lit(1u32), &schema, DataType::Int32)?,

@@ -208,7 +208,7 @@ pub fn create_physical_expr(
             //
             // There should be no coercion during physical
             // planning.
-            binary(lhs, *op, rhs, input_schema)
+            binary(lhs, *op, rhs, input_schema, execution_props)
         }
         Expr::Like(Like {
             negated,
@@ -347,6 +347,7 @@ pub fn create_physical_expr(
                     Operator::GtEq,
                     low_expr,
                     input_schema,
+                    execution_props,
                 )?,
                 Operator::And,
                 binary(
@@ -354,8 +355,10 @@ pub fn create_physical_expr(
                     Operator::LtEq,
                     high_expr,
                     input_schema,
+                    execution_props,
                 )?,
                 input_schema,
+                execution_props,
             );
 
             if *negated {

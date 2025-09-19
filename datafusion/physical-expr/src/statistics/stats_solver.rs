@@ -211,11 +211,23 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr_common::interval_arithmetic::Interval;
     use datafusion_expr_common::operator::Operator;
     use datafusion_expr_common::statistics::Distribution;
     use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+
+    /// Helper function for tests that provides default ExecutionProps for binary function calls
+    fn binary_test(
+        lhs: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        rhs: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let execution_props = ExecutionProps::new();
+        binary(lhs, op, rhs, schema, &execution_props)
+    }
 
     pub fn binary_expr(
         left: Arc<dyn PhysicalExpr>,
@@ -230,7 +242,7 @@ mod tests {
 
         let left_expr = try_cast(left, schema, lhs)?;
         let right_expr = try_cast(right, schema, rhs)?;
-        binary(left_expr, op, right_expr, schema)
+        binary_test(left_expr, op, right_expr, schema)
     }
 
     #[test]
