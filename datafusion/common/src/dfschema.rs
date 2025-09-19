@@ -101,7 +101,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// let df_schema = DFSchema::from_unqualified_fields(vec![
 ///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
 /// ].into(),HashMap::new()).unwrap();
-/// let schema = Schema::from(df_schema);
+/// let schema: &Schema = df_schema.as_arrow();
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -594,7 +594,7 @@ impl DFSchema {
         &self,
         arrow_schema: &Schema,
     ) -> Result<()> {
-        let self_arrow_schema: &Schema = self.into();
+        let self_arrow_schema = self.as_arrow();
         self_arrow_schema
             .fields()
             .iter()
@@ -1064,13 +1064,6 @@ fn format_simple_data_type(data_type: &DataType) -> String {
         }
         DataType::Null => "null".to_string(),
         _ => format!("{data_type}").to_lowercase(),
-    }
-}
-
-impl<'a> From<&'a DFSchema> for &'a Schema {
-    /// Convert DFSchema reference into a Schema
-    fn from(df_schema: &'a DFSchema) -> Self {
-        df_schema.as_arrow()
     }
 }
 

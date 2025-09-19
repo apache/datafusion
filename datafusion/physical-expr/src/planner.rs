@@ -111,7 +111,7 @@ pub fn create_physical_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_schema: &Schema = input_dfschema.into();
+    let input_schema = input_dfschema.as_arrow();
 
     match e {
         Expr::Alias(Alias { expr, metadata, .. }) => {
