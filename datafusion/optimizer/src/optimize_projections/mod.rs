@@ -941,7 +941,7 @@ mod tests {
     use crate::optimize_projections::OptimizeProjections;
     use crate::optimizer::Optimizer;
     use crate::test::{
-        assert_fields_eq, scan_empty, test_table_scan, test_table_scan_fields,
+        assert_fields_eq, test_table_scan, test_table_scan_fields,
         test_table_scan_with_name,
     };
     use crate::{OptimizerContext, OptimizerRule};
@@ -1834,7 +1834,8 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
@@ -1886,7 +1887,8 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
@@ -1941,7 +1943,8 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("a", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join_using(table2_scan, JoinType::Left, vec!["a".into()])?
