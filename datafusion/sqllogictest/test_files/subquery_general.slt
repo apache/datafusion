@@ -285,22 +285,22 @@ where exists (
 # 4
 
 # fail
-# query II rowsort
-# SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) >1) from t1
-# ----
-# 11 NULL
-# 22 NULL
-# 33 5
-# 44 NULL
+query II rowsort
+SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) >1) from t1
+----
+11 NULL
+22 NULL
+33 5
+44 NULL
 
 # fail
-# query II rowsort
-# SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
-# ----
-# 11 NULL
-# 22 2
-# 33 NULL
-# 44 2
+query II rowsort
+SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
+----
+11 NULL
+22 2
+33 NULL
+44 2
 
 # fail
 # query I rowsort
@@ -329,13 +329,34 @@ where exists (
 # 2
 # 4
 
-# fail
 # query I rowsort
 # select t1.t1_int from t1 where
 #        (select case when count(*) = 1 then null else count(*) end as cnt from t2 where t2.t2_int = t1.t1_int) = 0
 # ----
 # 2
 # 4
+
+query TT
+explain select t1_int > (select avg(t1_int) from t1) from t1
+----
+logical_plan
+01)Projection: CAST(t1.t1_int AS Float64) > avg(t1.t1_int) AS t1.t1_int > avg(t1.t1_int)
+02)--LeftSingle Join(ComparisonJoin): 
+03)----TableScan: t1 projection=[t1_int]
+04)----Aggregate: groupBy=[[]], aggr=[[avg(CAST(t1.t1_int AS Float64))]]
+05)------Filter: Boolean(true)
+06)--------TableScan: t1 projection=[t1_int]
+physical_plan
+01)ProjectionExec: expr=[CAST(t1_int@0 AS Float64) > avg(t1.t1_int)@1 as t1.t1_int > avg(t1.t1_int)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----NestedLoopJoinExec: join_type=LeftSingle
+04)------DataSourceExec: partitions=1, partition_sizes=[2]
+05)------AggregateExec: mode=Final, gby=[], aggr=[avg(t1.t1_int)]
+06)--------CoalescePartitionsExec
+07)----------AggregateExec: mode=Partial, gby=[], aggr=[avg(t1.t1_int)]
+08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------------DataSourceExec: partitions=1, partition_sizes=[2]
+
 
 # fail
 query B rowsort
@@ -357,36 +378,35 @@ logical_plan
 05)------Left Join(DelimJoin):  Filter: t1_dscan_1.t1_t1_int IS NOT DISTINCT FROM t1_dscan_2.t1_t1_int
 06)--------Projection: t1.t1_int AS t1_dscan_2.t1_t1_int
 07)----------DelimGet: t1.t1_int
-08)--------Projection: max(t2.t2_id), t1_dscan_1.t1_t1_int
-09)----------Aggregate: groupBy=[[t1_dscan_1.t1_t1_int]], aggr=[[max(t2.t2_id)]]
-10)------------Projection: t2.t2_id, t1_dscan_1.t1_t1_int
-11)--------------Inner Join(ComparisonJoin): t2.t2_int = t1_dscan_1.t1_t1_int
-12)----------------Filter: Boolean(true)
-13)------------------TableScan: t2 projection=[t2_id, t2_int]
-14)----------------Projection: t1.t1_int AS t1_dscan_1.t1_t1_int
-15)------------------DelimGet: t1.t1_int
+08)--------Aggregate: groupBy=[[t1_dscan_1.t1_t1_int]], aggr=[[max(t2.t2_id)]]
+09)----------Projection: t2.t2_id, t1_dscan_1.t1_t1_int
+10)------------Inner Join(ComparisonJoin): t2.t2_int = t1_dscan_1.t1_t1_int
+11)--------------Filter: Boolean(true)
+12)----------------TableScan: t2 projection=[t2_id, t2_int]
+13)--------------Projection: t1.t1_int AS t1_dscan_1.t1_t1_int
+14)----------------DelimGet: t1.t1_int
 physical_plan
 01)ProjectionExec: expr=[t1_id@0 as t1_id, CASE WHEN max(t2.t2_id) > Int64(1) THEN Utf8("a") ELSE Utf8("b") END@1 as x]
 02)--NestedLoopJoinExec: join_type=LeftSingle, filter=t1_int@0 IS NOT DISTINCT FROM t1_t1_int@1, projection=[t1_id@0, CASE WHEN max(t2.t2_id) > Int64(1) THEN Utf8("a") ELSE Utf8("b") END@2]
 03)----DataSourceExec: partitions=1, partition_sizes=[2]
 04)----ProjectionExec: expr=[CASE WHEN max(t2.t2_id)@1 > 1 THEN a ELSE b END as CASE WHEN max(t2.t2_id) > Int64(1) THEN Utf8("a") ELSE Utf8("b") END, t1_t1_int@0 as t1_t1_int]
-05)------NestedLoopJoinExec: join_type=Left, filter=t1_t1_int@1 IS NOT DISTINCT FROM t1_t1_int@0, projection=[t1_t1_int@0, max(t2.t2_id)@1]
+05)------NestedLoopJoinExec: join_type=Left, filter=t1_t1_int@1 IS NOT DISTINCT FROM t1_t1_int@0, projection=[t1_t1_int@0, max(t2.t2_id)@2]
 06)--------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
 07)----------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
 08)------------DataSourceExec: partitions=1, partition_sizes=[2]
-09)--------ProjectionExec: expr=[max(t2.t2_id)@1 as max(t2.t2_id), t1_t1_int@0 as t1_t1_int]
-10)----------AggregateExec: mode=FinalPartitioned, gby=[t1_t1_int@0 as t1_t1_int], aggr=[max(t2.t2_id)]
-11)------------CoalesceBatchesExec: target_batch_size=2
-12)--------------RepartitionExec: partitioning=Hash([t1_t1_int@0], 4), input_partitions=4
-13)----------------AggregateExec: mode=Partial, gby=[t1_t1_int@1 as t1_t1_int], aggr=[max(t2.t2_id)]
-14)------------------ProjectionExec: expr=[t2_id@1 as t2_id, t1_t1_int@0 as t1_t1_int]
-15)--------------------CoalesceBatchesExec: target_batch_size=2
-16)----------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_t1_int@0, t2_int@1)], projection=[t1_t1_int@0, t2_id@1]
-17)------------------------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
-18)--------------------------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
-19)----------------------------DataSourceExec: partitions=1, partition_sizes=[2]
-20)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-21)--------------------------DataSourceExec: partitions=1, partition_sizes=[2]
+09)--------AggregateExec: mode=FinalPartitioned, gby=[t1_t1_int@0 as t1_t1_int], aggr=[max(t2.t2_id)]
+10)----------CoalesceBatchesExec: target_batch_size=2
+11)------------RepartitionExec: partitioning=Hash([t1_t1_int@0], 4), input_partitions=4
+12)--------------AggregateExec: mode=Partial, gby=[t1_t1_int@1 as t1_t1_int], aggr=[max(t2.t2_id)]
+13)----------------ProjectionExec: expr=[t2_id@1 as t2_id, t1_t1_int@0 as t1_t1_int]
+14)------------------CoalesceBatchesExec: target_batch_size=2
+15)--------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_t1_int@0, t2_int@1)], projection=[t1_t1_int@0, t2_id@1]
+16)----------------------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
+17)------------------------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
+18)--------------------------DataSourceExec: partitions=1, partition_sizes=[2]
+19)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+20)------------------------DataSourceExec: partitions=1, partition_sizes=[2]
+
 
 
 query IT rowsort
@@ -408,36 +428,34 @@ logical_plan
 05)------Left Join(DelimJoin):  Filter: t1_dscan_1.t1_t1_int IS NOT DISTINCT FROM t1_dscan_2.t1_t1_int
 06)--------Projection: t1.t1_int AS t1_dscan_2.t1_t1_int
 07)----------DelimGet: t1.t1_int
-08)--------Projection: max(t2.t2_id), t1_dscan_1.t1_t1_int
-09)----------Aggregate: groupBy=[[t1_dscan_1.t1_t1_int]], aggr=[[max(t2.t2_id)]]
-10)------------Projection: t2.t2_id, t1_dscan_1.t1_t1_int
-11)--------------Inner Join(ComparisonJoin): t2.t2_int = t1_dscan_1.t1_t1_int
-12)----------------Filter: Boolean(true)
-13)------------------TableScan: t2 projection=[t2_id, t2_int]
-14)----------------Projection: t1.t1_int AS t1_dscan_1.t1_t1_int
-15)------------------DelimGet: t1.t1_int
+08)--------Aggregate: groupBy=[[t1_dscan_1.t1_t1_int]], aggr=[[max(t2.t2_id)]]
+09)----------Projection: t2.t2_id, t1_dscan_1.t1_t1_int
+10)------------Inner Join(ComparisonJoin): t2.t2_int = t1_dscan_1.t1_t1_int
+11)--------------Filter: Boolean(true)
+12)----------------TableScan: t2 projection=[t2_id, t2_int]
+13)--------------Projection: t1.t1_int AS t1_dscan_1.t1_t1_int
+14)----------------DelimGet: t1.t1_int
 physical_plan
 01)ProjectionExec: expr=[t1_id@0 as t1_id, max(t2.t2_id) IS NULL@1 as x]
 02)--NestedLoopJoinExec: join_type=LeftSingle, filter=t1_int@0 IS NOT DISTINCT FROM t1_t1_int@1, projection=[t1_id@0, max(t2.t2_id) IS NULL@2]
 03)----DataSourceExec: partitions=1, partition_sizes=[2]
 04)----ProjectionExec: expr=[max(t2.t2_id)@1 IS NULL as max(t2.t2_id) IS NULL, t1_t1_int@0 as t1_t1_int]
-05)------NestedLoopJoinExec: join_type=Left, filter=t1_t1_int@1 IS NOT DISTINCT FROM t1_t1_int@0, projection=[t1_t1_int@0, max(t2.t2_id)@1]
+05)------NestedLoopJoinExec: join_type=Left, filter=t1_t1_int@1 IS NOT DISTINCT FROM t1_t1_int@0, projection=[t1_t1_int@0, max(t2.t2_id)@2]
 06)--------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
 07)----------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
 08)------------DataSourceExec: partitions=1, partition_sizes=[2]
-09)--------ProjectionExec: expr=[max(t2.t2_id)@1 as max(t2.t2_id), t1_t1_int@0 as t1_t1_int]
-10)----------AggregateExec: mode=FinalPartitioned, gby=[t1_t1_int@0 as t1_t1_int], aggr=[max(t2.t2_id)]
-11)------------CoalesceBatchesExec: target_batch_size=2
-12)--------------RepartitionExec: partitioning=Hash([t1_t1_int@0], 4), input_partitions=4
-13)----------------AggregateExec: mode=Partial, gby=[t1_t1_int@1 as t1_t1_int], aggr=[max(t2.t2_id)]
-14)------------------ProjectionExec: expr=[t2_id@1 as t2_id, t1_t1_int@0 as t1_t1_int]
-15)--------------------CoalesceBatchesExec: target_batch_size=2
-16)----------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_t1_int@0, t2_int@1)], projection=[t1_t1_int@0, t2_id@1]
-17)------------------------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
-18)--------------------------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
-19)----------------------------DataSourceExec: partitions=1, partition_sizes=[2]
-20)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-21)--------------------------DataSourceExec: partitions=1, partition_sizes=[2]
+09)--------AggregateExec: mode=FinalPartitioned, gby=[t1_t1_int@0 as t1_t1_int], aggr=[max(t2.t2_id)]
+10)----------CoalesceBatchesExec: target_batch_size=2
+11)------------RepartitionExec: partitioning=Hash([t1_t1_int@0], 4), input_partitions=4
+12)--------------AggregateExec: mode=Partial, gby=[t1_t1_int@1 as t1_t1_int], aggr=[max(t2.t2_id)]
+13)----------------ProjectionExec: expr=[t2_id@1 as t2_id, t1_t1_int@0 as t1_t1_int]
+14)------------------CoalesceBatchesExec: target_batch_size=2
+15)--------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_t1_int@0, t2_int@1)], projection=[t1_t1_int@0, t2_id@1]
+16)----------------------ProjectionExec: expr=[t1_int@0 as t1_t1_int]
+17)------------------------AggregateExec: mode=Final, gby=[t1_int@0 as t1_int], aggr=[]
+18)--------------------------DataSourceExec: partitions=1, partition_sizes=[2]
+19)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+20)------------------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 
 
