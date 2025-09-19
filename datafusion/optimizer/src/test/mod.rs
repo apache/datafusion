@@ -21,7 +21,7 @@ use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, assert_contains};
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, logical_plan::table_scan};
+use datafusion_expr::{LogicalPlan, logical_plan::table_scan};
 use std::sync::Arc;
 
 pub mod udfs;
@@ -66,15 +66,6 @@ pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
 /// some tests share a common table
 pub fn test_table_scan() -> Result<LogicalPlan> {
     test_table_scan_with_name("test")
-}
-
-/// Scan an empty data source, mainly used in tests
-pub fn scan_empty(
-    name: Option<&str>,
-    table_schema: &Schema,
-    projection: Option<Vec<usize>>,
-) -> Result<LogicalPlanBuilder> {
-    table_scan(name, table_schema, projection)
 }
 
 pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
