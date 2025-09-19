@@ -8002,6 +8002,23 @@ NULL NULL
 [60, 59, 58, 57, 56, 55, 54, NULL, 52, 51] [51, 52, NULL, 54, 55, 56, 57, 58, 59, 60]
 [70, 69, 68, 67, 66, 65, 64, 63, 62, 61] [61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
+statement ok
+CREATE TABLE test_reverse_fixed_size AS VALUES
+  (arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)')),
+  (arrow_cast([4, 5, 6], 'FixedSizeList(3, Int64)')),
+  (arrow_cast([NULL, 8, 9], 'FixedSizeList(3, Int64)')),
+  (NULL);
+
+query ?
+SELECT array_sort(reverse(column1)) FROM test_reverse_fixed_size;
+----
+[3, 2, 1]
+[6, 5, 4]
+[9, 8, NULL]
+NULL
+
+statement ok
+DROP TABLE test_reverse_fixed_size;
 
 # Test defining a table with array columns
 statement ok
