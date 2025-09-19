@@ -8010,7 +8010,7 @@ CREATE TABLE test_reverse_fixed_size AS VALUES
   (NULL);
 
 query ?
-SELECT array_sort(reverse(column1)) FROM test_reverse_fixed_size;
+SELECT reverse(column1) FROM test_reverse_fixed_size;
 ----
 [3, 2, 1]
 [6, 5, 4]
