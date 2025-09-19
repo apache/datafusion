@@ -25,7 +25,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{Alias, FieldMetadata, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -306,8 +306,17 @@ impl LogicalPlanBuilder {
 
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
+            let mut common_metadata: Option<FieldMetadata> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
+                let metadata = value.metadata(&schema)?;
+                if let Some(ref cm) = common_metadata {
+                    if &metadata != cm {
+                        return plan_err!("Inconsistent metadata across values list at row {i} column {j}. Was {:?} but found {:?}", cm, metadata);
+                    }
+                } else {
+                    common_metadata = Some(metadata.clone());
+                }
                 let data_type = value.get_type(&schema)?;
                 if data_type == DataType::Null {
                     continue;
@@ -326,7 +335,11 @@ impl LogicalPlanBuilder {
             }
             // assuming common_type was not set, and no error, therefore the type should be NULL
             // since the code loop skips NULL
-            fields.push(common_type.unwrap_or(DataType::Null), true);
+            fields.push_with_metadata(
+                common_type.unwrap_or(DataType::Null),
+                true,
+                common_metadata,
+            );
         }
 
         Self::infer_inner(values, fields, &schema)
@@ -1507,10 +1520,23 @@ impl ValuesFields {
     }
 
     pub fn push(&mut self, data_type: DataType, nullable: bool) {
+        self.push_with_metadata(data_type, nullable, None);
+    }
+
+    pub fn push_with_metadata(
+        &mut self,
+        data_type: DataType,
+        nullable: bool,
+        metadata: Option<FieldMetadata>,
+    ) {
         // Naming follows the convention described here:
         // https://www.postgresql.org/docs/current/queries-values.html
         let name = format!("column{}", self.inner.len() + 1);
-        self.inner.push(Field::new(name, data_type, nullable));
+        let mut field = Field::new(name, data_type, nullable);
+        if let Some(metadata) = metadata {
+            field.set_metadata(metadata.to_hashmap());
+        }
+        self.inner.push(field);
     }
 
     pub fn into_fields(self) -> Fields {
@@ -2153,7 +2179,10 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
+    use crate::lit_with_metadata;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
@@ -2769,6 +2798,35 @@ mod tests {
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "right".to_string())])
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_values_metadata() -> Result<()> {
+        let metadata: HashMap<String, String> =
+            [("ARROW:extension:metadata".to_string(), "test".to_string())]
+                .into_iter()
+                .collect();
+        let metadata = FieldMetadata::from(metadata);
+        let values = LogicalPlanBuilder::values(vec![
+            vec![lit_with_metadata(1, Some(metadata.clone()))],
+            vec![lit_with_metadata(2, Some(metadata.clone()))],
+        ])?
+        .build()?;
+        assert_eq!(*values.schema().field(0).metadata(), metadata.to_hashmap());
+
+        // Do not allow VALUES with different metadata mixed together
+        let metadata2: HashMap<String, String> =
+            [("ARROW:extension:metadata".to_string(), "test2".to_string())]
+                .into_iter()
+                .collect();
+        let metadata2 = FieldMetadata::from(metadata2);
+        assert!(LogicalPlanBuilder::values(vec![
+            vec![lit_with_metadata(1, Some(metadata.clone()))],
+            vec![lit_with_metadata(2, Some(metadata2.clone()))],
+        ])
+        .is_err());
 
         Ok(())
     }
