@@ -35,7 +35,9 @@ use arrow::array::{
     },
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
 };
-use arrow::datatypes::{DataType, Decimal128Type, Decimal256Type, DecimalType};
+use arrow::datatypes::{
+    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, DecimalType,
+};
 use arrow::util::display::array_value_to_string;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
@@ -1182,6 +1184,20 @@ impl Unparser<'_> {
                 Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float64(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Decimal32(Some(value), precision, scale) => {
+                Ok(ast::Expr::value(ast::Value::Number(
+                    Decimal32Type::format_decimal(*value, *precision, *scale),
+                    false,
+                )))
+            }
+            ScalarValue::Decimal32(None, ..) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Decimal64(Some(value), precision, scale) => {
+                Ok(ast::Expr::value(ast::Value::Number(
+                    Decimal64Type::format_decimal(*value, *precision, *scale),
+                    false,
+                )))
+            }
+            ScalarValue::Decimal64(None, ..) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Decimal128(Some(value), precision, scale) => {
                 Ok(ast::Expr::value(ast::Value::Number(
                     Decimal128Type::format_decimal(*value, *precision, *scale),
@@ -1726,13 +1742,9 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
-            DataType::Decimal32(_precision, _scale) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
-            }
-            DataType::Decimal64(_precision, _scale) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
-            }
-            DataType::Decimal128(precision, scale)
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
             | DataType::Decimal256(precision, scale) => {
                 let mut new_precision = *precision as u64;
                 let mut new_scale = *scale as u64;
@@ -2179,6 +2191,20 @@ mod tests {
             (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
             (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
             // See test_interval_scalar_to_expr for interval literals
+            (
+                (col("a") + col("b")).gt(Expr::Literal(
+                    ScalarValue::Decimal32(Some(1123), 4, 3),
+                    None,
+                )),
+                r#"((a + b) > 1.123)"#,
+            ),
+            (
+                (col("a") + col("b")).gt(Expr::Literal(
+                    ScalarValue::Decimal64(Some(1123), 4, 3),
+                    None,
+                )),
+                r#"((a + b) > 1.123)"#,
+            ),
             (
                 (col("a") + col("b")).gt(Expr::Literal(
                     ScalarValue::Decimal128(Some(100123), 28, 3),
