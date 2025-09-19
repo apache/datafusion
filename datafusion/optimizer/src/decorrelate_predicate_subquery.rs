@@ -388,9 +388,36 @@ fn build_join(
             .filter_map(|c| right_schema.index_of_column(&c).ok().map(|idx| (idx, c)))
             .collect();
 
+        right_cols_idx_and_col.sort_by_key(|(idx, _)| *idx);
+
+        let right_proj_exprs: Vec<Expr> = right_cols_idx_and_col
+            .into_iter()
+            .map(|(_, c)| Expr::Column(c))
+            .collect();
+
+        let right_projected = if !right_proj_exprs.is_empty() {
+            LogicalPlanBuilder::from(sub_query_alias.clone())
+                .project(right_proj_exprs)?
+                .build()?
+        } else {
+            // Degenerate case: no right columns referenced by the predicate(s)
+            sub_query_alias.clone()
+        };
+        let new_plan = LogicalPlanBuilder::from(left.clone())
+            .join_on(right_projected, join_type, Some(join_filter))?
+            .build()?;
+
+        debug!(
+            "predicate subquery optimized:\n{}",
+            new_plan.display_indent()
+        );
+
+        return Ok(Some(new_plan));
+    }
+
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(left.clone())
-        .join_on(right_projected, join_type, Some(join_filter))?
+        .join_on(sub_query_alias, join_type, Some(join_filter))?
         .build()?;
     debug!(
         "predicate subquery optimized:\n{}",
