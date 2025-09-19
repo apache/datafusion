@@ -115,7 +115,8 @@ fn general_array_shuffle<O: OffsetSizeTrait + TryFrom<i64>>(
         // skip the null value
         if array.is_null(row_index) {
             nulls.push(false);
-            offsets.push(offsets[row_index]);
+            offsets.push(offsets[row_index] + O::one());
+            mutable.extend(0, 0, 1);
             continue;
         }
         nulls.push(true);
@@ -162,9 +163,7 @@ fn fixed_size_array_shuffle(
         // skip the null value
         if array.is_null(row_index) {
             nulls.push(false);
-            // For null rows, we still need to add placeholder elements to maintain array structure
-            let start = row_index * value_length;
-            mutable.extend(0, start, start + value_length);
+            mutable.extend(0, 0, value_length);
             continue;
         }
         nulls.push(true);
