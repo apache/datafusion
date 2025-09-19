@@ -725,14 +725,12 @@ impl DisplayAs for HashJoinExec {
                 } else {
                     "".to_string()
                 };
-                let display_null_equality = if matches!(
-                    self.null_equality(),
-                    NullEquality::NullEqualsNull
-                ) {
-                    ", Null Equality: NULL equals NULL"
-                } else {
-                    ""
-                };
+                let display_null_equality =
+                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                        ", Null Equality: NULL equals NULL"
+                    } else {
+                        ""
+                    };
                 let on = self
                     .on
                     .iter()

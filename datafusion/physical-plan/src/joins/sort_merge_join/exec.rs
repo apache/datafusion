@@ -351,14 +351,12 @@ impl DisplayAs for SortMergeJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let display_null_equality = if matches!(
-                    self.null_equality(),
-                    NullEquality::NullEqualsNull
-                ) {
-                    ", Null Equality: NULL equals NULL"
-                } else {
-                    ""
-                };
+                let display_null_equality =
+                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                        ", Null Equality: NULL equals NULL"
+                    } else {
+                        ""
+                    };
                 write!(
                     f,
                     "SortMergeJoin: join_type={:?}, on=[{}]{}{}",
