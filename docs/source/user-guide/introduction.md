@@ -125,7 +125,7 @@ Here are some active projects using DataFusion:
 - [Sail](https://github.com/lakehq/sail) Unifying stream, batch and AI workloads with Apache Spark compatibility
 - [Seafowl] CDN-friendly analytical database
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
-- [Spice.ai][spiceai] Building blocks for data-driven AI applications
+- [Spice.ai] Building blocks for data-driven AI applications
 - [Synnada] Streaming-first framework for data products
 - [VegaFusion] Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [Telemetry](https://telemetry.sh/) Structured logging made easy
