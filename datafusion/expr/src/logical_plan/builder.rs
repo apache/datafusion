@@ -281,15 +281,14 @@ impl LogicalPlanBuilder {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
 
-                if !data_type.equals_datatype(field_type) {
-                    if can_cast_types(&data_type, field_type) {
-                    } else {
-                        return exec_err!(
-                            "type mismatch and can't cast to got {} and {}",
-                            data_type,
-                            field_type
-                        );
-                    }
+                if !data_type.equals_datatype(field_type)
+                    && !can_cast_types(&data_type, field_type)
+                {
+                    return exec_err!(
+                        "type mismatch and can't cast to got {} and {}",
+                        data_type,
+                        field_type
+                    );
                 }
             }
             fields.push(field_type.to_owned(), field_nullable);
