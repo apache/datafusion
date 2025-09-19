@@ -90,19 +90,19 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.20", default-features = false }
-arrow = { version = "56.0.0", features = [
+arrow = { version = "56.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "56.0.0", default-features = false }
-arrow-flight = { version = "56.0.0", features = [
+arrow-buffer = { version = "56.1.0", default-features = false }
+arrow-flight = { version = "56.1.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "56.0.0", default-features = false, features = [
+arrow-ipc = { version = "56.1.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "56.0.0", default-features = false }
-arrow-schema = { version = "56.0.0", default-features = false }
+arrow-ord = { version = "56.1.0", default-features = false }
+arrow-schema = { version = "56.1.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.10"
@@ -121,14 +121,14 @@ datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "50.
 datafusion-datasource-json = { path = "datafusion/datasource-json", version = "50.0.0", default-features = false }
 datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "50.0.0", default-features = false }
 datafusion-doc = { path = "datafusion/doc", version = "50.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "50.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "50.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "50.0.0", default-features = false }
+datafusion-expr = { path = "datafusion/expr", version = "50.0.0", default-features = false }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "50.0.0" }
 datafusion-ffi = { path = "datafusion/ffi", version = "50.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "50.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "50.0.0" }
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "50.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "50.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "50.0.0", default-features = false }
 datafusion-functions-table = { path = "datafusion/functions-table", version = "50.0.0" }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "50.0.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "50.0.0" }
@@ -152,12 +152,12 @@ futures = "0.3"
 half = { version = "2.6.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
-indexmap = "2.11.1"
+indexmap = "2.11.4"
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.3", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "56.0.0", default-features = false, features = [
+parquet = { version = "56.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -223,6 +223,7 @@ used_underscore_binding = "warn"
 or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
+inefficient_to_string = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

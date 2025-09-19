@@ -55,7 +55,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
         with:
           shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
           save-if: ${{ github.ref_name == 'main' }}
@@ -108,7 +108,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -176,7 +176,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -217,6 +217,8 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=recursive_protection
       - name: Check datafusion (serde)
         run: cargo check --profile ci --no-default-features -p datafusion --features=serde
+      - name: Check datafusion (sql)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=sql
       - name: Check datafusion (string_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=string_expressions
       - name: Check datafusion (unicode_expressions)
@@ -279,7 +281,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
         with:
          save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
@@ -346,7 +348,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
@@ -409,8 +411,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        run: |
-          cargo install wasm-pack
+        uses: taiki-e/install-action@0aa4f22591557b744fe31e55dbfcdfea74a073f7  # v2
+        with:
+          tool: wasm-pack
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
@@ -582,7 +585,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run datafusion-common tests
-        run: cargo test --profile ci -p datafusion-common --features=pyarrow
+        run: cargo test --profile ci -p datafusion-common --features=pyarrow,sql
 
   vendor:
     name: Verify Vendored Code
@@ -677,7 +680,7 @@ jobs:
       - name: Install Clippy
         run: rustup component add clippy
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-clippy"
@@ -749,7 +752,10 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        run: cargo install cargo-msrv
+        uses: taiki-e/install-action@0aa4f22591557b744fe31e55dbfcdfea74a073f7  # v2
+        with:
+          tool: cargo-msrv
+
       - name: Check datafusion
         working-directory: datafusion/core
         run: |

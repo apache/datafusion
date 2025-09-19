@@ -42,7 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        uses: taiki-e/install-action@0aa4f22591557b744fe31e55dbfcdfea74a073f7  # v2
+        with:
+          tool: cargo-audit
       - name: Run audit check
         # Ignored until https://github.com/apache/datafusion/issues/15571
         # ignored py03 warning until arrow 55 upgrade

@@ -253,7 +253,7 @@ physical_plan
 statement ok
 drop table t;
 
-# Regression test for 
+# Regression test for
 # https://github.com/apache/datafusion/issues/17513
 
 query I
