@@ -129,6 +129,7 @@ Here are some active projects using DataFusion:
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [Telemetry](https://telemetry.sh/) Structured logging made easy
+- [Xorq](https://github.com/xorq-labs/xorq/) Xorq is a multi-engine batch transformation framework built on Ibis, DataFusion and Arrow
 
 Here are some less active projects that used DataFusion:
 
