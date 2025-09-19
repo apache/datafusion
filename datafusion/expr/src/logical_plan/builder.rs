@@ -62,7 +62,9 @@ use datafusion_common::{
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use indexmap::IndexSet;
+use itertools::Itertools;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -177,9 +179,10 @@ impl LogicalPlanBuilder {
     pub fn to_recursive_query(
         self,
         name: String,
-        recursive_term: LogicalPlan,
+        recursive_term: impl Into<Arc<LogicalPlan>>,
         is_distinct: bool,
     ) -> Result<Self> {
+        let recursive_term = recursive_term.into();
         // Ensure that the static term and the recursive term have the same number of fields
         let static_fields_len = self.plan.schema().fields().len();
         let recursive_fields_len = recursive_term.schema().fields().len();
@@ -191,12 +194,12 @@ impl LogicalPlanBuilder {
             );
         }
         // Ensure that the recursive term has the same field types as the static term
-        let coerced_recursive_term =
+        let recursive_term =
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
             name,
             static_term: self.plan,
-            recursive_term: Arc::new(coerced_recursive_term),
+            recursive_term,
             is_distinct,
         })))
     }
@@ -207,7 +210,7 @@ impl LogicalPlanBuilder {
     ///
     /// so it's usually better to override the default names with a table alias list.
     ///
-    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    /// If the values include params/binders such as $1, $2, $3, etc. then the `param_data_types` should be provided.
     pub fn values(values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
@@ -239,7 +242,7 @@ impl LogicalPlanBuilder {
     /// The column names are not specified by the SQL standard and different database systems do it differently,
     /// so it's usually better to override the default names with a table alias list.
     ///
-    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    /// If the values include params/binders such as $1, $2, $3, etc. then the `param_data_types` should be provided.
     pub fn values_with_schema(
         values: Vec<Vec<Expr>>,
         schema: &DFSchemaRef,
@@ -415,14 +418,14 @@ impl LogicalPlanBuilder {
 
     /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
     pub fn copy_to(
-        input: LogicalPlan,
+        input: impl Into<Arc<LogicalPlan>>,
         output_url: String,
         file_type: Arc<dyn FileType>,
         options: HashMap<String, String>,
         partition_by: Vec<String>,
     ) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Copy(CopyTo::new(
-            Arc::new(input),
+            input.into(),
             output_url,
             partition_by,
             file_type,
@@ -464,7 +467,7 @@ impl LogicalPlanBuilder {
     /// # }
     /// ```
     pub fn insert_into(
-        input: LogicalPlan,
+        input: impl Into<Arc<LogicalPlan>>,
         table_name: impl Into<TableReference>,
         target: Arc<dyn TableSource>,
         insert_op: InsertOp,
@@ -473,7 +476,7 @@ impl LogicalPlanBuilder {
             table_name.into(),
             target,
             WriteOp::Insert(insert_op),
-            Arc::new(input),
+            input.into(),
         ))))
     }
 
@@ -543,10 +546,10 @@ impl LogicalPlanBuilder {
 
     /// Wrap a plan in a window
     pub fn window_plan(
-        input: LogicalPlan,
+        input: impl Into<Arc<LogicalPlan>>,
         window_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<LogicalPlan> {
-        let mut plan = input;
+        let mut plan = input.into();
         let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
         // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
         // we compare the sort key themselves and if one window's sort keys are a prefix of another
@@ -568,15 +571,17 @@ impl LogicalPlanBuilder {
             }
             key_b.len().cmp(&key_a.len())
         });
+
         for (_, exprs) in groups {
             let window_exprs = exprs.into_iter().collect::<Vec<_>>();
             // Partition and sorting is done at physical level, see the EnforceDistribution
             // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
                 .window(window_exprs)?
-                .build()?;
+                .build_arc()?;
         }
-        Ok(plan)
+
+        Ok(Arc::unwrap_or_clone(plan))
     }
 
     /// Apply a projection without alias.
@@ -584,7 +589,7 @@ impl LogicalPlanBuilder {
         self,
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<Self> {
-        project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
+        project(self.plan, expr).map(Self::new)
     }
 
     /// Apply a projection without alias with optional validation
@@ -593,7 +598,7 @@ impl LogicalPlanBuilder {
         self,
         expr: Vec<(impl Into<SelectExpr>, bool)>,
     ) -> Result<Self> {
-        project_with_validation(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
+        project_with_validation(self.plan, expr).map(Self::new)
     }
 
     /// Select the given column indices
@@ -661,7 +666,7 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(self, alias: impl Into<TableReference>) -> Result<Self> {
-        subquery_alias(Arc::unwrap_or_clone(self.plan), alias).map(Self::new)
+        subquery_alias(self.plan, alias).map(Self::new)
     }
 
     /// Add missing sort columns to all downstream projection
@@ -696,43 +701,43 @@ impl LogicalPlanBuilder {
         curr_plan: LogicalPlan,
         missing_cols: &IndexSet<Column>,
         is_distinct: bool,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Transformed<LogicalPlan>> {
         match curr_plan {
             LogicalPlan::Projection(Projection {
                 input,
                 mut expr,
-                schema: _,
+                schema,
             }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
-                let mut missing_exprs = missing_cols
+                let missing_exprs: Vec<Expr> = missing_cols
                     .iter()
                     .map(|c| normalize_col(Expr::Column(c.clone()), &input))
-                    .collect::<Result<Vec<_>>>()?;
+                    // Do not let duplicate columns to be added, some of the
+                    // missing_cols may be already present but without the new
+                    // projected alias.
+                    .filter_ok(|e| !expr.contains(e))
+                    .try_collect()?;
 
-                // Do not let duplicate columns to be added, some of the
-                // missing_cols may be already present but without the new
-                // projected alias.
-                missing_exprs.retain(|e| !expr.contains(e));
                 if is_distinct {
                     Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
-                expr.extend(missing_exprs);
-                project(Arc::unwrap_or_clone(input), expr)
+
+                if missing_exprs.is_empty() {
+                    Ok(Transformed::no(LogicalPlan::Projection(Projection {
+                        input,
+                        expr,
+                        schema,
+                    })))
+                } else {
+                    expr.extend(missing_exprs);
+                    project(input, expr).map(Transformed::yes)
+                }
             }
             _ => {
                 let is_distinct =
                     is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
-                let new_inputs = curr_plan
-                    .inputs()
-                    .into_iter()
-                    .map(|input_plan| {
-                        Self::add_missing_columns(
-                            (*input_plan).clone(),
-                            missing_cols,
-                            is_distinct,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                curr_plan.with_new_exprs(curr_plan.expressions(), new_inputs)
+                curr_plan.map_children(|input| {
+                    Self::add_missing_columns(input, missing_cols, is_distinct)
+                })
             }
         }
     }
@@ -830,13 +835,13 @@ impl LogicalPlanBuilder {
 
         // remove pushed down sort columns
         let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
-
         let is_distinct = false;
         let plan = Self::add_missing_columns(
             Arc::unwrap_or_clone(self.plan),
             &missing_cols,
             is_distinct,
-        )?;
+        )
+        .data()?;
 
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
@@ -850,36 +855,33 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a union, preserving duplicate rows
-    pub fn union(self, plan: LogicalPlan) -> Result<Self> {
-        union(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
+    pub fn union(self, plan: impl Into<Arc<LogicalPlan>>) -> Result<Self> {
+        union(self.plan, plan).map(Self::new)
     }
 
     /// Apply a union by name, preserving duplicate rows
-    pub fn union_by_name(self, plan: LogicalPlan) -> Result<Self> {
-        union_by_name(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
+    pub fn union_by_name(self, plan: impl Into<Arc<LogicalPlan>>) -> Result<Self> {
+        union_by_name(self.plan, plan).map(Self::new)
     }
 
     /// Apply a union by name, removing duplicate rows
-    pub fn union_by_name_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
-        let right_plan: LogicalPlan = plan;
-
+    pub fn union_by_name_distinct(
+        self,
+        plan: impl Into<Arc<LogicalPlan>>,
+    ) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
-            union_by_name(left_plan, right_plan)?,
+            union_by_name(self.plan, plan)?,
         )))))
     }
 
     /// Apply a union, removing duplicate rows
-    pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
-        let right_plan: LogicalPlan = plan;
-
+    pub fn union_distinct(self, plan: impl Into<Arc<LogicalPlan>>) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
-            union(left_plan, right_plan)?,
+            union(self.plan, plan)?,
         )))))
     }
 
-    /// Apply deduplication: Only distinct (different) values are returned)
+    /// Apply deduplication: Only distinct (different) values are returned
     pub fn distinct(self) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Distinct(Distinct::All(self.plan))))
     }
@@ -912,7 +914,7 @@ impl LogicalPlanBuilder {
     /// Note that in case of outer join, the `filter` is applied to only matched rows.
     pub fn join(
         self,
-        right: LogicalPlan,
+        right: impl Into<Arc<LogicalPlan>>,
         join_type: JoinType,
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
@@ -968,7 +970,7 @@ impl LogicalPlanBuilder {
     /// ```
     pub fn join_on(
         self,
-        right: LogicalPlan,
+        right: impl Into<Arc<LogicalPlan>>,
         join_type: JoinType,
         on_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<Self> {
@@ -1006,7 +1008,7 @@ impl LogicalPlanBuilder {
     /// The `null_equality` dictates how `null` values are joined.
     pub fn join_detailed(
         self,
-        right: LogicalPlan,
+        right: impl Into<Arc<LogicalPlan>>,
         join_type: JoinType,
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
@@ -1035,6 +1037,7 @@ impl LogicalPlanBuilder {
             return plan_err!("left_keys and right_keys were not the same length");
         }
 
+        let right = right.into();
         let filter = if let Some(expr) = filter {
             let filter = normalize_col_with_schemas_and_ambiguity_check(
                 expr,
@@ -1140,7 +1143,7 @@ impl LogicalPlanBuilder {
 
         Ok(Self::new(LogicalPlan::Join(Join {
             left: self.plan,
-            right: Arc::new(right),
+            right,
             on,
             filter,
             join_type,
@@ -1154,10 +1157,11 @@ impl LogicalPlanBuilder {
     /// Apply a join with using constraint, which duplicates all join columns in output schema.
     pub fn join_using(
         self,
-        right: LogicalPlan,
+        right: impl Into<Arc<LogicalPlan>>,
         join_type: JoinType,
         using_keys: Vec<Column>,
     ) -> Result<Self> {
+        let right = right.into();
         let left_keys: Vec<Column> = using_keys
             .clone()
             .into_iter()
@@ -1215,7 +1219,7 @@ impl LogicalPlanBuilder {
         } else {
             let join = Join::try_new(
                 self.plan,
-                Arc::new(right),
+                right,
                 join_on,
                 filters,
                 join_type,
@@ -1229,10 +1233,10 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a cross join
-    pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
+    pub fn cross_join(self, right: impl Into<Arc<LogicalPlan>>) -> Result<Self> {
         let join = Join::try_new(
             self.plan,
-            Arc::new(right),
+            right.into(),
             vec![],
             None,
             JoinType::Inner,
@@ -1332,8 +1336,8 @@ impl LogicalPlanBuilder {
 
     /// Process intersect set operator
     pub fn intersect(
-        left_plan: LogicalPlan,
-        right_plan: LogicalPlan,
+        left_plan: impl Into<Arc<LogicalPlan>>,
+        right_plan: impl Into<Arc<LogicalPlan>>,
         is_all: bool,
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::intersect_or_except(
@@ -1346,8 +1350,8 @@ impl LogicalPlanBuilder {
 
     /// Process except set operator
     pub fn except(
-        left_plan: LogicalPlan,
-        right_plan: LogicalPlan,
+        left_plan: impl Into<Arc<LogicalPlan>>,
+        right_plan: impl Into<Arc<LogicalPlan>>,
         is_all: bool,
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::intersect_or_except(
@@ -1360,11 +1364,13 @@ impl LogicalPlanBuilder {
 
     /// Process intersect or except
     fn intersect_or_except(
-        left_plan: LogicalPlan,
-        right_plan: LogicalPlan,
+        left_plan: impl Into<Arc<LogicalPlan>>,
+        right_plan: impl Into<Arc<LogicalPlan>>,
         join_type: JoinType,
         is_all: bool,
     ) -> Result<LogicalPlan> {
+        let left_plan = left_plan.into();
+        let right_plan = right_plan.into();
         let left_len = left_plan.schema().fields().len();
         let right_len = right_plan.schema().fields().len();
 
@@ -1390,8 +1396,8 @@ impl LogicalPlanBuilder {
             .zip(right_plan.schema().fields().iter())
             .map(|(left_field, right_field)| {
                 (
-                    (Column::from_name(left_field.name())),
-                    (Column::from_name(right_field.name())),
+                    Column::from_name(left_field.name()),
+                    Column::from_name(right_field.name()),
                 )
             })
             .unzip();
@@ -1424,13 +1430,18 @@ impl LogicalPlanBuilder {
         Ok(Arc::unwrap_or_clone(self.plan))
     }
 
+    /// Build the plan into an Arc
+    pub fn build_arc(self) -> Result<Arc<LogicalPlan>> {
+        Ok(self.plan)
+    }
+
     /// Apply a join with both explicit equijoin and non equijoin predicates.
     ///
     /// Note this is a low level API that requires identifying specific
     /// predicate types. Most users should use  [`join_on`](Self::join_on) that
     /// automatically identifies predicates appropriately.
     ///
-    /// `equi_exprs` defines equijoin predicates, of the form `l = r)` for each
+    /// `equi_exprs` defines equijoin predicates, of the form `l = r` for each
     /// `(l, r)` tuple. `l`, the first element of the tuple, must only refer
     /// to columns from the existing input. `r`, the second element of the tuple,
     /// must only refer to columns from the right input.
@@ -1440,7 +1451,7 @@ impl LogicalPlanBuilder {
     /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
         self,
-        right: LogicalPlan,
+        right: impl Into<Arc<LogicalPlan>>,
         join_type: JoinType,
         equi_exprs: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
         filter: Option<Expr>,
@@ -1449,6 +1460,7 @@ impl LogicalPlanBuilder {
             return plan_err!("left_keys and right_keys were not the same length");
         }
 
+        let right = right.into();
         let join_key_pairs = equi_exprs
             .0
             .into_iter()
@@ -1487,7 +1499,7 @@ impl LogicalPlanBuilder {
 
         let join = Join::try_new(
             self.plan,
-            Arc::new(right),
+            right,
             join_key_pairs,
             filter,
             join_type,
@@ -1501,7 +1513,7 @@ impl LogicalPlanBuilder {
 
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        unnest(Arc::unwrap_or_clone(self.plan), vec![column.into()]).map(Self::new)
+        unnest(self.plan, vec![column.into()]).map(Self::new)
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -1510,12 +1522,7 @@ impl LogicalPlanBuilder {
         column: impl Into<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        unnest_with_options(
-            Arc::unwrap_or_clone(self.plan),
-            vec![column.into()],
-            options,
-        )
-        .map(Self::new)
+        unnest_with_options(self.plan, vec![column.into()], options).map(Self::new)
     }
 
     /// Unnest the given columns with the given [`UnnestOptions`]
@@ -1524,8 +1531,7 @@ impl LogicalPlanBuilder {
         columns: Vec<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
-            .map(Self::new)
+        unnest_with_options(self.plan, columns, options).map(Self::new)
     }
 }
 
@@ -1879,7 +1885,7 @@ pub fn validate_unique_names<'a>(
 
 /// Union two [`LogicalPlan`]s.
 ///
-/// Constructs the UNION plan, but does not perform type-coercion. Therefore the
+/// Constructs the UNION plan, but does not perform type-coercion. Therefore, the
 /// subtree expressions will not be properly typed until the optimizer pass.
 ///
 /// If a properly typed UNION plan is needed, refer to [`TypeCoercionRewriter::coerce_union`]
@@ -1888,22 +1894,25 @@ pub fn validate_unique_names<'a>(
 ///
 /// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
-pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
+pub fn union(
+    left_plan: impl Into<Arc<LogicalPlan>>,
+    right_plan: impl Into<Arc<LogicalPlan>>,
+) -> Result<LogicalPlan> {
     Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
-        Arc::new(left_plan),
-        Arc::new(right_plan),
+        left_plan.into(),
+        right_plan.into(),
     ])?))
 }
 
 /// Like [`union`], but combine rows from different tables by name, rather than
 /// by position.
 pub fn union_by_name(
-    left_plan: LogicalPlan,
-    right_plan: LogicalPlan,
+    left_plan: impl Into<Arc<LogicalPlan>>,
+    right_plan: impl Into<Arc<LogicalPlan>>,
 ) -> Result<LogicalPlan> {
     Ok(LogicalPlan::Union(Union::try_new_by_name(vec![
-        Arc::new(left_plan),
-        Arc::new(right_plan),
+        left_plan.into(),
+        right_plan.into(),
     ])?))
 }
 
@@ -1913,7 +1922,7 @@ pub fn union_by_name(
 /// * Two or more expressions have the same name
 /// * An invalid expression is used (e.g. a `sort` expression)
 pub fn project(
-    plan: LogicalPlan,
+    plan: impl Into<Arc<LogicalPlan>>,
     expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
 ) -> Result<LogicalPlan> {
     project_with_validation(plan, expr.into_iter().map(|e| (e, true)))
@@ -1927,9 +1936,10 @@ pub fn project(
 /// * Two or more expressions have the same name
 /// * An invalid expression is used (e.g. a `sort` expression)
 fn project_with_validation(
-    plan: LogicalPlan,
+    plan: impl Into<Arc<LogicalPlan>>,
     expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
 ) -> Result<LogicalPlan> {
+    let plan = plan.into();
     let mut projected_expr = vec![];
     for (e, validate) in expr {
         let e = e.into();
@@ -1984,9 +1994,9 @@ fn project_with_validation(
             }
         }
     }
-    validate_unique_names("Projections", projected_expr.iter())?;
 
-    Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+    validate_unique_names("Projections", projected_expr.iter())?;
+    Projection::try_new(projected_expr, plan).map(LogicalPlan::Projection)
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of
@@ -2013,10 +2023,10 @@ fn replace_columns(
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
 pub fn subquery_alias(
-    plan: LogicalPlan,
+    plan: impl Into<Arc<LogicalPlan>>,
     alias: impl Into<TableReference>,
 ) -> Result<LogicalPlan> {
-    SubqueryAlias::try_new(Arc::new(plan), alias).map(LogicalPlan::SubqueryAlias)
+    SubqueryAlias::try_new(plan.into(), alias).map(LogicalPlan::SubqueryAlias)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
@@ -2092,8 +2102,9 @@ pub fn table_source_with_constraints(
 /// Wrap projection for a plan, if the join keys contains normal expression.
 pub fn wrap_projection_for_join_if_necessary(
     join_keys: &[Expr],
-    input: LogicalPlan,
-) -> Result<(LogicalPlan, Vec<Column>, bool)> {
+    input: impl Into<Arc<LogicalPlan>>,
+) -> Result<(Arc<LogicalPlan>, Vec<Column>, bool)> {
+    let input = input.into();
     let input_schema = input.schema();
     let alias_join_keys: Vec<Expr> = join_keys
         .iter()
@@ -2132,7 +2143,7 @@ pub fn wrap_projection_for_join_if_necessary(
 
         LogicalPlanBuilder::from(input)
             .project(projection.into_iter().map(SelectExpr::from))?
-            .build()?
+            .build_arc()?
     } else {
         input
     };
@@ -2197,7 +2208,10 @@ impl TableSource for LogicalTableSource {
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan
-pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
+pub fn unnest(
+    input: impl Into<Arc<LogicalPlan>>,
+    columns: Vec<Column>,
+) -> Result<LogicalPlan> {
     unnest_with_options(input, columns, UnnestOptions::default())
 }
 
@@ -2213,8 +2227,8 @@ pub fn get_struct_unnested_columns(
 
 /// Create a [`LogicalPlan::Unnest`] plan with options
 /// This function receive a list of columns to be unnested
-/// because multiple unnest can be performed on the same column (e.g unnest with different depth)
-/// The new schema will contains post-unnest fields replacing the original field
+/// because multiple unnest can be performed on the same column (e.g. unnest with different depth)
+/// The new schema will contain post-unnest fields replacing the original field
 ///
 /// For example:
 /// Input schema as
@@ -2241,12 +2255,12 @@ pub fn get_struct_unnested_columns(
 /// +---------+---------+---------------------+---------------------+
 /// ```
 pub fn unnest_with_options(
-    input: LogicalPlan,
+    input: impl Into<Arc<LogicalPlan>>,
     columns_to_unnest: Vec<Column>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
     Ok(LogicalPlan::Unnest(Unnest::try_new(
-        Arc::new(input),
+        input.into(),
         columns_to_unnest,
         options,
     )?))
@@ -2254,12 +2268,12 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
-    use std::vec;
-
     use super::*;
     use crate::lit_with_metadata;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
+    use arrow::datatypes::Schema;
+    use std::vec;
 
     use crate::test::function_stub::sum;
     use datafusion_common::{
@@ -2621,7 +2635,7 @@ mod tests {
         ");
 
         // Check unnested field is a scalar
-        let field = plan.schema().field_with_name(None, "strings").unwrap();
+        let field = plan.schema().field_with_name(None, "strings")?;
         assert_eq!(&DataType::Utf8, field.data_type());
 
         // Unnesting the singular struct column result into 2 new columns for each subfield
@@ -2638,8 +2652,7 @@ mod tests {
             // Check unnested struct field is a scalar
             let field = plan
                 .schema()
-                .field_with_name(None, &format!("struct_singular.{field_name}"))
-                .unwrap();
+                .field_with_name(None, &format!("struct_singular.{field_name}"))?;
             assert_eq!(&DataType::UInt32, field.data_type());
         }
 
@@ -2658,7 +2671,7 @@ mod tests {
         ");
 
         // Check unnested struct list field should be a struct.
-        let field = plan.schema().field_with_name(None, "structs").unwrap();
+        let field = plan.schema().field_with_name(None, "structs")?;
         assert!(matches!(field.data_type(), DataType::Struct(_)));
 
         // Unnesting multiple fields at the same time, using infer syntax
@@ -2704,25 +2717,18 @@ mod tests {
         ");
 
         // Check output columns has correct type
-        let field = plan
-            .schema()
-            .field_with_name(None, "stringss_depth_1")
-            .unwrap();
+        let field = plan.schema().field_with_name(None, "stringss_depth_1")?;
         assert_eq!(
             &DataType::new_list(DataType::Utf8, false),
             field.data_type()
         );
-        let field = plan
-            .schema()
-            .field_with_name(None, "stringss_depth_2")
-            .unwrap();
+        let field = plan.schema().field_with_name(None, "stringss_depth_2")?;
         assert_eq!(&DataType::Utf8, field.data_type());
         // unnesting struct is still correct
         for field_name in &["a", "b"] {
             let field = plan
                 .schema()
-                .field_with_name(None, &format!("struct_singular.{field_name}"))
-                .unwrap();
+                .field_with_name(None, &format!("struct_singular.{field_name}"))?;
             assert_eq!(&DataType::UInt32, field.data_type());
         }
 

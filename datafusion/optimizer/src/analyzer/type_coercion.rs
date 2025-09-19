@@ -77,7 +77,7 @@ fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPla
     }
 
     if let Some(dfschema) = transform_schema_to_nonview(plan.schema()) {
-        coerce_plan_expr_for_schema(plan, &dfschema?)
+        coerce_plan_expr_for_schema(Arc::new(plan), &dfschema?).map(Arc::unwrap_or_clone)
     } else {
         Ok(plan)
     }
@@ -221,9 +221,8 @@ impl<'a> TypeCoercionRewriter<'a> {
             .inputs
             .into_iter()
             .map(|p| {
-                let plan =
-                    coerce_plan_expr_for_schema(Arc::unwrap_or_clone(p), &union_schema)?;
-                match plan {
+                match Arc::unwrap_or_clone(coerce_plan_expr_for_schema(p, &union_schema)?)
+                {
                     LogicalPlan::Projection(Projection { expr, input, .. }) => {
                         Ok(Arc::new(project_with_column_index(
                             expr,

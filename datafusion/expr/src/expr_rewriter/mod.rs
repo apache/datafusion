@@ -41,7 +41,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 
 /// Trait for rewriting [`Expr`]s into function calls.
 ///
-/// This trait is used with `FunctionRegistry::register_function_rewrite` to
+/// This trait is used with `FunctionRegistry::register_function_rewrite`
 /// to evaluating `Expr`s using functions that may not be built in to DataFusion
 ///
 /// For example, concatenating arrays `a || b` is represented as
@@ -49,7 +49,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 /// `array_concat` from the `functions-nested` crate.
 // This is not used in datafusion internally, but it is still helpful for downstream project so don't remove it.
 pub trait FunctionRewrite: Debug {
-    /// Return a human readable name for this rewrite
+    /// Return a human-readable name for this rewrite
     fn name(&self) -> &str;
 
     /// Potentially rewrite `expr` to some other expression
@@ -219,26 +219,29 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
 /// Returns plan with expressions coerced to types compatible with
 /// schema types
 pub fn coerce_plan_expr_for_schema(
-    plan: LogicalPlan,
+    plan: Arc<LogicalPlan>,
     schema: &DFSchema,
-) -> Result<LogicalPlan> {
-    match plan {
+) -> Result<Arc<LogicalPlan>> {
+    if matches!(plan.as_ref(), LogicalPlan::Projection(_)) {
         // special case Projection to avoid adding multiple projections
-        LogicalPlan::Projection(Projection { expr, input, .. }) => {
-            let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
-            let projection = Projection::try_new(new_exprs, input)?;
-            Ok(LogicalPlan::Projection(projection))
-        }
-        _ => {
-            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
-            let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
-            let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
-            if add_project {
-                let projection = Projection::try_new(new_exprs, Arc::new(plan))?;
-                Ok(LogicalPlan::Projection(projection))
-            } else {
-                Ok(plan)
-            }
+        let LogicalPlan::Projection(Projection { expr, input, .. }) =
+            Arc::unwrap_or_clone(plan)
+        else {
+            unreachable!()
+        };
+
+        let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
+        let projection = Projection::try_new(new_exprs, input)?;
+        Ok(Arc::new(LogicalPlan::Projection(projection)))
+    } else {
+        let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
+        let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
+        let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
+        if add_project {
+            let projection = Projection::try_new(new_exprs, plan)?;
+            Ok(Arc::new(LogicalPlan::Projection(projection)))
+        } else {
+            Ok(plan)
         }
     }
 }
@@ -434,7 +437,7 @@ mod test {
     fn normalize_cols() {
         let expr = col("a") + col("b") + col("c");
 
-        // Schemas with some matching and some non matching cols
+        // Schemas with some matching and some non-matching cols
         let schema_a = make_schema_with_empty_metadata(
             vec![Some("tableA".into()), Some("tableA".into())],
             vec!["a", "aa"],
