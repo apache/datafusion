@@ -17,23 +17,27 @@
 
 //! Factory for creating ListingTables with default options
 
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::Arc;
-
 use crate::catalog::{TableProvider, TableProviderFactory};
 use crate::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use crate::execution::context::SessionState;
+use std::collections::HashSet;
+use std::path::Path;
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{config_datafusion_err, Result};
+use datafusion_common::{plan_err, DFSchema, DataFusionError, ToDFSchema};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::expr::Sort;
+
+use futures::future::join_all;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 #[derive(Debug, Default)]
@@ -63,135 +67,188 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
-        let file_extension = match table_path.is_collection() {
-            // Setting the extension to be empty instead of allowing the default extension seems
-            // odd, but was done to ensure existing behavior isn't modified. It seems like this
-            // could be refactored to either use the default extension or set the fully expected
-            // extension when compression is included (e.g. ".csv.gz")
-            true => "",
-            false => &get_extension(cmd.location.as_str()),
+        let file_extension = match cmd.locations.len() {
+            1 => {
+                let table_path = ListingTableUrl::parse(&cmd.locations[0])?;
+                match table_path.is_collection() {
+                    // Setting the extension to be empty instead of allowing the default extension seems
+                    // odd, but was done to ensure existing behavior isn't modified. It seems like this
+                    // could be refactored to either use the default extension or set the fully expected
+                    // extension when compression is included (e.g. ".csv.gz").
+                    // We do the same if there are multiple locations provided for the table.
+                    true => "",
+                    false => &get_extension(cmd.locations[0].as_str()),
+                }
+            }
+            _ => "",
         };
+
         let mut options = ListingOptions::new(file_format)
             .with_session_config_options(session_state.config())
             .with_file_extension(file_extension);
 
-        let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
-            let infer_parts = session_state
-                .config_options()
-                .execution
-                .listing_table_factory_infer_partitions;
-            let part_cols = if cmd.table_partition_cols.is_empty() && infer_parts {
-                options
-                    .infer_partitions(session_state, &table_path)
-                    .await?
-                    .into_iter()
-            } else {
-                cmd.table_partition_cols.clone().into_iter()
-            };
+        let table_paths: Vec<ListingTableUrl> = cmd
+            .locations
+            .iter()
+            .map(|loc| ListingTableUrl::parse(loc))
+            .collect::<Result<Vec<_>>>()?;
 
-            (
-                None,
-                part_cols
-                    .map(|p| {
-                        (
-                            p,
-                            DataType::Dictionary(
-                                Box::new(DataType::UInt16),
-                                Box::new(DataType::Utf8),
-                            ),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
+        // We use the first location to infer the partition columns,
+        // primarily for performance and simplicity reasons.
+        let partition_columns = infer_partition_columns(
+            &options,
+            session_state,
+            &table_paths[0],
+            &cmd.table_partition_cols,
+        )
+        .await?;
+
+        let infer_schemas = table_paths.into_iter().map(|listing_url| {
+            infer_schema(
+                &options,
+                &session_state,
+                listing_url,
+                &partition_columns,
+                &cmd.order_exprs,
+                &cmd.schema,
+                &cmd.file_type,
             )
-        } else {
-            let schema = Arc::clone(cmd.schema.inner());
-            let table_partition_cols = cmd
-                .table_partition_cols
-                .iter()
-                .map(|col| {
-                    schema
-                        .field_with_name(col)
-                        .map_err(|e| arrow_datafusion_err!(e))
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
-                .collect();
-            // exclude partition columns to support creating partitioned external table
-            // with a specified column definition like
-            // `create external table a(c0 int, c1 int) stored as csv partitioned by (c1)...`
-            let mut project_idx = Vec::new();
-            for i in 0..schema.fields().len() {
-                if !cmd.table_partition_cols.contains(schema.field(i).name()) {
-                    project_idx.push(i);
-                }
-            }
-            let schema = Arc::new(schema.project(&project_idx)?);
-            (Some(schema), table_partition_cols)
-        };
+        });
+        let results = join_all(infer_schemas).await;
 
-        options = options.with_table_partition_cols(table_partition_cols);
+        let mut merged_schema = DFSchema::empty();
+        let mut listing_urls = Vec::new();
+        for result in results {
+            let (resolved_table_path, resolved_schema) = result?;
+            listing_urls.push(resolved_table_path);
+            merged_schema.merge(&resolved_schema.to_dfschema()?);
+        }
 
-        options
-            .validate_partitions(session_state, &table_path)
-            .await?;
-
-        let resolved_schema = match provided_schema {
-            // We will need to check the table columns against the schema
-            // this is done so that we can do an ORDER BY for external table creation
-            // specifically for parquet file format.
-            // See: https://github.com/apache/datafusion/issues/7317
-            None => {
-                // if the folder then rewrite a file path as 'path/*.parquet'
-                // to only read the files the reader can understand
-                if table_path.is_folder() && table_path.get_glob().is_none() {
-                    // Since there are no files yet to infer an actual extension,
-                    // derive the pattern based on compression type.
-                    // So for gzipped CSV the pattern is `*.csv.gz`
-                    let glob = match options.format.compression_type() {
-                        Some(compression) => {
-                            match options.format.get_ext_with_compression(&compression) {
-                                // Use glob based on `FileFormat` extension
-                                Ok(ext) => format!("*.{ext}"),
-                                // Fallback to `file_type`, if not supported by `FileFormat`
-                                Err(_) => format!("*.{}", cmd.file_type.to_lowercase()),
-                            }
-                        }
-                        None => format!("*.{}", cmd.file_type.to_lowercase()),
-                    };
-                    table_path = table_path.with_glob(glob.as_ref())?;
-                }
-                let schema = options.infer_schema(session_state, &table_path).await?;
-                let df_schema = Arc::clone(&schema).to_dfschema()?;
-                let column_refs: HashSet<_> = cmd
-                    .order_exprs
-                    .iter()
-                    .flat_map(|sort| sort.iter())
-                    .flat_map(|s| s.expr.column_refs())
-                    .collect();
-
-                for column in &column_refs {
-                    if !df_schema.has_column(column) {
-                        return plan_err!("Column {column} is not in schema");
-                    }
-                }
-
-                schema
-            }
-            Some(s) => s,
-        };
-        let config = ListingTableConfig::new(table_path)
+        options = options.with_table_partition_cols(partition_columns);
+        let config = ListingTableConfig::new_with_multi_paths(listing_urls)
             .with_listing_options(options.with_file_sort_order(cmd.order_exprs.clone()))
-            .with_schema(resolved_schema);
+            .with_schema(merged_schema.inner().to_owned());
+
         let provider = ListingTable::try_new(config)?
             .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
+
         let table = provider
             .with_definition(cmd.definition.clone())
             .with_constraints(cmd.constraints.clone())
             .with_column_defaults(cmd.column_defaults.clone());
+
         Ok(Arc::new(table))
     }
+}
+
+async fn infer_schema(
+    options: &ListingOptions,
+    session_state: &SessionState,
+    mut table_path: ListingTableUrl,
+    partition_cols: &Vec<(String, DataType)>,
+    order_exprs: &Vec<Vec<Sort>>,
+    schema: &DFSchema,
+    file_type: &String,
+) -> Result<(ListingTableUrl, SchemaRef), DataFusionError> {
+    let provided_schema = if schema.fields().len() == 0 {
+        None
+    } else {
+        let schema = Arc::clone(schema.inner());
+        let partitions_cols_set: HashSet<&String> =
+            HashSet::from_iter(partition_cols.iter().map(|(k, _)| k));
+        // exclude partition columns to support creating a partitioned external table
+        // with a specified column definition like
+        // `create external table a(c0 int, c1 int) stored as csv partitioned by (c1)...`
+        let mut project_idx = Vec::new();
+        for i in 0..schema.fields().len() {
+            if !partitions_cols_set.contains(schema.field(i).name()) {
+                project_idx.push(i);
+            }
+        }
+        let schema = Arc::new(schema.project(&project_idx)?);
+        Some(schema)
+    };
+
+    options
+        .validate_partitions(session_state, &table_path)
+        .await?;
+
+    let resolved_schema = match provided_schema {
+        // We will need to check the table columns against the schema
+        // this is done so that we can do an ORDER BY for external table creation
+        // specifically for parquet file format.
+        // See: https://github.com/apache/datafusion/issues/7317
+        None => {
+            // if the folder then rewrite a file path as 'path/*.parquet'
+            // to only read the files the reader can understand
+            if table_path.is_folder() && table_path.get_glob().is_none() {
+                // Since there are no files yet to infer an actual extension,
+                // derive the pattern based on compression type.
+                // So for gzipped CSV the pattern is `*.csv.gz`
+                let glob = match options.format.compression_type() {
+                    Some(compression) => {
+                        match options.format.get_ext_with_compression(&compression) {
+                            // Use glob based on `FileFormat` extension
+                            Ok(ext) => format!("*.{ext}"),
+                            // Fallback to `file_type`, if not supported by `FileFormat`
+                            Err(_) => format!("*.{}", file_type.to_lowercase()),
+                        }
+                    }
+                    None => format!("*.{}", file_type.to_lowercase()),
+                };
+                table_path = table_path.with_glob(&glob)?;
+            }
+            let schema = options.infer_schema(session_state, &table_path).await?;
+            let df_schema = Arc::clone(&schema).to_dfschema()?;
+            let column_refs: HashSet<_> = order_exprs
+                .iter()
+                .flat_map(|sort| sort.iter())
+                .flat_map(|s| s.expr.column_refs())
+                .collect();
+
+            for column in &column_refs {
+                if !df_schema.has_column(column) {
+                    return plan_err!("Column {column} is not in schema");
+                }
+            }
+
+            schema
+        }
+        Some(s) => s,
+    };
+    Ok((table_path, resolved_schema))
+}
+
+async fn infer_partition_columns(
+    options: &ListingOptions,
+    session_state: &SessionState,
+    table_path: &ListingTableUrl,
+    provided_cols: &Vec<String>,
+) -> Result<Vec<(String, DataType)>, DataFusionError> {
+    let infer_parts = session_state
+        .config_options()
+        .execution
+        .listing_table_factory_infer_partitions;
+    let part_cols = if provided_cols.is_empty() && infer_parts {
+        options
+            .infer_partitions(session_state, &table_path)
+            .await?
+            .into_iter()
+    } else {
+        provided_cols.clone().into_iter()
+    };
+
+    Ok(part_cols
+        .map(|p| {
+            (
+                p,
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Utf8),
+                ),
+            )
+        })
+        .collect::<Vec<_>>())
 }
 
 // Get file extension from path
@@ -233,7 +290,7 @@ mod tests {
         let name = TableReference::bare("foo");
         let cmd = CreateExternalTable {
             name,
-            location: csv_file.path().to_str().unwrap().to_string(),
+            locations: vec![csv_file.path().to_str().unwrap().to_string()],
             file_type: "csv".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
@@ -274,7 +331,7 @@ mod tests {
         options.insert("format.has_header".into(), "true".into());
         let cmd = CreateExternalTable {
             name,
-            location: csv_file.path().to_str().unwrap().to_string(),
+            locations: vec![csv_file.path().to_str().unwrap().to_string()],
             file_type: "csv".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
@@ -319,7 +376,7 @@ mod tests {
         options.insert("format.compression".into(), "gzip".into());
         let cmd = CreateExternalTable {
             name,
-            location: dir.path().to_str().unwrap().to_string(),
+            locations: vec![dir.path().to_str().unwrap().to_string()],
             file_type: "csv".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
@@ -371,7 +428,7 @@ mod tests {
         options.insert("format.has_header".into(), "true".into());
         let cmd = CreateExternalTable {
             name,
-            location: dir.path().to_str().unwrap().to_string(),
+            locations: vec![dir.path().to_str().unwrap().to_string()],
             file_type: "csv".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
@@ -415,7 +472,7 @@ mod tests {
 
         let cmd = CreateExternalTable {
             name,
-            location: String::from(path.to_str().unwrap()),
+            locations: vec![String::from(path.to_str().unwrap())],
             file_type: "parquet".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
@@ -455,7 +512,7 @@ mod tests {
 
         let cmd = CreateExternalTable {
             name,
-            location: dir.path().to_str().unwrap().to_string(),
+            locations: vec![dir.path().to_str().unwrap().to_string()],
             file_type: "parquet".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
@@ -496,7 +553,7 @@ mod tests {
 
         let cmd = CreateExternalTable {
             name,
-            location: dir.path().to_str().unwrap().to_string(),
+            locations: vec![dir.path().to_str().unwrap().to_string()],
             file_type: "parquet".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
@@ -518,5 +575,56 @@ mod tests {
 
         let listing_options = listing_table.options();
         assert!(listing_options.table_partition_cols.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_using_multiple_locations() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(dir.path());
+        path.push("folder-1");
+        path.push("folder-2");
+        fs::create_dir_all(&path).unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let options = HashMap::new();
+        let cmd = CreateExternalTable {
+            name,
+            locations: vec![
+                dir.path().to_str().unwrap().to_string() + "/folder-1",
+                dir.path().to_str().unwrap().to_string() + "/folder-2",
+            ],
+            file_type: "csv".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert_eq!("", listing_options.file_extension);
+        assert_eq!(2, listing_table.table_paths().len());
+
+        // Glob pattern is set to search for gzipped files
+        let table_path = listing_table.table_paths().first().unwrap();
+        assert_eq!(
+            table_path.get_glob().clone().unwrap(),
+            Pattern::new("*.csv").unwrap()
+        );
     }
 }

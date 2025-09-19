@@ -184,8 +184,8 @@ impl TableProviderFactory for TestTableFactory {
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
-            url: cmd.location.to_string(),
-            schema: Arc::clone(cmd.schema.inner()),
+            url: cmd.locations,
+            schema: Arc::new(cmd.schema.as_ref().into()),
         }))
     }
 }
@@ -194,7 +194,7 @@ impl TableProviderFactory for TestTableFactory {
 #[derive(Debug)]
 pub struct TestTableProvider {
     /// URL of table files or folder
-    pub url: String,
+    pub url: Vec<String>,
     /// test table schema
     pub schema: SchemaRef,
 }

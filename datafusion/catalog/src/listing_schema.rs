@@ -132,7 +132,7 @@ impl ListingSchemaProvider {
                         &CreateExternalTable {
                             schema: Arc::new(DFSchema::empty()),
                             name,
-                            location: table_url,
+                            locations: vec![table_url],
                             file_type: self.format.clone(),
                             table_partition_cols: vec![],
                             if_not_exists: false,

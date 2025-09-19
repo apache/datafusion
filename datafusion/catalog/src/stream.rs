@@ -53,8 +53,12 @@ impl TableProviderFactory for StreamTableFactory {
         state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
+        let location = match cmd.locations.len() {
+            1 => &cmd.locations[0],
+            _ => return config_err!("Stream table factory supports only a single table location"),
+        };
+
         let schema: SchemaRef = Arc::clone(cmd.schema.inner());
-        let location = cmd.location.clone();
         let encoding = cmd.file_type.parse()?;
         let header = if let Ok(opt) = cmd
             .options

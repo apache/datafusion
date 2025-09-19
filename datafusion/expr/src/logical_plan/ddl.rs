@@ -209,7 +209,7 @@ pub struct CreateExternalTable {
     /// The table name
     pub name: TableReference,
     /// The physical location
-    pub location: String,
+    pub locations: Vec<String>,
     /// The file type of physical file
     pub file_type: String,
     /// Partition Columns
@@ -239,7 +239,7 @@ impl Hash for CreateExternalTable {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.schema.hash(state);
         self.name.hash(state);
-        self.location.hash(state);
+        self.locations.hash(state);
         self.file_type.hash(state);
         self.table_partition_cols.hash(state);
         self.if_not_exists.hash(state);
@@ -259,7 +259,7 @@ impl PartialOrd for CreateExternalTable {
             /// The table name
             pub name: &'a TableReference,
             /// The physical location
-            pub location: &'a String,
+            pub locations: &'a Vec<String>,
             /// The file type of physical file
             pub file_type: &'a String,
             /// Partition Columns
@@ -277,7 +277,7 @@ impl PartialOrd for CreateExternalTable {
         }
         let comparable_self = ComparableCreateExternalTable {
             name: &self.name,
-            location: &self.location,
+            locations: &self.locations,
             file_type: &self.file_type,
             table_partition_cols: &self.table_partition_cols,
             if_not_exists: &self.if_not_exists,
@@ -288,7 +288,7 @@ impl PartialOrd for CreateExternalTable {
         };
         let comparable_other = ComparableCreateExternalTable {
             name: &other.name,
-            location: &other.location,
+            locations: &other.locations,
             file_type: &other.file_type,
             table_partition_cols: &other.table_partition_cols,
             if_not_exists: &other.if_not_exists,

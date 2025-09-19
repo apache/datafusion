@@ -1735,12 +1735,12 @@ mod tests {
             (
                 vec![vec![col("string_col").sort(true, false)]],
                 Ok(vec![[PhysicalSortExpr {
-                            expr: physical_col("string_col", &schema).unwrap(),
-                            options: SortOptions {
-                                descending: false,
-                                nulls_first: false,
-                            },
-                        }].into(),
+                    expr: physical_col("string_col", &schema).unwrap(),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                }].into(),
                 ])
             ),
             // ok with two columns, different options
@@ -1751,11 +1751,11 @@ mod tests {
                 ]],
                 Ok(vec![[
                             PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
-                                        .asc()
-                                        .nulls_last(),
+                                .asc()
+                                .nulls_last(),
                             PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
-                                        .desc()
-                                        .nulls_first()
+                                .desc()
+                                .nulls_first()
                         ].into(),
                 ])
             ),

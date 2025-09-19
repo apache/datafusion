@@ -625,7 +625,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             create_extern_table.name.as_ref(),
                             "CreateExternalTable",
                         )?,
-                        location: create_extern_table.location.clone(),
+                        locations: create_extern_table.location.clone(),
                         file_type: create_extern_table.file_type.clone(),
                         table_partition_cols: create_extern_table
                             .table_partition_cols
@@ -1465,7 +1465,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
                 CreateExternalTable {
                     name,
-                    location,
+                    locations: location,
                     file_type,
                     schema: df_schema,
                     table_partition_cols,
