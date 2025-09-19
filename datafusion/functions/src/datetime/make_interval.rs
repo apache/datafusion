@@ -258,23 +258,11 @@ pub fn make_interval_month_day_nano(
     sec: f64,
 ) -> Option<IntervalMonthDayNano> {
     // checks if overflow
-    let months = match year.checked_mul(12).and_then(|v| v.checked_add(month)) {
-        Some(m) => m,
-        None => return None,
-    };
-    let total_days = match week.checked_mul(7).and_then(|v| v.checked_add(day)) {
-        Some(dy) => dy,
-        None => return None,
-    };
+    let months = year.checked_mul(12).and_then(|v| v.checked_add(month))?;
+    let total_days = week.checked_mul(7).and_then(|v| v.checked_add(day))?;
 
-    let hours_nanos = match (hour as i64).checked_mul(3_600_000_000_000) {
-        Some(n) => n,
-        None => return None,
-    };
-    let mins_nanos = match (min as i64).checked_mul(60_000_000_000) {
-        Some(n) => n,
-        None => return None,
-    };
+    let hours_nanos = (hour as i64).checked_mul(3_600_000_000_000)?;
+    let mins_nanos = (min as i64).checked_mul(60_000_000_000)?;
 
     let sec_int = sec.trunc() as i64;
     let frac = sec - sec.trunc();
@@ -288,19 +276,12 @@ pub fn make_interval_month_day_nano(
         }
     }
 
-    let secs_nanos = match sec_int.checked_mul(1_000_000_000) {
-        Some(n) => n,
-        None => return None,
-    };
+    let secs_nanos = sec_int.checked_mul(1_000_000_000)?;
 
-    let total_nanos = match hours_nanos
+    let total_nanos = hours_nanos
         .checked_add(mins_nanos)
         .and_then(|v| v.checked_add(secs_nanos))
-        .and_then(|v| v.checked_add(frac_nanos))
-    {
-        Some(n) => n,
-        None => return None,
-    };
+        .and_then(|v| v.checked_add(frac_nanos))?;
 
     Some(IntervalMonthDayNano::new(months, total_days, total_nanos))
 }
