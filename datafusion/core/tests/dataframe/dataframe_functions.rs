@@ -1294,7 +1294,7 @@ async fn test_count_wildcard() -> Result<()> {
         Field::new("c", DataType::UInt32, false),
     ]);
 
-    let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+    let table_scan = table_scan(Some("test"), schema, None)?.build()?;
     let plan = LogicalPlanBuilder::from(table_scan)
         .aggregate(vec![col("b")], vec![count_all()])
         .unwrap()

@@ -22,7 +22,6 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::{Distinct, LogicalPlan, Union};
-use itertools::Itertools;
 use std::sync::Arc;
 
 #[derive(Default, Debug)]
@@ -59,11 +58,11 @@ impl OptimizerRule for EliminateNestedUnion {
                 let inputs = inputs
                     .into_iter()
                     .flat_map(extract_plans_from_union)
-                    .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
+                    .map(|plan| coerce_plan_expr_for_schema(Arc::new(plan), &schema))
                     .collect::<Result<Vec<_>>>()?;
 
                 Ok(Transformed::yes(LogicalPlan::Union(Union {
-                    inputs: inputs.into_iter().map(Arc::new).collect_vec(),
+                    inputs,
                     schema,
                 })))
             }
@@ -74,12 +73,14 @@ impl OptimizerRule for EliminateNestedUnion {
                             .into_iter()
                             .map(extract_plan_from_distinct)
                             .flat_map(extract_plans_from_union)
-                            .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
+                            .map(|plan| {
+                                coerce_plan_expr_for_schema(Arc::new(plan), &schema)
+                            })
                             .collect::<Result<Vec<_>>>()?;
 
                         Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
                             Arc::new(LogicalPlan::Union(Union {
-                                inputs: inputs.into_iter().map(Arc::new).collect_vec(),
+                                inputs,
                                 schema: Arc::clone(&schema),
                             })),
                         ))))
@@ -151,7 +152,7 @@ mod tests {
 
     #[test]
     fn eliminate_nothing() -> Result<()> {
-        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+        let plan_builder = table_scan(Some("table"), schema(), None)?;
 
         let plan = plan_builder.clone().union(plan_builder.build()?)?.build()?;
 
@@ -164,7 +165,7 @@ mod tests {
 
     #[test]
     fn eliminate_distinct_nothing() -> Result<()> {
-        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+        let plan_builder = table_scan(Some("table"), schema(), None)?;
 
         let plan = plan_builder
             .clone()
@@ -181,7 +182,7 @@ mod tests {
 
     #[test]
     fn eliminate_nested_union() -> Result<()> {
-        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+        let plan_builder = table_scan(Some("table"), schema(), None)?;
 
         let plan = plan_builder
             .clone()
@@ -201,7 +202,7 @@ mod tests {
 
     #[test]
     fn eliminate_nested_union_with_distinct_union() -> Result<()> {
-        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+        let plan_builder = table_scan(Some("table"), schema(), None)?;
 
         let plan = plan_builder
             .clone()
@@ -223,7 +224,7 @@ mod tests {
 
     #[test]
     fn eliminate_nested_distinct_union() -> Result<()> {
-        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+        let plan_builder = table_scan(Some("table"), schema(), None)?;
 
         let plan = plan_builder
             .clone()
@@ -246,7 +247,7 @@ mod tests {
 
     #[test]
     fn eliminate_nested_distinct_union_with_distinct_table() -> Result<()> {
-        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+        let plan_builder = table_scan(Some("table"), schema(), None)?;
 
         let plan = plan_builder
             .clone()
@@ -269,7 +270,7 @@ mod tests {
     // after LogicalPlanBuilder::union, we already have all equal expression aliases
     #[test]
     fn eliminate_nested_union_with_projection() -> Result<()> {
-        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+        let plan_builder = table_scan(Some("table"), schema(), None)?;
 
         let plan = plan_builder
             .clone()
@@ -298,7 +299,7 @@ mod tests {
 
     #[test]
     fn eliminate_nested_distinct_union_with_projection() -> Result<()> {
-        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+        let plan_builder = table_scan(Some("table"), schema(), None)?;
 
         let plan = plan_builder
             .clone()
@@ -330,7 +331,7 @@ mod tests {
     fn eliminate_nested_union_with_type_cast_projection() -> Result<()> {
         let table_1 = table_scan(
             Some("table_1"),
-            &Schema::new(vec![
+            Schema::new(vec![
                 Field::new("id", DataType::Int64, false),
                 Field::new("key", DataType::Utf8, false),
                 Field::new("value", DataType::Float64, false),
@@ -340,7 +341,7 @@ mod tests {
 
         let table_2 = table_scan(
             Some("table_1"),
-            &Schema::new(vec![
+            Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
                 Field::new("key", DataType::Utf8, false),
                 Field::new("value", DataType::Float32, false),
@@ -350,7 +351,7 @@ mod tests {
 
         let table_3 = table_scan(
             Some("table_1"),
-            &Schema::new(vec![
+            Schema::new(vec![
                 Field::new("id", DataType::Int16, false),
                 Field::new("key", DataType::Utf8, false),
                 Field::new("value", DataType::Float32, false),
@@ -377,7 +378,7 @@ mod tests {
     fn eliminate_nested_distinct_union_with_type_cast_projection() -> Result<()> {
         let table_1 = table_scan(
             Some("table_1"),
-            &Schema::new(vec![
+            Schema::new(vec![
                 Field::new("id", DataType::Int64, false),
                 Field::new("key", DataType::Utf8, false),
                 Field::new("value", DataType::Float64, false),
@@ -387,7 +388,7 @@ mod tests {
 
         let table_2 = table_scan(
             Some("table_1"),
-            &Schema::new(vec![
+            Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
                 Field::new("key", DataType::Utf8, false),
                 Field::new("value", DataType::Float32, false),
@@ -397,7 +398,7 @@ mod tests {
 
         let table_3 = table_scan(
             Some("table_1"),
-            &Schema::new(vec![
+            Schema::new(vec![
                 Field::new("id", DataType::Int16, false),
                 Field::new("key", DataType::Utf8, false),
                 Field::new("value", DataType::Float32, false),
