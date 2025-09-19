@@ -551,7 +551,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             self.right.partition_statistics(None)?,
             vec![],
             &self.join_type,
-            &self.join_schema,
+            &self.schema(),
         )
     }
 
@@ -2267,6 +2267,26 @@ pub(crate) mod tests {
 
         assert_join_metrics!(metrics, 2);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_has_correct_stats() -> Result<()> {
+        let left = build_left_table();
+        let right = build_right_table();
+        let nested_loop_join = NestedLoopJoinExec::try_new(
+            left,
+            right,
+            None,
+            &JoinType::Left,
+            Some(vec![1, 2]),
+        )?;
+        let stats = nested_loop_join.partition_statistics(None)?;
+        assert_eq!(
+            nested_loop_join.schema().fields().len(),
+            stats.column_statistics.len(),
+        );
+        assert_eq!(2, stats.column_statistics.len());
         Ok(())
     }
 
