@@ -24,7 +24,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_datafusion_err, internal_err, Column, HashSet, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, Column, Result};
 use datafusion_expr::expr::{
     self, Exists, InSubquery, WindowFunction, WindowFunctionParams,
 };
@@ -844,16 +844,7 @@ impl DependentJoinDecorrelator {
                     }
 
                     let new_agg = Aggregate::try_new(input, group_expr, aggr_expr)?;
-                    let agg_output_cols = new_agg
-                        .schema
-                        .columns()
-                        .into_iter()
-                        .map(|c| Expr::Column(c));
-
                     let right = LogicalPlanBuilder::new(LogicalPlan::Aggregate(new_agg))
-                        // TODO: a hack to ensure aggregated expr are ordered first in the output
-                        // Check if we can remove this logic now
-                        // .project(agg_output_cols.rev())?
                         .build()?;
                     natural_join(
                         LogicalPlanBuilder::new(dscan),
