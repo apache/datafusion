@@ -472,4 +472,9 @@ impl NativeType {
     pub fn is_duration(&self) -> bool {
         matches!(self, NativeType::Duration(_))
     }
+
+    #[inline]
+    pub fn is_binary(&self) -> bool {
+        matches!(self, NativeType::Binary | NativeType::FixedSizeBinary(_))
+    }
 }
