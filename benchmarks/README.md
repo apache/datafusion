@@ -731,7 +731,7 @@ Different queries are included to test nested loop joins under various workloads
 
 This benchmark focuses on the performance of queries with nested hash joins, minimizing other overheads such as scanning data sources or evaluating predicates.
 
-Different queries are included to test nested loop joins under various workloads.
+Several queries are included to test hash joins under various workloads.
 
 ### Example Run
 
