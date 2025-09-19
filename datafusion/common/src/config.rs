@@ -838,7 +838,34 @@ config_namespace! {
 
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
+        ///
+        /// Note: if `join_method_priority` is set, this configuration will be overridden
+        #[deprecated(since = "51.0.0", note = "Please use configuration option `join_method_priority` instead")]
         pub prefer_hash_join: bool, default = true
+
+        /// Comma-separated join priority (case-insensitive) selecting the first applicable and enabled (through configurations like `enable_hash_join`) join method.
+        ///
+        /// Valid join methods are: hj/hash_join, smj/sort_merge_join, nlj/nested_loop_join.
+        ///
+        /// It is allowed to specify any number of join methods in the configuration. If none of them is applicable, the default join planning heuristic will be used.
+        /// The default join planning policy is: for equi-joins Hash Join will be selected; for non equi-joins, Nested Loop Join will be chosen.
+        ///
+        /// Example usage: SET datafusion.optimizer.join_method_priority = 'hj, nlj'
+        ///
+        /// Note: If this option is not set (default empty string), the deprecated legacy option `prefer_hash_join` will be used.
+        pub join_method_priority: String, transform = str::to_lowercase, default = "".to_string()
+
+        /// Enables planning HashJoin operators. If set to false, the optimizer will avoid
+        /// producing HashJoin plans and consider other join strategies instead.
+        pub enable_hash_join: bool, default = true
+
+        /// Enables planning SortMergeJoin operators. If set to false, the optimizer will avoid
+        /// producing SortMergeJoin plans and consider other join strategies instead.
+        pub enable_sort_merge_join: bool, default = true
+
+        /// Enables planning NestedLoopJoin operators. If set to false, the optimizer will avoid
+        /// producing NestedLoopJoin plans and consider other join strategies instead.
+        pub enable_nested_loop_join: bool, default = true
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
