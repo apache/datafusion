@@ -18,7 +18,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
 use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray};
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
@@ -27,70 +26,22 @@ use datafusion_common::{
     exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_macros::user_doc;
+use datafusion_functions::utils::make_scalar_function;
 
-#[user_doc(
-    doc_section(label = "Time and Date Functions"),
-    description = "Construct an INTERVAL (MonthDayNano) from component parts. Missing arguments default to 0; if any provided argument is NULL on a row, the result is NULL.",
-    syntax_example = "make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]])",
-    sql_example = r#"```sql
--- Inline example without creating a table
-> SELECT
-      y, m, w, d, h, mi, s,
-      make_interval(y, m, w, d, h, mi, s) AS interval
-    FROM VALUES
-      (1,   1,   1,   1,   1,   1,   1.0)
-    AS v(y, m, w, d, h, mi, s);
-+---+---+---+---+---+---+---+---------------------------------------------------+
-|y  |m  |w  |d  |h  |mi |s  |interval                                           |
-+---+---+---+---+---+---+---+---------------------------------------------------+
-|1  |1  |1  |1  |1  |1  |1.0|1 years 1 months 8 days 1 hours 1 minutes 1 seconds|
-+---+---+---+---+---+---+---+---------------------------------------------------+
-```"#,
-    argument(
-        name = "years",
-        description = "Years to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
-    ),
-    argument(
-        name = "months",
-        description = "Months to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
-    ),
-    argument(
-        name = "weeks",
-        description = "Weeks to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
-    ),
-    argument(
-        name = "days",
-        description = "Days to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
-    ),
-    argument(
-        name = "hours",
-        description = "Hours to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
-    ),
-    argument(
-        name = "mins",
-        description = "Minutes to use when making the interval. Optional; defaults to 0. Can be a constant, column or function, and any combination of arithmetic operators."
-    ),
-    argument(
-        name = "secs",
-        description = "Seconds to use when making the interval (may be fractional). Optional; defaults to 0. Must be finite (not NaN/±Inf). Can be a constant, column or function, and any combination of arithmetic operators."
-    )
-)]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct MakeIntervalFunc {
+pub struct SparkMakeInterval {
     signature: Signature,
 }
 
-impl Default for MakeIntervalFunc {
+impl Default for SparkMakeInterval {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MakeIntervalFunc {
+impl SparkMakeInterval {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -98,7 +49,7 @@ impl MakeIntervalFunc {
     }
 }
 
-impl ScalarUDFImpl for MakeIntervalFunc {
+impl ScalarUDFImpl for SparkMakeInterval {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -143,10 +94,6 @@ impl ScalarUDFImpl for MakeIntervalFunc {
                 })
                 .collect()),
         }
-    }
-
-    fn documentation(&self) -> Option<&Documentation> {
-        self.doc()
     }
 }
 
@@ -580,7 +527,7 @@ mod tests {
             return_field: Field::new("f", Interval(MonthDayNano), true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
-        MakeIntervalFunc::new().invoke_with_args(args)
+        SparkMakeInterval::new().invoke_with_args(args)
     }
 
     #[test]
