@@ -33,7 +33,6 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
-use arrow_schema::SchemaRef;
 
 #[derive(Clone)]
 pub struct FlightServiceImpl {}
@@ -99,7 +98,7 @@ impl FlightService for FlightServiceImpl {
                 let df = ctx.sql(sql).await.map_err(to_tonic_err)?;
 
                 // execute the query
-                let schema: SchemaRef = df.schema().into();
+                let schema = Arc::clone(df.schema().inner());
                 let results = df.collect().await.map_err(to_tonic_err)?;
                 if results.is_empty() {
                     return Err(Status::internal("There were no results from ticket"));

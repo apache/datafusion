@@ -1067,30 +1067,10 @@ fn format_simple_data_type(data_type: &DataType) -> String {
     }
 }
 
-impl From<DFSchema> for Schema {
-    /// Convert DFSchema into a Schema
-    fn from(df_schema: DFSchema) -> Self {
-        (&df_schema).into()
-    }
-}
-
-impl From<&DFSchema> for Schema {
-    /// Convert DFSchema reference into a Schema
-    fn from(df_schema: &DFSchema) -> Self {
-        df_schema.as_arrow().clone()
-    }
-}
-
 impl<'a> From<&'a DFSchema> for &'a Schema {
     /// Convert DFSchema reference into a Schema
     fn from(df_schema: &'a DFSchema) -> Self {
         df_schema.as_arrow()
-    }
-}
-
-impl From<&DFSchema> for SchemaRef {
-    fn from(df_schema: &DFSchema) -> Self {
-        Arc::clone(df_schema.inner())
     }
 }
 

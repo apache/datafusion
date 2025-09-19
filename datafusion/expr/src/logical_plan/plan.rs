@@ -2276,10 +2276,10 @@ impl SubqueryAlias {
         let func_dependencies = plan.schema().functional_dependencies().clone();
 
         let schema = DFSchema::from_unqualified_fields(fields, meta_data)?;
-        let schema = Schema::from(schema);
+        let schema = schema.as_arrow();
 
         let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
+            DFSchema::try_from_qualified_schema(alias.clone(), schema)?
                 .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {

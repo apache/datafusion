@@ -136,7 +136,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Step 2.1: Create a table source for the temporary relation
         let work_table_source = self
             .context_provider
-            .create_cte_work_table(&cte_name, static_plan.schema().as_ref().into())?;
+            .create_cte_work_table(&cte_name, Arc::clone(static_plan.schema().inner()))?;
 
         // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term
