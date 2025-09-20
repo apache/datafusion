@@ -371,18 +371,46 @@ pub(crate) fn window_equivalence_properties(
     for (i, expr) in window_exprs.iter().enumerate() {
         let partitioning_exprs = expr.partition_by();
         let no_partitioning = partitioning_exprs.is_empty();
-        // Collect columns defining partitioning, and construct all `SortOptions`
-        // variations for them. Then, we will check each one whether it satisfies
-        // the existing ordering provided by the input plan.
+
+        // Use incremental approach to avoid O(4^n) exponential complexity:
+        // Instead of generating all combinations upfront via multi_cartesian_product,
+        // we build orderings incrementally and prune invalid paths early.
         let mut all_satisfied_lexs = vec![];
-        for lex in partitioning_exprs
-            .iter()
-            .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)))
-            .multi_cartesian_product()
-            .filter_map(LexOrdering::new)
-        {
-            if window_eq_properties.ordering_satisfy(lex.clone())? {
-                all_satisfied_lexs.push(lex);
+        if !no_partitioning {
+            // Start with empty orderings that we'll extend incrementally
+            let mut current_orderings = vec![vec![]];
+            for partition_expr in partitioning_exprs.iter() {
+                let mut next_orderings = vec![];
+
+                let sort_options =
+                    sort_options_resolving_constant(Arc::clone(partition_expr), true);
+
+                // For each current partial ordering, try extending with each sort option
+                for current in current_orderings.iter() {
+                    for sort_expr in sort_options.iter() {
+                        let mut extended = current.clone();
+                        extended.push(sort_expr.clone());
+
+                        // Check if this partial ordering can potentially satisfy requirements
+                        if let Some(lex) = LexOrdering::new(extended.clone()) {
+                            if window_eq_properties.ordering_satisfy(lex.clone())? {
+                                next_orderings.push(extended);
+                            }
+                        }
+                    }
+                }
+                // If no valid orderings remain, stop early
+                if next_orderings.is_empty() {
+                    break;
+                }
+                current_orderings = next_orderings;
+            }
+
+            // Convert final orderings to LexOrdering and add to all_satisfied_lexs
+            for ordering in current_orderings {
+                if let Some(lex) = LexOrdering::new(ordering) {
+                    all_satisfied_lexs.push(lex);
+                }
             }
         }
         // If there is a partitioning, and no possible ordering cannot satisfy
@@ -410,8 +438,10 @@ pub(crate) fn window_equivalence_properties(
                     // Window function results in a partial constant value in
                     // some ordering. Adjust the ordering equivalences accordingly:
                     let new_lexs = all_satisfied_lexs.into_iter().flat_map(|lex| {
-                        let new_partial_consts =
-                            sort_options_resolving_constant(Arc::clone(&window_col));
+                        let new_partial_consts = sort_options_resolving_constant(
+                            Arc::clone(&window_col),
+                            false,
+                        );
 
                         new_partial_consts.into_iter().map(move |partial| {
                             let mut existing = lex.clone();
@@ -471,7 +501,7 @@ pub(crate) fn window_equivalence_properties(
                         .get_aggregate_expr()
                         .expressions()
                         .into_iter()
-                        .map(sort_options_resolving_constant)
+                        .map(|expr| sort_options_resolving_constant(expr, false))
                         .multi_cartesian_product();
 
                     let (mut asc, mut satisfied) = (false, false);
@@ -634,11 +664,45 @@ pub fn get_window_mode(
     Ok(None)
 }
 
-fn sort_options_resolving_constant(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
-    vec![
-        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
-        PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
-    ]
+/// Generates sort option variations for a given expression.
+///
+/// This function is used to handle constant columns in window operations. Since constant
+/// columns can be considered as having any ordering, we generate multiple sort options
+/// to explore different ordering possibilities.
+///
+/// # Parameters
+/// - `expr`: The physical expression to generate sort options for
+/// - `all_options`: If true, generates all 4 possible sort options (ASC/DESC × NULLS FIRST/LAST).
+///                  If false, generates only 2 options that preserve set monotonicity.
+///
+/// # When to use `all_options = true`:
+/// Use for PARTITION BY columns where we want to explore all possible orderings to find
+/// one that matches the existing data ordering.
+///
+/// # When to use `all_options = false`:
+/// Use for aggregate/window function arguments where set monotonicity needs to be preserved.
+/// Only generates ASC NULLS LAST and DESC NULLS FIRST because:
+/// - Set monotonicity is broken if data has increasing order but nulls come first
+/// - Set monotonicity is broken if data has decreasing order but nulls come last
+fn sort_options_resolving_constant(
+    expr: Arc<dyn PhysicalExpr>,
+    all_options: bool,
+) -> Vec<PhysicalSortExpr> {
+    if all_options {
+        // Generate all 4 possible sort options for partition columns
+        vec![
+            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)), // ASC NULLS LAST
+            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, true)), // ASC NULLS FIRST
+            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(true, false)), // DESC NULLS LAST
+            PhysicalSortExpr::new(expr, SortOptions::new(true, true)), // DESC NULLS FIRST
+        ]
+    } else {
+        // Generate only the 2 options that preserve set monotonicity
+        vec![
+            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)), // ASC NULLS LAST
+            PhysicalSortExpr::new(expr, SortOptions::new(true, true)), // DESC NULLS FIRST
+        ]
+    }
 }
 
 #[cfg(test)]
