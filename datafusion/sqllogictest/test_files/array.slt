@@ -1938,6 +1938,12 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2,
 ----
 [2, 3, 4] [h, e]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 2, 4),
+       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'FixedSizeList(5, Utf8)'), 1, 2);
+----
+[2, 3, 4] [h, e]
+
 # array_slice scalar function #2 (with positive indexes; full array)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 0, 6), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, 5);
@@ -1946,6 +1952,12 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, 6), array_slice(make_array('h',
 
 query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0, 6), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 0, 5);
+----
+[1, 2, 3, 4, 5] [h, e, l, l, o]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 0, 6),
+       array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'FixedSizeList(5, Utf8)'), 0, 5);
 ----
 [1, 2, 3, 4, 5] [h, e, l, l, o]
 
