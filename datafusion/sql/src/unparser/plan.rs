@@ -75,7 +75,7 @@ use std::{sync::Arc, vec};
 ///     Field::new("value", DataType::Utf8, false),
 /// ]);
 /// // Scan 'table' and select columns 'id' and 'value'
-/// let plan = table_scan(Some("table"), &schema, None)
+/// let plan = table_scan(Some("table"), schema, None)
 ///     .unwrap()
 ///     .project(vec![col("id"), col("value")])
 ///     .unwrap()
