@@ -353,7 +353,7 @@ impl DisplayAs for SortMergeJoinExec {
                     .join(", ");
                 let display_null_equality =
                     if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
-                        ", Null Equality: NULL equals NULL"
+                        ", NullsEqual: true"
                     } else {
                         ""
                     };
@@ -385,7 +385,7 @@ impl DisplayAs for SortMergeJoinExec {
                 writeln!(f, "on={on}")?;
 
                 if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
-                    writeln!(f, "Null Equality: NULL equals NULL")?;
+                    writeln!(f, "NullsEqual: true")?;
                 }
 
                 Ok(())
