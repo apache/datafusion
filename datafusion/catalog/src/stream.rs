@@ -53,7 +53,7 @@ impl TableProviderFactory for StreamTableFactory {
         state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
+        let schema: SchemaRef = Arc::clone(cmd.schema.inner());
         let location = cmd.location.clone();
         let encoding = cmd.file_type.parse()?;
         let header = if let Ok(opt) = cmd

@@ -111,7 +111,7 @@ pub fn create_physical_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_schema: &Schema = &input_dfschema.into();
+    let input_schema = input_dfschema.as_arrow();
 
     match e {
         Expr::Alias(Alias { expr, metadata, .. }) => {
@@ -407,6 +407,7 @@ where
 
 /// Convert a logical expression to a physical expression (without any simplification, etc)
 pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+    // TODO this makes a deep copy of the Schema. Should take SchemaRef instead and avoid deep copy
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()

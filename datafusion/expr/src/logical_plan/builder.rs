@@ -1995,6 +1995,7 @@ pub fn table_scan_with_filter_and_fetch(
 }
 
 pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+    // TODO should we take SchemaRef and avoid cloning?
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource {
         table_schema,
@@ -2006,6 +2007,7 @@ pub fn table_source_with_constraints(
     table_schema: &Schema,
     constraints: Constraints,
 ) -> Arc<dyn TableSource> {
+    // TODO should we take SchemaRef and avoid cloning?
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource {
         table_schema,

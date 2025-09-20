@@ -51,7 +51,7 @@ mod tests {
             let ctx = SessionContext::new();
             ctx.register_table(
                 table_ref,
-                Arc::new(EmptyTable::new(df_schema.inner().clone())),
+                Arc::new(EmptyTable::new(Arc::clone(df_schema.inner()))),
             )?;
             Ok(ctx)
         }

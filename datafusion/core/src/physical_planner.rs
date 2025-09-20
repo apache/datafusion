@@ -59,7 +59,7 @@ use crate::schema_equivalence::schema_satisfied_by;
 
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::Schema;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
@@ -466,7 +466,6 @@ impl DefaultPhysicalPlanner {
                 Arc::clone(res.plan())
             }
             LogicalPlan::Values(Values { values, schema }) => {
-                let exec_schema = schema.as_ref().to_owned().into();
                 let exprs = values
                     .iter()
                     .map(|row| {
@@ -477,27 +476,23 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                MemorySourceConfig::try_new_as_values(SchemaRef::new(exec_schema), exprs)?
+                MemorySourceConfig::try_new_as_values(Arc::clone(schema.inner()), exprs)?
                     as _
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema,
-            }) => Arc::new(EmptyExec::new(SchemaRef::new(
-                schema.as_ref().to_owned().into(),
-            ))),
+            }) => Arc::new(EmptyExec::new(Arc::clone(schema.inner()))),
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: true,
                 schema,
-            }) => Arc::new(PlaceholderRowExec::new(SchemaRef::new(
-                schema.as_ref().to_owned().into(),
-            ))),
+            }) => Arc::new(PlaceholderRowExec::new(Arc::clone(schema.inner()))),
             LogicalPlan::DescribeTable(DescribeTable {
                 schema,
                 output_schema,
             }) => {
-                let output_schema: Schema = output_schema.as_ref().into();
-                self.plan_describe(Arc::clone(schema), Arc::new(output_schema))?
+                let output_schema = Arc::clone(output_schema.inner());
+                self.plan_describe(Arc::clone(schema), output_schema)?
             }
 
             // 1 Child
@@ -514,7 +509,7 @@ impl DefaultPhysicalPlanner {
                 let parsed_url = ListingTableUrl::parse(output_url)?;
                 let object_store_url = parsed_url.object_store();
 
-                let schema: Schema = (**input.schema()).clone().into();
+                let schema = Arc::clone(input.schema().inner());
 
                 // Note: the DataType passed here is ignored for the purposes of writing and inferred instead
                 // from the schema of the RecordBatch being written. This allows COPY statements to specify only
@@ -551,7 +546,7 @@ impl DefaultPhysicalPlanner {
                     object_store_url,
                     table_paths: vec![parsed_url],
                     file_group: FileGroup::default(),
-                    output_schema: Arc::new(schema),
+                    output_schema: schema,
                     table_partition_cols,
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
@@ -931,7 +926,7 @@ impl DefaultPhysicalPlanner {
                 ..
             }) => {
                 let input = children.one()?;
-                let schema = SchemaRef::new(schema.as_ref().to_owned().into());
+                let schema = Arc::clone(schema.inner());
                 let list_column_indices = list_type_columns
                     .iter()
                     .map(|(index, unnesting)| ListUnnest {
@@ -1639,7 +1634,7 @@ pub fn create_window_expr_with_name(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
-    let physical_schema: &Schema = &logical_schema.into();
+    let physical_schema = Arc::clone(logical_schema.inner());
     match e {
         Expr::WindowFunction(window_fun) => {
             let WindowFunction {
@@ -2031,7 +2026,7 @@ impl DefaultPhysicalPlanner {
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = self.create_physical_plan(&a.input, session_state).await?;
-        let schema = SchemaRef::new((*a.schema).clone().into());
+        let schema = Arc::clone(a.schema.inner());
         let show_statistics = session_state.config_options().explain.show_statistics;
         Ok(Arc::new(AnalyzeExec::new(
             a.verbose,
@@ -2382,6 +2377,7 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
+    use arrow_schema::SchemaRef;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
         assert_contains, DFSchemaRef, TableReference, ToDFSchema as _,
