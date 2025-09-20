@@ -18,12 +18,14 @@
 //! [`ScalarUDFImpl`] definitions for array_sort function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{new_null_array, Array, ArrayRef, ListArray, NullBufferBuilder};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, GenericListArray, NullBufferBuilder, OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::SortColumn;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, FieldRef};
 use arrow::{compute, compute::SortOptions};
-use datafusion_common::cast::{as_list_array, as_string_array};
+use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{
@@ -137,6 +139,9 @@ impl ScalarUDFImpl for ArraySort {
             DataType::List(field) => {
                 Ok(DataType::new_list(field.data_type().clone(), true))
             }
+            DataType::LargeList(field) => {
+                Ok(DataType::new_large_list(field.data_type().clone(), true))
+            }
             arg_type => {
                 plan_err!("{} does not support type {arg_type}", self.name())
             }
@@ -165,13 +170,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_sort expects one to three arguments");
     }
 
-    if args[0].data_type().is_null() {
-        return Ok(Arc::clone(&args[0]));
-    }
-
-    let list_array = as_list_array(&args[0])?;
-    let row_count = list_array.len();
-    if row_count == 0 || list_array.value_type().is_null() {
+    if args[0].is_empty() || args[0].data_type().is_null() {
         return Ok(Arc::clone(&args[0]));
     }
 
@@ -179,7 +178,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Ok(new_null_array(args[0].data_type(), args[0].len()));
     }
 
-    let sort_option = match args.len() {
+    let sort_options = match args.len() {
         1 => None,
         2 => {
             let sort = as_string_array(&args[1])?.value(0);
@@ -196,8 +195,36 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 nulls_first: order_nulls_first(nulls_first)?,
             })
         }
-        _ => return exec_err!("array_sort expects 1 to 3 arguments"),
+        // We guard at the top
+        _ => unreachable!(),
     };
+
+    match args[0].data_type() {
+        DataType::List(field) | DataType::LargeList(field)
+            if field.data_type().is_null() =>
+        {
+            Ok(Arc::clone(&args[0]))
+        }
+        DataType::List(field) => {
+            let array = as_list_array(&args[0])?;
+            array_sort_generic(array, field, sort_options)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&args[0])?;
+            array_sort_generic(array, field, sort_options)
+        }
+        // Signature should prevent this arm ever occurring
+        _ => exec_err!("array_sort expects list for first argument"),
+    }
+}
+
+/// Array_sort SQL function
+pub fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
+    list_array: &GenericListArray<OffsetSize>,
+    field: &FieldRef,
+    sort_options: Option<SortOptions>,
+) -> Result<ArrayRef> {
+    let row_count = list_array.len();
 
     let mut array_lengths = vec![];
     let mut arrays = vec![];
@@ -216,14 +243,14 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 DataType::Struct(_) => {
                     let sort_columns: Vec<SortColumn> = vec![SortColumn {
                         values: Arc::clone(&arr_ref),
-                        options: sort_option,
+                        options: sort_options,
                     }];
                     let indices = compute::lexsort_to_indices(&sort_columns, None)?;
                     compute::take(arr_ref.as_ref(), &indices, None)?
                 }
                 _ => {
                     let arr_ref = arr_ref.as_ref();
-                    compute::sort(arr_ref, sort_option)?
+                    compute::sort(arr_ref, sort_options)?
                 }
             };
             array_lengths.push(sorted_array.len());
@@ -232,8 +259,6 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
 
-    // Assume all arrays have the same data type
-    let data_type = list_array.value_type();
     let buffer = valid.finish();
 
     let elements = arrays
@@ -242,10 +267,10 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Vec<&dyn Array>>();
 
     let list_arr = if elements.is_empty() {
-        ListArray::new_null(Arc::new(Field::new_list_field(data_type, true)), row_count)
+        GenericListArray::<OffsetSize>::new_null(Arc::clone(field), row_count)
     } else {
-        ListArray::new(
-            Arc::new(Field::new_list_field(data_type, true)),
+        GenericListArray::<OffsetSize>::new(
+            Arc::clone(field),
             OffsetBuffer::from_lengths(array_lengths),
             Arc::new(compute::concat(elements.as_slice())?),
             buffer,
