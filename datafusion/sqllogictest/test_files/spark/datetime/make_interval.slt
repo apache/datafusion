@@ -111,12 +111,3 @@ query ?
 SELECT INTERVAL '1' SECOND AS iv;
 ----
 1.000000000 secs
-
-
-#>>> spark.sql("SELECT make_interval() AS interval FROM VALUES (1), (2) AS t(x)").show()
-# +---------+
-# | interval|
-# +---------+
-# |0 seconds|
-# |0 seconds|
-# +---------+
