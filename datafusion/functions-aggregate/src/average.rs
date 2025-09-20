@@ -528,7 +528,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
         self.count += (values.len() - values.null_count()) as u64;
 
         if let Some(x) = sum(values) {
-            let v = self.sum.get_or_insert(T::Native::default());
+            let v = self.sum.get_or_insert_with(T::Native::default);
             self.sum = Some(v.add_wrapping(x));
         }
         Ok(())
@@ -573,7 +573,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
 
         // sums are summed
         if let Some(x) = sum(states[1].as_primitive::<T>()) {
-            let v = self.sum.get_or_insert(T::Native::default());
+            let v = self.sum.get_or_insert_with(T::Native::default);
             self.sum = Some(v.add_wrapping(x));
         }
         Ok(())

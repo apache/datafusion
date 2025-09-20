@@ -382,7 +382,7 @@ where
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_or(values[0].as_primitive::<T>()) {
-            let v = self.value.get_or_insert(T::Native::usize_as(0));
+            let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
             *v = *v | x;
         }
         Ok(())
@@ -427,7 +427,7 @@ where
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_xor(values[0].as_primitive::<T>()) {
-            let v = self.value.get_or_insert(T::Native::usize_as(0));
+            let v = self.value.get_or_insert_with(|| T::Native::usize_as(0));
             *v = *v ^ x;
         }
         Ok(())

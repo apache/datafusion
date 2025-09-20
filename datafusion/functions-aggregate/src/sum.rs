@@ -335,7 +335,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
         if let Some(x) = arrow::compute::sum(values) {
-            let v = self.sum.get_or_insert(T::Native::usize_as(0));
+            let v = self.sum.get_or_insert_with(|| T::Native::usize_as(0));
             *v = v.add_wrapping(x);
         }
         Ok(())

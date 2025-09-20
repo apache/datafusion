@@ -86,7 +86,7 @@ pub struct PartitionEvaluatorPrivateData {
 }
 
 impl FFI_PartitionEvaluator {
-    unsafe fn inner_mut(&mut self) -> &mut Box<(dyn PartitionEvaluator + 'static)> {
+    unsafe fn inner_mut(&mut self) -> &mut Box<dyn PartitionEvaluator + 'static> {
         let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
         &mut (*private_data).evaluator
     }

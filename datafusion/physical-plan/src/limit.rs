@@ -105,7 +105,8 @@ impl DisplayAs for GlobalLimitExec {
                     f,
                     "GlobalLimitExec: skip={}, fetch={}",
                     self.skip,
-                    self.fetch.map_or("None".to_string(), |x| x.to_string())
+                    self.fetch
+                        .map_or_else(|| "None".to_string(), |x| x.to_string())
                 )
             }
             DisplayFormatType::TreeRender => {

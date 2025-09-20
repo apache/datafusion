@@ -149,5 +149,5 @@ fn luhn_check_impl(input: &str) -> bool {
         alt = !alt;
     }
 
-    digits_processed > 0 && sum % 10 == 0
+    digits_processed > 0 && sum.is_multiple_of(10)
 }

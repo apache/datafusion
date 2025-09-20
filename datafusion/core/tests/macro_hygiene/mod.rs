@@ -73,6 +73,7 @@ mod config_field {
     #[test]
     fn test_macro() {
         #[derive(Debug)]
+        #[allow(dead_code)]
         struct E;
 
         impl std::fmt::Display for E {

@@ -160,7 +160,7 @@ fn boolean_op(
     left: &dyn Array,
     right: &dyn Array,
     op: impl FnOnce(&BooleanArray, &BooleanArray) -> Result<BooleanArray, ArrowError>,
-) -> Result<Arc<(dyn Array + 'static)>, ArrowError> {
+) -> Result<Arc<dyn Array + 'static>, ArrowError> {
     let ll = as_boolean_array(left).expect("boolean_op failed to downcast left array");
     let rr = as_boolean_array(right).expect("boolean_op failed to downcast right array");
     op(ll, rr).map(|t| Arc::new(t) as _)
