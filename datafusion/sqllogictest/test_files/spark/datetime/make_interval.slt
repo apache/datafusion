@@ -106,7 +106,6 @@ SELECT make_interval() || '';
 ----
 (empty)
 
-
 query ?
 SELECT INTERVAL '1' SECOND AS iv;
 ----
