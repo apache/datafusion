@@ -1863,7 +1863,7 @@ async fn with_column_renamed_join() -> Result<()> {
     assert_snapshot!(
         df_renamed.logical_plan(),
         @r"
-    Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3
+    Projection: t1.c1 AS t1.AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3
       Limit: skip=0, fetch=1
         Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST
           Inner Join: t1.c1 = t2.c1
@@ -1878,15 +1878,15 @@ async fn with_column_renamed_join() -> Result<()> {
 
     assert_snapshot!(
         df_renamed.clone().into_optimized_plan().unwrap(),
-        @r###"
-    Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3
+        @r"
+    Projection: t1.c1 AS t1.AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3
       Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1
         Inner Join: t1.c1 = t2.c1
           SubqueryAlias: t1
             TableScan: aggregate_test_100 projection=[c1, c2, c3]
           SubqueryAlias: t2
             TableScan: aggregate_test_100 projection=[c1, c2, c3]
-    "###
+    "
     );
 
     let df_results = df_renamed.collect().await?;
@@ -3606,12 +3606,12 @@ async fn join_with_alias_filter() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
-    Projection: t1.a, t2.a, t1.b, t1.c, t2.b, t2.c [a:UInt32, a:UInt32, b:Utf8, c:Int32, b:Utf8, c:Int32]
-      Inner Join: t1.a + UInt32(3) = t2.a + UInt32(1) [a:UInt32, b:Utf8, c:Int32, a:UInt32, b:Utf8, c:Int32]
-        TableScan: t1 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
-        TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
-    "###
+        @r"
+    Projection: t1.a, t2.a, t1.b, t1.c, t2.b, t2.c [t1.a:UInt32, t2.a:UInt32, t1.b:Utf8, t1.c:Int32, t2.b:Utf8, t2.c:Int32]
+      Inner Join: t1.a + UInt32(3) = t2.a + UInt32(1) [t1.a:UInt32, t1.b:Utf8, t1.c:Int32, t2.a:UInt32, t2.b:Utf8, t2.c:Int32]
+        TableScan: t1 projection=[a, b, c] [t1.a:UInt32, t1.b:Utf8, t1.c:Int32]
+        TableScan: t2 projection=[a, b, c] [t2.a:UInt32, t2.b:Utf8, t2.c:Int32]
+    "
     );
 
     let results = df.collect().await?;
@@ -3651,14 +3651,14 @@ async fn right_semi_with_alias_filter() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
-    RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]
-      Projection: t1.a [a:UInt32]
-        Filter: t1.c > Int32(1) [a:UInt32, c:Int32]
-          TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]
-      Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]
-        TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
-    "###
+        @r"
+    RightSemi Join: t1.a = t2.a [t2.a:UInt32, t2.b:Utf8, t2.c:Int32]
+      Projection: t1.a [t1.a:UInt32]
+        Filter: t1.c > Int32(1) [t1.a:UInt32, t1.c:Int32]
+          TableScan: t1 projection=[a, c] [t1.a:UInt32, t1.c:Int32]
+      Filter: t2.c > Int32(1) [t2.a:UInt32, t2.b:Utf8, t2.c:Int32]
+        TableScan: t2 projection=[a, b, c] [t2.a:UInt32, t2.b:Utf8, t2.c:Int32]
+    "
     );
 
     let results = df.collect().await?;
@@ -3698,13 +3698,13 @@ async fn right_anti_filter_push_down() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
-    RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]
-      Projection: t1.a [a:UInt32]
-        Filter: t1.c > Int32(1) [a:UInt32, c:Int32]
-          TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]
-      TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
-    "###
+        @r"
+    RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [t2.a:UInt32, t2.b:Utf8, t2.c:Int32]
+      Projection: t1.a [t1.a:UInt32]
+        Filter: t1.c > Int32(1) [t1.a:UInt32, t1.c:Int32]
+          TableScan: t1 projection=[a, c] [t1.a:UInt32, t1.c:Int32]
+      TableScan: t2 projection=[a, b, c] [t2.a:UInt32, t2.b:Utf8, t2.c:Int32]
+    "
     );
 
     let results = df.collect().await?;
@@ -4382,12 +4382,12 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
-    Projection: shapes.shape_id [shape_id:UInt32]
-      Unnest: lists[shape_id2|depth=1] structs[] [shape_id:UInt32, shape_id2:UInt32;N]
-        Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: "item", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]
-          TableScan: shapes projection=[shape_id] [shape_id:UInt32]
-    "###
+        @r#"
+    Projection: shapes.shape_id [shapes.shape_id:UInt32]
+      Unnest: lists[shape_id2|depth=1] structs[] [shapes.shape_id:UInt32, shape_id2:UInt32;N]
+        Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shapes.shape_id:UInt32, shape_id2:List(Field { name: "item", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]
+          TableScan: shapes projection=[shape_id] [shapes.shape_id:UInt32]
+    "#
     );
 
     let results = df.collect().await?;
@@ -5748,11 +5748,11 @@ async fn test_alias() -> Result<()> {
         .into_unoptimized_plan()
         .display_indent_schema()
         .to_string();
-    assert_snapshot!(plan, @r###"
-    SubqueryAlias: table_alias [a:Utf8, b:Int32, one:Int32]
-      Projection: test.a, test.b, Int32(1) AS one [a:Utf8, b:Int32, one:Int32]
-        TableScan: test [a:Utf8, b:Int32]
-    "###);
+    assert_snapshot!(plan, @r"
+    SubqueryAlias: table_alias [table_alias.a:Utf8, table_alias.b:Int32, table_alias.one:Int32]
+      Projection: test.a, test.b, Int32(1) AS one [test.a:Utf8, test.b:Int32, one:Int32]
+        TableScan: test [test.a:Utf8, test.b:Int32]
+    ");
 
     // Select over the aliased DataFrame
     let df = df.select(vec![
@@ -5822,10 +5822,10 @@ async fn test_alias_empty() -> Result<()> {
         .into_unoptimized_plan()
         .display_indent_schema()
         .to_string();
-    assert_snapshot!(plan, @r###"
-    SubqueryAlias:  [a:Utf8, b:Int32]
-      TableScan: test [a:Utf8, b:Int32]
-    "###);
+    assert_snapshot!(plan, @r"
+    SubqueryAlias:  [.a:Utf8, .b:Int32]
+      TableScan: test [test.a:Utf8, test.b:Int32]
+    ");
 
     assert_snapshot!(
         batches_to_sort_string(&df.select(vec![col("a"), col("b")])?.collect().await.unwrap()),
@@ -5857,12 +5857,12 @@ async fn test_alias_nested() -> Result<()> {
         .into_optimized_plan()?
         .display_indent_schema()
         .to_string();
-    assert_snapshot!(plan, @r###"
-    SubqueryAlias: alias2 [a:Utf8, b:Int32, one:Int32]
-      SubqueryAlias: alias1 [a:Utf8, b:Int32, one:Int32]
-        Projection: test.a, test.b, Int32(1) AS one [a:Utf8, b:Int32, one:Int32]
-          TableScan: test projection=[a, b] [a:Utf8, b:Int32]
-    "###);
+    assert_snapshot!(plan, @r"
+    SubqueryAlias: alias2 [alias2.a:Utf8, alias2.b:Int32, alias2.one:Int32]
+      SubqueryAlias: alias1 [alias1.a:Utf8, alias1.b:Int32, alias1.one:Int32]
+        Projection: test.a, test.b, Int32(1) AS one [test.a:Utf8, test.b:Int32, one:Int32]
+          TableScan: test projection=[a, b] [test.a:Utf8, test.b:Int32]
+    ");
 
     // Select over the aliased DataFrame
     let select1 = df

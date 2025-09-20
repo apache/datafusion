@@ -611,10 +611,10 @@ mod tests {
         Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS count_third
           Left Join: left.id = right.id
             SubqueryAlias: left
-              Projection: left.id, left.count(Int64(1)), left.id:1, left.category, right.id AS id:2, right.count(Int64(1)) AS count(Int64(1)):1
+              Projection: left.id, left.count(Int64(1)), left.id:1, left.category, right.id AS right.id:2, right.count(Int64(1)) AS right.count(Int64(1)):1
                 Left Join: left.id = right.id
                   SubqueryAlias: left
-                    Projection: left.id, left.count(Int64(1)), right.id AS id:1, right.category
+                    Projection: left.id, left.count(Int64(1)), right.id AS right.id:1, right.category
                       Left Join: left.id = right.id
                         SubqueryAlias: left
                           Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]

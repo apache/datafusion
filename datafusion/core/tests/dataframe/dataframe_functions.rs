@@ -1310,8 +1310,8 @@ async fn test_count_wildcard() -> Result<()> {
         @r"
     Sort: count(*) ASC NULLS LAST [count(*):Int64]
       Projection: count(*) [count(*):Int64]
-        Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1)) AS count(*)]] [b:UInt32, count(*):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1)) AS count(*)]] [test.b:UInt32, count(*):Int64]
+          TableScan: test [test.a:UInt32, test.b:UInt32, test.c:UInt32]
     ");
 
     Ok(())
