@@ -95,6 +95,15 @@ impl JoinHashMapType for PruningJoinHashMap {
     fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+
+    fn hashes(&self) -> Box<dyn Iterator<Item = u64> + '_> {
+        let iter = self.map.iter().map(|(hash, _)| *hash);
+        Box::new(iter)
+    }
+
+    fn num_hashes(&self) -> usize {
+        self.map.len()
+    }
 }
 
 /// The `PruningJoinHashMap` is similar to a regular `JoinHashMap`, but with
