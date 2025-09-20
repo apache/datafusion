@@ -969,7 +969,7 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
                     ],
-                    array_coercion: None,
+                    array_coercion: Some(ListCoercion::FixedSizedListToList),
                 }),
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                     arguments: vec![
@@ -977,7 +977,7 @@ impl Signature {
                         ArrayFunctionArgument::Element,
                         ArrayFunctionArgument::Index,
                     ],
-                    array_coercion: None,
+                    array_coercion: Some(ListCoercion::FixedSizedListToList),
                 }),
             ]),
             volatility,
