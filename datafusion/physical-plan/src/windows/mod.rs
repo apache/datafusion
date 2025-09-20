@@ -673,7 +673,7 @@ pub fn get_window_mode(
 /// # Parameters
 /// - `expr`: The physical expression to generate sort options for
 /// - `all_options`: If true, generates all 4 possible sort options (ASC/DESC × NULLS FIRST/LAST).
-///  If false, generates only 2 options that preserve set monotonicity.
+///   If false, generates only 2 options that preserve set monotonicity.
 ///
 /// # When to use `all_options = true`:
 /// Use for PARTITION BY columns where we want to explore all possible orderings to find
