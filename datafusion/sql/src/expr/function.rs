@@ -270,11 +270,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
             let scalar_func_expr =
                 Expr::ScalarFunction(ScalarFunction::new_udf(fm.clone(), args.clone()));
-            
+
             if name.eq_ignore_ascii_case(fm.name()) {
                 return Ok(scalar_func_expr);
             } else {
-
                 let arg_names = args
                     .iter()
                     .map(|arg| arg.to_string())
@@ -489,7 +488,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     null_treatment,
                 } = aggregate_expr;
 
-
                 let agg_func_expr =
                     Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                         func.clone(),
@@ -499,11 +497,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         order_by,
                         null_treatment,
                     ));
-                
+
                 if name.eq_ignore_ascii_case(func.name()) {
                     return Ok(agg_func_expr);
-                }else {
-
+                } else {
                     let arg_names = args
                         .iter()
                         .map(|arg| arg.to_string())
@@ -517,7 +514,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         verbose_alias,
                     )));
                 }
-
             }
         }
 
