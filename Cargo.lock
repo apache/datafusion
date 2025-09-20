@@ -2623,6 +2623,7 @@ version = "50.0.0"
 dependencies = [
  "arrow",
  "bigdecimal",
+ "chrono",
  "ctor",
  "datafusion-common",
  "datafusion-expr",
