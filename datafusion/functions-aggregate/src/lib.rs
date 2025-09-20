@@ -105,6 +105,7 @@ pub mod expr_fn {
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
     pub use super::array_agg::array_agg;
     pub use super::average::avg;
+    pub use super::average::avg_distinct;
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
     pub use super::bit_and_or_xor::bit_xor;
@@ -134,6 +135,7 @@ pub mod expr_fn {
     pub use super::stddev::stddev;
     pub use super::stddev::stddev_pop;
     pub use super::sum::sum;
+    pub use super::sum::sum_distinct;
     pub use super::variance::var_pop;
     pub use super::variance::var_sample;
 }
