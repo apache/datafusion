@@ -18,6 +18,7 @@
 pub mod date_add;
 pub mod date_sub;
 pub mod last_day;
+pub mod make_interval;
 pub mod next_day;
 
 use datafusion_expr::ScalarUDF;
@@ -27,6 +28,7 @@ use std::sync::Arc;
 make_udf_function!(date_add::SparkDateAdd, date_add);
 make_udf_function!(date_sub::SparkDateSub, date_sub);
 make_udf_function!(last_day::SparkLastDay, last_day);
+make_udf_function!(make_interval::SparkMakeInterval, make_interval);
 make_udf_function!(next_day::SparkNextDay, next_day);
 
 pub mod expr_fn {
@@ -47,6 +49,11 @@ pub mod expr_fn {
         "Returns the last day of the month which the date belongs to.",
         arg1
     ));
+    export_functions!((
+        make_interval,
+        "Make interval from years, months, weeks, days, hours, mins and secs.",
+        arg1 arg2
+    ));
     // TODO: add once ANSI support is added:
     // "When both of the input parameters are not NULL and day_of_week is an invalid input, the function throws SparkIllegalArgumentException if spark.sql.ansi.enabled is set to true, otherwise NULL."
     export_functions!((
@@ -57,5 +64,11 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![date_add(), date_sub(), last_day(), next_day()]
+    vec![
+        date_add(),
+        date_sub(),
+        last_day(),
+        make_interval(),
+        next_day(),
+    ]
 }
