@@ -79,7 +79,10 @@ pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
 
-pub use datafusion_doc::{DocSection, Documentation, DocumentationBuilder};
+pub use datafusion_doc::{
+    aggregate_doc_sections, scalar_doc_sections, window_doc_sections, DocSection,
+    Documentation, DocumentationBuilder,
+};
 pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
