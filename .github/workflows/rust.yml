@@ -285,31 +285,9 @@ jobs:
         with:
          save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
-      - name: Inspect disk
-        run: df -h
-      - name: Compile tests (excluding doctests and datafusion-cli)
-        env:
-          RUST_BACKTRACE: 1
-        run: |
-          cargo test \
-            --profile ci \
-            --exclude datafusion-examples \
-            --exclude ffi_example_table_provider \
-            --exclude datafusion-benchmarks \
-            --exclude datafusion-cli \
-            --workspace \
-            --lib \
-            --tests \
-            --bins \
-            --features serde,avro,json,backtrace,integration-tests,parquet_encryption \
-            --no-run
-      - name: Inspect disk
-        run: df -h
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
-          # Use dedicated tmp dir with more space for tests that may spill to disk
-          TMPDIR: ${{ runner.temp }}
         run: |
           cargo test \
             --profile ci \
@@ -581,8 +559,6 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
-      - name: Inspect disk
-        run: df -h
       - name: Run tests (excluding doctests)
         shell: bash
         run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
