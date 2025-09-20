@@ -56,32 +56,75 @@ fn test_date_timestamp_arithmetic_error() -> Result<()> {
 
 #[test]
 fn test_decimal_mathematics_op_type() {
+    // Decimal32
     assert_eq!(
-        coerce_numeric_type_to_decimal(&DataType::Int8).unwrap(),
+        coerce_numeric_type_to_decimal32(&DataType::Int8).unwrap(),
+        DataType::Decimal32(3, 0)
+    );
+    assert_eq!(
+        coerce_numeric_type_to_decimal32(&DataType::Int16).unwrap(),
+        DataType::Decimal32(5, 0)
+    );
+    assert!(coerce_numeric_type_to_decimal32(&DataType::Int32).is_none());
+    assert!(coerce_numeric_type_to_decimal32(&DataType::Int64).is_none(),);
+    assert_eq!(
+        coerce_numeric_type_to_decimal32(&DataType::Float16).unwrap(),
+        DataType::Decimal32(6, 3)
+    );
+    assert!(coerce_numeric_type_to_decimal32(&DataType::Float32).is_none(),);
+    assert!(coerce_numeric_type_to_decimal32(&DataType::Float64).is_none());
+
+    // Decimal64
+    assert_eq!(
+        coerce_numeric_type_to_decimal64(&DataType::Int8).unwrap(),
+        DataType::Decimal64(3, 0)
+    );
+    assert_eq!(
+        coerce_numeric_type_to_decimal64(&DataType::Int16).unwrap(),
+        DataType::Decimal64(5, 0)
+    );
+    assert_eq!(
+        coerce_numeric_type_to_decimal64(&DataType::Int32).unwrap(),
+        DataType::Decimal64(10, 0)
+    );
+    assert!(coerce_numeric_type_to_decimal64(&DataType::Int64).is_none(),);
+    assert_eq!(
+        coerce_numeric_type_to_decimal64(&DataType::Float16).unwrap(),
+        DataType::Decimal64(6, 3)
+    );
+    assert_eq!(
+        coerce_numeric_type_to_decimal64(&DataType::Float32).unwrap(),
+        DataType::Decimal64(14, 7)
+    );
+    assert!(coerce_numeric_type_to_decimal64(&DataType::Float64).is_none());
+
+    // Decimal128
+    assert_eq!(
+        coerce_numeric_type_to_decimal128(&DataType::Int8).unwrap(),
         DataType::Decimal128(3, 0)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal(&DataType::Int16).unwrap(),
+        coerce_numeric_type_to_decimal128(&DataType::Int16).unwrap(),
         DataType::Decimal128(5, 0)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal(&DataType::Int32).unwrap(),
+        coerce_numeric_type_to_decimal128(&DataType::Int32).unwrap(),
         DataType::Decimal128(10, 0)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal(&DataType::Int64).unwrap(),
+        coerce_numeric_type_to_decimal128(&DataType::Int64).unwrap(),
         DataType::Decimal128(20, 0)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal(&DataType::Float16).unwrap(),
+        coerce_numeric_type_to_decimal128(&DataType::Float16).unwrap(),
         DataType::Decimal128(6, 3)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal(&DataType::Float32).unwrap(),
+        coerce_numeric_type_to_decimal128(&DataType::Float32).unwrap(),
         DataType::Decimal128(14, 7)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal(&DataType::Float64).unwrap(),
+        coerce_numeric_type_to_decimal128(&DataType::Float64).unwrap(),
         DataType::Decimal128(30, 15)
     );
 }
