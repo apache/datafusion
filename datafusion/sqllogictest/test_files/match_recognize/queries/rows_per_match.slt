@@ -1,0 +1,160 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ----------------------------------------------------------------------
+# MATCH_RECOGNIZE – ROWS PER MATCH variants
+# This suite validates the behaviour of ONE ROW PER MATCH (implicit & explicit)
+# as well as the three ALL ROWS PER MATCH modes: SHOW EMPTY MATCHES (default),
+# OMIT EMPTY MATCHES and WITH UNMATCHED ROWS.
+# ----------------------------------------------------------------------
+
+# ------------------------------------------------------------
+# Test setup – create simple numeric table
+# ------------------------------------------------------------
+statement ok
+CREATE TABLE rpm_test(id INT, val INT);
+
+statement ok
+INSERT INTO rpm_test VALUES
+ (1, 5),   -- unmatched / low value
+ (2, 15),  -- match
+ (3, 20),  -- match
+ (4, 7),   -- unmatched / low value
+ (5, 30);  -- match
+
+# ------------------------------------------------------------
+# 1. Implicit ONE ROW PER MATCH (no clause)
+# ------------------------------------------------------------
+query IIIII
+SELECT first_id, first_val, last_id, last_val, match_no
+FROM rpm_test
+MATCH_RECOGNIZE (
+    MEASURES
+        MATCH_NUMBER() AS match_no,
+        FIRST(id) AS first_id,
+        FIRST(val) AS first_val,
+        LAST(id) AS last_id,
+        LAST(val) AS last_val
+    PATTERN (A*)
+    DEFINE A AS val > 10
+)
+ORDER BY match_no;
+----
+1 5 1 5 1
+2 15 3 20 2
+4 7 4 7 3
+5 30 5 30 4
+
+# ------------------------------------------------------------
+# 2. Explicit ONE ROW PER MATCH
+# ------------------------------------------------------------
+query IIIII
+SELECT first_id, first_val, last_id, last_val, match_no
+FROM rpm_test
+MATCH_RECOGNIZE (
+    MEASURES
+        MATCH_NUMBER() AS match_no,
+        FIRST(id) AS first_id,
+        FIRST(val) AS first_val,
+        LAST(id) AS last_id,
+        LAST(val) AS last_val
+    ONE ROW PER MATCH
+    PATTERN (A*)
+    DEFINE A AS val > 10
+)
+ORDER BY match_no;
+----
+1 5 1 5 1
+2 15 3 20 2
+4 7 4 7 3
+5 30 5 30 4
+
+# ------------------------------------------------------------
+# 3. ALL ROWS PER MATCH  (default SHOW EMPTY MATCHES)
+#    Pattern allows empty matches everywhere – expect one empty match
+#    per input row in addition to physical matches.
+# ------------------------------------------------------------
+query IITI
+SELECT id, val, classifier, match_no
+FROM rpm_test
+MATCH_RECOGNIZE (
+    MEASURES
+        CLASSIFIER()   AS classifier,
+        MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH
+    PATTERN (A*)
+    DEFINE A AS val > 10
+)
+ORDER BY id, match_no;
+----
+1 5 NULL 1
+2 15 A 2
+3 20 A 2
+4 7 NULL 3
+5 30 A 4
+
+# ------------------------------------------------------------
+# 4. ALL ROWS PER MATCH OMIT EMPTY MATCHES  – demonstrate that
+#    physical matches are still returned while empty ones are
+#    suppressed. Pattern: optional low-value rows (A) followed by
+#    a high-value row (B). Expected three matches covering
+#    (1,2), (3), and (4,5).
+# ------------------------------------------------------------
+query IITI
+SELECT id, val, classifier, match_no
+FROM rpm_test
+MATCH_RECOGNIZE (
+    MEASURES
+        CLASSIFIER()   AS classifier,
+        MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH OMIT EMPTY MATCHES
+    PATTERN (A*)
+    DEFINE
+      A AS val > 10
+)
+ORDER BY match_no, id;
+----
+2 15 A 2
+3 20 A 2
+5 30 A 4
+
+# ------------------------------------------------------------
+# 5. ALL ROWS PER MATCH WITH UNMATCHED ROWS  – unmatched rows are
+#    emitted alongside matched ones (classifier NULL).
+# ------------------------------------------------------------
+query IITIIIIII
+SELECT *
+FROM rpm_test
+MATCH_RECOGNIZE (
+    MEASURES
+        CLASSIFIER()   AS classifier,
+        MATCH_NUMBER() AS match_no,
+        MATCH_SEQUENCE_NUMBER() AS seq,
+	MAX(val) AS max_val,
+	MAX(A.val) AS max_a_val,
+	COUNT(*) AS cnt,
+	COUNT(A.*) AS cnt_a
+    ALL ROWS PER MATCH WITH UNMATCHED ROWS
+    PATTERN (A+)
+    DEFINE A AS val > 10
+)
+ORDER BY id;
+----
+1 5 NULL NULL NULL NULL NULL NULL NULL
+2 15 A 1 1 15 15 1 1
+3 20 A 1 2 20 20 2 2
+4 7 NULL NULL NULL NULL NULL NULL NULL
+5 30 A 2 1 30 30 1 1

@@ -250,6 +250,22 @@ pub trait ExprPlanner: Debug + Send + Sync {
     fn plan_window(&self, expr: RawWindowExpr) -> Result<PlannerResult<RawWindowExpr>> {
         Ok(PlannerResult::Original(expr))
     }
+
+    /// Post-process an expression that originates from a MATCH_RECOGNIZE
+    /// DEFINE or MEASURES clause.
+    ///
+    /// This hook allows planners to rewrite symbol-predicated columns or apply
+    /// other MATCH_RECOGNIZE-specific changes without touching generic
+    /// expressions.
+    ///
+    /// Default implementation is a no-op.
+    fn plan_match_recognize(
+        &self,
+        expr: Expr,
+        _aggregate: bool,
+    ) -> Result<PlannerResult<Expr>> {
+        Ok(PlannerResult::Original(expr))
+    }
 }
 
 /// An operator with two arguments to plan

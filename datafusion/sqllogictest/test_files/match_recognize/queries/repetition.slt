@@ -1,0 +1,129 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ../init_data.slt.part
+
+# Test 1: Basic repetition pattern (A A A)
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A A A)
+    DEFINE A AS price > 250 AND price < 300
+)
+----
+TSLA 2024-01-02 251
+TSLA 2024-01-03 255
+TSLA 2024-01-04 252
+TSLA 2024-01-05 258
+TSLA 2024-01-08 261
+TSLA 2024-01-09 264
+TSLA 2024-01-10 262
+TSLA 2024-01-11 266
+TSLA 2024-01-12 269
+CRM 2024-01-05 255
+CRM 2024-01-08 258
+CRM 2024-01-09 261
+CRM 2024-01-10 259
+CRM 2024-01-11 263
+CRM 2024-01-12 266
+
+# Test 2: Two symbol repetition (A A)
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A A)
+    DEFINE A AS price > 200 AND price < 300
+)
+----
+TSLA 2024-01-01 248
+TSLA 2024-01-02 251
+TSLA 2024-01-03 255
+TSLA 2024-01-04 252
+TSLA 2024-01-05 258
+TSLA 2024-01-08 261
+TSLA 2024-01-09 264
+TSLA 2024-01-10 262
+TSLA 2024-01-11 266
+TSLA 2024-01-12 269
+CRM 2024-01-01 245
+CRM 2024-01-02 248
+CRM 2024-01-03 252
+CRM 2024-01-04 249
+CRM 2024-01-05 255
+CRM 2024-01-08 258
+CRM 2024-01-09 261
+CRM 2024-01-10 259
+CRM 2024-01-11 263
+CRM 2024-01-12 266
+
+# Test 3: Four symbol repetition (A A A A)
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A A A A)
+    DEFINE A AS price > 200 AND price < 300
+)
+----
+TSLA 2024-01-01 248
+TSLA 2024-01-02 251
+TSLA 2024-01-03 255
+TSLA 2024-01-04 252
+TSLA 2024-01-05 258
+TSLA 2024-01-08 261
+TSLA 2024-01-09 264
+TSLA 2024-01-10 262
+CRM 2024-01-01 245
+CRM 2024-01-02 248
+CRM 2024-01-03 252
+CRM 2024-01-04 249
+CRM 2024-01-05 255
+CRM 2024-01-08 258
+CRM 2024-01-09 261
+CRM 2024-01-10 259
+
+# Test 4: Repetition pattern with no matches
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A A A)
+    DEFINE A AS price > 600
+)
+----
+
+# Test 5: Repetition pattern with company filter
+query TDI
+SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ALL ROWS PER MATCH
+    PATTERN (A A A)
+    DEFINE A AS price > 100 AND company = 'DDOG'
+)
+----
+DDOG 2024-01-01 125
+DDOG 2024-01-02 128
+DDOG 2024-01-03 132
+DDOG 2024-01-04 129
+DDOG 2024-01-05 135
+DDOG 2024-01-08 138
+DDOG 2024-01-09 141
+DDOG 2024-01-10 139
+DDOG 2024-01-11 143

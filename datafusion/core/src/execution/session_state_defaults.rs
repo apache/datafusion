@@ -29,7 +29,10 @@ use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
 use crate::functions_nested;
-use crate::{functions, functions_aggregate, functions_table, functions_window};
+use crate::{
+    functions, functions_aggregate, functions_match_recognize, functions_table,
+    functions_window,
+};
 use datafusion_catalog::TableFunction;
 use datafusion_catalog::{MemoryCatalogProvider, MemorySchemaProvider};
 use datafusion_execution::config::SessionConfig;
@@ -96,6 +99,7 @@ impl SessionStateDefaults {
             Arc::new(functions::unicode::planner::UnicodeFunctionPlanner),
             Arc::new(functions_aggregate::planner::AggregateFunctionPlanner),
             Arc::new(functions_window::planner::WindowFunctionPlanner),
+            Arc::new(functions_match_recognize::planner::MatchRecognizeFunctionPlanner),
         ];
 
         expr_planners
@@ -104,7 +108,10 @@ impl SessionStateDefaults {
     /// returns the list of default [`ScalarUDF']'s
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
         #[cfg_attr(not(feature = "nested_expressions"), allow(unused_mut))]
-        let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
+        let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions()
+            .into_iter()
+            .chain(functions_match_recognize::all_default_scalar_functions())
+            .collect();
 
         #[cfg(feature = "nested_expressions")]
         functions.append(&mut functions_nested::all_default_nested_functions());
@@ -115,11 +122,17 @@ impl SessionStateDefaults {
     /// returns the list of default [`AggregateUDF']'s
     pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         functions_aggregate::all_default_aggregate_functions()
+            .into_iter()
+            .chain(functions_match_recognize::all_default_aggregate_functions())
+            .collect()
     }
 
     /// returns the list of default [`WindowUDF']'s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
+            .into_iter()
+            .chain(functions_match_recognize::all_default_window_functions())
+            .collect()
     }
 
     /// returns the list of default [`TableFunction`]s
