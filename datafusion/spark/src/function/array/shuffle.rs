@@ -47,7 +47,7 @@ impl Default for SparkShuffle {
 impl SparkShuffle {
     pub fn new() -> Self {
         Self {
-            signature: Signature::arrays(1,  None, Volatility::Volatile),
+            signature: Signature::arrays(1, None, Volatility::Volatile),
         }
     }
 }
