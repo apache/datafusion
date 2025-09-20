@@ -497,7 +497,7 @@ impl Default for ArrayHasAll {
 impl ArrayHasAll {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::arrays(2, None, Volatility::Immutable),
             aliases: vec![String::from("list_has_all")],
         }
     }
@@ -571,7 +571,7 @@ impl Default for ArrayHasAny {
 impl ArrayHasAny {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::arrays(2, None, Volatility::Immutable),
             aliases: vec![String::from("list_has_any"), String::from("arrays_overlap")],
         }
     }

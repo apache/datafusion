@@ -76,7 +76,7 @@ impl Default for ArrayReverse {
 impl ArrayReverse {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec!["list_reverse".to_string()],
         }
     }
