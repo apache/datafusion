@@ -378,6 +378,8 @@ impl NestedLoopJoinExec {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) || self.projection.is_some()
         {
             Arc::new(new_join)
