@@ -88,6 +88,34 @@ pub trait GroupColumn: Send + Sync {
     /// The vectorized version `append_val`
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()>;
 
+    /// Whether this builder supports [`Self::append_array_slice`] optimization
+    /// In case it returns true, [`Self::append_array_slice`] must be implemented
+    fn support_append_array_slice(&self) -> bool {
+        false
+    }
+
+    /// Append slice of values from `array`, starting at `start` for `length` rows
+    ///
+    /// This is a special case of `vectorized_append` when the rows are continuous
+    ///
+    /// You should implement this to optimize large copies of contiguous values.
+    ///
+    /// This does not get the sliced array even though it would be more user-friendly
+    /// to allow optimization that avoid the additional computation that can happen in a slice
+    ///
+    /// Note: in order for this to be used, [`Self::support_append_array_slice`] must return true
+    fn append_array_slice(
+        &mut self,
+        _array: &ArrayRef,
+        _start: usize,
+        _length: usize,
+    ) -> Result<()> {
+        assert!(!self.support_append_array_slice(), "support_append_array_slice() return true while append_array_slice() is not implemented");
+        not_impl_err!(
+            "append_array_slice is not implemented for this GroupColumn, please implement it as well as support_append_array_slice"
+        )
+    }
+
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
 
@@ -233,6 +261,11 @@ struct VectorizedOperationBuffers {
     /// The `vectorized append` row indices buffer
     append_row_indices: Vec<usize>,
 
+    /// If all the values in `append_row_indices` are consecutive
+    /// i.e. `append_row_indices[i] + 1 == append_row_indices[i + 1]`
+    /// this is used to optimize the `vectorized_append` operation
+    are_row_indices_consecutive: bool,
+
     /// The `vectorized_equal_to` row indices buffer
     equal_to_row_indices: Vec<usize>,
 
@@ -250,11 +283,26 @@ struct VectorizedOperationBuffers {
 
 impl VectorizedOperationBuffers {
     fn clear(&mut self) {
-        self.append_row_indices.clear();
+        self.clear_append_row_indices();
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
         self.equal_to_results.clear();
         self.remaining_row_indices.clear();
+    }
+
+    fn add_append_row_index(&mut self, row: usize) {
+        self.are_row_indices_consecutive = self.are_row_indices_consecutive
+            && self
+                .append_row_indices
+                .last()
+                .is_none_or(|last| last + 1 == row);
+
+        self.append_row_indices.push(row);
+    }
+
+    fn clear_append_row_indices(&mut self) {
+        self.append_row_indices.clear();
+        self.are_row_indices_consecutive = true;
     }
 }
 
@@ -498,7 +546,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         batch_hashes: &[u64],
         groups: &mut [usize],
     ) {
-        self.vectorized_operation_buffers.append_row_indices.clear();
+        self.vectorized_operation_buffers.clear_append_row_indices();
         self.vectorized_operation_buffers
             .equal_to_row_indices
             .clear();
@@ -528,9 +576,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 );
 
                 // Add row index to `vectorized_append_row_indices`
-                self.vectorized_operation_buffers
-                    .append_row_indices
-                    .push(row);
+                self.vectorized_operation_buffers.add_append_row_index(row);
 
                 // Set group index to row in `groups`
                 groups[row] = current_group_idx;
@@ -578,11 +624,33 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         }
 
         let iter = self.group_values.iter_mut().zip(cols.iter());
-        for (group_column, col) in iter {
-            group_column.vectorized_append(
-                col,
-                &self.vectorized_operation_buffers.append_row_indices,
-            )?;
+        if self
+            .vectorized_operation_buffers
+            .are_row_indices_consecutive
+            && !self
+                .vectorized_operation_buffers
+                .append_row_indices
+                .is_empty()
+        {
+            let start = self.vectorized_operation_buffers.append_row_indices[0];
+            let length = self.vectorized_operation_buffers.append_row_indices.len();
+            for (group_column, col) in iter {
+                if group_column.support_append_array_slice() {
+                    group_column.append_array_slice(col, start, length)?;
+                } else {
+                    group_column.vectorized_append(
+                        col,
+                        &self.vectorized_operation_buffers.append_row_indices,
+                    )?;
+                }
+            }
+        } else {
+            for (group_column, col) in iter {
+                group_column.vectorized_append(
+                    col,
+                    &self.vectorized_operation_buffers.append_row_indices,
+                )?;
+            }
         }
 
         Ok(())
