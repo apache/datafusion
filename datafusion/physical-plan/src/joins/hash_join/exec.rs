@@ -727,7 +727,7 @@ impl DisplayAs for HashJoinExec {
                 };
                 let display_null_equality =
                     if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
-                        ", Null Equality: NULL equals NULL"
+                        ", NullsEqual: true"
                     } else {
                         ""
                     };
@@ -765,7 +765,7 @@ impl DisplayAs for HashJoinExec {
                 writeln!(f, "on={on}")?;
 
                 if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
-                    writeln!(f, "Null Equality: NULL equals NULL")?;
+                    writeln!(f, "NullsEqual: true")?;
                 }
 
                 if let Some(filter) = self.filter.as_ref() {
