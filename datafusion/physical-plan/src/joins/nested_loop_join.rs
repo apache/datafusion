@@ -162,7 +162,8 @@ pub struct NestedLoopJoinExec {
     pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
     pub(crate) join_type: JoinType,
-    /// The schema once the join is applied
+    /// The full concatenated schema of left and right children should be distinct from
+    /// the output schema of the operator
     join_schema: SchemaRef,
     /// Future that consumes left input and buffers it in memory
     ///
