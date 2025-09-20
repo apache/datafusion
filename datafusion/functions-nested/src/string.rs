@@ -26,7 +26,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field};
 
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 
 use std::any::Any;
 
@@ -50,7 +50,7 @@ use datafusion_expr::{
     Documentation, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass,
     Volatility,
 };
-use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 

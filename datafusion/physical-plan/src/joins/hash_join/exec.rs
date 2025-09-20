@@ -725,6 +725,12 @@ impl DisplayAs for HashJoinExec {
                 } else {
                     "".to_string()
                 };
+                let display_null_equality =
+                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                        ", NullsEqual: true"
+                    } else {
+                        ""
+                    };
                 let on = self
                     .on
                     .iter()
@@ -733,8 +739,13 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
-                    self.mode, self.join_type, on, display_filter, display_projections,
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
+                    self.mode,
+                    self.join_type,
+                    on,
+                    display_filter,
+                    display_projections,
+                    display_null_equality,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -752,6 +763,10 @@ impl DisplayAs for HashJoinExec {
                 }
 
                 writeln!(f, "on={on}")?;
+
+                if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                    writeln!(f, "NullsEqual: true")?;
+                }
 
                 if let Some(filter) = self.filter.as_ref() {
                     writeln!(f, "filter={filter}")?;
