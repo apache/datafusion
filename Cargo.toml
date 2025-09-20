@@ -232,3 +232,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(tarpaulin_include)",
 ] }
 unused_qualifications = "deny"
+
+
+[patch.crates-io]
+object_store = {  git = "https://github.com/alamb/arrow-rs-object-store.git", branch="alamb/prepare_0.12.4" }
