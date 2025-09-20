@@ -555,7 +555,7 @@ SELECT corr(c2, c12) FROM aggregate_test_100
 query R
 select corr(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 ----
-0
+NULL
 
 # all_nulls_query_correlation
 query R
@@ -2726,7 +2726,7 @@ CREATE OR REPLACE TABLE corr_single_row(
 query R
 SELECT corr(x, y) FROM corr_single_row;
 ----
-0
+NULL
 
 # correlation with all nulls
 statement ok
