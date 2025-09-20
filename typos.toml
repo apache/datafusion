@@ -42,5 +42,6 @@ extend-exclude = [
     "*.sql",
     "dev/changelog/**",
     "benchmarks/**",
-    "*.csv"
+    "*.csv",
+    "docs/source/contributor-guide/governance.md"
 ]

@@ -17,7 +17,9 @@
 
 use arrow::{
     array::{ArrayRef, ArrowNumericType},
-    datatypes::{i256, Decimal128Type, Decimal256Type, DecimalType},
+    datatypes::{
+        i256, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, DecimalType,
+    },
 };
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
@@ -28,7 +30,7 @@ use crate::aggregate::sum_distinct::DistinctSumAccumulator;
 use crate::utils::DecimalAverager;
 
 /// Generic implementation of `AVG DISTINCT` for Decimal types.
-/// Handles both Decimal128Type and Decimal256Type.
+/// Handles both all Arrow decimal types (32, 64, 128 and 256 bits).
 #[derive(Debug)]
 pub struct DecimalDistinctAvgAccumulator<T: DecimalType + Debug> {
     sum_accumulator: DistinctSumAccumulator<T>,
@@ -80,6 +82,34 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator
         let sum_scalar = self.sum_accumulator.evaluate()?;
 
         match sum_scalar {
+            ScalarValue::Decimal32(Some(sum), _, _) => {
+                let decimal_averager = DecimalAverager::<Decimal32Type>::try_new(
+                    self.sum_scale,
+                    self.target_precision,
+                    self.target_scale,
+                )?;
+                let avg = decimal_averager
+                    .avg(sum, self.sum_accumulator.distinct_count() as i32)?;
+                Ok(ScalarValue::Decimal32(
+                    Some(avg),
+                    self.target_precision,
+                    self.target_scale,
+                ))
+            }
+            ScalarValue::Decimal64(Some(sum), _, _) => {
+                let decimal_averager = DecimalAverager::<Decimal64Type>::try_new(
+                    self.sum_scale,
+                    self.target_precision,
+                    self.target_scale,
+                )?;
+                let avg = decimal_averager
+                    .avg(sum, self.sum_accumulator.distinct_count() as i64)?;
+                Ok(ScalarValue::Decimal64(
+                    Some(avg),
+                    self.target_precision,
+                    self.target_scale,
+                ))
+            }
             ScalarValue::Decimal128(Some(sum), _, _) => {
                 let decimal_averager = DecimalAverager::<Decimal128Type>::try_new(
                     self.sum_scale,
@@ -127,8 +157,68 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Decimal128Array, Decimal256Array};
+    use arrow::array::{
+        Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    };
     use std::sync::Arc;
+
+    #[test]
+    fn test_decimal32_distinct_avg_accumulator() -> Result<()> {
+        let precision = 5_u8;
+        let scale = 2_i8;
+        let array = Decimal32Array::from(vec![
+            Some(10_00),
+            Some(12_50),
+            Some(17_50),
+            Some(20_00),
+            Some(20_00),
+            Some(30_00),
+            None,
+            None,
+        ])
+        .with_precision_and_scale(precision, scale)?;
+
+        let mut accumulator =
+            DecimalDistinctAvgAccumulator::<Decimal32Type>::with_decimal_params(
+                scale, 9, 6,
+            );
+        accumulator.update_batch(&[Arc::new(array)])?;
+
+        let result = accumulator.evaluate()?;
+        let expected_result = ScalarValue::Decimal32(Some(18000000), 9, 6);
+        assert_eq!(result, expected_result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal64_distinct_avg_accumulator() -> Result<()> {
+        let precision = 10_u8;
+        let scale = 4_i8;
+        let array = Decimal64Array::from(vec![
+            Some(100_0000),
+            Some(125_0000),
+            Some(175_0000),
+            Some(200_0000),
+            Some(200_0000),
+            Some(300_0000),
+            None,
+            None,
+        ])
+        .with_precision_and_scale(precision, scale)?;
+
+        let mut accumulator =
+            DecimalDistinctAvgAccumulator::<Decimal64Type>::with_decimal_params(
+                scale, 14, 8,
+            );
+        accumulator.update_batch(&[Arc::new(array)])?;
+
+        let result = accumulator.evaluate()?;
+        let expected_result = ScalarValue::Decimal64(Some(180_00000000), 14, 8);
+        assert_eq!(result, expected_result);
+
+        Ok(())
+    }
 
     #[test]
     fn test_decimal128_distinct_avg_accumulator() -> Result<()> {
