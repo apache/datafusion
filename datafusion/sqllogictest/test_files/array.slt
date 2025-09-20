@@ -7285,6 +7285,16 @@ select array_except(null, null)
 ----
 NULL
 
+query ?
+select array_except(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 6, 3, 4], 'LargeList(Int64)'));
+----
+[1, 2]
+
+query ?
+select array_except(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int64)'), arrow_cast([5, 6, 3, 4], 'FixedSizeList(4, Int64)'));
+----
+[1, 2]
+
 ### Array operators tests
 
 
