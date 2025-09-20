@@ -268,7 +268,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
-            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
+            let scalar_func_expr =
+                Expr::ScalarFunction(ScalarFunction::new_udf(fm.clone(), args.clone()));
+            
+            if name.eq_ignore_ascii_case(fm.name()) {
+                return Ok(scalar_func_expr);
+            } else {
+
+                let arg_names = args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let verbose_alias = format!("{}({})", name, arg_names);
+
+                return Ok(Expr::Alias(expr::Alias::new(
+                    scalar_func_expr,
+                    None::<datafusion_common::TableReference>,
+                    verbose_alias,
+                )));
+            }
         }
 
         // Build Unnest expression
@@ -470,14 +489,35 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     null_treatment,
                 } = aggregate_expr;
 
-                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                    func,
-                    args,
-                    distinct,
-                    filter,
-                    order_by,
-                    null_treatment,
-                )));
+
+                let agg_func_expr =
+                    Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                        func.clone(),
+                        args.clone(),
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    ));
+                
+                if name.eq_ignore_ascii_case(func.name()) {
+                    return Ok(agg_func_expr);
+                }else {
+
+                    let arg_names = args
+                        .iter()
+                        .map(|arg| arg.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let verbose_alias = format!("{}({})", name, arg_names);
+
+                    return Ok(Expr::Alias(expr::Alias::new(
+                        agg_func_expr,
+                        None::<datafusion_common::TableReference>,
+                        verbose_alias,
+                    )));
+                }
+
             }
         }
 
