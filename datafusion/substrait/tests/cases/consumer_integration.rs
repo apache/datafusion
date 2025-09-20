@@ -605,26 +605,30 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_joins() -> Result<()> {
         let plan_str = test_plan_to_string("multiple_joins.json").await?;
-        assert_eq!(
+        assert_snapshot!(
             plan_str,
-            "Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS count_third\
-            \n  Left Join: left.id = right.id\
-            \n    SubqueryAlias: left\
-            \n      Left Join: left.id = right.id\
-            \n        SubqueryAlias: left\
-            \n          Left Join: left.id = right.id\
-            \n            SubqueryAlias: left\
-            \n              Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
-            \n                Values: (Int64(1)), (Int64(2))\
-            \n            SubqueryAlias: right\
-            \n              Aggregate: groupBy=[[id, category]], aggr=[[]]\
-            \n                Values: (Int64(1), Utf8(\"info\")), (Int64(2), Utf8(\"low\"))\
-            \n        SubqueryAlias: right\
-            \n          Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
-            \n            Values: (Int64(1)), (Int64(2))\
-            \n    SubqueryAlias: right\
-            \n      Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
-            \n        Values: (Int64(1)), (Int64(2))"
+            @r#"
+        Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS count_third
+          Left Join: left.id = right.id
+            SubqueryAlias: left
+              Projection: left.id, left.count(Int64(1)), left.id:1, left.category, right.id AS id:2, right.count(Int64(1)) AS count(Int64(1)):1
+                Left Join: left.id = right.id
+                  SubqueryAlias: left
+                    Projection: left.id, left.count(Int64(1)), right.id AS id:1, right.category
+                      Left Join: left.id = right.id
+                        SubqueryAlias: left
+                          Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]
+                            Values: (Int64(1)), (Int64(2))
+                        SubqueryAlias: right
+                          Aggregate: groupBy=[[id, category]], aggr=[[]]
+                            Values: (Int64(1), Utf8("info")), (Int64(2), Utf8("low"))
+                  SubqueryAlias: right
+                    Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]
+                      Values: (Int64(1)), (Int64(2))
+            SubqueryAlias: right
+              Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]
+                Values: (Int64(1)), (Int64(2))
+        "#
         );
         Ok(())
     }
