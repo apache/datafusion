@@ -29,12 +29,12 @@ use arrow::datatypes::{
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_generic_list_array, as_int64_array,
 };
-use datafusion_common::{exec_err, internal_datafusion_err, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
-use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
