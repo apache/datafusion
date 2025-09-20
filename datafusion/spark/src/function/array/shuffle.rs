@@ -47,7 +47,7 @@ impl Default for SparkShuffle {
 impl SparkShuffle {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Volatile),
+            signature: Signature::arrays(1,  None, Volatility::Volatile),
         }
     }
 }
@@ -98,7 +98,7 @@ pub fn array_shuffle_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn general_array_shuffle<O: OffsetSizeTrait + TryFrom<i64>>(
+fn general_array_shuffle<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
