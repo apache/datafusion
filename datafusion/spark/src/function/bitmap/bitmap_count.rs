@@ -27,13 +27,13 @@ use arrow::datatypes::DataType::{
     Binary, BinaryView, FixedSizeBinary, Int64, LargeBinary,
 };
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_datafusion_err, internal_err, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
 };
+use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
-use datafusion_functions::{downcast_arg, downcast_named_arg};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BitmapCount {
