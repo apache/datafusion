@@ -476,7 +476,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
-    for partitioning_columns in [4, 7, 8] {
+    // It was observed in production that queries with window functions sometimes partition over more than 30 columns
+    for partitioning_columns in [4, 7, 8, 12, 30] {
         c.bench_function(
             &format!(
                 "physical_window_function_partition_by_{partitioning_columns}_on_values"
