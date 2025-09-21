@@ -21,10 +21,11 @@ under the License.
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
-This crate is a submodule of DataFusion that provides Apache Spark-compatible expressions for use with DataFusion.
+This crate is a submodule of DataFusion that provides [Apache Spark] compatible expressions for use with DataFusion.
 
 [Apache Arrow]: https://arrow.apache.org/
 [Apache DataFusion]: https://datafusion.apache.org/
+[Apache Spark]: https://spark.apache.org/
 
 ## Testing Guide
 
