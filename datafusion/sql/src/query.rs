@@ -89,11 +89,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Apply pipe operators to a plan
     fn pipe_operators(
         &self,
-        plan: LogicalPlan,
+        mut plan: LogicalPlan,
         pipe_operators: Vec<PipeOperator>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let mut plan = plan;
         for pipe_operator in pipe_operators {
             plan = self.pipe_operator(plan, pipe_operator, planner_context)?;
         }
