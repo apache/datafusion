@@ -40,8 +40,9 @@ use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
+
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
@@ -80,7 +81,7 @@ pub struct FFI_WindowUDF {
         display_name: RString,
     ) -> RResult<WrappedSchema, RString>,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`WindowUDF`]
@@ -253,6 +254,19 @@ pub struct ForeignWindowUDF {
 unsafe impl Send for ForeignWindowUDF {}
 unsafe impl Sync for ForeignWindowUDF {}
 
+impl PartialEq for ForeignWindowUDF {
+    fn eq(&self, other: &Self) -> bool {
+        // FFI_WindowUDF cannot be compared, so identity equality is the best we can do.
+        std::ptr::eq(self, other)
+    }
+}
+impl Eq for ForeignWindowUDF {}
+impl Hash for ForeignWindowUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self, state)
+    }
+}
+
 impl TryFrom<&FFI_WindowUDF> for ForeignWindowUDF {
     type Error = DataFusionError;
 
@@ -333,38 +347,6 @@ impl WindowUDFImpl for ForeignWindowUDF {
     fn sort_options(&self) -> Option<SortOptions> {
         let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref().into();
         options.map(|s| s.into())
-    }
-
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            name,
-            aliases,
-            udf,
-            signature,
-        } = self;
-        name == &other.name
-            && aliases == &other.aliases
-            && std::ptr::eq(udf, &other.udf)
-            && signature == &other.signature
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            name,
-            aliases,
-            udf,
-            signature,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        std::ptr::hash(udf, &mut hasher);
-        signature.hash(&mut hasher);
-        hasher.finish()
     }
 }
 

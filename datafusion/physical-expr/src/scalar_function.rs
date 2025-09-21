@@ -39,16 +39,15 @@ use crate::PhysicalExpr;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    Volatility,
 };
-use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
-use itertools::Itertools;
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -167,6 +166,29 @@ impl ScalarFunctionExpr {
     pub fn config_options(&self) -> &ConfigOptions {
         &self.config_options
     }
+
+    /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
+    /// and verify that its inner function is of type T.
+    /// If the downcast fails, or the function is not of type T, returns `None`.
+    /// Otherwise returns `Some(ScalarFunctionExpr)`.
+    pub fn try_downcast_func<T>(expr: &dyn PhysicalExpr) -> Option<&ScalarFunctionExpr>
+    where
+        T: 'static,
+    {
+        match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
+            Some(scalar_expr)
+                if scalar_expr
+                    .fun()
+                    .inner()
+                    .as_any()
+                    .downcast_ref::<T>()
+                    .is_some() =>
+            {
+                Some(scalar_expr)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for ScalarFunctionExpr {
@@ -175,40 +197,49 @@ impl fmt::Display for ScalarFunctionExpr {
     }
 }
 
-impl DynEq for ScalarFunctionExpr {
-    fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other.downcast_ref::<Self>().is_some_and(|o| {
-            self.fun.eq(&o.fun)
-                && self.name.eq(&o.name)
-                && self.args.eq(&o.args)
-                && self.return_field.eq(&o.return_field)
-                && self
-                    .config_options
-                    .entries()
-                    .iter()
-                    .sorted_by(|&l, &r| l.key.cmp(&r.key))
-                    .zip(
-                        o.config_options
-                            .entries()
-                            .iter()
-                            .sorted_by(|&l, &r| l.key.cmp(&r.key)),
-                    )
-                    .filter(|(l, r)| l.ne(r))
-                    .count()
-                    == 0
-        })
+impl PartialEq for ScalarFunctionExpr {
+    fn eq(&self, o: &Self) -> bool {
+        if std::ptr::eq(self, o) {
+            // The equality implementation is somewhat expensive, so let's short-circuit when possible.
+            return true;
+        }
+        let Self {
+            fun,
+            name,
+            args,
+            return_field,
+            config_options,
+        } = self;
+        fun.eq(&o.fun)
+            && name.eq(&o.name)
+            && args.eq(&o.args)
+            && return_field.eq(&o.return_field)
+            && (Arc::ptr_eq(config_options, &o.config_options)
+                || sorted_config_entries(config_options)
+                    == sorted_config_entries(&o.config_options))
+    }
+}
+impl Eq for ScalarFunctionExpr {}
+impl Hash for ScalarFunctionExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            fun,
+            name,
+            args,
+            return_field,
+            config_options: _, // expensive to hash, and often equal
+        } = self;
+        fun.hash(state);
+        name.hash(state);
+        args.hash(state);
+        return_field.hash(state);
     }
 }
 
-impl DynHash for ScalarFunctionExpr {
-    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
-        self.type_id().hash(&mut state);
-        self.fun.hash(&mut state);
-        self.name.hash(&mut state);
-        self.args.hash(&mut state);
-        self.return_field.hash(&mut state);
-        self.config_options.entries().hash(&mut state);
-    }
+fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
+    let mut entries = config_options.entries();
+    entries.sort_by(|l, r| l.key.cmp(&r.key));
+    entries
 }
 
 impl PhysicalExpr for ScalarFunctionExpr {
@@ -327,5 +358,90 @@ impl PhysicalExpr for ScalarFunctionExpr {
             expr.fmt_sql(f)?;
         }
         write!(f, ")")
+    }
+
+    fn is_volatile_node(&self) -> bool {
+        self.fun.signature().volatility == Volatility::Volatile
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::Column;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::{ScalarUDF, ScalarUDFImpl, Signature};
+    use datafusion_physical_expr_common::physical_expr::is_volatile;
+    use std::any::Any;
+
+    /// Test helper to create a mock UDF with a specific volatility
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockScalarUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for MockScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "mock_function"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))))
+        }
+    }
+
+    #[test]
+    fn test_scalar_function_volatile_node() {
+        // Create a volatile UDF
+        let volatile_udf = Arc::new(ScalarUDF::from(MockScalarUDF {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Float32],
+                Volatility::Volatile,
+            ),
+        }));
+
+        // Create a non-volatile UDF
+        let stable_udf = Arc::new(ScalarUDF::from(MockScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        }));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
+        let args = vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>];
+        let config_options = Arc::new(ConfigOptions::new());
+
+        // Test volatile function
+        let volatile_expr = ScalarFunctionExpr::try_new(
+            volatile_udf,
+            args.clone(),
+            &schema,
+            Arc::clone(&config_options),
+        )
+        .unwrap();
+
+        assert!(volatile_expr.is_volatile_node());
+        let volatile_arc: Arc<dyn PhysicalExpr> = Arc::new(volatile_expr);
+        assert!(is_volatile(&volatile_arc));
+
+        // Test non-volatile function
+        let stable_expr =
+            ScalarFunctionExpr::try_new(stable_udf, args, &schema, config_options)
+                .unwrap();
+
+        assert!(!stable_expr.is_volatile_node());
+        let stable_arc: Arc<dyn PhysicalExpr> = Arc::new(stable_expr);
+        assert!(!is_volatile(&stable_arc));
     }
 }

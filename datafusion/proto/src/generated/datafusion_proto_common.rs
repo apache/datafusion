@@ -646,6 +646,9 @@ pub struct CsvOptions {
     /// Optional terminator character as a byte
     #[prost(bytes = "vec", tag = "17")]
     pub terminator: ::prost::alloc::vec::Vec<u8>,
+    /// Indicates if truncated rows are allowed
+    #[prost(bytes = "vec", tag = "18")]
+    pub truncated_rows: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -795,9 +798,6 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "30")]
     pub skip_arrow_metadata: bool,
-    /// default = false
-    #[prost(bool, tag = "33")]
-    pub cache_metadata: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]
@@ -836,6 +836,10 @@ pub struct ParquetOptions {
     pub bloom_filter_ndv_opt: ::core::option::Option<parquet_options::BloomFilterNdvOpt>,
     #[prost(oneof = "parquet_options::CoerceInt96Opt", tags = "32")]
     pub coerce_int96_opt: ::core::option::Option<parquet_options::CoerceInt96Opt>,
+    #[prost(oneof = "parquet_options::MaxPredicateCacheSizeOpt", tags = "33")]
+    pub max_predicate_cache_size_opt: ::core::option::Option<
+        parquet_options::MaxPredicateCacheSizeOpt,
+    >,
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
@@ -888,6 +892,11 @@ pub mod parquet_options {
     pub enum CoerceInt96Opt {
         #[prost(string, tag = "32")]
         CoerceInt96(::prost::alloc::string::String),
+    }
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum MaxPredicateCacheSizeOpt {
+        #[prost(uint64, tag = "33")]
+        MaxPredicateCacheSize(u64),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

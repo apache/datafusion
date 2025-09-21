@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -85,6 +85,16 @@ pub fn approx_percentile_cont_with_weight(
 +--------------------------------------------------------------------------------------------------+
 | 78.5                                                                                             |
 +--------------------------------------------------------------------------------------------------+
+```
+An alternative syntax is also supported:
+
+```sql
+> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
++--------------------------------------------------+
+| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
++--------------------------------------------------+
+| 78.5                                             |
++--------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The"),
     argument(
@@ -100,6 +110,7 @@ pub fn approx_percentile_cont_with_weight(
         description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxPercentileContWithWeight {
     signature: Signature,
     approx_percentile_cont: ApproxPercentileCont,
@@ -235,30 +246,6 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            approx_percentile_cont,
-        } = self;
-        signature == &other.signature
-            && approx_percentile_cont.equals(&other.approx_percentile_cont)
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            approx_percentile_cont,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        hasher.write_u64(approx_percentile_cont.hash_value());
-        hasher.finish()
     }
 }
 

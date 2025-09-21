@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -30,12 +30,12 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field, FieldRef,
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
+    Decimal64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
@@ -89,6 +89,7 @@ pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct FirstValue {
     signature: Signature,
     is_input_pre_ordered: bool,
@@ -184,6 +185,8 @@ impl AggregateUDFImpl for FirstValue {
                     | Float16
                     | Float32
                     | Float64
+                    | Decimal32(_, _)
+                    | Decimal64(_, _)
                     | Decimal128(_, _)
                     | Decimal256(_, _)
                     | Date32
@@ -233,6 +236,8 @@ impl AggregateUDFImpl for FirstValue {
             DataType::Float32 => create_accumulator::<Float32Type>(args),
             DataType::Float64 => create_accumulator::<Float64Type>(args),
 
+            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(args),
+            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(args),
             DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
             DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
 
@@ -292,30 +297,6 @@ impl AggregateUDFImpl for FirstValue {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        signature == &other.signature
-            && is_input_pre_ordered == &other.is_input_pre_ordered
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        is_input_pre_ordered.hash(&mut hasher);
-        hasher.finish()
     }
 }
 
@@ -1029,6 +1010,7 @@ impl Accumulator for FirstValueAccumulator {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct LastValue {
     signature: Signature,
     is_input_pre_ordered: bool,
@@ -1146,6 +1128,8 @@ impl AggregateUDFImpl for LastValue {
                     | Float16
                     | Float32
                     | Float64
+                    | Decimal32(_, _)
+                    | Decimal64(_, _)
                     | Decimal128(_, _)
                     | Decimal256(_, _)
                     | Date32
@@ -1197,6 +1181,8 @@ impl AggregateUDFImpl for LastValue {
             DataType::Float32 => create_accumulator::<Float32Type>(args),
             DataType::Float64 => create_accumulator::<Float64Type>(args),
 
+            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(args),
+            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(args),
             DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
             DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
 
@@ -1236,30 +1222,6 @@ impl AggregateUDFImpl for LastValue {
                 )
             }
         }
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        signature == &other.signature
-            && is_input_pre_ordered == &other.is_input_pre_ordered
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        is_input_pre_ordered.hash(&mut hasher);
-        hasher.finish()
     }
 }
 

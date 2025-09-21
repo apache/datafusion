@@ -29,6 +29,25 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 Aggregate functions operate on a set of values to compute a single result.
 
+## Filter clause
+
+Aggregate functions support the SQL `FILTER (WHERE ...)` clause to restrict which input rows contribute to the aggregate result.
+
+```sql
+function([exprs]) FILTER (WHERE condition)
+```
+
+Example:
+
+```sql
+SELECT
+  sum(salary) FILTER (WHERE salary > 0) AS sum_positive_salaries,
+  count(*)    FILTER (WHERE active)     AS active_count
+FROM employees;
+```
+
+Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/`MAX` return `NULL`.
+
 ## General Functions
 
 - [array_agg](#array_agg)
@@ -1065,6 +1084,24 @@ approx_percentile_cont(percentile [, centroids]) WITHIN GROUP (ORDER BY expressi
 +-----------------------------------------------------------------------+
 ```
 
+An alternate syntax is also supported:
+
+```sql
+> SELECT approx_percentile_cont(column_name, 0.75) FROM table_name;
++-----------------------------------------------+
+| approx_percentile_cont(column_name, 0.75)     |
++-----------------------------------------------+
+| 65.0                                          |
++-----------------------------------------------+
+
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++----------------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)           |
++----------------------------------------------------------+
+| 65.0                                                     |
++----------------------------------------------------------+
+```
+
 ### `approx_percentile_cont_with_weight`
 
 Returns the weighted approximate percentile of input values using the t-digest algorithm.
@@ -1095,4 +1132,15 @@ approx_percentile_cont_with_weight(weight, percentile [, centroids]) WITHIN GROU
 +--------------------------------------------------------------------------------------------------+
 | 78.5                                                                                             |
 +--------------------------------------------------------------------------------------------------+
+```
+
+An alternative syntax is also supported:
+
+```sql
+> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
++--------------------------------------------------+
+| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
++--------------------------------------------------+
+| 78.5                                             |
++--------------------------------------------------+
 ```

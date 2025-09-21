@@ -1,4 +1,4 @@
-# GSoC Application Guidelines
+# GSoC Application Guidelines (2025)
 
 ## Introduction
 

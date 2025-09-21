@@ -74,6 +74,15 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// [`execute`]: ExecutionPlan::execute
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
+///
+/// # Examples
+///
+/// See [`datafusion-examples`] for examples, including
+/// [`memory_pool_execution_plan.rs`] which shows how to implement a custom
+/// `ExecutionPlan` with memory tracking and spilling support.
+///
+/// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
+/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
@@ -194,6 +203,31 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Reset any internal state within this [`ExecutionPlan`].
+    ///
+    /// This method is called when an [`ExecutionPlan`] needs to be re-executed,
+    /// such as in recursive queries. Unlike [`ExecutionPlan::with_new_children`], this method
+    /// ensures that any stateful components (e.g., [`DynamicFilterPhysicalExpr`])
+    /// are reset to their initial state.
+    ///
+    /// The default implementation simply calls [`ExecutionPlan::with_new_children`] with the existing children,
+    /// effectively creating a new instance of the [`ExecutionPlan`] with the same children but without
+    /// necessarily resetting any internal state. Implementations that require resetting of some
+    /// internal state should override this method to provide the necessary logic.
+    ///
+    /// This method should *not* reset state recursively for children, as it is expected that
+    /// it will be called from within a walk of the execution plan tree so that it will be called on each child later
+    /// or was already called on each child.
+    ///
+    /// Note to implementers: unlike [`ExecutionPlan::with_new_children`] this method does not accept new children as an argument,
+    /// thus it is expected that any cached plan properties will remain valid after the reset.
+    ///
+    /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let children = self.children().into_iter().cloned().collect();
+        self.with_new_children(children)
+    }
 
     /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to
     /// produce `target_partitions` partitions.
@@ -1301,7 +1335,7 @@ pub fn check_not_null_constraints(
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
-    actual.iter().map(|elem| elem.to_string()).collect()
+    actual.iter().map(|elem| (*elem).to_string()).collect()
 }
 
 /// Indicates the effect an execution plan operator will have on the cardinality

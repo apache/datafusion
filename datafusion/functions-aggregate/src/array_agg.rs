@@ -75,7 +75,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 "#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
     signature: Signature,
@@ -1105,7 +1105,7 @@ mod tests {
         ])])?;
 
         // without compaction, the size is 17112
-        assert_eq!(acc.size(), 2112);
+        assert_eq!(acc.size(), 2184);
 
         Ok(())
     }

@@ -1078,6 +1078,7 @@ pub mod proto {
         pub expr: Option<datafusion_proto::protobuf::LogicalExprNode>,
     }
 
+    #[allow(dead_code)]
     #[derive(Clone, PartialEq, Eq, ::prost::Message)]
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
@@ -1586,7 +1587,7 @@ fn round_trip_scalar_values_and_data_types() {
         assert_eq!(
             dt, roundtrip,
             "DataType was not the same after round trip!\n\n\
-                        Input: {dt:?}\n\nRoundtrip: {roundtrip:?}"
+                        Input: {dt}\n\nRoundtrip: {roundtrip:?}"
         );
     }
 }
@@ -2495,7 +2496,7 @@ fn roundtrip_window() {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimpleWindowUDF {
         signature: Signature,
     }

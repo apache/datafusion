@@ -91,7 +91,24 @@ pub fn approx_percentile_cont(
 +-----------------------------------------------------------------------+
 | 65.0                                                                  |
 +-----------------------------------------------------------------------+
-```"#,
+```
+An alternate syntax is also supported:
+```sql
+> SELECT approx_percentile_cont(column_name, 0.75) FROM table_name;
++-----------------------------------------------+
+| approx_percentile_cont(column_name, 0.75)     |
++-----------------------------------------------+
+| 65.0                                          |
++-----------------------------------------------+
+
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++----------------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)           |
++----------------------------------------------------------+
+| 65.0                                                     |
++----------------------------------------------------------+
+```
+"#,
     standard_argument(name = "expression",),
     argument(
         name = "percentile",
@@ -102,6 +119,7 @@ pub fn approx_percentile_cont(
         description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxPercentileCont {
     signature: Signature,
 }
@@ -503,7 +521,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
             DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
             DataType::Float64 => ScalarValue::Float64(Some(q)),
-            v => unreachable!("unexpected return type {:?}", v),
+            v => unreachable!("unexpected return type {}", v),
         })
     }
 
