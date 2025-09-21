@@ -186,6 +186,10 @@ set datafusion.sql_parser.default_null_ordering = null;
 statement ok
 set datafusion.sql_parser.default_null_ordering = 'nulls_max';
 
+ # invalid null ordering
+Invalid or Unsupported Configuration: Invalid null ordering. Expected 'nulls_max', 'nulls_min', 'nulls_first' or 'nulls_last'. Got 'nulls_mine'
+set datafusion.sql_parser.default_null_ordering = 'nulls_mine';
+
 # sort
 
 statement ok

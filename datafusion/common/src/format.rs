@@ -205,3 +205,94 @@ impl ConfigField for ExplainFormat {
         Ok(())
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DFDurationFormat(pub DurationFormat);
+
+impl FromStr for DFDurationFormat {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "iso8601" => Ok(DFDurationFormat(DurationFormat::ISO8601)),
+            "pretty" => Ok(DFDurationFormat(DurationFormat::Pretty)),
+            _ => Err(DataFusionError::Configuration(format!(
+                "Invalid duration format. Expected 'pretty', or 'iso8601'. Got '{s}'"
+            ))),
+        }
+    }
+}
+
+impl Display for DFDurationFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            DurationFormat::ISO8601 => write!(f, "iso8601"),
+            DurationFormat::Pretty => write!(f, "pretty"),
+            _ => Err(fmt::Error),
+        }
+    }
+}
+
+impl ConfigField for DFDurationFormat {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = DFDurationFormat::from_str(value)?;
+        Ok(())
+    }
+}
+
+// TODO should be moved from here
+/// Represents the null ordering for sorting expressions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NullOrdering {
+    /// Nulls appear last in ascending order.
+    NullsMax,
+    /// Nulls appear first in descending order.
+    NullsMin,
+    /// Nulls appear first.
+    NullsFirst,
+    /// Nulls appear last.
+    NullsLast,
+}
+
+impl FromStr for NullOrdering {
+    type Err = DataFusionError;
+
+    fn from_str(format: &str) -> Result<Self, Self::Err> {
+        match format.to_lowercase().as_str() {
+            "nulls_max" => Ok(NullOrdering::NullsMax),
+            "nulls_min" => Ok(NullOrdering::NullsMin),
+            "nulls_first" => Ok(NullOrdering::NullsFirst),
+            "nulls_last" => Ok(NullOrdering::NullsLast),
+            _ => {
+                Err(DataFusionError::Configuration(format!("Invalid null ordering. Expected 'nulls_max', 'nulls_min', 'nulls_first' or 'nulls_last'. Got '{format}'")))
+            }
+        }
+    }
+}
+
+impl Display for NullOrdering {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            NullOrdering::NullsMax => "nulls_max",
+            NullOrdering::NullsMin => "nulls_min",
+            NullOrdering::NullsFirst => "nulls_first",
+            NullOrdering::NullsLast => "nulls_last",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl ConfigField for NullOrdering {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = NullOrdering::from_str(value)?;
+        Ok(())
+    }
+}
