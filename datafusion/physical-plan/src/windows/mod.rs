@@ -372,42 +372,37 @@ pub(crate) fn window_equivalence_properties(
         let partitioning_exprs = expr.partition_by();
         let no_partitioning = partitioning_exprs.is_empty();
 
-        // Use incremental approach to avoid O(4^n) exponential complexity:
-        // Instead of generating all combinations upfront via multi_cartesian_product,
-        // we build orderings incrementally and prune invalid paths early.
+        // Find "one" valid ordering for partition columns to avoid exponential complexity.
         let mut all_satisfied_lexs = vec![];
         if !no_partitioning {
-            // Start with empty orderings that we'll extend incrementally
-            let mut current_orderings = vec![vec![]];
+            // Find a single valid ordering using a greedy approach
+            let mut ordering = vec![];
             for partition_expr in partitioning_exprs.iter() {
-                let mut next_orderings = vec![];
-
                 let sort_options =
                     sort_options_resolving_constant(Arc::clone(partition_expr), true);
 
-                // For each current partial ordering, try extending with each sort option
-                for current in current_orderings.iter() {
-                    for sort_expr in sort_options.iter() {
-                        let mut extended = current.clone();
-                        extended.push(sort_expr.clone());
+                // Try each sort option and pick the first one that works
+                let mut found = false;
+                for sort_expr in sort_options.iter() {
+                    let mut candidate_ordering = ordering.clone();
+                    candidate_ordering.push(sort_expr.clone());
 
-                        // Check if this partial ordering can potentially satisfy requirements
-                        if let Some(lex) = LexOrdering::new(extended.clone()) {
-                            if window_eq_properties.ordering_satisfy(lex.clone())? {
-                                next_orderings.push(extended);
-                            }
+                    if let Some(lex) = LexOrdering::new(candidate_ordering.clone()) {
+                        if window_eq_properties.ordering_satisfy(lex)? {
+                            ordering.push(sort_expr.clone());
+                            found = true;
+                            break;
                         }
                     }
                 }
-                // If no valid orderings remain, stop early
-                if next_orderings.is_empty() {
+                // If no sort option works for this column, we can't build a valid ordering
+                if !found {
+                    ordering.clear();
                     break;
                 }
-                current_orderings = next_orderings;
             }
-
-            // Convert final orderings to LexOrdering and add to all_satisfied_lexs
-            for ordering in current_orderings {
+            // If we successfully built an ordering for all columns, use it
+            if ordering.len() == partitioning_exprs.len() {
                 if let Some(lex) = LexOrdering::new(ordering) {
                     all_satisfied_lexs.push(lex);
                 }
