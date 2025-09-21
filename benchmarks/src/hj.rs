@@ -58,10 +58,9 @@ const HASH_QUERIES: &[&str] = &[
     // equality on key + cheap filter to downselect
     r#"
         SELECT t1.value, t2.value
-        FROM range(10000) AS t1
+        FROM generate_series(0,10000, 1000) AS t1(value)
         JOIN range(10000) AS t2
-          ON t1.value = t2.value
-        WHERE t1.value % 1000 = 0
+        ON t1.value = t2.value;
     "#,
     // Q2: INNER 10K x 10K | MEDIUM ~20%
     r#"
@@ -149,6 +148,20 @@ const HASH_QUERIES: &[&str] = &[
         FROM range(30000) AS t1
         FULL JOIN range(30000) AS t2
           ON (t1.value % 2) = (t2.value % 2)
+    "#,
+    // Q13: INNER 30K x 30K | MEDIUM ~33% | double predicate
+    r#"
+        SELECT t1.value, t2.value
+        FROM range(30000) AS t1
+        INNER JOIN range(30000) AS t2
+          ON (t1.value = t2.value) AND (t1.value > 10000 and t2.value < 20000)
+    "#,
+    // Q14: FULL OUTER 30K x 30K | MEDIUM ~50% | modulo
+    r#"
+        SELECT t1.value AS l, t2.value AS r
+        FROM range(30000) AS t1
+        FULL JOIN range(30000) AS t2
+          ON (t1.value = t2.value) AND ((t1.value+t2.value)%10 = 0)
     "#,
 ];
 
