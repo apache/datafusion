@@ -2547,8 +2547,8 @@ fn test_unparse_window() -> Result<()> {
             filter: None,
         },
     }));
-    let table_scan = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
-    let plan = LogicalPlanBuilder::window_plan(table_scan, vec![window_expr])?;
+    let table = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
+    let plan = LogicalPlanBuilder::window_plan(table, vec![window_expr.clone()])?;
 
     let name = plan.schema().fields().last().unwrap().name().clone();
     let plan = LogicalPlanBuilder::from(plan)
@@ -2583,6 +2583,27 @@ fn test_unparse_window() -> Result<()> {
         sql,
         @r#"SELECT test.k, test.v, rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM test QUALIFY (rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) = 1)"#
     );
+
+    // without table qualifier
+    let table = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
+    let table = LogicalPlanBuilder::from(table)
+        .project(vec![col("k").alias("k"), col("v").alias("v")])?
+        .build()?;
+    let plan = LogicalPlanBuilder::window_plan(table, vec![window_expr])?;
+
+    let name = plan.schema().fields().last().unwrap().name().clone();
+    let plan = LogicalPlanBuilder::from(plan)
+        .filter(col(name.clone()).eq(lit(1i64)))?
+        .project(vec![col("k"), col("v"), col(name)])?
+        .build()?;
+
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "k", "v", "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "k" AS "k", "v" AS "v", rank() OVER (PARTITION BY "k" ORDER BY "v" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "test"."k" AS "k", "test"."v" AS "v" FROM "test") AS "derived_projection") AS "__qualify_subquery" WHERE ("rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" = 1)"#
+    );
+
     Ok(())
 }
 
