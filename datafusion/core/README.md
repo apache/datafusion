@@ -17,6 +17,11 @@
   under the License.
 -->
 
+<!-- 
+  Note the main crates.io landing page https://crates.io/crates/datafusion 
+  uses the workspace README.md file, not this file
+-->
+
 # Apache DataFusion Core
 
 This crate contains the main entry points and high level DataFusion APIs such as
