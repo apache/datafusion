@@ -17,8 +17,8 @@
   under the License.
 -->
 
-<!-- 
-  Note the main crates.io landing page https://crates.io/crates/datafusion 
+<!--
+  Note the main crates.io landing page https://crates.io/crates/datafusion
   uses the workspace README.md file, not this file
 -->
 
