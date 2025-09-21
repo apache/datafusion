@@ -97,7 +97,7 @@ impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         let mut plan = normalize_union_schema(plan)?;
         if !self.dialect.supports_qualify() {
-            plan = rewrite_qualify(&plan)?;
+            plan = rewrite_qualify(plan)?;
         }
 
         match plan {

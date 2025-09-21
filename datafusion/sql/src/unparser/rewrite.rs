@@ -120,27 +120,19 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
 ///       Window: window_function
 ///         TableScan: table
 ///
-pub(super) fn rewrite_qualify(plan: &LogicalPlan) -> Result<LogicalPlan> {
-    let plan = plan.clone();
-
+pub(super) fn rewrite_qualify(plan: LogicalPlan) -> Result<LogicalPlan> {
     let transformed_plan = plan.transform_up(|plan| match plan {
+        // Check if the filter's input is a Window plan
         LogicalPlan::Filter(mut filter) => {
-            // Check if the filter's input is a Window plan
             if matches!(&*filter.input, LogicalPlan::Window(_)) {
                 // Create a SubqueryAlias around the Window plan
-                let qualifiers = filter
+                let qualifier = filter
                     .input
                     .schema()
                     .iter()
-                    .filter(|(q, _)| q.is_some())
-                    .flat_map(|(q, _)| q)
-                    .collect::<Vec<_>>();
-
-                let qualifier = if qualifiers.is_empty() {
-                    "__qualify_subquery".to_string()
-                } else {
-                    qualifiers[0].to_string()
-                };
+                    .find_map(|(q, _)| q)
+                    .map(|q| q.to_string())
+                    .unwrap_or_else(|| "__qualify_subquery".to_string());
 
                 // for Postgres, name of column for 'rank() over (...)' is 'rank'
                 // but in Datafusion, it is 'rank() over (...)'
@@ -167,6 +159,7 @@ pub(super) fn rewrite_qualify(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 Ok(Transformed::no(LogicalPlan::Filter(filter)))
             }
         }
+
         _ => Ok(Transformed::no(plan)),
     });
 
