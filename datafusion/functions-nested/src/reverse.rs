@@ -76,7 +76,7 @@ impl Default for ArrayReverse {
 impl ArrayReverse {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec!["list_reverse".to_string()],
         }
     }
@@ -199,7 +199,7 @@ fn fixed_size_array_reverse(
         // skip the null value
         if array.is_null(row_index) {
             nulls.push(false);
-            mutable.extend(0, 0, 1);
+            mutable.extend(0, 0, value_length);
             continue;
         } else {
             nulls.push(true);
