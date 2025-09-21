@@ -48,7 +48,7 @@ object_store = { workspace = true }
 parquet = { workspace = true, default-features = true }
 rand = { workspace = true }
 regex.workspace = true
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.225", features = ["derive"] }
 serde_json = { workspace = true }
 snmalloc-rs = { version = "0.3", optional = true }
 structopt = { version = "0.3", default-features = false }
