@@ -56,7 +56,10 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
         .with_env_var("MINIO_ROOT_USER", MINIO_ROOT_USER)
         .with_env_var("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
         .with_mount(Mount::bind_mount(
-            absolute_data_path.to_str().unwrap(),
+            absolute_data_path
+                .to_str()
+                .unwrap()
+                .replace("/__w/", "/home/runner/work/"),
             "/source",
         ))
         .start()
