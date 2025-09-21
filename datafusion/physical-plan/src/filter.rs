@@ -34,7 +34,7 @@ use crate::filter_pushdown::{
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
-    ProjectionExec,
+    ProjectionExec, ProjectionExpr,
 };
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
@@ -516,11 +516,11 @@ impl ExecutionPlan for FilterExec {
                         .iter()
                         .map(|p| {
                             let field = filter_child_schema.field(*p).clone();
-                            (
-                                Arc::new(Column::new(field.name(), *p))
+                            ProjectionExpr {
+                                expr: Arc::new(Column::new(field.name(), *p))
                                     as Arc<dyn PhysicalExpr>,
-                                field.name().to_string(),
-                            )
+                                alias: field.name().to_string(),
+                            }
                         })
                         .collect::<Vec<_>>();
                     Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)

@@ -219,23 +219,23 @@ struct RunQueryResult {
 }
 
 impl RunQueryResult {
-    fn expected_formated(&self) -> String {
+    fn expected_formatted(&self) -> String {
         format!("{}", pretty_format_batches(&self.expected).unwrap())
     }
 
-    fn result_formated(&self) -> String {
+    fn result_formatted(&self) -> String {
         format!("{}", pretty_format_batches(&self.result).unwrap())
     }
 
     fn is_ok(&self) -> bool {
-        self.expected_formated() == self.result_formated()
+        self.expected_formatted() == self.result_formatted()
     }
 }
 
-/// Iterate over each line in the plan and check that one of them has `DataSourceExec` and `DynamicFilterPhysicalExpr` in the same line.
+/// Iterate over each line in the plan and check that one of them has `DataSourceExec` and `DynamicFilter` in the same line.
 fn has_dynamic_filter_expr_pushdown(plan: &str) -> bool {
     for line in plan.lines() {
-        if line.contains("DataSourceExec") && line.contains("DynamicFilterPhysicalExpr") {
+        if line.contains("DataSourceExec") && line.contains("DynamicFilter") {
             return true;
         }
     }
@@ -297,7 +297,7 @@ async fn test_fuzz_topk_filter_pushdown() {
                         order_vec.push(ordering);
                     }
                     None => {
-                        orders.insert(order_column.to_string(), vec![ordering]);
+                        orders.insert((*order_column).to_string(), vec![ordering]);
                     }
                 }
             }
@@ -374,8 +374,8 @@ async fn test_fuzz_topk_filter_pushdown() {
     for failure in &failures {
         println!("Failure:");
         println!("Query:\n{}", failure.query);
-        println!("\nExpected:\n{}", failure.expected_formated());
-        println!("\nResult:\n{}", failure.result_formated());
+        println!("\nExpected:\n{}", failure.expected_formatted());
+        println!("\nResult:\n{}", failure.result_formatted());
         println!("\n\n");
     }
 

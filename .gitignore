@@ -31,6 +31,7 @@ docker_cache
 *.orig
 .*.swp
 .*.swo
+*.pending-snap
 
 venv/*
 

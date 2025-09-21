@@ -169,6 +169,35 @@ LOCATION '/path/to/directory/of/files'
 OPTIONS ('has_header' 'true');
 ```
 
+Tables that are partitioned using a Hive compliant partitioning scheme will have their columns and values automatically
+detected and incorporated into the table's schema and data. Given the following example directory structure:
+
+```console
+hive_partitioned/
+├── a=1
+│   └── b=200
+│       └── file1.parquet
+└── a=2
+    └── b=100
+        └── file2.parquet
+```
+
+Users can specify the top level `hive_partitioned` directory as an `EXTERNAL TABLE` and leverage the Hive partitions to query
+and filter data.
+
+```sql
+CREATE EXTERNAL TABLE hive_partitioned
+STORED AS PARQUET
+LOCATION '/path/to/hive_partitioned/';
+
+SELECT count(*) FROM hive_partitioned WHERE b=100;
++------------------+
+| count(*)         |
++------------------+
+| 1                |
++------------------+
+```
+
 ### Example: Unbounded Data Sources
 
 We can create unbounded data sources using the `CREATE UNBOUNDED EXTERNAL TABLE` SQL statement.
@@ -207,7 +236,7 @@ CREATE EXTERNAL TABLE test (
     c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH ORDER (c2 ASC, c5 + c8 DESC NULL FIRST)
+WITH ORDER (c2 ASC, c5 + c8 DESC NULLS FIRST)
 LOCATION '/path/to/aggregate_test_100.csv'
 OPTIONS ('has_header' 'true');
 ```
