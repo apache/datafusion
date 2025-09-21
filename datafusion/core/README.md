@@ -21,4 +21,3 @@
 
 This crate contains the main entry points and high level DataFusion APIs such as
 `SessionContext`, `DataFrame` and `ListingTable`.
-

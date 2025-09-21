@@ -36,4 +36,3 @@ reason to use this crate directly in your project as well.
 [Apache DataFusion]: https://datafusion.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion
 [`PhysicalExprAdapter`]: https://docs.rs/datafusion/latest/datafusion/physical_expr_adapter/trait.PhysicalExprAdapter.html
-
