@@ -24,8 +24,8 @@ use super::log::LogFunc;
 use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, exec_err, internal_datafusion_err,
-    plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
