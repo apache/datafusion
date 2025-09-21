@@ -669,8 +669,8 @@ impl DFSchema {
                         ))
                     {
                         _plan_err!(
-                            "Schema mismatch: Expected field '{}' with type {:?}, \
-                            but got '{}' with type {:?}.",
+                            "Schema mismatch: Expected field '{}' with type {}, \
+                            but got '{}' with type {}.",
                             f1.name(),
                             f1.data_type(),
                             f2.name(),
@@ -798,6 +798,14 @@ impl DFSchema {
                         .zip(iter2)
                         .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_semantically_equal(f1, f2))
             }
+            (
+                DataType::Decimal32(_l_precision, _l_scale),
+                DataType::Decimal32(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Decimal64(_l_precision, _l_scale),
+                DataType::Decimal64(_r_precision, _r_scale),
+            ) => true,
             (
                 DataType::Decimal128(_l_precision, _l_scale),
                 DataType::Decimal128(_r_precision, _r_scale),
@@ -1056,6 +1064,12 @@ fn format_simple_data_type(data_type: &DataType) -> String {
         DataType::Dictionary(_, value_type) => {
             format_simple_data_type(value_type.as_ref())
         }
+        DataType::Decimal32(precision, scale) => {
+            format!("decimal32({precision}, {scale})")
+        }
+        DataType::Decimal64(precision, scale) => {
+            format!("decimal64({precision}, {scale})")
+        }
         DataType::Decimal128(precision, scale) => {
             format!("decimal128({precision}, {scale})")
         }
@@ -1063,7 +1077,7 @@ fn format_simple_data_type(data_type: &DataType) -> String {
             format!("decimal256({precision}, {scale})")
         }
         DataType::Null => "null".to_string(),
-        _ => format!("{data_type:?}").to_lowercase(),
+        _ => format!("{data_type}").to_lowercase(),
     }
 }
 
@@ -1308,8 +1322,8 @@ impl SchemaExt for Schema {
                 .try_for_each(|(f1, f2)| {
                     if f1.name() != f2.name() || (!DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) && !can_cast_types(f2.data_type(), f1.data_type())) {
                         _plan_err!(
-                            "Inserting query schema mismatch: Expected table field '{}' with type {:?}, \
-                            but got '{}' with type {:?}.",
+                            "Inserting query schema mismatch: Expected table field '{}' with type {}, \
+                            but got '{}' with type {}.",
                             f1.name(),
                             f1.data_type(),
                             f2.name(),
@@ -1792,6 +1806,27 @@ mod tests {
         assert!(!DFSchema::datatype_is_semantically_equal(
             &DataType::Int8,
             &DataType::Int16
+        ));
+
+        // Succeeds if decimal precision and scale are different
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal32(1, 2),
+            &DataType::Decimal32(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal64(1, 2),
+            &DataType::Decimal64(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal128(1, 2),
+            &DataType::Decimal128(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal256(1, 2),
+            &DataType::Decimal256(2, 1),
         ));
 
         // Test lists
@@ -2377,6 +2412,8 @@ mod tests {
                     ),
                     false,
                 ),
+                Field::new("decimal32", DataType::Decimal32(9, 4), true),
+                Field::new("decimal64", DataType::Decimal64(9, 4), true),
                 Field::new("decimal128", DataType::Decimal128(18, 4), true),
                 Field::new("decimal256", DataType::Decimal256(38, 10), false),
                 Field::new("date32", DataType::Date32, true),
@@ -2408,6 +2445,8 @@ mod tests {
          |-- fixed_size_binary: fixed_size_binary (nullable = true)
          |-- fixed_size_list: fixed size list (nullable = false)
          |    |-- item: int32 (nullable = true)
+         |-- decimal32: decimal32(9, 4) (nullable = true)
+         |-- decimal64: decimal64(9, 4) (nullable = true)
          |-- decimal128: decimal128(18, 4) (nullable = true)
          |-- decimal256: decimal256(38, 10) (nullable = false)
          |-- date32: date32 (nullable = true)

@@ -167,6 +167,7 @@ message CreateExternalTableNode {
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
+  bool or_replace = 15;
   bool temporary = 14;
   string definition = 7;
   repeated SortExprNodeCollection order_exprs = 10;

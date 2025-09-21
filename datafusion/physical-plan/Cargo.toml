@@ -49,7 +49,7 @@ arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -75,7 +75,6 @@ insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
-tempfile = "3.22.0"
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "fs",

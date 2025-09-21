@@ -27,6 +27,8 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{
     DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
+    DECIMAL64_MAX_SCALE,
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
@@ -204,7 +206,7 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
-            // boolean or null arguments.                   
+            // boolean or null arguments.
             Ok(Signature::uniform(Boolean))
         } else {
             plan_err!(
@@ -341,22 +343,64 @@ fn math_decimal_coercion(
             let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type)?;
             Some((lhs_type, value_type))
         }
-        (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
-            Some((dec_type.clone(), dec_type.clone()))
-        }
-        (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
+        (
+            Null,
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+        ) => Some((rhs_type.clone(), rhs_type.clone())),
+        (
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+            Null,
+        ) => Some((lhs_type.clone(), lhs_type.clone())),
+        (Decimal32(_, _), Decimal32(_, _))
+        | (Decimal64(_, _), Decimal64(_, _))
+        | (Decimal128(_, _), Decimal128(_, _))
+        | (Decimal256(_, _), Decimal256(_, _)) => {
             Some((lhs_type.clone(), rhs_type.clone()))
         }
         // Unlike with comparison we don't coerce to a decimal in the case of floating point
         // numbers, instead falling back to floating point arithmetic instead
         (
+            Decimal32(_, _),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+        ) => Some((
+            lhs_type.clone(),
+            coerce_numeric_type_to_decimal32(rhs_type)?,
+        )),
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+            Decimal32(_, _),
+        ) => Some((
+            coerce_numeric_type_to_decimal32(lhs_type)?,
+            rhs_type.clone(),
+        )),
+        (
+            Decimal64(_, _),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+        ) => Some((
+            lhs_type.clone(),
+            coerce_numeric_type_to_decimal64(rhs_type)?,
+        )),
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+            Decimal64(_, _),
+        ) => Some((
+            coerce_numeric_type_to_decimal64(lhs_type)?,
+            rhs_type.clone(),
+        )),
+        (
             Decimal128(_, _),
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-        ) => Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?)),
+        ) => Some((
+            lhs_type.clone(),
+            coerce_numeric_type_to_decimal128(rhs_type)?,
+        )),
         (
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
             Decimal128(_, _),
-        ) => Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone())),
+        ) => Some((
+            coerce_numeric_type_to_decimal128(lhs_type)?,
+            rhs_type.clone(),
+        )),
         (
             Decimal256(_, _),
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
@@ -694,7 +738,7 @@ pub fn try_type_union_resolution_with_struct(
                 keys_string = Some(keys);
             }
         } else {
-            return exec_err!("Expect to get struct but got {}", data_type);
+            return exec_err!("Expect to get struct but got {data_type}");
         }
     }
 
@@ -726,7 +770,7 @@ pub fn try_type_union_resolution_with_struct(
                 }
             }
         } else {
-            return exec_err!("Expect to get struct but got {}", data_type);
+            return exec_err!("Expect to get struct but got {data_type}");
         }
     }
 
@@ -932,8 +976,8 @@ fn get_common_decimal_type(
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match decimal_type {
-        Decimal128(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal(other_type)?;
+        Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal128(other_type)?;
             get_wider_decimal_type(decimal_type, &other_decimal_type)
         }
         Decimal256(_, _) => {
@@ -953,11 +997,23 @@ fn get_wider_decimal_type(
     rhs_type: &DataType,
 ) -> Option<DataType> {
     match (lhs_decimal_type, rhs_type) {
+        (DataType::Decimal32(p1, s1), DataType::Decimal32(p2, s2)) => {
+            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+            let s = *s1.max(s2);
+            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
+            Some(create_decimal32_type((range + s) as u8, s))
+        }
+        (DataType::Decimal64(p1, s1), DataType::Decimal64(p2, s2)) => {
+            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+            let s = *s1.max(s2);
+            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
+            Some(create_decimal64_type((range + s) as u8, s))
+        }
         (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
             // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
             let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal_type((range + s) as u8, s))
+            Some(create_decimal128_type((range + s) as u8, s))
         }
         (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => {
             // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
@@ -971,7 +1027,39 @@ fn get_wider_decimal_type(
 
 /// Convert the numeric data type to the decimal data type.
 /// We support signed and unsigned integer types and floating-point type.
-fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
+fn coerce_numeric_type_to_decimal32(numeric_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    // This conversion rule is from spark
+    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
+    match numeric_type {
+        Int8 | UInt8 => Some(Decimal32(3, 0)),
+        Int16 | UInt16 => Some(Decimal32(5, 0)),
+        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
+        Float16 => Some(Decimal32(6, 3)),
+        _ => None,
+    }
+}
+
+/// Convert the numeric data type to the decimal data type.
+/// We support signed and unsigned integer types and floating-point type.
+fn coerce_numeric_type_to_decimal64(numeric_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    // This conversion rule is from spark
+    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
+    match numeric_type {
+        Int8 | UInt8 => Some(Decimal64(3, 0)),
+        Int16 | UInt16 => Some(Decimal64(5, 0)),
+        Int32 | UInt32 => Some(Decimal64(10, 0)),
+        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
+        Float16 => Some(Decimal64(6, 3)),
+        Float32 => Some(Decimal64(14, 7)),
+        _ => None,
+    }
+}
+
+/// Convert the numeric data type to the decimal data type.
+/// We support signed and unsigned integer types and floating-point type.
+fn coerce_numeric_type_to_decimal128(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
@@ -1120,7 +1208,21 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
     }
 }
 
-fn create_decimal_type(precision: u8, scale: i8) -> DataType {
+fn create_decimal32_type(precision: u8, scale: i8) -> DataType {
+    DataType::Decimal128(
+        DECIMAL32_MAX_PRECISION.min(precision),
+        DECIMAL32_MAX_SCALE.min(scale),
+    )
+}
+
+fn create_decimal64_type(precision: u8, scale: i8) -> DataType {
+    DataType::Decimal128(
+        DECIMAL64_MAX_PRECISION.min(precision),
+        DECIMAL64_MAX_SCALE.min(scale),
+    )
+}
+
+fn create_decimal128_type(precision: u8, scale: i8) -> DataType {
     DataType::Decimal128(
         DECIMAL128_MAX_PRECISION.min(precision),
         DECIMAL128_MAX_SCALE.min(scale),
