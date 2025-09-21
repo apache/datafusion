@@ -29,8 +29,8 @@ Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no
 reason to use this crate directly in your project as well.
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
-[ListingTable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-[TableProvider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[listingtable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
+[tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 [`datafusion`]: https://crates.io/crates/datafusion

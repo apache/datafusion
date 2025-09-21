@@ -29,7 +29,7 @@ Note that the [`datafusion`] crate re-exports this module. If you are already
 using the [`datafusion`] crate in your project, there is no reason to use this
 crate directly in your project as well.
 
-[Apache DataFusion]: https://datafusion.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion
 
 ## Example Usage

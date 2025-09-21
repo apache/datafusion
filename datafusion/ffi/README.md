@@ -101,10 +101,10 @@ In this crate we have a variety of structs which closely mimic the behavior of
 their internal counterparts. To see detailed notes about how to use them, see
 the example in `FFI_TableProvider`.
 
-[Apache DataFusion]: https://datafusion.apache.org/
-[API Docs]: http://docs.rs/datafusion-ffi/latest
-[Rust ABI]: https://doc.rust-lang.org/reference/abi.html
-[FFI]: https://doc.rust-lang.org/nomicon/ffi.html
+[apache datafusion]: https://datafusion.apache.org/
+[api docs]: http://docs.rs/datafusion-ffi/latest
+[rust abi]: https://doc.rust-lang.org/reference/abi.html
+[ffi]: https://doc.rust-lang.org/nomicon/ffi.html
 [abi_stable]: https://crates.io/crates/abi_stable
 [async-ffi]: https://crates.io/crates/async-ffi
 [bindgen]: https://crates.io/crates/bindgen

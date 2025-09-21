@@ -23,8 +23,8 @@
 
 This crate is a submodule of DataFusion that contains an implementation of [sqllogictest].
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
 [sqllogictest]: https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
 ## Overview

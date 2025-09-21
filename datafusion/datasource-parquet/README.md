@@ -27,7 +27,7 @@ Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no
 reason to use this crate directly in your project as well.
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
-[Apache Parquet]: https://parquet.apache.org/
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[apache parquet]: https://parquet.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion

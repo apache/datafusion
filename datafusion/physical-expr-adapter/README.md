@@ -32,7 +32,7 @@ Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no
 reason to use this crate directly in your project as well.
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion
-[`PhysicalExprAdapter`]: https://docs.rs/datafusion/latest/datafusion/physical_expr_adapter/trait.PhysicalExprAdapter.html
+[`physicalexpradapter`]: https://docs.rs/datafusion/latest/datafusion/physical_expr_adapter/trait.PhysicalExprAdapter.html

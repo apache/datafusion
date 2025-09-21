@@ -25,6 +25,6 @@ This crate contains common macros used in DataFusion
 
 Most projects should use the [`datafusion`] crate directly.
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion

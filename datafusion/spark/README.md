@@ -23,9 +23,9 @@ under the License.
 
 This crate is a submodule of DataFusion that provides [Apache Spark] compatible expressions for use with DataFusion.
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
-[Apache Spark]: https://spark.apache.org/
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[apache spark]: https://spark.apache.org/
 
 ## Testing Guide
 
@@ -44,6 +44,6 @@ the [Sail] or [Comet] projects first.
 If you do port functionality from these sources, make sure to port over the corresponding tests too, to ensure
 correctness and compatibility.
 
-[Spark SQLLogicTest README]: ../sqllogictest/test_files/spark/README.md
-[Sail]: https://github.com/lakehq/sail
-[Comet]: https://github.com/apache/datafusion-comet
+[spark sqllogictest readme]: ../sqllogictest/test_files/spark/README.md
+[sail]: https://github.com/lakehq/sail
+[comet]: https://github.com/apache/datafusion-comet

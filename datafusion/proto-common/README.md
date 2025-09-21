@@ -30,8 +30,8 @@ Most projects should use the [`datafusion-proto`] crate directly, which re-expor
 this module. If you are already using the [`datafusion-proto`] crate, there is no
 reason to use this crate directly in your project as well.
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
-[Protocol Buffers]: https://protobuf.dev/
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[protocol buffers]: https://protobuf.dev/
 [`datafusion-proto`]: https://crates.io/crates/datafusion-proto
-[API Docs]: http://docs.rs/datafusion-proto/latest
+[api docs]: http://docs.rs/datafusion-proto/latest

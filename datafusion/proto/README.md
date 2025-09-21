@@ -27,7 +27,7 @@ query engine.
 
 See [API Docs] for details and examples.
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
-[Protocol Buffers]: https://protobuf.dev/
-[API Docs]: http://docs.rs/datafusion-proto/latest
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[protocol buffers]: https://protobuf.dev/
+[api docs]: http://docs.rs/datafusion-proto/latest

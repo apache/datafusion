@@ -24,7 +24,7 @@
 This crate is a submodule of DataFusion that provides a [Substrait] producer and consumer for DataFusion
 plans. See [API Docs] for details and examples.
 
-[Apache Arrow]: https://arrow.apache.org/
-[Apache DataFusion]: https://datafusion.apache.org/
-[Substrait]: https://substrait.io
-[API Docs]: https://docs.rs/datafusion-substrait/latest
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[substrait]: https://substrait.io
+[api docs]: https://docs.rs/datafusion-substrait/latest
