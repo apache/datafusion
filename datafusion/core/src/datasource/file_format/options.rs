@@ -34,7 +34,7 @@ use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::config::TableOptions;
+use datafusion_common::config::{ConfigFileDecryptionProperties, TableOptions};
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
@@ -91,6 +91,11 @@ pub struct CsvReadOptions<'a> {
     pub file_sort_order: Vec<Vec<SortExpr>>,
     /// Optional regex to match null values
     pub null_regex: Option<String>,
+    /// Whether to allow truncated rows when parsing.
+    /// By default this is set to false and will error if the CSV rows have different lengths.
+    /// When set to true then it will allow records with less than the expected number of columns and fill the missing columns with nulls.
+    /// If the record’s schema is not nullable, then it will still return an error.
+    pub truncated_rows: bool,
 }
 
 impl Default for CsvReadOptions<'_> {
@@ -117,6 +122,7 @@ impl<'a> CsvReadOptions<'a> {
             file_sort_order: vec![],
             comment: None,
             null_regex: None,
+            truncated_rows: false,
         }
     }
 
@@ -223,6 +229,15 @@ impl<'a> CsvReadOptions<'a> {
         self.null_regex = null_regex;
         self
     }
+
+    /// Configure whether to allow truncated rows when parsing.
+    /// By default this is set to false and will error if the CSV rows have different lengths
+    /// When set to true then it will allow records with less than the expected number of columns and fill the missing columns with nulls.
+    /// If the record’s schema is not nullable, then it will still return an error.
+    pub fn truncated_rows(mut self, truncated_rows: bool) -> Self {
+        self.truncated_rows = truncated_rows;
+        self
+    }
 }
 
 /// Options that control the reading of Parquet files.
@@ -252,6 +267,8 @@ pub struct ParquetReadOptions<'a> {
     pub schema: Option<&'a Schema>,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<SortExpr>>,
+    /// Properties for decryption of Parquet files that use modular encryption
+    pub file_decryption_properties: Option<ConfigFileDecryptionProperties>,
 }
 
 impl Default for ParquetReadOptions<'_> {
@@ -263,6 +280,7 @@ impl Default for ParquetReadOptions<'_> {
             skip_metadata: None,
             schema: None,
             file_sort_order: vec![],
+            file_decryption_properties: None,
         }
     }
 }
@@ -311,6 +329,15 @@ impl<'a> ParquetReadOptions<'a> {
     /// Configure if file has known sort order
     pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
+        self
+    }
+
+    /// Configure file decryption properties for reading encrypted Parquet files
+    pub fn file_decryption_properties(
+        mut self,
+        file_decryption_properties: ConfigFileDecryptionProperties,
+    ) -> Self {
+        self.file_decryption_properties = Some(file_decryption_properties);
         self
     }
 }
@@ -546,7 +573,8 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_newlines_in_values(self.newlines_in_values)
             .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned())
-            .with_null_regex(self.null_regex.clone());
+            .with_null_regex(self.null_regex.clone())
+            .with_truncated_rows(self.truncated_rows);
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
@@ -574,7 +602,11 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
-        let mut file_format = ParquetFormat::new().with_options(table_options.parquet);
+        let mut options = table_options.parquet;
+        if let Some(file_decryption_properties) = &self.file_decryption_properties {
+            options.crypto.file_decryption = Some(file_decryption_properties.clone());
+        }
+        let mut file_format = ParquetFormat::new().with_options(options);
 
         if let Some(parquet_pruning) = self.parquet_pruning {
             file_format = file_format.with_enable_pruning(parquet_pruning)

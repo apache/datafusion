@@ -22,15 +22,15 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions};
-use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
-use datafusion_expr::{
-    expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
+use datafusion_expr::expr::{
+    NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction,
 };
+use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
+use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    NullTreatment, ObjectName, OrderByExpr, Spanned, WindowType,
+    ObjectName, OrderByExpr, Spanned, WindowType,
 };
 
 /// Suggest a valid function based on an invalid input function name
@@ -93,6 +93,8 @@ struct FunctionArgs {
     distinct: bool,
     /// WITHIN GROUP clause, if any
     within_group: Vec<OrderByExpr>,
+    /// Was the function called without parenthesis, i.e. could this also be a column reference?
+    function_without_parentheses: bool,
 }
 
 impl FunctionArgs {
@@ -115,9 +117,10 @@ impl FunctionArgs {
                 order_by: vec![],
                 over,
                 filter,
-                null_treatment,
+                null_treatment: null_treatment.map(|v| v.into()),
                 distinct: false,
                 within_group,
+                function_without_parentheses: matches!(args, FunctionArguments::None),
             });
         };
 
@@ -196,9 +199,10 @@ impl FunctionArgs {
             order_by,
             over,
             filter,
-            null_treatment,
+            null_treatment: null_treatment.map(|v| v.into()),
             distinct,
             within_group,
+            function_without_parentheses: false,
         })
     }
 }
@@ -212,7 +216,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         let function_args = FunctionArgs::try_new(function)?;
         let FunctionArgs {
-            name,
+            name: object_name,
             args,
             order_by,
             over,
@@ -220,29 +224,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             null_treatment,
             distinct,
             within_group,
+            function_without_parentheses,
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
-            return plan_err!("OVER and WITHIN GROUP clause are can not be used together. \
-                OVER is for window function, whereas WITHIN GROUP is for ordered set aggregate function");
+            return plan_err!("OVER and WITHIN GROUP clause cannot be used together. \
+                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions");
+        }
+
+        if !order_by.is_empty() && !within_group.is_empty() {
+            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function");
         }
 
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
         let is_function_window = over.is_some();
-        let sql_parser_span = name.0[0].span();
-        let name = if name.0.len() > 1 {
+        let sql_parser_span = object_name.0[0].span();
+        let name = if object_name.0.len() > 1 {
             // DF doesn't handle compound identifiers
             // (e.g. "foo.bar") for function names yet
-            name.to_string()
+            object_name.to_string()
         } else {
-            match name.0[0].as_ident() {
+            match object_name.0[0].as_ident() {
                 Some(ident) => crate::utils::normalize_ident(ident.clone()),
                 None => {
                     return plan_err!(
                         "Expected an identifier in function name, but found {:?}",
-                        name.0[0]
+                        object_name.0[0]
                     )
                 }
             }
@@ -336,13 +345,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             if let Ok(fun) = self.find_window_func(&name) {
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
+
+                // Plan FILTER clause if present
+                let filter = filter
+                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .transpose()?
+                    .map(Box::new);
+
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
                     args,
                     partition_by,
                     order_by,
                     window_frame,
+                    filter,
                     null_treatment,
+                    distinct: function_args.distinct,
                 };
 
                 for planner in self.context_provider.get_expr_planners().iter() {
@@ -358,23 +376,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     partition_by,
                     order_by,
                     window_frame,
+                    filter,
                     null_treatment,
+                    distinct,
                 } = window_expr;
 
-                return Expr::from(expr::WindowFunction::new(func_def, args))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .null_treatment(null_treatment)
-                    .build();
+                let expr = Expr::from(WindowFunction {
+                    fun: func_def,
+                    params: expr::WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        filter,
+                        null_treatment,
+                        distinct,
+                    },
+                });
+
+                return Ok(expr);
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
-                if fm.is_ordered_set_aggregate() && within_group.is_empty() {
-                    return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
-                }
-
                 if null_treatment.is_some() && !fm.supports_null_handling_clause() {
                     return plan_err!(
                         "[IGNORE | RESPECT] NULLS are not permitted for {}",
@@ -394,7 +418,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         None,
                     )?;
 
-                    // add target column expression in within group clause to function arguments
+                    // Add the WITHIN GROUP ordering expressions to the front of the argument list
+                    // So function(arg) WITHIN GROUP (ORDER BY x) becomes function(x, arg)
                     if !within_group.is_empty() {
                         args = within_group
                             .iter()
@@ -402,16 +427,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             .chain(args)
                             .collect::<Vec<_>>();
                     }
-                    (!within_group.is_empty()).then_some(within_group)
+                    within_group
                 } else {
-                    let order_by = self.order_by_to_sort_expr(
+                    let order_by = if !order_by.is_empty() {
+                        order_by
+                    } else {
+                        within_group
+                    };
+                    self.order_by_to_sort_expr(
                         order_by,
                         schema,
                         planner_context,
                         true,
                         None,
-                    )?;
-                    (!order_by.is_empty()).then_some(order_by)
+                    )?
                 };
 
                 let filter: Option<Box<Expr>> = filter
@@ -453,6 +482,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )));
             }
         }
+
+        // workaround for https://github.com/apache/datafusion-sqlparser-rs/issues/1909
+        if function_without_parentheses {
+            let maybe_ids = object_name
+                .0
+                .iter()
+                .map(|part| part.as_ident().cloned().ok_or(()))
+                .collect::<Result<Vec<_>, ()>>();
+            if let Ok(ids) = maybe_ids {
+                if ids.len() == 1 {
+                    return self.sql_identifier_to_expr(
+                        ids.into_iter().next().unwrap(),
+                        schema,
+                        planner_context,
+                    );
+                } else {
+                    return self.sql_compound_identifier_to_expr(
+                        ids,
+                        schema,
+                        planner_context,
+                    );
+                }
+            }
+        }
+
         // Could not find the relevant function, so return an error
         if let Some(suggested_func_name) =
             suggest_valid_function(&name, is_function_window, self.context_provider)

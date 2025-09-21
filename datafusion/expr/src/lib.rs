@@ -34,6 +34,8 @@
 //!
 //! The [expr_fn] module contains functions for creating expressions.
 
+extern crate core;
+
 mod literal;
 mod operation;
 mod partition_evaluator;
@@ -63,12 +65,15 @@ pub mod simplify;
 pub mod sort_properties {
     pub use datafusion_expr_common::sort_properties::*;
 }
+pub mod async_udf;
 pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
+pub mod ptr_eq;
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
+pub mod udf_eq;
 pub mod utils;
 pub mod var_provider;
 pub mod window_frame;
@@ -99,11 +104,14 @@ pub use literal::{
 };
 pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
+#[cfg(feature = "sql")]
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
-    aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF,
-    SetMonotonicity, StatisticsArgs,
+    aggregate_doc_sections, udaf_default_display_name, udaf_default_human_display,
+    udaf_default_return_field, udaf_default_schema_name,
+    udaf_default_window_function_display_name, udaf_default_window_function_schema_name,
+    AggregateUDF, AggregateUDFImpl, ReversedUDAF, SetMonotonicity, StatisticsArgs,
 };
 pub use udf::{
     scalar_doc_sections, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,

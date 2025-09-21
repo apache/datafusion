@@ -103,7 +103,7 @@ make_udf_expr_and_func!(
         description = "Index to extract the element from the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayElement {
     signature: Signature,
     aliases: Vec<String>,
@@ -320,7 +320,7 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
         description = "Stride of the array slice. The default is 1."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArraySlice {
     signature: Signature,
     aliases: Vec<String>,
@@ -451,7 +451,7 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_array_slice::<i64>(array, from_array, to_array, stride)
         }
-        _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
+        _ => exec_err!("array_slice does not support type: {}", array_data_type),
     }
 }
 
@@ -663,7 +663,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayPopFront {
     signature: Signature,
     aliases: Vec<String>,
@@ -730,10 +730,7 @@ fn array_pop_front_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_front_list::<i64>(array)
         }
-        _ => exec_err!(
-            "array_pop_front does not support type: {:?}",
-            array_data_type
-        ),
+        _ => exec_err!("array_pop_front does not support type: {}", array_data_type),
     }
 }
 
@@ -770,7 +767,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayPopBack {
     signature: Signature,
     aliases: Vec<String>,
@@ -839,7 +836,7 @@ fn array_pop_back_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_pop_back_list::<i64>(array)
         }
         _ => exec_err!(
-            "array_pop_back does not support type: {:?}",
+            "array_pop_back does not support type: {}",
             array.data_type()
         ),
     }
@@ -878,7 +875,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayAnyValue {
     signature: Signature,
     aliases: Vec<String>,
@@ -942,7 +939,7 @@ fn array_any_value_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&array)?;
             general_array_any_value::<i64>(array)
         }
-        data_type => exec_err!("array_any_value does not support type: {:?}", data_type),
+        data_type => exec_err!("array_any_value does not support type: {data_type}"),
     }
 }
 

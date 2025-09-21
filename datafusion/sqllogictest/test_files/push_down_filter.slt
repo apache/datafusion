@@ -39,9 +39,9 @@ physical_plan
 01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2]
 02)--UnnestExec
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+04)------ProjectionExec: expr=[column2@0 as __unnest_placeholder(v.column2)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------FilterExec: column1@0 = 2
+06)----------FilterExec: column1@0 = 2, projection=[column2@1]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
@@ -59,10 +59,9 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as __unnest_placeholder(v.column2,depth=1)]
-06)----------UnnestExec
-07)------------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------UnnestExec
+06)----------ProjectionExec: expr=[column2@0 as __unnest_placeholder(v.column2)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
@@ -129,11 +128,30 @@ physical_plan
 06)----------ProjectionExec: expr=[column1@0 as column1, column2@1 as __unnest_placeholder(d.column2)]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
-
-
 statement ok
 drop table d;
 
+statement ok
+CREATE TABLE d AS VALUES (named_struct('a', 1, 'b', 2)), (named_struct('a', 3, 'b', 4)), (named_struct('a', 5, 'b', 6));
+
+query II
+select * from (select unnest(column1) from d) where "__unnest_placeholder(d.column1).b" > 5;
+----
+5 6
+
+query TT
+explain select * from (select unnest(column1) from d) where "__unnest_placeholder(d.column1).b" > 5;
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: __unnest_placeholder(d.column1).b@1 > 5
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column1@0 as __unnest_placeholder(d.column1)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table d;
 
 # Test push down filter with limit for parquet
 statement ok
@@ -157,7 +175,7 @@ CREATE TABLE src_table (
 # File 1:
 query I
 COPY (SELECT * FROM src_table where part_key = 1)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-0.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-0.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -165,7 +183,7 @@ STORED AS PARQUET;
 # File 2:
 query I
 COPY (SELECT * FROM src_table where part_key = 2)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-1.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-1.parquet'
 STORED AS PARQUET;
 ----
 4
@@ -173,7 +191,7 @@ STORED AS PARQUET;
 # File 3:
 query I
 COPY (SELECT * FROM src_table where part_key = 3)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-2.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-2.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -185,14 +203,14 @@ CREATE EXTERNAL TABLE test_filter_with_limit
   value INT
 )
 STORED AS PARQUET
-LOCATION 'test_files/scratch/parquet/test_filter_with_limit/';
+LOCATION 'test_files/scratch/push_down_filter/test_filter_with_limit/';
 
 query TT
 explain select * from test_filter_with_limit where value = 2 limit 1;
 ----
 physical_plan
 01)CoalescePartitionsExec: fetch=1
-02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-2.parquet]]}, projection=[part_key, value], limit=1, file_type=parquet, predicate=value@1 = 2, pruning_predicate=value_null_count@2 != row_count@3 AND value_min@0 <= 2 AND 2 <= value_max@1, required_guarantees=[value in (2)]
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-2.parquet]]}, projection=[part_key, value], limit=1, file_type=parquet, predicate=value@1 = 2, pruning_predicate=value_null_count@2 != row_count@3 AND value_min@0 <= 2 AND 2 <= value_max@1, required_guarantees=[value in (2)]
 
 query II
 select * from test_filter_with_limit where value = 2 limit 1;
@@ -265,8 +283,140 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 query TT
 explain select a from t where CAST(a AS string) = '0123';
 ----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 0123
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8View) = 0123
 
+
+# Test dynamic filter pushdown with swapped join inputs (issue #17196)
+# Create tables with different sizes to force join input swapping
+statement ok
+copy (select i as k from generate_series(1, 100) t(i)) to 'test_files/scratch/push_down_filter/small_table.parquet';
+
+statement ok
+copy (select i as k, i as v from generate_series(1, 1000) t(i)) to 'test_files/scratch/push_down_filter/large_table.parquet';
+
+statement ok
+create external table small_table stored as parquet location 'test_files/scratch/push_down_filter/small_table.parquet';
+
+statement ok
+create external table large_table stored as parquet location 'test_files/scratch/push_down_filter/large_table.parquet';
+
+# Test that dynamic filter is applied to the correct table after join input swapping
+# The small_table should be the build side, large_table should be the probe side with dynamic filter
+query TT
+explain select * from small_table join large_table on small_table.k = large_table.k where large_table.v >= 50;
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/small_table.parquet]]}, projection=[k], file_type=parquet
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/large_table.parquet]]}, projection=[k, v], file_type=parquet, predicate=v@1 >= 50 AND DynamicFilter [ empty ], pruning_predicate=v_null_count@1 != row_count@2 AND v_max@0 >= 50, required_guarantees=[]
+
+statement ok
+drop table small_table;
+
+statement ok
+drop table large_table;
 
 statement ok
 drop table t;
+
+# Regression test for https://github.com/apache/datafusion/issues/17188
+query I
+COPY (select i as k from generate_series(1, 10000000) as t(i))
+TO 'test_files/scratch/push_down_filter/t1.parquet'
+STORED AS PARQUET;
+----
+10000000
+
+query I
+COPY (select i as k, i as v from generate_series(1, 10000000) as t(i))
+TO 'test_files/scratch/push_down_filter/t2.parquet'
+STORED AS PARQUET;
+----
+10000000
+
+statement ok
+create external table t1 stored as parquet location 'test_files/scratch/push_down_filter/t1.parquet';
+
+statement ok
+create external table t2 stored as parquet location 'test_files/scratch/push_down_filter/t2.parquet';
+
+# The failure before https://github.com/apache/datafusion/pull/17197 was non-deterministic and random
+# So we'll run the same query a couple of times just to have more certainty it's fixed
+# Sorry about the spam in this slt test...
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+query III rowsort
+select *
+from t1
+join t2 on t1.k = t2.k
+where v = 1 or v = 10000000
+order by t1.k, t2.v;
+----
+1 1 1
+10000000 10000000 10000000
+
+# Regression test for https://github.com/apache/datafusion/issues/17512
+
+query I
+COPY (
+    SELECT arrow_cast('2025-01-01T00:00:00Z'::timestamptz, 'Timestamp(Microsecond, Some("UTC"))') AS start_timestamp
+)
+TO 'test_files/scratch/push_down_filter/17512.parquet'
+STORED AS PARQUET;
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE records STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter/17512.parquet';
+
+query I
+SELECT 1
+FROM (
+    SELECT start_timestamp
+    FROM records
+    WHERE start_timestamp <= '2025-01-01T00:00:00Z'::timestamptz
+) AS t
+WHERE t.start_timestamp::time < '00:00:01'::time;
+----
+1

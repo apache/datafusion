@@ -151,13 +151,13 @@ impl CsvFormat {
         let stream = store
             .get(&object.location)
             .await
-            .map_err(DataFusionError::ObjectStore);
+            .map_err(|e| DataFusionError::ObjectStore(Box::new(e)));
         let stream = match stream {
             Ok(stream) => self
                 .read_to_delimited_chunks_from_stream(
                     stream
                         .into_stream()
-                        .map_err(DataFusionError::ObjectStore)
+                        .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
                         .boxed(),
                 )
                 .await
@@ -181,7 +181,7 @@ impl CsvFormat {
         let stream = match decoder {
             Ok(decoded_stream) => {
                 newline_delimited_stream(decoded_stream.map_err(|e| match e {
-                    DataFusionError::ObjectStore(e) => e,
+                    DataFusionError::ObjectStore(e) => *e,
                     err => object_store::Error::Generic {
                         store: "read to delimited chunks failed",
                         source: Box::new(err),
@@ -219,6 +219,11 @@ impl CsvFormat {
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
         self.options.has_header = Some(has_header);
+        self
+    }
+
+    pub fn with_truncated_rows(mut self, truncated_rows: bool) -> Self {
+        self.options.truncated_rows = Some(truncated_rows);
         self
     }
 
@@ -291,6 +296,13 @@ impl CsvFormat {
         self
     }
 
+    /// Set whether rows should be truncated to the column width
+    /// - defaults to false
+    pub fn with_truncate_rows(mut self, truncate_rows: bool) -> Self {
+        self.options.truncated_rows = Some(truncate_rows);
+        self
+    }
+
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.options.delimiter
@@ -358,6 +370,10 @@ impl FileFormat for CsvFormat {
         Ok(format!("{}{}", ext, file_compression_type.get_ext()))
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        Some(self.options.compression.into())
+    }
+
     async fn infer_schema(
         &self,
         state: &dyn Session,
@@ -422,11 +438,13 @@ impl FileFormat for CsvFormat {
             .with_file_compression_type(self.options.compression.into())
             .with_newlines_in_values(newlines_in_values);
 
+        let truncated_rows = self.options.truncated_rows.unwrap_or(false);
         let source = Arc::new(
             CsvSource::new(has_header, self.options.delimiter, self.options.quote)
                 .with_escape(self.options.escape)
                 .with_terminator(self.options.terminator)
-                .with_comment(self.options.comment),
+                .with_comment(self.options.comment)
+                .with_truncate_rows(truncated_rows),
         );
 
         let config = conf_builder.with_source(source).build();
@@ -505,7 +523,8 @@ impl CsvFormat {
                             .unwrap_or_else(|| state.config_options().catalog.has_header),
                 )
                 .with_delimiter(self.options.delimiter)
-                .with_quote(self.options.quote);
+                .with_quote(self.options.quote)
+                .with_truncated_rows(self.options.truncated_rows.unwrap_or(false));
 
             if let Some(null_regex) = &self.options.null_regex {
                 let regex = Regex::new(null_regex.as_str())

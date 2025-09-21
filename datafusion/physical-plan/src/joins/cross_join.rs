@@ -175,6 +175,12 @@ impl CrossJoinExec {
     /// Returns a new `ExecutionPlan` that computes the same join as this one,
     /// with the left and right inputs swapped using the  specified
     /// `partition_mode`.
+    ///
+    /// # Notes:
+    ///
+    /// This function should be called BEFORE inserting any repartitioning
+    /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
+    /// for more details.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let new_join =
             CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
@@ -268,6 +274,18 @@ impl ExecutionPlan for CrossJoinExec {
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
         )))
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let new_exec = CrossJoinExec {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            schema: Arc::clone(&self.schema),
+            left_fut: Default::default(), // reset the build side!
+            metrics: ExecutionPlanMetricsSet::default(),
+            cache: self.cache.clone(),
+        };
+        Ok(Arc::new(new_exec))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -559,7 +577,8 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 CrossJoinStreamState::BuildBatches(_) => {
-                    handle_state!(self.build_batches())
+                    let poll = handle_state!(self.build_batches());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
             };
         }
@@ -632,7 +651,6 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                     }
 
                     self.join_metrics.output_batches.add(1);
-                    self.join_metrics.output_rows.add(batch.num_rows());
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }
@@ -647,7 +665,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::build_table_scan_i32;
+    use crate::test::{assert_join_metrics, build_table_scan_i32};
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -657,14 +675,15 @@ mod tests {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let join = CrossJoinExec::new(left, right);
         let columns_header = columns(&join.schema());
 
         let stream = join.execute(0, context)?;
         let batches = common::collect(stream).await?;
+        let metrics = join.metrics().unwrap();
 
-        Ok((columns_header, batches))
+        Ok((columns_header, batches, metrics))
     }
 
     #[tokio::test]
@@ -831,7 +850,7 @@ mod tests {
             ("c2", &vec![14, 15]),
         );
 
-        let (columns, batches) = join_collect(left, right, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(left, right, task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -847,6 +866,8 @@ mod tests {
             | 3  | 6  | 9  | 11 | 13 | 15 |
             +----+----+----+----+----+----+
             "#);
+
+        assert_join_metrics!(metrics, 6);
 
         Ok(())
     }

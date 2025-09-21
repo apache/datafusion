@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::compute::try_binary;
 use arrow::datatypes::DataType;
-
-use datafusion_common::{Result, ScalarValue};
+use arrow::error::ArrowError;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
+use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
@@ -120,6 +122,76 @@ where
     }
 }
 
+/// Computes a binary math function for input arrays using a specified function.
+/// Generic types:
+/// - `L`: Left array primitive type
+/// - `R`: Right array primitive type
+/// - `O`: Output array primitive type
+/// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+pub fn calculate_binary_math<L, R, O, F>(
+    left: &dyn Array,
+    right: &ColumnarValue,
+    fun: F,
+) -> Result<Arc<PrimitiveArray<O>>>
+where
+    R: ArrowPrimitiveType,
+    L: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
+    R::Native: TryFrom<ScalarValue>,
+{
+    Ok(match right {
+        ColumnarValue::Scalar(scalar) => {
+            let right_value: R::Native =
+                R::Native::try_from(scalar.clone()).map_err(|_| {
+                    DataFusionError::NotImplemented(format!(
+                        "Cannot convert scalar value {} to {}",
+                        &scalar,
+                        R::DATA_TYPE
+                    ))
+                })?;
+            let left_array = left.as_primitive::<L>();
+            // Bind right value
+            let result =
+                left_array.try_unary::<_, O, _>(|lvalue| fun(lvalue, right_value))?;
+            Arc::new(result) as _
+        }
+        ColumnarValue::Array(right) => {
+            let right_casted = arrow::compute::cast(&right, &R::DATA_TYPE)?;
+            let right_array = right_casted.as_primitive::<R>();
+
+            // Types are compatible even they are decimals with different scale or precision
+            let result = if PrimitiveArray::<L>::is_compatible(&L::DATA_TYPE) {
+                let left_array = left.as_primitive::<L>();
+                try_binary::<_, _, _, O>(left_array, right_array, &fun)?
+            } else {
+                let left_casted = arrow::compute::cast(left, &L::DATA_TYPE)?;
+                let left_array = left_casted.as_primitive::<L>();
+                try_binary::<_, _, _, O>(left_array, right_array, &fun)?
+            };
+            Arc::new(result) as _
+        }
+    })
+}
+
+/// Converts Decimal128 components (value and scale) to an unscaled i128
+pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        match i128::from(10).checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod test {
     /// $FUNC ScalarUDFImpl to test
@@ -128,19 +200,20 @@ pub mod test {
     /// $EXPECTED_TYPE is the expected value type
     /// $EXPECTED_DATA_TYPE is the expected result type
     /// $ARRAY_TYPE is the column type after function applied
+    /// $CONFIG_OPTIONS config options to pass to function
     macro_rules! test_function {
-        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
-            let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
-            let func = $FUNC;
+    ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident, $CONFIG_OPTIONS:expr) => {
+        let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
+        let func = $FUNC;
 
-            let data_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
-            let cardinality = $ARGS
-                .iter()
-                .fold(Option::<usize>::None, |acc, arg| match arg {
-                    ColumnarValue::Scalar(_) => acc,
-                    ColumnarValue::Array(a) => Some(a.len()),
-                })
-                .unwrap_or(1);
+        let data_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+        let cardinality = $ARGS
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            })
+            .unwrap_or(1);
 
             let scalar_arguments = $ARGS.iter().map(|arg| match arg {
                 ColumnarValue::Scalar(scalar) => Some(scalar.clone()),
@@ -155,58 +228,81 @@ pub mod test {
 
             let field_array = data_array.into_iter().zip(nullables).enumerate()
                 .map(|(idx, (data_type, nullable))| arrow::datatypes::Field::new(format!("field_{idx}"), data_type, nullable))
-                .map(std::sync::Arc::new)
-                .collect::<Vec<_>>();
+            .map(std::sync::Arc::new)
+            .collect::<Vec<_>>();
 
-            let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
-                arg_fields: &field_array,
-                scalar_arguments: &scalar_arguments_refs,
-            });
+        let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
+            arg_fields: &field_array,
+            scalar_arguments: &scalar_arguments_refs,
+        });
             let arg_fields = $ARGS.iter()
-                .enumerate()
+            .enumerate()
                 .map(|(idx, arg)| arrow::datatypes::Field::new(format!("f_{idx}"), arg.data_type(), true).into())
-                .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
-            match expected {
-                Ok(expected) => {
-                    assert_eq!(return_field.is_ok(), true);
-                    let return_field = return_field.unwrap();
-                    let return_type = return_field.data_type();
-                    assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
+        match expected {
+            Ok(expected) => {
+                assert_eq!(return_field.is_ok(), true);
+                let return_field = return_field.unwrap();
+                let return_type = return_field.data_type();
+                assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_field});
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
+                    args: $ARGS,
+                    arg_fields,
+                    number_rows: cardinality,
+                    return_field,
+                        config_options: $CONFIG_OPTIONS
+                });
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
                     let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().expect("Failed to convert to type");
-                    assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
+                assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
 
-                    // value is correct
-                    match expected {
-                        Some(v) => assert_eq!(result.value(0), v),
-                        None => assert!(result.is_null(0)),
-                    };
-                }
-                Err(expected_error) => {
-                    if return_field.is_err() {
-                        match return_field {
-                            Ok(_) => assert!(false, "expected error"),
-                            Err(error) => { datafusion_common::assert_contains!(expected_error.strip_backtrace(), error.strip_backtrace()); }
+                // value is correct
+                match expected {
+                    Some(v) => assert_eq!(result.value(0), v),
+                    None => assert!(result.is_null(0)),
+                };
+            }
+            Err(expected_error) => {
+                if let Ok(return_field) = return_field {
+                    // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
+                    match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs {
+                        args: $ARGS,
+                        arg_fields,
+                        number_rows: cardinality,
+                        return_field,
+                        config_options: $CONFIG_OPTIONS,
+                    }) {
+                        Ok(_) => assert!(false, "expected error"),
+                        Err(error) => {
+                            assert!(expected_error
+                                .strip_backtrace()
+                                .starts_with(&error.strip_backtrace()));
                         }
                     }
-                    else {
-                        let return_field = return_field.unwrap();
-
-                        // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_field}) {
-                            Ok(_) => assert!(false, "expected error"),
-                            Err(error) => {
-                                assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
-                            }
-                        }
-                    }
+                } else if let Err(error) = return_field {
+                    datafusion_common::assert_contains!(
+                        expected_error.strip_backtrace(),
+                        error.strip_backtrace()
+                    );
                 }
-            };
+            }
+        };
+    };
+
+        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
+            test_function!(
+                $FUNC,
+                $ARGS,
+                $EXPECTED,
+                $EXPECTED_TYPE,
+                $EXPECTED_DATA_TYPE,
+                $ARRAY_TYPE,
+                std::sync::Arc::new(datafusion_common::config::ConfigOptions::default())
+            )
         };
     }
 
@@ -226,5 +322,32 @@ pub mod test {
 
         let v = utf8_to_int_type(&DataType::LargeUtf8, "test").unwrap();
         assert_eq!(v, DataType::Int64);
+    }
+
+    #[test]
+    fn test_decimal128_to_i128() {
+        let cases = [
+            (123, 0, Some(123)),
+            (1230, 1, Some(123)),
+            (123000, 3, Some(123)),
+            (1, 0, Some(1)),
+            (123, -3, None),
+            (123, i8::MAX, None),
+            (i128::MAX, 0, Some(i128::MAX)),
+            (i128::MAX, 3, Some(i128::MAX / 1000)),
+        ];
+
+        for (value, scale, expected) in cases {
+            match decimal128_to_i128(value, scale) {
+                Ok(actual) => {
+                    assert_eq!(
+                        actual,
+                        expected.expect("Got value but expected none"),
+                        "{value} and {scale} vs {expected:?}"
+                    );
+                }
+                Err(_) => assert!(expected.is_none()),
+            }
+        }
     }
 }

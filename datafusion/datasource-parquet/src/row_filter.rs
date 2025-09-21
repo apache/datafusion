@@ -184,7 +184,7 @@ pub(crate) struct FilterCandidate {
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
     /// The projection to read from the file schema to get the columns
-    /// required to pass thorugh a `SchemaMapper` to the table schema
+    /// required to pass through a `SchemaMapper` to the table schema
     /// upon which we then evaluate the filter expression.
     projection: Vec<usize>,
     ///  A `SchemaMapper` used to map batches read from the file schema to
@@ -426,7 +426,7 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     physical_file_schema: &SchemaRef,
-    logical_file_schema: &SchemaRef,
+    predicate_file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
@@ -447,7 +447,7 @@ pub fn build_row_filter(
             FilterCandidateBuilder::new(
                 Arc::clone(expr),
                 Arc::clone(physical_file_schema),
-                Arc::clone(logical_file_schema),
+                Arc::clone(predicate_file_schema),
                 Arc::clone(schema_adapter_factory),
             )
             .build(metadata)

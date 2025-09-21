@@ -30,7 +30,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::{assert_contains, Result};
+use datafusion_common::{assert_contains, NullEquality, Result};
 use datafusion_common::config::ConfigOptions;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
@@ -667,7 +667,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
 
 #[rstest]
 #[tokio::test]
-async fn test_with_multiple_replacable_repartitions(
+async fn test_with_multiple_replaceable_repartitions(
     #[values(false, true)] source_unbounded: bool,
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
@@ -1171,7 +1171,7 @@ fn hash_join_exec(
             &JoinType::Inner,
             None,
             PartitionMode::Partitioned,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     )

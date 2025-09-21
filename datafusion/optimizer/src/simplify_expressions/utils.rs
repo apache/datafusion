@@ -17,6 +17,7 @@
 
 //! Utility functions for expression simplification
 
+use arrow::datatypes::i256;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr, InList},
@@ -150,6 +151,11 @@ pub fn is_zero(s: &Expr) -> bool {
         Expr::Literal(ScalarValue::Float32(Some(v)), _) if *v == 0. => true,
         Expr::Literal(ScalarValue::Float64(Some(v)), _) if *v == 0. => true,
         Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s), _) if *v == 0 => true,
+        Expr::Literal(ScalarValue::Decimal256(Some(v), _p, _s), _)
+            if *v == i256::ZERO =>
+        {
+            true
+        }
         _ => false,
     }
 }
@@ -172,6 +178,13 @@ pub fn is_one(s: &Expr) -> bool {
                     .get(*s as usize)
                     .map(|x| x == v)
                     .unwrap_or_default()
+        }
+        Expr::Literal(ScalarValue::Decimal256(Some(v), _p, s), _) => {
+            *s >= 0
+                && match i256::from(10).checked_pow(*s as u32) {
+                    Some(res) => res == *v,
+                    None => false,
+                }
         }
         _ => false,
     }
@@ -363,5 +376,80 @@ pub fn distribute_negation(expr: Expr) -> Expr {
         Expr::Negative(expr) => *expr,
         // use negative clause
         _ => Expr::Negative(Box::new(expr)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_one, is_zero};
+    use arrow::datatypes::i256;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::lit;
+
+    #[test]
+    fn test_is_zero() {
+        assert!(is_zero(&lit(ScalarValue::Int8(Some(0)))));
+        assert!(is_zero(&lit(ScalarValue::Float32(Some(0.0)))));
+        assert!(is_zero(&lit(ScalarValue::Decimal128(
+            Some(i128::from(0)),
+            9,
+            0
+        ))));
+        assert!(is_zero(&lit(ScalarValue::Decimal128(
+            Some(i128::from(0)),
+            9,
+            5
+        ))));
+        assert!(is_zero(&lit(ScalarValue::Decimal256(
+            Some(i256::ZERO),
+            9,
+            0
+        ))));
+        assert!(is_zero(&lit(ScalarValue::Decimal256(
+            Some(i256::ZERO),
+            9,
+            5
+        ))));
+    }
+
+    #[test]
+    fn test_is_one() {
+        assert!(is_one(&lit(ScalarValue::Int8(Some(1)))));
+        assert!(is_one(&lit(ScalarValue::Float32(Some(1.0)))));
+        assert!(is_one(&lit(ScalarValue::Decimal128(
+            Some(i128::from(1)),
+            9,
+            0
+        ))));
+        assert!(is_one(&lit(ScalarValue::Decimal128(
+            Some(i128::from(10)),
+            9,
+            1
+        ))));
+        assert!(is_one(&lit(ScalarValue::Decimal128(
+            Some(i128::from(100)),
+            9,
+            2
+        ))));
+        assert!(is_one(&lit(ScalarValue::Decimal256(
+            Some(i256::from(1)),
+            9,
+            0
+        ))));
+        assert!(is_one(&lit(ScalarValue::Decimal256(
+            Some(i256::from(10)),
+            9,
+            1
+        ))));
+        assert!(is_one(&lit(ScalarValue::Decimal256(
+            Some(i256::from(100)),
+            9,
+            2
+        ))));
+        assert!(!is_one(&lit(ScalarValue::Decimal256(
+            Some(i256::from(100)),
+            9,
+            -1
+        ))));
     }
 }

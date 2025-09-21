@@ -42,6 +42,8 @@ pub fn from_window_function(
                 order_by,
                 window_frame,
                 null_treatment: _,
+                distinct: _,
+                filter: _,
             },
     } = window_fn;
     // function reference

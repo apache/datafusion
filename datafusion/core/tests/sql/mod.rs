@@ -34,7 +34,6 @@ use datafusion::{execution::context::SessionContext, physical_plan::displayable}
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{assert_contains, assert_not_contains};
-use insta::assert_snapshot;
 use object_store::path::Path;
 use std::fs::File;
 use std::io::Write;

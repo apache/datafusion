@@ -41,7 +41,6 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, row_number};
 use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
-use sqlparser::ast::NullTreatment;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -68,15 +67,18 @@ use datafusion_common::{
     TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::file_format::format_as_file_type;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_expr::expr::{GroupingSet, Sort, WindowFunction};
+use datafusion_expr::expr::{
+    FieldMetadata, GroupingSet, NullTreatment, Sort, WindowFunction,
+};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
     scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
-    ScalarFunctionImplementation, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::Partitioning;
@@ -91,8 +93,8 @@ async fn physical_plan_to_string(df: &DataFrame) -> String {
         .await
         .expect("Error creating physical plan");
 
-    let formated = displayable(physical_plan.as_ref()).indent(true);
-    formated.to_string()
+    let formatted = displayable(physical_plan.as_ref()).indent(true);
+    formatted.to_string()
 }
 
 pub fn table_with_constraints() -> Arc<dyn TableProvider> {
@@ -958,6 +960,83 @@ async fn window_using_aggregates() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn window_aggregates_with_filter() -> Result<()> {
+    // Define a small in-memory table to make expected values clear
+    let ts: Int32Array = [1, 2, 3, 4, 5].into_iter().collect();
+    let val: Int32Array = [-3, -2, 1, 4, -1].into_iter().collect();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("ts", Arc::new(ts) as _),
+        ("val", Arc::new(val) as _),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+
+    let df = ctx.table("t").await?;
+
+    // Build filtered window aggregates over ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    let mut exprs = vec![
+        (datafusion_functions_aggregate::sum::sum_udaf(), "sum_pos"),
+        (
+            datafusion_functions_aggregate::average::avg_udaf(),
+            "avg_pos",
+        ),
+        (
+            datafusion_functions_aggregate::min_max::min_udaf(),
+            "min_pos",
+        ),
+        (
+            datafusion_functions_aggregate::min_max::max_udaf(),
+            "max_pos",
+        ),
+        (
+            datafusion_functions_aggregate::count::count_udaf(),
+            "cnt_pos",
+        ),
+    ]
+    .into_iter()
+    .map(|(func, alias)| {
+        let w = WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(func),
+            vec![col("val")],
+        );
+
+        Expr::from(w)
+            .order_by(vec![col("ts").sort(true, true)])
+            .window_frame(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            ))
+            .filter(col("val").gt(lit(0)))
+            .build()
+            .unwrap()
+            .alias(alias)
+    })
+    .collect::<Vec<_>>();
+    exprs.extend_from_slice(&[col("ts"), col("val")]);
+
+    let results = df.select(exprs)?.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +---------+---------+---------+---------+---------+----+-----+
+    | sum_pos | avg_pos | min_pos | max_pos | cnt_pos | ts | val |
+    +---------+---------+---------+---------+---------+----+-----+
+    |         |         |         |         | 0       | 1  | -3  |
+    |         |         |         |         | 0       | 2  | -2  |
+    | 1       | 1.0     | 1       | 1       | 1       | 3  | 1   |
+    | 5       | 2.5     | 1       | 4       | 2       | 4  | 4   |
+    | 5       | 2.5     | 1       | 4       | 2       | 5  | -1  |
+    +---------+---------+---------+---------+---------+----+-----+
+    "###
+    );
+
+    Ok(())
+}
+
 // Test issue: https://github.com/apache/datafusion/issues/10346
 #[tokio::test]
 async fn test_select_over_aggregate_schema() -> Result<()> {
@@ -1212,7 +1291,7 @@ async fn join_on_filter_datatype() -> Result<()> {
         JoinType::Inner,
         Some(Expr::Literal(ScalarValue::Null, None)),
     )?;
-    assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation");
+    assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation: rows=0");
 
     // JOIN ON expression must be boolean type
     let join = left.join_on(right, JoinType::Inner, Some(lit("TRUE")))?;
@@ -1354,6 +1433,36 @@ async fn except() -> Result<()> {
     let expected = create_plan(
         "SELECT c1, c3 FROM aggregate_test_100
             EXCEPT ALL SELECT c1, c3 FROM aggregate_test_100",
+    )
+    .await?;
+    assert_same_plan(&result, &expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn except_distinct() -> Result<()> {
+    let df = test_table().await?.select_columns(&["c1", "c3"])?;
+    let d2 = df.clone();
+    let plan = df.except_distinct(d2)?;
+    let result = plan.logical_plan().clone();
+    let expected = create_plan(
+        "SELECT c1, c3 FROM aggregate_test_100
+            EXCEPT DISTINCT SELECT c1, c3 FROM aggregate_test_100",
+    )
+    .await?;
+    assert_same_plan(&result, &expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn intersect_distinct() -> Result<()> {
+    let df = test_table().await?.select_columns(&["c1", "c3"])?;
+    let d2 = df.clone();
+    let plan = df.intersect_distinct(d2)?;
+    let result = plan.logical_plan().clone();
+    let expected = create_plan(
+        "SELECT c1, c3 FROM aggregate_test_100
+            INTERSECT DISTINCT SELECT c1, c3 FROM aggregate_test_100",
     )
     .await?;
     assert_same_plan(&result, &expected);
@@ -2145,6 +2254,7 @@ async fn verify_join_output_partitioning() -> Result<()> {
         JoinType::LeftAnti,
         JoinType::RightAnti,
         JoinType::LeftMark,
+        JoinType::RightMark,
     ];
 
     let default_partition_count = SessionConfig::new().target_partitions();
@@ -2178,7 +2288,8 @@ async fn verify_join_output_partitioning() -> Result<()> {
             JoinType::Inner
             | JoinType::Right
             | JoinType::RightSemi
-            | JoinType::RightAnti => {
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
                 let right_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
                     Arc::new(Column::new_with_schema("c2_c1", &join_schema)?),
                     Arc::new(Column::new_with_schema("c2_c2", &join_schema)?),
@@ -2711,23 +2822,20 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
-    +---------------+---------------------------------------------------------+
-    | plan_type     | plan                                                    |
-    +---------------+---------------------------------------------------------+
-    | logical_plan  | LeftSemi Join:                                          |
-    |               |   TableScan: t1 projection=[a, b]                       |
-    |               |   SubqueryAlias: __correlated_sq_1                      |
-    |               |     Projection:                                         |
-    |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] |
-    |               |         TableScan: t2 projection=[]                     |
-    | physical_plan | NestedLoopJoinExec: join_type=RightSemi                 |
-    |               |   ProjectionExec: expr=[]                               |
-    |               |     PlaceholderRowExec                                  |
-    |               |   DataSourceExec: partitions=1, partition_sizes=[1]     |
-    |               |                                                         |
-    +---------------+---------------------------------------------------------+
-    "###
+        @r"
+    +---------------+-----------------------------------------------------+
+    | plan_type     | plan                                                |
+    +---------------+-----------------------------------------------------+
+    | logical_plan  | LeftSemi Join:                                      |
+    |               |   TableScan: t1 projection=[a, b]                   |
+    |               |   SubqueryAlias: __correlated_sq_1                  |
+    |               |     EmptyRelation: rows=1                           |
+    | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
+    |               |   PlaceholderRowExec                                |
+    |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
+    |               |                                                     |
+    +---------------+-----------------------------------------------------+
+    "
     );
 
     let df_results = ctx
@@ -2750,23 +2858,20 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
-    +---------------+---------------------------------------------------------------------+
-    | plan_type     | plan                                                                |
-    +---------------+---------------------------------------------------------------------+
-    | logical_plan  | LeftSemi Join:                                                      |
-    |               |   TableScan: t1 projection=[a, b]                                   |
-    |               |   SubqueryAlias: __correlated_sq_1                                  |
-    |               |     Projection:                                                     |
-    |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] |
-    |               |         TableScan: t2 projection=[]                                 |
-    | physical_plan | NestedLoopJoinExec: join_type=RightSemi                             |
-    |               |   ProjectionExec: expr=[]                                           |
-    |               |     PlaceholderRowExec                                              |
-    |               |   DataSourceExec: partitions=1, partition_sizes=[1]                 |
-    |               |                                                                     |
-    +---------------+---------------------------------------------------------------------+
-    "###
+        @r"
+    +---------------+-----------------------------------------------------+
+    | plan_type     | plan                                                |
+    +---------------+-----------------------------------------------------+
+    | logical_plan  | LeftSemi Join:                                      |
+    |               |   TableScan: t1 projection=[a, b]                   |
+    |               |   SubqueryAlias: __correlated_sq_1                  |
+    |               |     EmptyRelation: rows=1                           |
+    | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
+    |               |   PlaceholderRowExec                                |
+    |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
+    |               |                                                     |
+    +---------------+-----------------------------------------------------+
+    "
     );
 
     Ok(())
@@ -2785,20 +2890,20 @@ async fn test_count_wildcard_on_window() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
-    +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-    +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                                                                                                                                                                                             |
-    |               |   WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]]                                                                                                                                                                                                                                                                                                                                                   |
-    |               |     TableScan: t1 projection=[a]                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-    | physical_plan | ProjectionExec: expr=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@1 as count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]                                                                                                                                                                                                                                                                |
-    |               |   BoundedWindowAggExec: wdw=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING: Ok(Field { name: "count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(6)), end_bound: Following(UInt32(2)), is_causal: false }], mode=[Sorted] |
-    |               |     SortExec: expr=[a@0 DESC], preserve_partitioning=[false]                                                                                                                                                                                                                                                                                                                                                                                                              |
-    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                                                                                                                                                                                   |
-    |               |                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-    +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    "###
+        @r#"
+    +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                         |
+    +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Projection: count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                                                                                                                |
+    |               |   WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]]                                                                                                                                                                                                                                                                      |
+    |               |     TableScan: t1 projection=[a]                                                                                                                                                                                                                                                                                                                                                             |
+    | physical_plan | ProjectionExec: expr=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@1 as count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]                                                                                                                                                                                   |
+    |               |   BoundedWindowAggExec: wdw=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING: Field { name: "count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING], mode=[Sorted] |
+    |               |     SortExec: expr=[a@0 DESC], preserve_partitioning=[false]                                                                                                                                                                                                                                                                                                                                 |
+    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                                                                                                      |
+    |               |                                                                                                                                                                                                                                                                                                                                                                                              |
+    +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    "#
     );
 
     let df_results = ctx
@@ -2819,20 +2924,20 @@ async fn test_count_wildcard_on_window() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
-    +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-    +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                                                                                                                                                                                                                                                                                    |
-    |               |   WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]]                                                                                                                                                                                                                                                                                                                                                   |
-    |               |     TableScan: t1 projection=[a]                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-    | physical_plan | ProjectionExec: expr=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@1 as count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]                                                                                                                                                                                                                                                         |
-    |               |   BoundedWindowAggExec: wdw=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING: Ok(Field { name: "count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(6)), end_bound: Following(UInt32(2)), is_causal: false }], mode=[Sorted] |
-    |               |     SortExec: expr=[a@0 DESC], preserve_partitioning=[false]                                                                                                                                                                                                                                                                                                                                                                                                              |
-    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                                                                                                                                                                                   |
-    |               |                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-    +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    "###
+        @r#"
+    +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                         |
+    +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | Projection: count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                                                                                                                                                                                                       |
+    |               |   WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]]                                                                                                                                                                                                                                                                      |
+    |               |     TableScan: t1 projection=[a]                                                                                                                                                                                                                                                                                                                                                             |
+    | physical_plan | ProjectionExec: expr=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@1 as count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]                                                                                                                                                                            |
+    |               |   BoundedWindowAggExec: wdw=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING: Field { name: "count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING], mode=[Sorted] |
+    |               |     SortExec: expr=[a@0 DESC], preserve_partitioning=[false]                                                                                                                                                                                                                                                                                                                                 |
+    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                                                                                                      |
+    |               |                                                                                                                                                                                                                                                                                                                                                                                              |
+    +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    "#
     );
 
     Ok(())
@@ -4849,7 +4954,7 @@ async fn use_var_provider() -> Result<()> {
         Field::new("bar", DataType::Int64, false),
     ]));
 
-    let mem_table = Arc::new(MemTable::try_new(schema, vec![])?);
+    let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![]])?);
 
     let config = SessionConfig::new()
         .with_target_partitions(4)
@@ -4907,11 +5012,11 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Filter: a = $0 [a:Int32]
       Projection: Int32(1) AS a [a:Int32]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -4940,11 +5045,11 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Filter: a = Int32(3) [a:Int32]
       Projection: Int32(1) AS a [a:Int32]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "
     );
 
     // N.B., the test is basically `SELECT 1 as a WHERE a = 3;` which returns no results.
@@ -4971,10 +5076,10 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: $1 [$1:Null;N]
-      EmptyRelation []
-    "###
+      EmptyRelation: rows=1 []
+    "
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -5001,10 +5106,10 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: Int32(3) AS $1 [$1:Null;N]
-      EmptyRelation []
-    "###
+      EmptyRelation: rows=1 []
+    "
     );
 
     assert_snapshot!(
@@ -5040,11 +5145,11 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Filter: a LIKE $1 [a:Utf8]
       Projection: Utf8("foo") AS a [a:Utf8]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "#
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -5073,11 +5178,11 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Filter: a LIKE Utf8("f%") [a:Utf8]
       Projection: Utf8("foo") AS a [a:Utf8]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "#
     );
 
     assert_snapshot!(
@@ -5633,7 +5738,7 @@ async fn test_alias() -> Result<()> {
         .await?
         .select(vec![col("a"), col("test.b"), lit(1).alias("one")])?
         .alias("table_alias")?;
-    // All ouput column qualifiers are changed to "table_alias"
+    // All output column qualifiers are changed to "table_alias"
     df.schema().columns().iter().for_each(|c| {
         assert_eq!(c.relation, Some("table_alias".into()));
     });
@@ -5674,6 +5779,7 @@ async fn test_alias() -> Result<()> {
 async fn test_alias_with_metadata() -> Result<()> {
     let mut metadata = HashMap::new();
     metadata.insert(String::from("k"), String::from("v"));
+    let metadata = FieldMetadata::from(metadata);
     let df = create_test_table("test")
         .await?
         .select(vec![col("a").alias_with_metadata("b", Some(metadata))])?
@@ -6132,5 +6238,88 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df_empty.schema().fields().len(), 0);
     assert_eq!(df_empty.count().await?, 0);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_copy_schema() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+
+    let session_state = SessionStateBuilder::new_with_default_features().build();
+
+    let session_ctx = SessionContext::new_with_state(session_state);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+
+    // Create and register the source table with the provided schema and data
+    let source_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
+    session_ctx.register_table("source_table", source_table.clone())?;
+
+    let target_path = tmp_dir.path().join("target.csv");
+
+    let query = format!(
+        "COPY source_table TO '{:?}' STORED AS csv",
+        target_path.to_str().unwrap()
+    );
+
+    let result = session_ctx.sql(&query).await?;
+    assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_copy_to_preserves_order() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+
+    let session_state = SessionStateBuilder::new_with_default_features().build();
+    let session_ctx = SessionContext::new_with_state(session_state);
+
+    let target_path = tmp_dir.path().join("target_ordered.csv");
+    let csv_file_format = session_ctx
+        .state()
+        .get_file_format_factory("csv")
+        .map(format_as_file_type)
+        .unwrap();
+
+    let ordered_select_plan = LogicalPlanBuilder::values(vec![
+        vec![lit(1u64)],
+        vec![lit(10u64)],
+        vec![lit(20u64)],
+        vec![lit(100u64)],
+    ])?
+    .sort(vec![SortExpr::new(col("column1"), false, true)])?
+    .build()?;
+
+    let copy_to_plan = LogicalPlanBuilder::copy_to(
+        ordered_select_plan,
+        target_path.to_str().unwrap().to_string(),
+        csv_file_format,
+        HashMap::new(),
+        vec![],
+    )?
+    .build()?;
+
+    let union_side_branch = LogicalPlanBuilder::values(vec![vec![lit(1u64)]])?.build()?;
+    let union_plan = LogicalPlanBuilder::from(copy_to_plan)
+        .union(union_side_branch)?
+        .build()?;
+
+    let frame = session_ctx.execute_logical_plan(union_plan).await?;
+    let physical_plan = frame.create_physical_plan().await?;
+
+    let physical_plan_format =
+        displayable(physical_plan.as_ref()).indent(true).to_string();
+
+    // Expect that input to the DataSinkExec is sorted correctly
+    assert_snapshot!(
+        physical_plan_format,
+        @r###"
+    UnionExec
+      DataSinkExec: sink=CsvSink(file_groups=[])
+        SortExec: expr=[column1@0 DESC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+      DataSourceExec: partitions=1, partition_sizes=[1]
+    "###
+    );
     Ok(())
 }

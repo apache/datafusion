@@ -470,6 +470,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use itertools::Itertools as _;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 
@@ -488,7 +489,8 @@ mod tests {
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
             None => plan_err!(
-                "Can not find compatible types to compare {expr_type:?} with {list_types:?}"
+                "Can not find compatible types to compare {expr_type} with [{}]",
+                list_types.iter().join(", ")
             ),
             Some(data_type) => {
                 // find the coerced type
@@ -1451,7 +1453,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a IN (a, b)");
-        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"a\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"b\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
 
         // Test: a NOT IN ('a', 'b')
         let list = vec![lit("a"), lit("b")];
@@ -1459,7 +1461,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a NOT IN (a, b)");
-        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"a\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"b\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
 
         // Test: a IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
@@ -1467,7 +1469,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a IN (a, b, NULL)");
-        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"a\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"b\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(NULL), field: Field { name: \"NULL\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(NULL), field: Field { name: \"lit\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
 
         // Test: a NOT IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
@@ -1475,7 +1477,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a NOT IN (a, b, NULL)");
-        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"a\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"b\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(NULL), field: Field { name: \"NULL\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(NULL), field: Field { name: \"lit\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
 
         Ok(())
     }

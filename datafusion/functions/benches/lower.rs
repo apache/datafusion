@@ -23,6 +23,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
@@ -122,6 +123,8 @@ fn create_args5(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let lower = string::lower();
+    let config_options = Arc::new(ConfigOptions::default());
+
     for size in [1024, 4096, 8192] {
         let args = create_args1(size, 32);
         let arg_fields = args
@@ -140,6 +143,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: size,
                     return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
                 }))
             })
         });
@@ -161,6 +165,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: arg_fields.clone(),
                     number_rows: size,
                     return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
                 }))
             })
         });
@@ -184,6 +189,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -217,6 +223,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 arg_fields: arg_fields.clone(),
                                 number_rows: size,
                                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                                config_options: Arc::clone(&config_options),
                             }))
                         }),
                     );
@@ -231,6 +238,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 arg_fields: arg_fields.clone(),
                                 number_rows: size,
                                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                                config_options: Arc::clone(&config_options),
                             }))
                         }),
                     );
@@ -246,6 +254,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 arg_fields: arg_fields.clone(),
                                 number_rows: size,
                                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                                config_options: Arc::clone(&config_options),
                             }))
                         }),
                     );

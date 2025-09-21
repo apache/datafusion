@@ -27,6 +27,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
@@ -131,7 +132,7 @@ pub struct MyAggregateUdfNode {
     pub result: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(in crate::cases) struct CustomUDWF {
     signature: Signature,
     payload: String,

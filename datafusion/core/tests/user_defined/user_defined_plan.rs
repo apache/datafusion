@@ -580,7 +580,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         self.input.schema()
     }
 
-    fn check_invariants(&self, check: InvariantLevel, _plan: &LogicalPlan) -> Result<()> {
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
         if let Some(InvariantMock {
             should_fail_invariant,
             kind,

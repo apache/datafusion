@@ -364,7 +364,7 @@ impl FunctionalDependencies {
                 // These joins preserve functional dependencies of the left side:
                 left_func_dependencies
             }
-            JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                 // These joins preserve functional dependencies of the right side:
                 right_func_dependencies
             }

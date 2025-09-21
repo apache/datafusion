@@ -33,7 +33,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_common::{ColumnStatistics, JoinType, Result, Statistics};
+use datafusion_common::{ColumnStatistics, JoinType, NullEquality, Result, Statistics};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -56,7 +56,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -190,7 +190,7 @@ pub fn sort_merge_join_exec(
             None,
             *join_type,
             vec![SortOptions::default(); join_on.len()],
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     )
@@ -236,7 +236,7 @@ pub fn hash_join_exec(
         join_type,
         None,
         PartitionMode::Partitioned,
-        true,
+        NullEquality::NullEqualsNothing,
     )?))
 }
 
@@ -265,6 +265,8 @@ pub fn bounded_window_exec_with_partition(
         Arc::new(WindowFrame::new(Some(false))),
         schema.as_ref(),
         false,
+        false,
+        None,
     )
     .unwrap();
 
@@ -302,7 +304,7 @@ pub fn sort_preserving_merge_exec_with_fetch(
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(UnionExec::new(input))
+    UnionExec::try_new(input).unwrap()
 }
 
 pub fn local_limit_exec(
@@ -380,7 +382,11 @@ pub fn projection_exec(
     expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(Arc::new(ProjectionExec::try_new(expr, input)?))
+    let proj_exprs: Vec<ProjectionExpr> = expr
+        .into_iter()
+        .map(|(expr, alias)| ProjectionExpr { expr, alias })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
 }
 
 /// A test [`ExecutionPlan`] whose requirements can be configured.
@@ -509,13 +515,6 @@ pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<
         .data()
 }
 
-pub fn trim_plan_display(plan: &str) -> Vec<&str> {
-    plan.split('\n')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 // construct a stream partition for test purposes
 #[derive(Debug)]
 pub struct TestStreamPartition {
@@ -629,25 +628,15 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
     PhysicalGroupBy::new_single(group_by_expr.clone())
 }
 
-pub fn assert_plan_matches_expected(
-    plan: &Arc<dyn ExecutionPlan>,
-    expected: &[&str],
-) -> Result<()> {
-    let expected_lines: Vec<&str> = expected.to_vec();
+pub fn get_optimized_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
     let config = ConfigOptions::new();
 
     let optimized =
         LimitedDistinctAggregation::new().optimize(Arc::clone(plan), &config)?;
 
     let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
-    let actual_lines = trim_plan_display(&optimized_result);
 
-    assert_eq!(
-        &expected_lines, &actual_lines,
-        "\n\nexpected:\n\n{expected_lines:#?}\nactual:\n\n{actual_lines:#?}\n\n"
-    );
-
-    Ok(())
+    Ok(optimized_result)
 }
 
 /// Describe the type of aggregate being tested

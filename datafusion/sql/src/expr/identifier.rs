@@ -23,6 +23,7 @@ use datafusion_common::{
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
+use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
@@ -75,7 +76,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                     return Ok(Expr::OuterReferenceColumn(
-                        field.data_type().clone(),
+                        Arc::new(field.clone()),
                         Column::from((qualifier, field)),
                     ));
                 }
@@ -182,7 +183,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
-                                        field.data_type().clone(),
+                                        Arc::new(field.clone()),
                                         Column::from((qualifier, field)),
                                     ))
                                 }
@@ -459,8 +460,8 @@ mod test {
     fn test_form_identifier() -> Result<()> {
         let err = form_identifier(&[]).expect_err("empty identifiers didn't fail");
         let expected = "Internal error: Incorrect number of identifiers: 0.\n\
-        This was likely caused by a bug in DataFusion's code and we would \
-        welcome that you file an bug report in our issue tracker";
+         This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this \
+         by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues";
         assert!(expected.starts_with(&err.strip_backtrace()));
 
         let ids = vec!["a".to_string()];
@@ -497,8 +498,8 @@ mod test {
         ])
         .expect_err("too many identifiers didn't fail");
         let expected = "Internal error: Incorrect number of identifiers: 5.\n\
-        This was likely caused by a bug in DataFusion's code and we would \
-        welcome that you file an bug report in our issue tracker";
+         This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this \
+         by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues";
         assert!(expected.starts_with(&err.strip_backtrace()));
 
         Ok(())

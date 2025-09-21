@@ -36,7 +36,7 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 
 /// Represents a literal value
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Literal {
     value: ScalarValue,
     field: FieldRef,
@@ -66,8 +66,7 @@ impl Literal {
         value: ScalarValue,
         metadata: Option<FieldMetadata>,
     ) -> Self {
-        let mut field =
-            Field::new(format!("{value}"), value.data_type(), value.is_null());
+        let mut field = Field::new("lit".to_string(), value.data_type(), value.is_null());
 
         if let Some(metadata) = metadata {
             field = metadata.add_to_field(field);
