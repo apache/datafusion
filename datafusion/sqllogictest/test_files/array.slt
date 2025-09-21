@@ -4809,6 +4809,11 @@ select array_to_string(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'),
 ----
 h,e,l,l,o 1-2-3-4-5 1|2|3
 
+query TTT
+select array_to_string(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'FixedSizeList(5, Utf8)'), ','), array_to_string(arrow_cast([1, 2, 3, 4, 5], 'FixedSizeList(5, Int64)'), '-'), array_to_string(arrow_cast([1.0, 2.0, 3.0], 'FixedSizeList(3, Float64)'), '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
 # array_to_string scalar function with nulls #2
 query TTT
 select array_to_string(make_array('h', NULL, NULL, NULL, 'o'), ',', '-'), array_to_string(make_array(NULL, 2, NULL, 4, 5), '-', 'nil'), array_to_string(make_array(1.0, NULL, 3.0), '|', '0');
@@ -4819,6 +4824,16 @@ query TTT
 select array_to_string(arrow_cast(make_array('h', NULL, NULL, NULL, 'o'), 'LargeList(Utf8)'), ',', '-'), array_to_string(arrow_cast(make_array(NULL, 2, NULL, 4, 5), 'LargeList(Int64)'), '-', 'nil'), array_to_string(arrow_cast(make_array(1.0, NULL, 3.0), 'LargeList(Float64)'), '|', '0');
 ----
 h,-,-,-,o nil-2-nil-4-5 1|0|3
+
+query TTT
+select array_to_string(arrow_cast(make_array('h', NULL, NULL, NULL, 'o'), 'FixedSizeList(5, Utf8)'), ',', '-'), array_to_string(arrow_cast(make_array(NULL, 2, NULL, 4, 5), 'FixedSizeList(5, Int64)'), '-', 'nil'), array_to_string(arrow_cast(make_array(1.0, NULL, 3.0), 'FixedSizeList(3, Float64)'), '|', '0');
+----
+h,-,-,-,o nil-2-nil-4-5 1|0|3
+
+query T
+select array_to_string(arrow_cast([arrow_cast([NULL, 'a'], 'FixedSizeList(2, Utf8)'), NULL], 'FixedSizeList(2, FixedSizeList(2, Utf8))'), ',', '-');
+----
+-,a,-,-
 
 # array_to_string with columns #1
 
