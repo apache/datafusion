@@ -251,6 +251,8 @@ pub struct CreateExternalTableNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
+    #[prost(bool, tag = "15")]
+    pub or_replace: bool,
     #[prost(bool, tag = "14")]
     pub temporary: bool,
     #[prost(string, tag = "7")]
@@ -1564,6 +1566,8 @@ pub struct CsvScanExecNode {
     pub quote: ::prost::alloc::string::String,
     #[prost(bool, tag = "7")]
     pub newlines_in_values: bool,
+    #[prost(bool, tag = "8")]
+    pub truncate_rows: bool,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]

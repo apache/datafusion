@@ -32,14 +32,16 @@ use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
-use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_plan::Accumulator;
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_to_arrow_schema;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -148,7 +150,7 @@ impl<'a> DFParquetMetadata<'a> {
 
         if cache_metadata && file_metadata_cache.is_some() {
             // Need to retrieve the entire metadata for the caching to be effective.
-            reader = reader.with_page_indexes(true);
+            reader = reader.with_page_index_policy(PageIndexPolicy::Optional);
         }
 
         let metadata = Arc::new(

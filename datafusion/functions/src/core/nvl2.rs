@@ -113,7 +113,7 @@ impl ScalarUDFImpl for NVL2Func {
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
                     } else {
-                        internal_err!("Coercion from {acc:?} to {x:?} failed.")
+                        internal_err!("Coercion from {acc} to {x} failed.")
                     }
                 })?;
         Ok(vec![new_type; arg_types.len()])

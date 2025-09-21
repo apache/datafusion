@@ -90,13 +90,12 @@ pub async fn from_subquery(
                         )))
                     }
                     other_type => substrait_err!(
-                        "unimplemented type {:?} for set predicate",
-                        other_type
+                        "unimplemented type {other_type:?} for set predicate"
                     ),
                 }
             }
             other_type => {
-                substrait_err!("Subquery type {:?} not implemented", other_type)
+                substrait_err!("Subquery type {other_type:?} not implemented")
             }
         },
         None => {

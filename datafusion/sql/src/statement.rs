@@ -519,7 +519,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
             }
-
             Statement::CreateView {
                 or_replace,
                 materialized,
@@ -1504,6 +1503,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             unbounded,
             options,
             constraints,
+            or_replace,
         } = statement;
 
         // Merge inline constraints and existing constraints
@@ -1552,6 +1552,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 file_type,
                 table_partition_cols,
                 if_not_exists,
+                or_replace,
                 temporary,
                 definition,
                 order_exprs: ordered_exprs,
@@ -1711,10 +1712,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
 
             // default to configuration value
+            // verbose mode only supports indent format
             let options = self.context_provider.options();
-            let format = format.as_ref().unwrap_or(&options.explain.format);
-
-            let format: ExplainFormat = format.parse()?;
+            let format = if verbose {
+                ExplainFormat::Indent
+            } else if let Some(format) = format {
+                ExplainFormat::from_str(&format)?
+            } else {
+                options.explain.format.clone()
+            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
@@ -2024,9 +2030,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut value_indices = vec![None; table_schema.fields().len()];
             let fields = columns
                 .into_iter()
-                .map(|c| self.ident_normalizer.normalize(c))
                 .enumerate()
                 .map(|(i, c)| {
+                    let c = self.ident_normalizer.normalize(c);
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
