@@ -17,16 +17,19 @@
   under the License.
 -->
 
-# DataFusion Core Physical Expressions
+# Apache DataFusion Core Physical Expressions
 
-[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
 This crate is a submodule of DataFusion that provides shared APIs for implementing
-physical expressions such as `PhysicalExpr` and `PhysicalSortExpr`.
+physical expressions such as [`PhysicalExpr`] and [`PhysicalSortExpr`].
 
 Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no
 reason to use this crate directly in your project as well.
 
-[df]: https://crates.io/crates/datafusion
+[Apache Arrow]: https://arrow.apache.org/
+[Apache DataFusion]: https://datafusion.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion
+[`PhysicalExpr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/trait.PhysicalExpr.html
+[`PhysicalSortExpr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.PhysicalSortExpr.html

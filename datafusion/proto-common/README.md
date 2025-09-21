@@ -17,17 +17,21 @@
   under the License.
 -->
 
-# `datafusion-proto-common`: Apache DataFusion Protobuf Serialization / Deserialization
+# Apache DataFusion Protobuf Common Serialization / Deserialization
 
-This crate contains code to convert Apache [DataFusion] primitive types to and from
-bytes, which can be useful for sending data over the network.
+[Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
+
+This crate contains code to convert DataFusion primitive types to and from
+bytes using [Protocol Buffers], which can be useful for sending data over the network.
 
 See [API Docs] for details and examples.
 
 Most projects should use the [`datafusion-proto`] crate directly, which re-exports
-this module. If you are already using the [`datafusion-protp`] crate, there is no
+this module. If you are already using the [`datafusion-proto`] crate, there is no
 reason to use this crate directly in your project as well.
 
+[Apache Arrow]: https://arrow.apache.org/
+[Apache DataFusion]: https://datafusion.apache.org/
+[Protocol Buffers]: https://protobuf.dev/
 [`datafusion-proto`]: https://crates.io/crates/datafusion-proto
-[datafusion]: https://datafusion.apache.org
-[api docs]: http://docs.rs/datafusion-proto/latest
+[API Docs]: http://docs.rs/datafusion-proto/latest

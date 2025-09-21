@@ -17,9 +17,9 @@
   under the License.
 -->
 
-# DataFusion catalog-listing
+# Apache DataFusion Catalog Listing
 
-[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
 This crate is a submodule of DataFusion with [ListingTable], an implementation
 of [TableProvider] based on files in a directory (either locally or on remote
@@ -29,8 +29,8 @@ Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no
 reason to use this crate directly in your project as well.
 
-[df]: https://crates.io/crates/datafusion
-[df]: https://crates.io/crates/datafusion
-[listingtable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-[tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
+[Apache Arrow]: https://arrow.apache.org/
+[Apache DataFusion]: https://datafusion.apache.org/
+[ListingTable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
+[TableProvider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 [`datafusion`]: https://crates.io/crates/datafusion

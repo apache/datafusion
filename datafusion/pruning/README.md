@@ -17,14 +17,16 @@
   under the License.
 -->
 
-# Apache DataFusion Substrait
+# Apache DataFusion Pruning Logic
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
-This crate is a submodule of DataFusion that provides a [Substrait] producer and consumer for DataFusion
-plans. See [API Docs] for details and examples.
+This crate is a submodule of DataFusion that contains pruning logic.
+
+Most projects should use the [`datafusion`] crate directly, which re-exports
+this module. If you are already using the [`datafusion`] crate, there is no
+reason to use this crate directly in your project as well.
 
 [Apache Arrow]: https://arrow.apache.org/
 [Apache DataFusion]: https://datafusion.apache.org/
-[Substrait]: https://substrait.io
-[API Docs]: https://docs.rs/datafusion-substrait/latest
+[`datafusion`]: https://crates.io/crates/datafusion
