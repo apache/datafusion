@@ -21,7 +21,7 @@
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
-This crate is a submodule of DataFusion that contains pruning logic, to analyze filter expressions with 
+This crate is a submodule of DataFusion that contains pruning logic, to analyze filter expressions with
 statistics such as min/max values and null counts, proving files / large subsections of files can be skipped
 without reading the actual data.
 
