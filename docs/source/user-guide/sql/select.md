@@ -365,7 +365,7 @@ DataFusion currently supports the following pipe operators:
 ### WHERE
 
 ```sql
-> select * from range(0,10)
+select * from range(0,10)
 |> where value < 2;
 +-------+
 | value |
@@ -380,7 +380,7 @@ DataFusion currently supports the following pipe operators:
 ### ORDER BY
 
 ```sql
-> select * from range(0,3)
+select * from range(0,3)
 |> order by value desc;
 +-------+
 | value |
@@ -396,7 +396,7 @@ DataFusion currently supports the following pipe operators:
 ### LIMIT
 
 ```sql
-> select * from range(0,3)
+select * from range(0,3)
 |> order by value desc
 |> limit 1;
 +-------+
@@ -411,7 +411,7 @@ DataFusion currently supports the following pipe operators:
 ### SELECT
 
 ```sql
-> select * from range(0,3)
+select * from range(0,3)
 |> select value + 10;
 +---------------------------+
 | range().value + Int64(10) |
@@ -427,7 +427,7 @@ DataFusion currently supports the following pipe operators:
 ### EXTEND
 
 ```sql
-> select * from range(0,3)
+select * from range(0,3)
 |> extend -value AS minus_value;
 +-------+-------------+
 | value | minus_value |
