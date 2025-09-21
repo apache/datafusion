@@ -111,7 +111,9 @@ pub async fn from_window_function(
             .await?,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: None,
+            distinct: false,
         },
     }))
 }

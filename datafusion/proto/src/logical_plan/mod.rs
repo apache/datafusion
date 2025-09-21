@@ -35,6 +35,7 @@ use crate::{
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaBuilder, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
+use datafusion::datasource::file_format::arrow::ArrowFormat;
 #[cfg(feature = "avro")]
 use datafusion::datasource::file_format::avro::AvroFormat;
 #[cfg(feature = "parquet")]
@@ -439,12 +440,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
                         #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
                         FileFormatType::Avro(..) => {
-                            #[cfg(feature = "avro")] 
+                            #[cfg(feature = "avro")]
                             {
                                 Arc::new(AvroFormat)
                             }
                             #[cfg(not(feature = "avro"))]
                             panic!("Unable to process avro file since `avro` feature is not enabled");
+                        }
+                        FileFormatType::Arrow(..) => {
+                            Arc::new(ArrowFormat)
                         }
                     };
 
@@ -628,6 +632,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .clone(),
                         order_exprs,
                         if_not_exists: create_extern_table.if_not_exists,
+                        or_replace: create_extern_table.or_replace,
                         temporary: create_extern_table.temporary,
                         definition,
                         unbounded: create_extern_table.unbounded,
@@ -1057,13 +1062,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 Some(FileFormatType::Avro(protobuf::AvroFormat {}))
                         }
 
+                        if any.is::<ArrowFormat>() {
+                            maybe_some_type =
+                                Some(FileFormatType::Arrow(protobuf::ArrowFormat {}))
+                        }
+
                         if let Some(file_format_type) = maybe_some_type {
                             file_format_type
                         } else {
                             return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion format.",
-                            listing_table.options().format
-                        )));
+                                "Error deserializing unknown file format: {:?}",
+                                listing_table.options().format
+                            )));
                         }
                     };
 
@@ -1416,7 +1426,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?;
 
                 // Assumed common usize field was batch size
-                // Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
+                // Used u64 to avoid any nastiness involving large values, most data clusters are probably uniformly 64 bits any ways
                 use protobuf::repartition_node::PartitionMethod;
 
                 let pb_partition_method = match partitioning_scheme {
@@ -1460,6 +1470,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema: df_schema,
                     table_partition_cols,
                     if_not_exists,
+                    or_replace,
                     definition,
                     order_exprs,
                     unbounded,
@@ -1493,6 +1504,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
+                            or_replace: *or_replace,
                             temporary: *temporary,
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),

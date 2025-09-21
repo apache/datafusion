@@ -38,21 +38,21 @@ use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{HashMap, Result};
 use datafusion_common_runtime::JoinSet;
+use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_physical_expr::expressions::{col, lit, Column};
+use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_plan::InputOrderMode;
+use test_utils::{add_empty_batches, StringBatchGenerator};
+
 use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::TaskContext;
-use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-use datafusion_physical_expr::expressions::{col, lit, Column};
-use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::metrics::MetricValue;
-use datafusion_physical_plan::InputOrderMode;
 use datafusion_physical_plan::{collect, displayable, ExecutionPlan};
-use test_utils::{add_empty_batches, StringBatchGenerator};
-
 use rand::rngs::StdRng;
 use rand::{random, rng, Rng, SeedableRng};
 
@@ -320,7 +320,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     .unwrap();
 
     let running_source = DataSourceExec::from_data_source(
-        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
+        MemorySourceConfig::try_new(std::slice::from_ref(&input1), schema.clone(), None)
             .unwrap()
             .try_with_sort_information(vec![sort_keys.into()])
             .unwrap(),
@@ -337,7 +337,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         ];
     let expr = group_by_columns
         .iter()
-        .map(|elem| (col(elem, &schema).unwrap(), elem.to_string()))
+        .map(|elem| (col(elem, &schema).unwrap(), (*elem).to_string()))
         .collect::<Vec<_>>();
     let group_by = PhysicalGroupBy::new_single(expr);
 
@@ -403,7 +403,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
              Left Plan:\n{}\n\
              Right Plan:\n{}\n\
              schema:\n{schema}\n\
-             Left Ouptut:\n{}\n\
+             Left Output:\n{}\n\
              Right Output:\n{}\n\
              input:\n{}\n\
              ",
@@ -632,8 +632,11 @@ fn extract_result_counts(results: Vec<RecordBatch>) -> HashMap<Option<String>, i
     output
 }
 
-fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<AggregateExec>) {
-    if let Some(metrics_set) = single_aggregate.metrics() {
+pub(crate) fn assert_spill_count_metric(
+    expect_spill: bool,
+    plan_that_spills: Arc<dyn ExecutionPlan>,
+) -> usize {
+    if let Some(metrics_set) = plan_that_spills.metrics() {
         let mut spill_count = 0;
 
         // Inspect metrics for SpillCount
@@ -649,6 +652,8 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
         } else if !expect_spill && spill_count > 0 {
             panic!("Expected no spill but found SpillCount metric with value greater than 0.");
         }
+
+        spill_count
     } else {
         panic!("No metrics returned from the operator; cannot verify spilling.");
     }
@@ -656,7 +661,7 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
 
 // Fix for https://github.com/apache/datafusion/issues/15530
 #[tokio::test]
-async fn test_single_mode_aggregate_with_spill() -> Result<()> {
+async fn test_single_mode_aggregate_single_mode_aggregate_with_spill() -> Result<()> {
     let scan_schema = Arc::new(Schema::new(vec![
         Field::new("col_0", DataType::Int64, true),
         Field::new("col_1", DataType::Utf8, true),

@@ -26,6 +26,7 @@ use datafusion::common::Result;
 use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::DataFusionError;
 use datafusion_common::{ColumnStatistics, ScalarValue};
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -33,10 +34,11 @@ use datafusion_datasource::schema_adapter::{
 use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions::{self, Column};
-use datafusion_physical_expr::schema_rewriter::{
-    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
+    PhysicalExprAdapterFactory,
 };
-use datafusion_physical_expr::{DefaultPhysicalExprAdapter, PhysicalExpr};
 use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
@@ -117,7 +119,7 @@ impl SchemaMapper for CustomSchemaMapper {
                 let default_value = match field.data_type() {
                     DataType::Int64 => ScalarValue::Int64(Some(0)),
                     DataType::Utf8 => ScalarValue::Utf8(Some("a".to_string())),
-                    _ => unimplemented!("Unsupported data type: {:?}", field.data_type()),
+                    _ => unimplemented!("Unsupported data type: {}", field.data_type()),
                 };
                 output_columns
                     .push(default_value.to_array_of_size(batch.num_rows()).unwrap());
@@ -187,7 +189,7 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
                             .logical_file_schema
                             .field_with_name(field_name)
                             .map_err(|_| {
-                                datafusion_common::DataFusionError::Plan(format!(
+                                DataFusionError::Plan(format!(
                                     "Field '{field_name}' not found in logical file schema",
                                 ))
                             })?;
@@ -197,7 +199,7 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
                             DataType::Int64 => ScalarValue::Int64(Some(1)),
                             DataType::Utf8 => ScalarValue::Utf8(Some("b".to_string())),
                             _ => unimplemented!(
-                                "Unsupported data type: {:?}",
+                                "Unsupported data type: {}",
                                 field.data_type()
                             ),
                         };

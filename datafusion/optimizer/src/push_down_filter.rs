@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -875,14 +876,37 @@ impl OptimizerRule for PushDownFilter {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
                 let mut non_unnest_predicates = vec![];
                 let mut unnest_predicates = vec![];
+                let mut unnest_struct_columns = vec![];
+
+                for idx in &unnest.struct_type_columns {
+                    let (sub_qualifier, field) =
+                        unnest.input.schema().qualified_field(*idx);
+                    let field_name = field.name().clone();
+
+                    if let DataType::Struct(children) = field.data_type() {
+                        for child in children {
+                            let child_name = child.name().clone();
+                            unnest_struct_columns.push(Column::new(
+                                sub_qualifier.cloned(),
+                                format!("{field_name}.{child_name}"),
+                            ));
+                        }
+                    }
+                }
+
                 for predicate in predicates {
                     // collect all the Expr::Column in predicate recursively
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.list_type_columns.iter().any(|(_, unnest_list)| {
-                        accum.contains(&unnest_list.output_column)
-                    }) {
+                    let contains_list_columns =
+                        unnest.list_type_columns.iter().any(|(_, unnest_list)| {
+                            accum.contains(&unnest_list.output_column)
+                        });
+                    let contains_struct_columns =
+                        unnest_struct_columns.iter().any(|c| accum.contains(c));
+
+                    if contains_list_columns || contains_struct_columns {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);
@@ -1942,7 +1966,10 @@ mod tests {
     // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoopPlan {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            self.input.partial_cmp(&other.input)
+            self.input
+                .partial_cmp(&other.input)
+                // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -3027,9 +3054,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters,
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from(test_provider.schema())?),
             projection,
             source: Arc::new(test_provider),
             fetch: None,
@@ -3399,7 +3424,7 @@ mod tests {
               Projection: b.a
                 SubqueryAlias: b
                   Projection: Int64(0) AS a
-                    EmptyRelation
+                    EmptyRelation: rows=1
         ",
         );
         // Ensure that the predicate without any columns (0 = 1) is
@@ -3413,7 +3438,7 @@ mod tests {
               SubqueryAlias: b
                 Projection: Int64(0) AS a
                   Filter: Int64(0) = Int64(1)
-                    EmptyRelation
+                    EmptyRelation: rows=1
         "
         )
     }
@@ -3832,7 +3857,7 @@ mod tests {
         )
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
     }

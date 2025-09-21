@@ -61,7 +61,7 @@ make_udf_expr_and_func!(
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayReverse {
     signature: Signature,
     aliases: Vec<String>,
@@ -76,7 +76,7 @@ impl Default for ArrayReverse {
 impl ArrayReverse {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec!["list_reverse".to_string()],
         }
     }
@@ -133,7 +133,7 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             fixed_size_array_reverse(array, field)
         }
         Null => Ok(Arc::clone(input_array)),
-        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
+        array_type => exec_err!("array_reverse does not support type '{array_type}'."),
     }
 }
 
@@ -199,7 +199,7 @@ fn fixed_size_array_reverse(
         // skip the null value
         if array.is_null(row_index) {
             nulls.push(false);
-            mutable.extend(0, 0, 1);
+            mutable.extend(0, 0, value_length);
             continue;
         } else {
             nulls.push(true);

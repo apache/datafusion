@@ -32,6 +32,7 @@ use arrow::{
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
 use arrow_schema::FieldRef;
+use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::ReturnFieldArgs;
 use datafusion::{
     error::DataFusionError,
@@ -46,7 +47,7 @@ use datafusion::{
 use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
 pub mod return_type_args;
@@ -94,7 +95,7 @@ pub struct FFI_ScalarUDF {
     /// See [`ScalarUDFImpl`] for details on short_circuits
     pub short_circuits: bool,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`ScalarUDF`]
@@ -207,6 +208,8 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         arg_fields,
         number_rows,
         return_field,
+        // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = rresult_return!(udf
@@ -287,6 +290,37 @@ pub struct ForeignScalarUDF {
 unsafe impl Send for ForeignScalarUDF {}
 unsafe impl Sync for ForeignScalarUDF {}
 
+impl PartialEq for ForeignScalarUDF {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        name == &other.name
+            && aliases == &other.aliases
+            && std::ptr::eq(udf, &other.udf)
+            && signature == &other.signature
+    }
+}
+impl Eq for ForeignScalarUDF {}
+
+impl Hash for ForeignScalarUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        name.hash(state);
+        aliases.hash(state);
+        std::ptr::hash(udf, state);
+        signature.hash(state);
+    }
+}
+
 impl TryFrom<&FFI_ScalarUDF> for ForeignScalarUDF {
     type Error = DataFusionError;
 
@@ -348,6 +382,8 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
+            // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
+            config_options: _config_options,
         } = invoke_args;
 
         let args = args
@@ -407,38 +443,6 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             let result_types = df_result!((self.udf.coerce_types)(&self.udf, arg_types))?;
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
-    }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            name,
-            aliases,
-            udf,
-            signature,
-        } = self;
-        name == &other.name
-            && aliases == &other.aliases
-            && std::ptr::eq(udf, &other.udf)
-            && signature == &other.signature
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            name,
-            aliases,
-            udf,
-            signature,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        std::ptr::hash(udf, &mut hasher);
-        signature.hash(&mut hasher);
-        hasher.finish()
     }
 }
 

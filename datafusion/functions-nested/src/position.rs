@@ -81,7 +81,7 @@ make_udf_expr_and_func!(
         description = "Index at which to start searching (1-indexed)."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayPosition {
     signature: Signature,
     aliases: Vec<String>,
@@ -147,7 +147,7 @@ pub fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         List(_) => general_position_dispatch::<i32>(args),
         LargeList(_) => general_position_dispatch::<i64>(args),
-        array_type => exec_err!("array_position does not support type '{array_type:?}'."),
+        array_type => exec_err!("array_position does not support type '{array_type}'."),
     }
 }
 fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -245,7 +245,7 @@ make_udf_expr_and_func!(
         description = "Element to search for position in the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayPositions {
     signature: Signature,
     aliases: Vec<String>,
@@ -308,7 +308,7 @@ pub fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_positions::<i64>(arr, element)
         }
         array_type => {
-            exec_err!("array_positions does not support type '{array_type:?}'.")
+            exec_err!("array_positions does not support type '{array_type}'.")
         }
     }
 }

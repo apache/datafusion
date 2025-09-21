@@ -107,7 +107,10 @@ fn schema_to_field_with_props(
                         .data_type()
                         .clone()
                 } else {
-                    return Err(apache_avro::Error::GetUnionDuplicate.into());
+                    return Err(apache_avro::Error::new(
+                        apache_avro::error::Details::GetUnionDuplicate,
+                    )
+                    .into());
                 }
             } else {
                 let fields = sub_schemas
@@ -235,6 +238,8 @@ fn default_field_name(dt: &DataType) -> &str {
         | DataType::LargeListView(_) => {
             unimplemented!("View support not implemented")
         }
+        DataType::Decimal32(_, _) => "decimal",
+        DataType::Decimal64(_, _) => "decimal",
         DataType::Decimal128(_, _) => "decimal",
         DataType::Decimal256(_, _) => "decimal",
     }

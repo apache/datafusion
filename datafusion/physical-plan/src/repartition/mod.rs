@@ -45,8 +45,9 @@ use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
-use datafusion_common::{internal_err, HashMap};
+use datafusion_common::{internal_err, ColumnStatistics, HashMap};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -755,10 +756,44 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            self.input.partition_statistics(None)
+        if let Some(partition) = partition {
+            let partition_count = self.partitioning().partition_count();
+            if partition_count == 0 {
+                return Ok(Statistics::new_unknown(&self.schema()));
+            }
+
+            if partition >= partition_count {
+                return internal_err!(
+                    "RepartitionExec invalid partition {} (expected less than {})",
+                    partition,
+                    self.partitioning().partition_count()
+                );
+            }
+
+            let mut stats = self.input.partition_statistics(None)?;
+
+            // Distribute statistics across partitions
+            stats.num_rows = stats
+                .num_rows
+                .get_value()
+                .map(|rows| Precision::Inexact(rows / partition_count))
+                .unwrap_or(Precision::Absent);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .get_value()
+                .map(|bytes| Precision::Inexact(bytes / partition_count))
+                .unwrap_or(Precision::Absent);
+
+            // Make all column stats unknown
+            stats.column_statistics = stats
+                .column_statistics
+                .iter()
+                .map(|_| ColumnStatistics::new_unknown())
+                .collect();
+
+            Ok(stats)
         } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+            self.input.partition_statistics(None)
         }
     }
 
@@ -1748,11 +1783,9 @@ mod test {
         let source1 = sorted_memory_exec(&schema, sort_exprs.clone());
         let source2 = sorted_memory_exec(&schema, sort_exprs);
         // output has multiple partitions, and is sorted
-        let union = UnionExec::new(vec![source1, source2]);
-        let exec =
-            RepartitionExec::try_new(Arc::new(union), Partitioning::RoundRobinBatch(10))
-                .unwrap()
-                .with_preserve_order();
+        let union = UnionExec::try_new(vec![source1, source2])?;
+        let exec = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
+            .with_preserve_order();
 
         // Repartition should preserve order
         let expected_plan = [
@@ -1790,11 +1823,9 @@ mod test {
         let source1 = memory_exec(&schema);
         let source2 = memory_exec(&schema);
         // output has multiple partitions, but is not sorted
-        let union = UnionExec::new(vec![source1, source2]);
-        let exec =
-            RepartitionExec::try_new(Arc::new(union), Partitioning::RoundRobinBatch(10))
-                .unwrap()
-                .with_preserve_order();
+        let union = UnionExec::try_new(vec![source1, source2])?;
+        let exec = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
+            .with_preserve_order();
 
         // Repartition should not preserve order, as there is no order to preserve
         let expected_plan = [

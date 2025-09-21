@@ -52,7 +52,7 @@ use datafusion_macros::user_doc;
     ),
     related_udf(name = "concat_ws")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ConcatFunc {
     signature: Signature,
 }
@@ -140,7 +140,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     Some(Some(v)) => result.push_str(v),
                     Some(None) => {} // null literal
                     None => plan_err!(
-                        "Concat function does not support scalar type {:?}",
+                        "Concat function does not support scalar type {}",
                         scalar
                     )?,
                 }
@@ -377,6 +377,7 @@ mod tests {
     use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use DataType::*;
 
     #[test]
@@ -485,6 +486,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;
