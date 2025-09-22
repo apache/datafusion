@@ -16,40 +16,46 @@
 # under the License.
 
 query I
-FROM range(2)
+SELECT bitmap_count(X'1010');
 ----
-0
-1
+2
 
 query I
-FROM range(2)
-SELECT *
+SELECT bitmap_count(X'FFFF');
 ----
-0
-1
+16
 
 query I
-FROM (SELECT * FROM range(2))
+SELECT bitmap_count(X'0');
 ----
 0
-1
 
 query I
-FROM (FROM range(2))
+SELECT bitmap_count(a) FROM (VALUES (X'0AB0'), (X'0AB0CD'), (NULL)) AS t(a);
 ----
-0
-1
+5
+10
+NULL
+
+# Tests with different binary types
+query I
+SELECT bitmap_count(arrow_cast(a, 'LargeBinary')) FROM (VALUES (X'0AB0'), (X'0AB0CD'), (NULL)) AS t(a);
+----
+5
+10
+NULL
 
 query I
-FROM range(2)
-SELECT 1
+SELECT bitmap_count(arrow_cast(a, 'BinaryView')) FROM (VALUES (X'0AB0'), (X'0AB0CD'), (NULL)) AS t(a);
 ----
-1
-1
+5
+10
+NULL
 
 query I
-FROM range(2) as r
-SELECT r.value
+SELECT bitmap_count(arrow_cast(a, 'FixedSizeBinary(2)')) FROM (VALUES (X'1010'), (X'0AB0'), (X'FFFF'), (NULL)) AS t(a);
 ----
-0
-1
+2
+5
+16
+NULL

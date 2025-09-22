@@ -27,7 +27,7 @@ use crate::datasource::listing::{
 };
 use crate::execution::context::SessionState;
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::DataType;
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
 use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
@@ -63,14 +63,39 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
+        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
+        let file_extension = match table_path.is_collection() {
+            // Setting the extension to be empty instead of allowing the default extension seems
+            // odd, but was done to ensure existing behavior isn't modified. It seems like this
+            // could be refactored to either use the default extension or set the fully expected
+            // extension when compression is included (e.g. ".csv.gz")
+            true => "",
+            false => &get_extension(cmd.location.as_str()),
+        };
+        let mut options = ListingOptions::new(file_format)
+            .with_session_config_options(session_state.config())
+            .with_file_extension(file_extension);
+
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
+            let infer_parts = session_state
+                .config_options()
+                .execution
+                .listing_table_factory_infer_partitions;
+            let part_cols = if cmd.table_partition_cols.is_empty() && infer_parts {
+                options
+                    .infer_partitions(session_state, &table_path)
+                    .await?
+                    .into_iter()
+            } else {
+                cmd.table_partition_cols.clone().into_iter()
+            };
+
             (
                 None,
-                cmd.table_partition_cols
-                    .iter()
-                    .map(|x| {
+                part_cols
+                    .map(|p| {
                         (
-                            x.clone(),
+                            p,
                             DataType::Dictionary(
                                 Box::new(DataType::UInt16),
                                 Box::new(DataType::Utf8),
@@ -80,7 +105,7 @@ impl TableProviderFactory for ListingTableFactory {
                     .collect::<Vec<_>>(),
             )
         } else {
-            let schema: SchemaRef = Arc::new(cmd.schema.as_ref().to_owned().into());
+            let schema = Arc::clone(cmd.schema.inner());
             let table_partition_cols = cmd
                 .table_partition_cols
                 .iter()
@@ -106,19 +131,7 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
-        let file_extension = match table_path.is_collection() {
-            // Setting the extension to be empty instead of allowing the default extension seems
-            // odd, but was done to ensure existing behavior isn't modified. It seems like this
-            // could be refactored to either use the default extension or set the fully expected
-            // extension when compression is included (e.g. ".csv.gz")
-            true => "",
-            false => &get_extension(cmd.location.as_str()),
-        };
-        let options = ListingOptions::new(file_format)
-            .with_file_extension(file_extension)
-            .with_session_config_options(session_state.config())
-            .with_table_partition_cols(table_partition_cols);
+        options = options.with_table_partition_cols(table_partition_cols);
 
         options
             .validate_partitions(session_state, &table_path)
@@ -192,6 +205,7 @@ fn get_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_execution::config::SessionConfig;
     use glob::Pattern;
     use std::collections::HashMap;
     use std::fs;
@@ -224,6 +238,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             definition: None,
             order_exprs: vec![],
@@ -264,6 +279,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             definition: None,
             order_exprs: vec![],
@@ -308,6 +324,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             definition: None,
             order_exprs: vec![],
@@ -359,6 +376,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             definition: None,
             order_exprs: vec![],
@@ -402,6 +420,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             definition: None,
             order_exprs: vec![],
@@ -418,5 +437,86 @@ mod tests {
 
         let listing_options = listing_table.options();
         assert_eq!("", listing_options.file_extension);
+    }
+
+    #[tokio::test]
+    async fn test_create_with_hive_partitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(dir.path());
+        path.extend(["key1=value1", "key2=value2"]);
+        fs::create_dir_all(&path).unwrap();
+        path.push("data.parquet");
+        fs::File::create_new(&path).unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable {
+            name,
+            location: dir.path().to_str().unwrap().to_string(),
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        let dtype =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
+        let expected_cols = vec![
+            (String::from("key1"), dtype.clone()),
+            (String::from("key2"), dtype.clone()),
+        ];
+        assert_eq!(expected_cols, listing_options.table_partition_cols);
+
+        // Ensure partition detection can be disabled via config
+        let factory = ListingTableFactory::new();
+        let mut cfg = SessionConfig::new();
+        cfg.options_mut()
+            .execution
+            .listing_table_factory_infer_partitions = false;
+        let context = SessionContext::new_with_config(cfg);
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable {
+            name,
+            location: dir.path().to_str().unwrap().to_string(),
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert!(listing_options.table_partition_cols.is_empty());
     }
 }
