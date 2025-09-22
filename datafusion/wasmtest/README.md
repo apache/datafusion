@@ -32,7 +32,7 @@ Some of DataFusion's downstream projects compile to WASM to run in the browser. 
 
 ## Setup
 
-First, [install wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
+First, [install wasm-pack](https://drager.github.io/wasm-pack/installer/)
 
 Then use wasm-pack to compile the crate from within this directory
 
