@@ -1129,7 +1129,11 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        dfschema.check_names()?;
+        // Without checking names, because schema here may have duplicate field names.
+        // For example, Partial AggregateMode will generate duplicate field names from
+        // state_fields.
+        // See <https://github.com/apache/datafusion/issues/17715>
+        // dfschema.check_names()?;
         Ok(dfschema)
     }
 }
