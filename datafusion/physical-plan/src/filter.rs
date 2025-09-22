@@ -716,7 +716,7 @@ impl RecordBatchStream for FilterExecStream {
 }
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
-pub fn collect_columns_from_predicate(
+fn collect_columns_from_predicate(
     predicate: &'_ Arc<dyn PhysicalExpr>,
 ) -> EqualAndNonEqual<'_> {
     let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
