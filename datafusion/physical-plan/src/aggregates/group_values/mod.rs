@@ -40,9 +40,8 @@ pub(crate) use single_group_by::primitive::HashValue;
 
 use crate::aggregates::{
     group_values::single_group_by::{
-        bytes::GroupValuesByes, bytes_view::GroupValuesBytesView,
-        bytes::GroupValuesBytes, bytes_view::GroupValuesBytesView,
-        primitive::GroupValuesPrimitive,
+        boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
+        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
     },
     order::GroupOrdering,
 };
@@ -191,6 +190,9 @@ pub fn new_group_values(
             }
             DataType::BinaryView => {
                 return Ok(Box::new(GroupValuesBytesView::new(OutputType::BinaryView)));
+            }
+            DataType::Boolean => {
+                return Ok(Box::new(GroupValuesBoolean::new()));
             }
             _ => {}
         }
