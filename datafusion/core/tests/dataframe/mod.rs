@@ -27,8 +27,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, Float32Type, Int32Type, Schema, SchemaRef, UInt64Type, UnionFields,
-    UnionMode,
+    DataType, Field, Float32Type, Int32Type, Schema, UInt64Type, UnionFields, UnionMode,
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
@@ -126,8 +125,7 @@ pub fn table_with_constraints() -> Arc<dyn TableProvider> {
 }
 
 async fn assert_logical_expr_schema_eq_physical_expr_schema(df: DataFrame) -> Result<()> {
-    let logical_expr_dfschema = df.schema();
-    let logical_expr_schema = SchemaRef::from(logical_expr_dfschema.to_owned());
+    let logical_expr_schema = Arc::clone(df.schema().inner());
     let batches = df.collect().await?;
     let physical_expr_schema = batches[0].schema();
     assert_eq!(logical_expr_schema, physical_expr_schema);
