@@ -197,6 +197,9 @@ pub fn sanitize_binary_array_for_utf8(array: ArrayRef) -> ArrayRef {
             let binary_view = array.as_binary_view();
 
             // Check if all bytes are already valid UTF-8
+            // Manual validation is required for BinaryView because Arrow's safe cast
+            // doesn't handle invalid UTF-8 sequences properly for this array type
+            // See: https://github.com/apache/arrow-rs/issues/8403
             let has_invalid_bytes = binary_view.iter().any(
                 |value| matches!(value, Some(bytes) if str::from_utf8(bytes).is_err()),
             );
