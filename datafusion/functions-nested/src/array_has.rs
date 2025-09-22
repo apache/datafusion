@@ -131,40 +131,42 @@ impl ScalarUDFImpl for ArrayHas {
 
         // if the haystack is a constant list, we can use an inlist expression which is more
         // efficient because the haystack is not varying per-row
-        if let Expr::Literal(ScalarValue::List(array), _) = haystack {
-            // TODO: support LargeList
-            // (not supported by `convert_array_to_scalar_vec`)
-            // (FixedSizeList not supported either, but seems to have worked fine when attempting to
-            // build a reproducer)
+        match haystack {
+            Expr::Literal(
+                // FixedSizeList gets coerced to List
+                scalar @ ScalarValue::List(_) | scalar @ ScalarValue::LargeList(_),
+                _,
+            ) => {
+                let array = scalar.to_array().unwrap(); // guarantee of ScalarValue
+                if let Ok(scalar_values) =
+                    ScalarValue::convert_array_to_scalar_vec(&array)
+                {
+                    assert_eq!(scalar_values.len(), 1);
+                    let list = scalar_values
+                        .into_iter()
+                        .flatten()
+                        .map(|v| Expr::Literal(v, None))
+                        .collect();
 
-            assert_eq!(array.len(), 1); // guarantee of ScalarValue
-            if let Ok(scalar_values) =
-                ScalarValue::convert_array_to_scalar_vec(array.as_ref())
-            {
-                assert_eq!(scalar_values.len(), 1);
-                let list = scalar_values
-                    .into_iter()
-                    .flatten()
-                    .map(|v| Expr::Literal(v, None))
-                    .collect();
-
-                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
-                    expr: Box::new(std::mem::take(needle)),
-                    list,
-                    negated: false,
-                })));
+                    return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
+                        expr: Box::new(std::mem::take(needle)),
+                        list,
+                        negated: false,
+                    })));
+                }
             }
-        } else if let Expr::ScalarFunction(ScalarFunction { func, args }) = haystack {
-            // make_array has a static set of arguments, so we can pull the arguments out from it
-            if func == &make_array_udf() {
+            Expr::ScalarFunction(ScalarFunction { func, args })
+                if func == &make_array_udf() =>
+            {
+                // make_array has a static set of arguments, so we can pull the arguments out from it
                 return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
                     expr: Box::new(std::mem::take(needle)),
                     list: std::mem::take(args),
                     negated: false,
                 })));
             }
-        }
-
+            _ => {}
+        };
         Ok(ExprSimplifyResult::Original(args))
     }
 
