@@ -17,10 +17,10 @@
   under the License.
 -->
 
-# `datafusion-ffi`: Apache DataFusion Foreign Function Interface
+# Apache DataFusion Foreign Function Interface
 
-This crate contains code to allow interoperability of Apache [DataFusion] with
-functions from other libraries and/or [DataFusion] versions using a stable
+This crate contains code to allow interoperability of [Apache DataFusion] with
+functions from other libraries and/or DataFusion versions using a stable
 interface.
 
 One of the limitations of the Rust programming language is that there is no
@@ -28,10 +28,10 @@ stable [Rust ABI] (Application Binary Interface). If a library is compiled with
 one version of the Rust compiler and you attempt to use that library with a
 program compiled by a different Rust compiler, there is no guarantee that you
 can access the data structures. In order to share code between libraries loaded
-at runtime, you need to use Rust's [FFI](Foreign Function Interface (FFI)).
+at runtime, you need to use Rust's [FFI] (Foreign Function Interface (FFI)).
 
-The purpose of this crate is to define interfaces between [DataFusion] libraries
-that will remain stable across different versions of [DataFusion]. This allows
+The purpose of this crate is to define interfaces between DataFusion libraries
+that will remain stable across different versions of DataFusion. This allows
 users to write libraries that can interface between each other at runtime rather
 than require compiling all of the code into a single executable.
 
@@ -46,7 +46,7 @@ See [API Docs] for details and examples.
 Two use cases have been identified for this crate, but they are not intended to
 be all inclusive.
 
-1. `datafusion-python` which will use the FFI to provide external services such
+1. [`datafusion-python`] which will use the FFI to provide external services such
    as a `TableProvider` without needing to re-export the entire `datafusion-python`
    code base. With `datafusion-ffi` these packages do not need `datafusion-python`
    as a dependency at all.
@@ -68,8 +68,8 @@ stable interfaces that closely mirror the Rust native approach. To learn more
 about this approach see the [abi_stable] and [async-ffi] crates.
 
 If you have a library in another language that you wish to interface to
-[DataFusion] the recommendation is to create a Rust wrapper crate to interface
-with your library and then to connect it to [DataFusion] using this crate.
+DataFusion the recommendation is to create a Rust wrapper crate to interface
+with your library and then to connect it to DataFusion using this crate.
 Alternatively, you could use [bindgen] to interface directly to the [FFI] provided
 by this crate, but that is currently not supported.
 
@@ -101,12 +101,12 @@ In this crate we have a variety of structs which closely mimic the behavior of
 their internal counterparts. To see detailed notes about how to use them, see
 the example in `FFI_TableProvider`.
 
-[datafusion]: https://datafusion.apache.org
+[apache datafusion]: https://datafusion.apache.org/
 [api docs]: http://docs.rs/datafusion-ffi/latest
 [rust abi]: https://doc.rust-lang.org/reference/abi.html
 [ffi]: https://doc.rust-lang.org/nomicon/ffi.html
 [abi_stable]: https://crates.io/crates/abi_stable
 [async-ffi]: https://crates.io/crates/async-ffi
 [bindgen]: https://crates.io/crates/bindgen
-[datafusion-python]: https://datafusion.apache.org/python/
+[`datafusion-python`]: https://datafusion.apache.org/python/
 [datafusion-contrib]: https://github.com/datafusion-contrib
