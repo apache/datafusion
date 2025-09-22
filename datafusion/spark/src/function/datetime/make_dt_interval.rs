@@ -158,7 +158,7 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
 
     Ok(Arc::new(builder.finish()))
 }
-pub fn make_interval_dt_nano(
+fn make_interval_dt_nano(
     day: i32,
     hour: i32,
     min: i32,
