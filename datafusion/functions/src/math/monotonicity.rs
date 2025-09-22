@@ -654,7 +654,7 @@ static DOCUMENTATION_SIN: LazyLock<Documentation> = LazyLock::new(|| {
 +----------+
 | sin(0)   |
 +----------+
-|  0.0     |
+| 0.0      |
 +----------+
 ```"#,
     )
@@ -766,13 +766,13 @@ static DOCUMENTATION_TANH: LazyLock<Documentation> = LazyLock::new(|| {
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
     .with_sql_example(
-        r#"  ```sql
-  > SELECT trunc(42.738);
-  +----------------+
-  | trunc(42.738)  |
-  +----------------+
-  | 42             |
-  +----------------+
+        r#"```sql
+  > SELECT tanh(20);
+  +----------+
+  | tanh(20) |
+  +----------+
+  | 1.0      |
+  +----------+
   ```"#,
     )
     .build()
