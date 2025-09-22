@@ -18,9 +18,9 @@
 pub mod date_add;
 pub mod date_sub;
 pub mod last_day;
+pub mod make_dt_interval;
 pub mod make_interval;
 pub mod next_day;
-pub mod make_dt_interval;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
