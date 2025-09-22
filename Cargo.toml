@@ -233,3 +233,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(tarpaulin_include)",
 ] }
 unused_qualifications = "deny"
+
+[patch.crates-io]
+wasm-bindgen-test = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "eb1841c4a2d056e7f651d4678a18d7f06ba7ea60" }
+wasm-bindgen-shared = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "eb1841c4a2d056e7f651d4678a18d7f06ba7ea60" }
