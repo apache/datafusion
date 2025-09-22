@@ -17,6 +17,7 @@
 
 pub mod ascii;
 pub mod char;
+pub mod elt;
 pub mod ilike;
 pub mod length;
 pub mod like;
@@ -30,6 +31,7 @@ make_udf_function!(ascii::SparkAscii, ascii);
 make_udf_function!(char::CharFunc, char);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(length::SparkLengthFunc, length);
+make_udf_function!(elt::SparkElt, elt);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 
@@ -45,6 +47,11 @@ pub mod expr_fn {
         char,
         "Returns the ASCII character having the binary equivalent to col. If col is larger than 256 the result is equivalent to char(col % 256).",
         arg1
+    ));
+    export_functions!((
+        elt,
+        "Returns ....",
+        arg1 arg2
     ));
     export_functions!((
         ilike,
@@ -69,5 +76,13 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![ascii(), char(), ilike(), length(), like(), luhn_check()]
+    vec![
+        ascii(),
+        char(),
+        elt(),
+        ilike(),
+        length(),
+        like(),
+        luhn_check(),
+    ]
 }
