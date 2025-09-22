@@ -99,6 +99,7 @@ pub struct RunOpt {
 }
 
 impl RunOpt {
+    #[allow(deprecated)]
     pub async fn run(self) -> Result<()> {
         println!("Running benchmarks with the following options: {self:?}");
         let query_range = match self.query {
