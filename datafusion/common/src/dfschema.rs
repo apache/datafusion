@@ -1132,8 +1132,8 @@ impl TryFrom<SchemaRef> for DFSchema {
         // Without checking names, because schema here may have duplicate field names.
         // For example, Partial AggregateMode will generate duplicate field names from
         // state_fields.
-        // See <TODO FILE TICKET>
-        // dfschema.check_names()?;        
+        // See <https://github.com/apache/datafusion/issues/17715>
+        // dfschema.check_names()?;
         Ok(dfschema)
     }
 }
