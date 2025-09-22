@@ -27,6 +27,12 @@ You can see the current [status of the `51.0.0 `release here](https://github.com
 
 ## DataFusion `50.0.0`
 
+### `MSRV` updated to 1.87.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+
+[`1.87.0`]: https://releases.rs/docs/1.87.0/
+
 ### ListingTable automatically detects Hive Partitioned tables
 
 DataFusion 50.0.0 automatically infers Hive partitions when using the `ListingTableFactory` and `CREATE EXTERNAL TABLE`. Previously,
