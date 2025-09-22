@@ -19,10 +19,13 @@
 
 # Upgrade Guides
 
-## DataFusion `50.0.0`
+## DataFusion `51.0.0`
 
-**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+You can see the current [status of the `51.0.0 `release here](https://github.com/apache/datafusion/issues/17558)
+
+## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
 

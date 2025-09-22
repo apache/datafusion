@@ -199,6 +199,7 @@ rpath = false
 strip = false            # Retain debug info for flamegraphs
 
 [profile.ci]
+debug = false
 inherits = "dev"
 incremental = false
 

@@ -1755,6 +1755,14 @@ impl FunctionRegistry for SessionContext {
     ) -> Result<()> {
         self.state.write().register_expr_planner(expr_planner)
     }
+
+    fn udafs(&self) -> HashSet<String> {
+        self.state.read().udafs()
+    }
+
+    fn udwfs(&self) -> HashSet<String> {
+        self.state.read().udwfs()
+    }
 }
 
 /// Create a new task context instance from SessionContext

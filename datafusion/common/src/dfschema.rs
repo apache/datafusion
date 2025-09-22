@@ -799,6 +799,14 @@ impl DFSchema {
                         .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_semantically_equal(f1, f2))
             }
             (
+                DataType::Decimal32(_l_precision, _l_scale),
+                DataType::Decimal32(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Decimal64(_l_precision, _l_scale),
+                DataType::Decimal64(_r_precision, _r_scale),
+            ) => true,
+            (
                 DataType::Decimal128(_l_precision, _l_scale),
                 DataType::Decimal128(_r_precision, _r_scale),
             ) => true,
@@ -1056,6 +1064,12 @@ fn format_simple_data_type(data_type: &DataType) -> String {
         DataType::Dictionary(_, value_type) => {
             format_simple_data_type(value_type.as_ref())
         }
+        DataType::Decimal32(precision, scale) => {
+            format!("decimal32({precision}, {scale})")
+        }
+        DataType::Decimal64(precision, scale) => {
+            format!("decimal64({precision}, {scale})")
+        }
         DataType::Decimal128(precision, scale) => {
             format!("decimal128({precision}, {scale})")
         }
@@ -1115,7 +1129,11 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        dfschema.check_names()?;
+        // Without checking names, because schema here may have duplicate field names.
+        // For example, Partial AggregateMode will generate duplicate field names from
+        // state_fields.
+        // See <https://github.com/apache/datafusion/issues/17715>
+        // dfschema.check_names()?;
         Ok(dfschema)
     }
 }
@@ -1794,6 +1812,27 @@ mod tests {
             &DataType::Int16
         ));
 
+        // Succeeds if decimal precision and scale are different
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal32(1, 2),
+            &DataType::Decimal32(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal64(1, 2),
+            &DataType::Decimal64(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal128(1, 2),
+            &DataType::Decimal128(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal256(1, 2),
+            &DataType::Decimal256(2, 1),
+        ));
+
         // Test lists
 
         // Succeeds if both have the same element type, disregards names and nullability
@@ -2377,6 +2416,8 @@ mod tests {
                     ),
                     false,
                 ),
+                Field::new("decimal32", DataType::Decimal32(9, 4), true),
+                Field::new("decimal64", DataType::Decimal64(9, 4), true),
                 Field::new("decimal128", DataType::Decimal128(18, 4), true),
                 Field::new("decimal256", DataType::Decimal256(38, 10), false),
                 Field::new("date32", DataType::Date32, true),
@@ -2408,6 +2449,8 @@ mod tests {
          |-- fixed_size_binary: fixed_size_binary (nullable = true)
          |-- fixed_size_list: fixed size list (nullable = false)
          |    |-- item: int32 (nullable = true)
+         |-- decimal32: decimal32(9, 4) (nullable = true)
+         |-- decimal64: decimal64(9, 4) (nullable = true)
          |-- decimal128: decimal128(18, 4) (nullable = true)
          |-- decimal256: decimal256(38, 10) (nullable = false)
          |-- date32: date32 (nullable = true)

@@ -19,6 +19,7 @@
 name = "datafusion-doc"
 description = "Documentation module for DataFusion query engine"
 keywords = ["datafusion", "query", "sql"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
