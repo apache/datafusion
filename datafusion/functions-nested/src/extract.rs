@@ -337,7 +337,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                         ],
-                        array_coercion: None,
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: vec![
@@ -346,7 +346,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                         ],
-                        array_coercion: None,
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
                     }),
                 ],
                 Volatility::Immutable,
@@ -672,15 +672,7 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::Array {
-                        arguments: vec![ArrayFunctionArgument::Array],
-                        array_coercion: Some(ListCoercion::FixedSizedListToList),
-                    },
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -776,15 +768,7 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::Array {
-                        arguments: vec![ArrayFunctionArgument::Array],
-                        array_coercion: Some(ListCoercion::FixedSizedListToList),
-                    },
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_pop_back")],
         }
     }
