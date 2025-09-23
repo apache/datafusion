@@ -626,19 +626,16 @@ impl Stream for SampleExecStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = self.input.poll_next_unpin(cx);
-        let baseline_metrics = &mut self.baseline_metrics;
-
-        match poll {
-            Poll::Ready(Some(Ok(batch))) => {
-                let start = baseline_metrics.elapsed_compute().clone();
+        match ready!(self.input.poll_next_unpin(cx)) {
+            Some(Ok(batch)) => {
+                let start = self.baseline_metrics.elapsed_compute().clone();
                 let result = self.sampler.sample(&batch);
+                let result = result.record_output(&self.baseline_metrics);
                 let _timer = start.timer();
                 Poll::Ready(Some(result))
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
+            None => Poll::Ready(None),
         }
     }
 }
