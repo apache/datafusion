@@ -15,55 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![allow(unused_imports)]
-
 use datafusion::common::{
     arrow_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchema, DFSchemaRef, ResolvedTableReference, Statistics, TableReference,
+    DFSchemaRef, Statistics, TableReference,
 };
 use datafusion::error::Result;
 use datafusion::logical_expr::sqlparser::ast::{
-    Query, SetExpr, Statement, TableFactor, TableSample, TableSampleMethod,
-    TableSampleQuantity, TableSampleUnit,
+    SetExpr, Statement, TableFactor, TableSampleMethod,
+    TableSampleUnit,
 };
 use datafusion::logical_expr::{
-    AggregateUDF, Extension, Filter, LogicalPlan, LogicalPlanBuilder, Projection,
+    AggregateUDF, Extension, LogicalPlan, LogicalPlanBuilder,
     ScalarUDF, TableSource, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
     WindowUDF,
 };
 use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap};
 
-use arrow::util::pretty::{pretty_format_batches, pretty_format_batches_with_schema};
-use datafusion::common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
-};
+use arrow::util::pretty::{pretty_format_batches};
 
-use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{DataType, SchemaRef};
 use async_trait::async_trait;
-use datafusion::catalog::cte_worktable::CteWorkTable;
-use datafusion::common::file_options::file_type::FileType;
 use datafusion::config::ConfigOptions;
-use datafusion::datasource::file_format::format_as_file_type;
-use datafusion::datasource::{provider_as_source, DefaultTableSource, TableProvider};
+use datafusion::datasource::{provider_as_source};
 use datafusion::error::DataFusionError;
 use datafusion::execution::{
-    FunctionRegistry, SendableRecordBatchStream, SessionState, SessionStateBuilder,
+    SendableRecordBatchStream, SessionState, SessionStateBuilder,
     TaskContext,
 };
 use datafusion::logical_expr::planner::{
-    ContextProvider, ExprPlanner, PlannerResult, RawBinaryExpr, TypePlanner,
+    ContextProvider, ExprPlanner, TypePlanner,
 };
 use datafusion::logical_expr::sqlparser::dialect::PostgreSqlDialect;
 use datafusion::logical_expr::sqlparser::parser::Parser;
-use datafusion::logical_expr::var_provider::is_system_variables;
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::optimizer::AnalyzerRule;
 use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
 use datafusion::physical_plan::{
     displayable, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -73,18 +60,8 @@ use datafusion::physical_planner::{
     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
 };
 use datafusion::prelude::*;
-use datafusion::sql::planner::{ParserOptions, PlannerContext, SqlToRel};
-use datafusion::sql::sqlparser::ast::{TableSampleKind, TableSampleModifier};
-use datafusion::sql::unparser::ast::{
-    DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
-};
-use datafusion::sql::unparser::dialect::CustomDialectBuilder;
-use datafusion::sql::unparser::expr_to_sql;
-use datafusion::sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
-use datafusion::sql::unparser::extension_unparser::{
-    UnparseToStatementResult, UnparseWithinStatementResult,
-};
-use datafusion::sql::unparser::{plan_to_sql, Unparser};
+use datafusion::sql::planner::{SqlToRel};
+use datafusion::sql::sqlparser::ast::{TableSampleKind};
 use datafusion::variable::VarType;
 use log::{debug, info};
 use std::fmt;
@@ -100,10 +77,9 @@ use arrow::compute;
 use arrow::record_batch::RecordBatch;
 
 use datafusion::execution::context::QueryPlanner;
-use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::ast;
 use futures::stream::{Stream, StreamExt};
-use futures::TryStreamExt;
+use futures::{ready, TryStreamExt};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, Poisson};
@@ -115,6 +91,7 @@ use rand_distr::{Distribution, Poisson};
 /// Hashable and comparible f64 for sampling bounds
 #[derive(Debug, Clone, Copy, PartialOrd)]
 struct Bound(f64);
+
 impl PartialEq for Bound {
     fn eq(&self, other: &Self) -> bool {
         (self.0 - other.0).abs() < f64::EPSILON
@@ -147,7 +124,6 @@ impl AsRef<f64> for Bound {
     }
 }
 
-
 #[derive(Debug, Clone, Hash, Eq, PartialEq, PartialOrd)]
 struct TableSamplePlanNode {
     inner_plan: LogicalPlan,
@@ -157,7 +133,6 @@ struct TableSamplePlanNode {
     with_replacement: bool,
     seed: u64,
 }
-
 
 impl UserDefinedLogicalNodeCore for TableSamplePlanNode {
     fn name(&self) -> &str {
