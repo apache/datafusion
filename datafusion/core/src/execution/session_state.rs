@@ -1672,11 +1672,11 @@ pub struct SessionContextProvider<'a> {
 #[cfg(feature = "sql")]
 impl<'a> SessionContextProvider<'a> {
     /// Construct the [`SessionContextProvider`] struct
-    pub fn new(state: &'a SessionState, tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>) -> Self {
-        Self {
-            state,
-            tables
-        }
+    pub fn new(
+        state: &'a SessionState,
+        tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
+    ) -> Self {
+        Self { state, tables }
     }
 }
 
