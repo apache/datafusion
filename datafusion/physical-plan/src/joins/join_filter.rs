@@ -34,7 +34,7 @@ pub struct JoinFilter {
 }
 
 /// For display in `EXPLAIN` plans, only expression with column names is needed,
-/// it output expresion like `(col1 + col2) = 0`
+/// it output expression like `(col1 + col2) = 0`
 impl Display for JoinFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.expression.fmt_sql(f)

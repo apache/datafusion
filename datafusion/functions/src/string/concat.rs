@@ -140,7 +140,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     Some(Some(v)) => result.push_str(v),
                     Some(None) => {} // null literal
                     None => plan_err!(
-                        "Concat function does not support scalar type {:?}",
+                        "Concat function does not support scalar type {}",
                         scalar
                     )?,
                 }

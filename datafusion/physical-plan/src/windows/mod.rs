@@ -96,15 +96,16 @@ pub fn create_window_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
-    input_schema: &Schema,
+    input_schema: SchemaRef,
     ignore_nulls: bool,
     distinct: bool,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = if distinct {
                 AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                    .schema(Arc::new(input_schema.clone()))
+                    .schema(input_schema)
                     .alias(name)
                     .with_ignore_nulls(ignore_nulls)
                     .distinct()
@@ -112,7 +113,7 @@ pub fn create_window_expr(
                     .map(Arc::new)?
             } else {
                 AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                    .schema(Arc::new(input_schema.clone()))
+                    .schema(input_schema)
                     .alias(name)
                     .with_ignore_nulls(ignore_nulls)
                     .build()
@@ -123,10 +124,11 @@ pub fn create_window_expr(
                 order_by,
                 window_frame,
                 aggregate,
+                filter,
             )
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
-            create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
+            create_udwf_window_expr(fun, args, &input_schema, name, ignore_nulls)?,
             partition_by,
             order_by,
             window_frame,
@@ -140,6 +142,7 @@ fn window_expr_from_aggregate_expr(
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.is_ever_expanding();
@@ -150,6 +153,7 @@ fn window_expr_from_aggregate_expr(
             partition_by,
             order_by,
             window_frame,
+            filter,
         ))
     } else {
         Arc::new(PlainAggregateWindowExpr::new(
@@ -157,6 +161,7 @@ fn window_expr_from_aggregate_expr(
             partition_by,
             order_by,
             window_frame,
+            filter,
         ))
     }
 }
@@ -809,9 +814,10 @@ mod tests {
                 &[],
                 &[],
                 Arc::new(WindowFrame::new(None)),
-                schema.as_ref(),
+                schema,
                 false,
                 false,
+                None,
             )?],
             blocking_exec,
             false,
