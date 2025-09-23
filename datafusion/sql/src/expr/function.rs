@@ -32,6 +32,7 @@ use sqlparser::ast::{
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
     ObjectName, OrderByExpr, Spanned, WindowType,
 };
+use std::sync::Arc;
 
 /// Suggest a valid function based on an invalid input function name
 ///
@@ -270,8 +271,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
-            let scalar_func_expr =
-                Expr::ScalarFunction(ScalarFunction::new_udf(fm.clone(), args.clone()));
+            let scalar_func_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(&fm),
+                args.clone(),
+            ));
 
             if name.eq_ignore_ascii_case(fm.name()) {
                 return Ok(scalar_func_expr);
@@ -281,7 +284,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|arg| arg.to_string())
                     .collect::<Vec<_>>()
                     .join(",");
-                let verbose_alias = format!("{}({})", name, arg_names);
+                let verbose_alias = format!("{name}({arg_names})");
 
                 return Ok(Expr::Alias(expr::Alias::new(
                     scalar_func_expr,
@@ -492,7 +495,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let agg_func_expr =
                     Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                        func.clone(),
+                        Arc::clone(&func),
                         args.clone(),
                         distinct,
                         filter,
@@ -508,7 +511,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .map(|arg| arg.to_string())
                         .collect::<Vec<_>>()
                         .join(",");
-                    let verbose_alias = format!("{}({})", name, arg_names);
+                    let verbose_alias = format!("{name}({arg_names})");
 
                     return Ok(Expr::Alias(expr::Alias::new(
                         agg_func_expr,
