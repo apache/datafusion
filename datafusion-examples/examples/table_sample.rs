@@ -84,9 +84,93 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, Poisson};
 
+/// This example demonstrates how to extend DataFusion's SQL parser to recognize
+/// other syntax.
 
+/// This example shows how to extend the DataFusion SQL planner to support the
+/// `TABLESAMPLE` clause in SQL queries and then use a custom user defined node
+/// to implement the sampling logic in the physical plan.
 
-/// This example demonstrates the table sample support.
+#[tokio::main]
+async fn main() -> Result<()> {
+    let _ = env_logger::try_init();
+
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_query_planner(Arc::new(TableSampleQueryPlanner {}))
+        .build();
+
+    let ctx = SessionContext::new_with_state(state.clone());
+
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+
+    let table_source = provider_as_source(ctx.table_provider("alltypes_plain").await?);
+    let context_provider = MockContextProvider {
+        state: &state,
+        tables: HashMap::<TableReference, Arc<dyn TableSource>>::from([(
+            "alltypes_plain".into(),
+            table_source.clone(),
+        )]),
+    };
+
+    let sql =
+        "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 42 PERCENT REPEATABLE(5) WHERE int_col = 1";
+
+    let dialect = PostgreSqlDialect {};
+    let statements = Parser::parse_sql(&dialect, sql)?;
+    let statement = statements.first().expect("one statement");
+
+    // Classical way
+    // let sql_to_rel = SqlToRel::new(&context_provider);
+    // let logical_plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
+
+    // Use sampling planner to create a logical plan
+    let table_sample_planner = TableSamplePlanner::new(&context_provider);
+    let logical_plan = table_sample_planner.create_logical_plan(statement.clone())?;
+
+    let physical_plan = ctx.state().create_physical_plan(&logical_plan).await?;
+
+    // Inspect physical plan
+    let displayable_plan = displayable(physical_plan.as_ref())
+        .indent(false)
+        .to_string();
+    info!("Physical plan:\n{displayable_plan}\n");
+    let first_line = displayable_plan.lines().next().unwrap();
+    assert_eq!(
+        first_line,
+        "SampleExec: lower_bound=0, upper_bound=0.42, with_replacement=false, seed=5"
+    );
+
+    // Execute via standard sql call - doesn't work
+    // let df = ctx.sql(sql).await?;
+    // let batches = df.collect().await?;
+
+    // Execute directly via physical plan
+    let task_context = Arc::new(TaskContext::from(&ctx));
+    let stream = physical_plan.execute(0, task_context)?;
+    let batches: Vec<_> = stream.try_collect().await?;
+
+    info!("Batches: {:?}", &batches);
+
+    let result_string = pretty_format_batches(&batches)
+        // pretty_format_batches_with_schema(table_source.schema(), &batches)
+        .map_err(|e| arrow_datafusion_err!(e))
+        .map(|d| d.to_string())?;
+    let result_strings = result_string.lines().collect::<Vec<_>>();
+    info!("Batch result: {:?}", &result_strings);
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches.first().unwrap().num_rows(), 2);
+
+    info!("Done");
+    Ok(())
+}
 
 /// Hashable and comparible f64 for sampling bounds
 #[derive(Debug, Clone, Copy, PartialOrd)]
@@ -826,87 +910,6 @@ impl ContextProvider for MockContextProvider<'_> {
     fn udwf_names(&self) -> Vec<String> {
         self.state.window_functions().keys().cloned().collect()
     }
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let _ = env_logger::try_init();
-
-    let state = SessionStateBuilder::new()
-        .with_default_features()
-        .with_query_planner(Arc::new(TableSampleQueryPlanner {}))
-        .build();
-
-    let ctx = SessionContext::new_with_state(state.clone());
-
-    let testdata = datafusion::test_util::parquet_test_data();
-    ctx.register_parquet(
-        "alltypes_plain",
-        &format!("{testdata}/alltypes_plain.parquet"),
-        ParquetReadOptions::default(),
-    )
-    .await?;
-
-    let table_source = provider_as_source(ctx.table_provider("alltypes_plain").await?);
-    let context_provider = MockContextProvider {
-        state: &state,
-        tables: HashMap::<TableReference, Arc<dyn TableSource>>::from([(
-            "alltypes_plain".into(),
-            table_source.clone(),
-        )]),
-    };
-
-    let sql =
-        "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 42 PERCENT REPEATABLE(5) WHERE int_col = 1";
-
-    let dialect = PostgreSqlDialect {};
-    let statements = Parser::parse_sql(&dialect, sql)?;
-    let statement = statements.first().expect("one statement");
-
-    // Classical way
-    // let sql_to_rel = SqlToRel::new(&context_provider);
-    // let logical_plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
-
-    // Use sampling planner to create a logical plan
-    let table_sample_planner = TableSamplePlanner::new(&context_provider);
-    let logical_plan = table_sample_planner.create_logical_plan(statement.clone())?;
-
-    let physical_plan = ctx.state().create_physical_plan(&logical_plan).await?;
-
-    // Inspect physical plan
-    let displayable_plan = displayable(physical_plan.as_ref())
-        .indent(false)
-        .to_string();
-    info!("Physical plan:\n{displayable_plan}\n");
-    let first_line = displayable_plan.lines().next().unwrap();
-    assert_eq!(
-        first_line,
-        "SampleExec: lower_bound=0, upper_bound=0.42, with_replacement=false, seed=5"
-    );
-
-    // Execute via standard sql call - doesn't work
-    // let df = ctx.sql(sql).await?;
-    // let batches = df.collect().await?;
-
-    // Execute directly via physical plan
-    let task_context = Arc::new(TaskContext::from(&ctx));
-    let stream = physical_plan.execute(0, task_context)?;
-    let batches: Vec<_> = stream.try_collect().await?;
-
-    info!("Batches: {:?}", &batches);
-
-    let result_string = pretty_format_batches(&batches)
-        // pretty_format_batches_with_schema(table_source.schema(), &batches)
-        .map_err(|e| arrow_datafusion_err!(e))
-        .map(|d| d.to_string())?;
-    let result_strings = result_string.lines().collect::<Vec<_>>();
-    info!("Batch result: {:?}", &result_strings);
-
-    assert_eq!(batches.len(), 1);
-    assert_eq!(batches.first().unwrap().num_rows(), 2);
-
-    info!("Done");
-    Ok(())
 }
 
 #[cfg(test)]
