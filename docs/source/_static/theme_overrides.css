@@ -86,9 +86,7 @@ Details: 8rem for search box etc*/
 }
 
 /* Make wide tables scroll within the content area to avoid overlapping the
-   right (secondary) sidebar in pydata-sphinx-theme. This keeps tables from
-   bleeding underneath the sticky sidebar on wide pages like configs.md. */
-.bd-content table.docutils,
+   right sidebar. Prevents tables from bleeding underneath the sticky sidebar. */
 .bd-content table {
   display: block;
   overflow-x: auto;
@@ -96,14 +94,19 @@ Details: 8rem for search box etc*/
   max-width: 100%;
 }
 
-/* Ensure table rows don't collapse height when display:block is applied */
+/* Restore proper table display to maintain column alignment */
 .bd-content table thead,
-.bd-content table tbody {
-  display: table;
-  width: 100%;
+.bd-content table tbody { display: table-row-group; }
+
+.bd-content table tr { display: table-row; }
+
+.bd-content table th,
+.bd-content table td { 
+  display: table-cell; 
+  white-space: normal;
 }
 
-/* Keep striped styling visible even when table scrolls */
+/* Maintain striped styling when table scrolls */
 .bd-content table tbody tr:nth-of-type(odd) {
   background-color: rgba(0, 0, 0, 0.03);
 }
