@@ -590,7 +590,7 @@ impl RecordBatchStream for SampleExecStream {
     }
 }
 
-/// Query planner to produce a LogicalPlan from AST with table sampling
+/// Custom SQL planner that implements support for TABLESAMPLE
 struct TableSamplePlanner<'a, S: ContextProvider> {
     context_provider: &'a S,
 }
