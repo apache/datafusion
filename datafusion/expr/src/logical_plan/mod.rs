@@ -22,6 +22,7 @@ pub mod dml;
 mod extension;
 pub(crate) mod invariants;
 pub use invariants::{assert_expected_schema, check_subquery_expr, InvariantLevel};
+pub mod match_recognize;
 mod plan;
 mod statement;
 pub mod tree_node;
@@ -37,6 +38,7 @@ pub use ddl::{
     DropCatalogSchema, DropFunction, DropTable, DropView, OperateFunctionArg,
 };
 pub use dml::{DmlStatement, WriteOp};
+pub use match_recognize::{MatchRecognize, NamedExpr};
 pub use plan::{
     projection_schema, Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct,
     DistinctOn, EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter,

@@ -64,6 +64,7 @@ ctor = { workspace = true }
 # please do not move these dependencies to the main dependencies section
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-match_recognize = { workspace = true }
 datafusion-functions-nested = { workspace = true, features = ["sql"] }
 datafusion-functions-window = { workspace = true }
 env_logger = { workspace = true }

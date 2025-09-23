@@ -49,7 +49,10 @@ use datafusion_expr::{
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
-use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
+use sqlparser::ast::{
+    self, Function, FunctionArgumentList, FunctionArguments, Ident, ObjectNamePart,
+    OrderByKind, SetExpr, TableAliasColumnDef,
+};
 use std::{sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
@@ -101,6 +104,7 @@ impl Unparser<'_> {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
             | LogicalPlan::Window(_)
+            | LogicalPlan::MatchRecognize(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
@@ -124,8 +128,28 @@ impl Unparser<'_> {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
+            | LogicalPlan::Unnest(_) => {
+                not_impl_err!("Unsupported plan: {plan:?}")
+            }
         }
+    }
+
+    /// Build a nullary MATCH_RECOGNIZE metadata function call (e.g., `classifier()`)
+    pub(super) fn mr_function_call(&self, name: &str) -> ast::Expr {
+        ast::Expr::Function(Function {
+            name: ast::ObjectName(vec![ObjectNamePart::Identifier(Ident::new(name))]),
+            args: FunctionArguments::List(FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+            parameters: FunctionArguments::None,
+            uses_odbc_syntax: false,
+        })
     }
 
     /// Try to unparse a [UserDefinedLogicalNode] to a SQL statement.
@@ -324,7 +348,7 @@ impl Unparser<'_> {
     }
 
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
-    fn select_to_sql_recursively(
+    pub(super) fn select_to_sql_recursively(
         &self,
         plan: &LogicalPlan,
         query: &mut Option<QueryBuilder>,
@@ -332,6 +356,9 @@ impl Unparser<'_> {
         relation: &mut RelationBuilder,
     ) -> Result<()> {
         match plan {
+            LogicalPlan::MatchRecognize(mr) => {
+                self.unparse_match_recognize(mr, query, select, relation)
+            }
             LogicalPlan::TableScan(scan) => {
                 if let Some(unparsed_table_scan) = Self::unparse_table_scan_pushdown(
                     plan,
@@ -1229,7 +1256,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<OrderByKind> {
+    pub(super) fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<OrderByKind> {
         Ok(OrderByKind::Expressions(
             sort_exprs
                 .iter()

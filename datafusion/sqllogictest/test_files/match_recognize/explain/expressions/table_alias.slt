@@ -1,0 +1,237 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ../../init_data.slt.part
+
+# 1) Basic table alias on MATCH_RECOGNIZE
+query TT
+EXPLAIN SELECT mr.company, mr.match_count FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        COUNT(*) AS match_count
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+) mr
+----
+logical_plan
+01)SubqueryAlias: mr
+02)--Projection: stock_price.company, count(Int64(1)) AS match_count
+03)----Aggregate: groupBy=[[stock_price.company, __mr_match_number]], aggr=[[count(Int64(1))]]
+04)------MatchRecognize: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.company], metadata=[__mr_match_number]}
+05)--------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, count(Int64(1))@2 as match_count], schema=[company:Utf8View;N, match_count:Int64]
+02)--AggregateExec: mode=FinalPartitioned, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=PartiallySorted([1]), schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1)):Int64]
+03)----SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+04)------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+05)--------RepartitionExec: partitioning=Hash([company@0, __mr_match_number@1], 4), input_partitions=4, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+06)----------AggregateExec: mode=Partial, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=Sorted, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[company], metadata=[__mr_match_number]}, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+09)----------------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# 2) Quoted table alias
+query TT
+EXPLAIN SELECT "mr alias".company, "mr alias".match_count FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        COUNT(*) AS match_count
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+) "mr alias"
+----
+logical_plan
+01)SubqueryAlias: mr alias
+02)--Projection: stock_price.company, count(Int64(1)) AS match_count
+03)----Aggregate: groupBy=[[stock_price.company, __mr_match_number]], aggr=[[count(Int64(1))]]
+04)------MatchRecognize: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.company], metadata=[__mr_match_number]}
+05)--------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, count(Int64(1))@2 as match_count], schema=[company:Utf8View;N, match_count:Int64]
+02)--AggregateExec: mode=FinalPartitioned, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=PartiallySorted([1]), schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1)):Int64]
+03)----SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+04)------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+05)--------RepartitionExec: partitioning=Hash([company@0, __mr_match_number@1], 4), input_partitions=4, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+06)----------AggregateExec: mode=Partial, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=Sorted, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+08)--------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[company], metadata=[__mr_match_number]}, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+09)----------------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+10)------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# 3) Multiple MR aliases in a single FROM via JOIN
+query TT
+EXPLAIN SELECT mr1.company, mr1.match_count AS gt_100, mr2.match_count AS gt_150
+FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES COUNT(*) AS match_count
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+) mr1
+JOIN stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES COUNT(*) AS match_count
+    ONE ROW PER MATCH
+    PATTERN (B)
+    DEFINE B AS price > 150
+) mr2
+ON mr1.company = mr2.company
+----
+logical_plan
+01)Projection: mr1.company, mr1.match_count AS gt_100, mr2.match_count AS gt_150
+02)--Inner Join: mr1.company = mr2.company
+03)----SubqueryAlias: mr1
+04)------Projection: stock_price.company, count(Int64(1)) AS match_count
+05)--------Aggregate: groupBy=[[stock_price.company, __mr_match_number]], aggr=[[count(Int64(1))]]
+06)----------MatchRecognize: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.company], metadata=[__mr_match_number]}
+07)------------TableScan: stock_price projection=[company, price_date, price]
+08)----SubqueryAlias: mr2
+09)------Projection: stock_price.company, count(Int64(1)) AS match_count
+10)--------Aggregate: groupBy=[[stock_price.company, __mr_match_number]], aggr=[[count(Int64(1))]]
+11)----------MatchRecognize: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[B] symbols=[B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[B: stock_price.price > Int32(150) AS stock_price.price > Int64(150)] output={passthrough_columns=[stock_price.company], metadata=[__mr_match_number]}
+12)------------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, match_count@1 as gt_100, match_count@2 as gt_150], schema=[company:Utf8View;N, gt_100:Int64, gt_150:Int64]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, match_count:Int64, match_count:Int64]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(company@0, company@0)], projection=[company@0, match_count@1, match_count@3], schema=[company:Utf8View;N, match_count:Int64, match_count:Int64]
+04)------CoalescePartitionsExec, schema=[company:Utf8View;N, match_count:Int64]
+05)--------ProjectionExec: expr=[company@0 as company, count(Int64(1))@2 as match_count], schema=[company:Utf8View;N, match_count:Int64]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=PartiallySorted([1]), schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1)):Int64]
+07)------------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+08)--------------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+09)----------------RepartitionExec: partitioning=Hash([company@0, __mr_match_number@1], 4), input_partitions=4, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+10)------------------AggregateExec: mode=Partial, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=Sorted, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+12)----------------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[company], metadata=[__mr_match_number]}, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+13)------------------------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+14)--------------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+15)----------------------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+16)------ProjectionExec: expr=[company@0 as company, count(Int64(1))@2 as match_count], schema=[company:Utf8View;N, match_count:Int64]
+17)--------AggregateExec: mode=FinalPartitioned, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=PartiallySorted([1]), schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1)):Int64]
+18)----------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+19)------------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+20)--------------RepartitionExec: partitioning=Hash([company@0, __mr_match_number@1], 4), input_partitions=4, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+21)----------------AggregateExec: mode=Partial, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=Sorted, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+22)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+23)--------------------MatchRecognizePatternExec: pattern=[B] output={passthrough_columns=[company], metadata=[__mr_match_number]}, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+24)----------------------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+25)------------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 150 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+26)--------------------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# 4) UNION ALL of MR-derived relations
+query TT
+EXPLAIN SELECT mr1.company, mr1.match_count FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES COUNT(*) AS match_count
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+) mr1
+UNION ALL
+SELECT mr2.company, mr2.match_count FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES COUNT(*) AS match_count
+    ONE ROW PER MATCH
+    PATTERN (B)
+    DEFINE B AS price > 150
+) mr2
+----
+logical_plan
+01)Union
+02)--SubqueryAlias: mr1
+03)----Projection: stock_price.company, count(Int64(1)) AS match_count
+04)------Aggregate: groupBy=[[stock_price.company, __mr_match_number]], aggr=[[count(Int64(1))]]
+05)--------MatchRecognize: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.company], metadata=[__mr_match_number]}
+06)----------TableScan: stock_price projection=[company, price_date, price]
+07)--SubqueryAlias: mr2
+08)----Projection: stock_price.company, count(Int64(1)) AS match_count
+09)------Aggregate: groupBy=[[stock_price.company, __mr_match_number]], aggr=[[count(Int64(1))]]
+10)--------MatchRecognize: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[B] symbols=[B] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[B: stock_price.price > Int32(150) AS stock_price.price > Int64(150)] output={passthrough_columns=[stock_price.company], metadata=[__mr_match_number]}
+11)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)UnionExec, schema=[company:Utf8View;N, match_count:Int64]
+02)--ProjectionExec: expr=[company@0 as company, count(Int64(1))@2 as match_count], schema=[company:Utf8View;N, match_count:Int64]
+03)----AggregateExec: mode=FinalPartitioned, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=PartiallySorted([1]), schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1)):Int64]
+04)------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+05)--------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+06)----------RepartitionExec: partitioning=Hash([company@0, __mr_match_number@1], 4), input_partitions=4, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+07)------------AggregateExec: mode=Partial, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=Sorted, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+09)----------------MatchRecognizePatternExec: pattern=[A] output={passthrough_columns=[company], metadata=[__mr_match_number]}, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+10)------------------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+11)--------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+13)--ProjectionExec: expr=[company@0 as company, count(Int64(1))@2 as match_count], schema=[company:Utf8View;N, match_count:Int64]
+14)----AggregateExec: mode=FinalPartitioned, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=PartiallySorted([1]), schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1)):Int64]
+15)------SortExec: expr=[__mr_match_number@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+16)--------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+17)----------RepartitionExec: partitioning=Hash([company@0, __mr_match_number@1], 4), input_partitions=4, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+18)------------AggregateExec: mode=Partial, gby=[company@0 as company, __mr_match_number@1 as __mr_match_number], aggr=[count(Int64(1))], ordering_mode=Sorted, schema=[company:Utf8View;N, __mr_match_number:UInt64;N, count(Int64(1))[count]:Int64]
+19)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+20)----------------MatchRecognizePatternExec: pattern=[B] output={passthrough_columns=[company], metadata=[__mr_match_number]}, schema=[company:Utf8View;N, __mr_match_number:UInt64;N]
+21)------------------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+22)--------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 150 as __mr_symbol_b], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_b:Boolean;N]
+23)----------------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+
+# 5) ALL ROWS PER MATCH with filtering on the MR alias
+query TT
+EXPLAIN SELECT mr.company, mr.row_price FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        price AS row_price
+    ALL ROWS PER MATCH
+    PATTERN (A+)
+    DEFINE A AS price > 100
+) mr
+WHERE mr.row_price > 200
+----
+logical_plan
+01)SubqueryAlias: mr
+02)--Projection: stock_price.company, stock_price.price AS row_price
+03)----Filter: stock_price.price > Int32(200)
+04)------MatchRecognize: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] after_skip=[PAST LAST ROW] pattern=[A+] symbols=[A] rows_per_match=[ALL ROWS PER MATCH SHOW EMPTY MATCHES] defines=[A: stock_price.price > Int32(100) AS stock_price.price > Int64(100)] output={passthrough_columns=[stock_price.company,stock_price.price]}
+05)--------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price@1 as row_price], schema=[company:Utf8View;N, row_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price:Int32;N]
+03)----FilterExec: price@1 > 200, schema=[company:Utf8View;N, price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price:Int32;N]
+05)--------MatchRecognizePatternExec: pattern=[A+] output={passthrough_columns=[company,price]}, schema=[company:Utf8View;N, price:Int32;N]
+06)----------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+07)------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_a], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_a:Boolean;N]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]

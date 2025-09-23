@@ -1,0 +1,31 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use datafusion_common::Result;
+use datafusion_expr::match_recognize::columns::classifier_bits_col_name;
+use datafusion_expr::match_recognize::utils::find_symbol_predicate;
+use datafusion_expr::{col, Expr};
+
+/// Try to construct a boolean classifier bits column `Expr` from an expression
+/// by extracting a single symbol predicate. Returns `None` if no symbol could
+/// be determined. Returns an error if multiple symbols are present.
+pub(crate) fn bits_col_expr_from_expr(expr: &Expr) -> Result<Option<Expr>> {
+    match find_symbol_predicate(expr)? {
+        Some(symbol) => Ok(Some(col(classifier_bits_col_name(&symbol)))),
+        None => Ok(None),
+    }
+}
