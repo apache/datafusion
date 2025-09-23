@@ -1259,9 +1259,7 @@ impl FileSink for ParquetSink {
 
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
             let parquet_props = self.create_writer_props(&runtime, &path).await?;
-            if !allow_single_file_parallelism {
-            // let parquet_props = self.create_writer_props(&runtime, &path)?;
-            // if !parquet_opts.global.allow_single_file_parallelism {
+            if !parquet_opts.global.allow_single_file_parallelism {
                 let mut writer = self
                     .create_async_arrow_writer(
                         &path,
@@ -1603,8 +1601,8 @@ async fn concatenate_parallel_row_groups(
         let mut rg_out = parquet_writer.next_row_group()?;
         for chunk in serialized_columns {
             chunk.append_to_row_group(&mut rg_out)?;
-
             rg_reservation.free();
+
             let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
             file_reservation.try_resize(buff_to_flush.len())?;
 
@@ -1637,7 +1635,7 @@ async fn output_single_parquet_file_parallelized(
     object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     data: Receiver<RecordBatch>,
     output_schema: Arc<Schema>,
-    writer_properties: &WriterProperties,
+    parquet_props: &WriterProperties,
     skip_arrow_metadata: bool,
     parallel_options: ParallelParquetWriterOptions,
     pool: Arc<dyn MemoryPool>,
@@ -1647,9 +1645,10 @@ async fn output_single_parquet_file_parallelized(
     let (serialize_tx, serialize_rx) =
         mpsc::channel::<SpawnedTask<RBStreamSerializeResult>>(max_rowgroups);
 
+    let arc_props = Arc::new(parquet_props.clone());
     let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
     let options = ArrowWriterOptions::new()
-        .with_properties(writer_properties.clone())
+        .with_properties(parquet_props.clone())
         .with_skip_arrow_metadata(skip_arrow_metadata);
     let writer = ArrowWriter::try_new_with_options(
         merged_buff.clone(),
@@ -1663,11 +1662,10 @@ async fn output_single_parquet_file_parallelized(
         data,
         serialize_tx,
         Arc::clone(&output_schema),
-        Arc::new(writer_properties.clone()),
+        Arc::clone(&arc_props),
         parallel_options,
         Arc::clone(&pool),
     );
-
     let file_metadata = concatenate_parallel_row_groups(
         writer,
         merged_buff,
@@ -1681,7 +1679,6 @@ async fn output_single_parquet_file_parallelized(
         .join_unwind()
         .await
         .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
-
     Ok(file_metadata)
 }
 
