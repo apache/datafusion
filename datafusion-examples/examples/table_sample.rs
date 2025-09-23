@@ -80,7 +80,7 @@ use rand_distr::{Distribution, Poisson};
 
 /// This example demonstrates how to extend DataFusion's SQL parser to recognize
 /// other syntax.
-
+///
 /// This example shows how to extend the DataFusion SQL planner to support the
 /// `TABLESAMPLE` clause in SQL queries and then use a custom user defined node
 /// to implement the sampling logic in the physical plan.
@@ -272,7 +272,7 @@ impl TableSampleExtensionPlanner {
             input: physical_input.clone(),
             lower_bound: 0.0,
             upper_bound: specific_node.upper_bound.into(),
-            with_replacement: specific_node.with_replacement.into(),
+            with_replacement: specific_node.with_replacement,
             seed: specific_node.seed,
             metrics: Default::default(),
             cache: SampleExec::compute_properties(&physical_input),
