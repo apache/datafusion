@@ -147,7 +147,7 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
         let mi = mins.as_ref().map_or(0, |a| a.value(i));
         let s = secs.as_ref().map_or(0.0, |a| a.value(i));
 
-        match make_interval_dt_nano(d, h, mi, s)? {
+        match make_interval_dt_nano(d, h, mi, s) {
             Some(v) => builder.append_value(v),
             None => {
                 builder.append_null();
@@ -158,35 +158,19 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
 
     Ok(Arc::new(builder.finish()))
 }
-fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<Option<i64>> {
+fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Option<i64> {
     const HOURS_PER_DAY: i32 = 24;
     const MINS_PER_HOUR: i32 = 60;
     const SECS_PER_MINUTE: i64 = 60;
     const MICROS_PER_SEC: i64 = 1_000_000;
 
-    let total_hours: i32 = match day
+    let total_hours: i32 = day
         .checked_mul(HOURS_PER_DAY)
-        .and_then(|v| v.checked_add(hour))
-    {
-        Some(v) => v,
-        None => {
-            return Err(DataFusionError::Execution(
-                "make_dt_interval: long overflow".into(),
-            ))
-        }
-    };
+        .and_then(|v| v.checked_add(hour))?;
 
-    let total_mins: i32 = match total_hours
+    let total_mins: i32 = total_hours
         .checked_mul(MINS_PER_HOUR)
-        .and_then(|v| v.checked_add(min))
-    {
-        Some(v) => v,
-        None => {
-            return Err(DataFusionError::Execution(
-                "make_dt_interval: long overflow".into(),
-            ))
-        }
-    };
+        .and_then(|v| v.checked_add(min))?;
 
     let mut sec_whole: i64 = sec.trunc() as i64;
     let sec_frac: f64 = sec - (sec_whole as f64);
@@ -195,44 +179,22 @@ fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<Opti
     if frac_us.abs() >= MICROS_PER_SEC {
         if frac_us > 0 {
             frac_us -= MICROS_PER_SEC;
-            sec_whole = match sec_whole.checked_add(1) {
-                Some(v) => v,
-                None => {
-                    return Err(DataFusionError::Execution(
-                        "make_dt_interval: long overflow".into(),
-                    ))
-                }
-            };
+            sec_whole = sec_whole.checked_add(1)?;
         } else {
             frac_us += MICROS_PER_SEC;
-            sec_whole = match sec_whole.checked_sub(1) {
-                Some(v) => v,
-                None => {
-                    return Err(DataFusionError::Execution(
-                        "make_dt_interval: long overflow".into(),
-                    ))
-                }
-            };
+            sec_whole = sec_whole.checked_sub(1)?;
         }
     }
 
-    let total_secs: i64 = match (total_mins as i64)
+    let total_secs: i64 = (total_mins as i64)
         .checked_mul(SECS_PER_MINUTE)
-        .and_then(|v| v.checked_add(sec_whole))
-    {
-        Some(v) => v,
-        None => {
-            return Err(DataFusionError::Execution(
-                "make_dt_interval: long overflow".into(),
-            ))
-        }
-    };
+        .and_then(|v| v.checked_add(sec_whole))?;
 
     let total_us = total_secs
         .checked_mul(MICROS_PER_SEC)
-        .and_then(|v| v.checked_add(frac_us));
+        .and_then(|v| v.checked_add(frac_us))?;
 
-    Ok(total_us)
+    Some(total_us)
 }
 
 #[cfg(test)]
@@ -309,18 +271,28 @@ mod tests {
     }
 
     #[test]
-    fn overflow_should_error() -> Result<()> {
+    fn error_months_overflow_should_be_null() -> Result<()> {
+        // months = year*12 + month → NULL
+
         let days = Arc::new(Int32Array::from(vec![Some(i32::MAX)])) as ArrayRef;
-        let hours = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
-        let mins = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
-        let secs = Arc::new(Float64Array::from(vec![Some(0.0)])) as ArrayRef;
 
-        let res = run_make_dt_interval(vec![days, hours, mins, secs]);
+        let hours = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
 
-        assert!(
-            matches!(res, Err(DataFusionError::Execution(_))),
-            "expected Execution error due to overflow, got: {res:?}"
-        );
+        let mins = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+
+        let secs = Arc::new(Float64Array::from(vec![Some(1.0)])) as ArrayRef;
+
+        let out = run_make_dt_interval(vec![days, hours, mins, secs])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| {
+                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+            })?;
+
+        for i in 0..out.len() {
+            assert!(out.is_null(i), "row {i} should be NULL");
+        }
 
         Ok(())
     }
