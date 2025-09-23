@@ -1399,6 +1399,8 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // Rules for Case
             //
 
+            // Inline a comparison to a literal with the case statement into the `THEN` clauses.
+            // which can enable further simplifications
             // CASE WHEN X THEN "a" WHEN Y THEN "b" ... END = "a" --> CASE WHEN X THEN "a" = "a" WHEN Y THEN "b" = "a" END
             Expr::BinaryExpr(BinaryExpr {
                 left,
