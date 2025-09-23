@@ -279,7 +279,7 @@ pub fn is_case_with_literal_outputs(expr: &Expr) -> bool {
     }
 }
 
-pub fn as_case(expr: &Expr) -> Result<&Case> {
+pub fn into_case(expr: Expr) -> Result<Case> {
     match expr {
         Expr::Case(case) => Ok(case),
         _ => internal_err!("Expected case, got {expr:?}"),

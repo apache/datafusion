@@ -1407,26 +1407,26 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: op @ (Eq | NotEq),
                 right,
             }) if is_case_with_literal_outputs(&left) && is_lit(&right) => {
-                let case = as_case(&left)?;
+                let case = into_case(*left)?;
                 Transformed::yes(Expr::Case(Case {
                     expr: None,
                     when_then_expr: case
                         .when_then_expr
-                        .iter()
+                        .into_iter()
                         .map(|(when, then)| {
                             (
-                                when.clone(),
+                                when,
                                 Box::new(Expr::BinaryExpr(BinaryExpr {
-                                    left: then.clone(),
+                                    left: then,
                                     op,
                                     right: right.clone(),
                                 })),
                             )
                         })
                         .collect(),
-                    else_expr: case.else_expr.as_ref().map(|els| {
+                    else_expr: case.else_expr.map(|els| {
                         Box::new(Expr::BinaryExpr(BinaryExpr {
-                            left: els.clone(),
+                            left: els,
                             op,
                             right,
                         }))
@@ -1550,12 +1550,11 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     Expr::Case(Case {
                         expr: None,
                         when_then_expr: when_then_expr
-                            .iter()
-                            .map(|(when, then)| {
-                                (when.clone(), Box::new(then.clone().not()))
-                            })
+                            .into_iter()
+                            .map(|(when, then)| (when, Box::new(Expr::Not(then))))
                             .collect(),
-                        else_expr: else_expr.map(|else_expr| Box::new(else_expr.not())),
+                        else_expr: else_expr
+                            .map(|else_expr| Box::new(Expr::Not(else_expr))),
                     })
                     .not(),
                 )
