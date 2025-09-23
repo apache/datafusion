@@ -1459,8 +1459,8 @@ mod tests {
 
     #[test]
     fn test_columns_builder_with_description() {
-        use std::collections::HashMap;
         use arrow::array::Array;
+        use std::collections::HashMap;
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("table_catalog", DataType::Utf8, false),
@@ -1503,21 +1503,37 @@ mod tests {
 
         // Create a field with description metadata
         let mut metadata = HashMap::new();
-        metadata.insert("description".to_string(), "Test column description".to_string());
-        let field_with_desc = Field::new("test_column", DataType::Int32, false)
-            .with_metadata(metadata);
+        metadata.insert(
+            "description".to_string(),
+            "Test column description".to_string(),
+        );
+        let field_with_desc =
+            Field::new("test_column", DataType::Int32, false).with_metadata(metadata);
 
         // Create a field without description metadata
         let field_without_desc = Field::new("other_column", DataType::Utf8, true);
 
         // Add columns to builder
-        builder.add_column("test_catalog", "test_schema", "test_table", 0, &field_with_desc);
-        builder.add_column("test_catalog", "test_schema", "test_table", 1, &field_without_desc);
+        builder.add_column(
+            "test_catalog",
+            "test_schema",
+            "test_table",
+            0,
+            &field_with_desc,
+        );
+        builder.add_column(
+            "test_catalog",
+            "test_schema",
+            "test_table",
+            1,
+            &field_without_desc,
+        );
 
         let batch = builder.finish();
 
         // Verify the descriptions are correctly extracted
-        let descriptions_array = batch.column_by_name("description")
+        let descriptions_array = batch
+            .column_by_name("description")
             .unwrap()
             .as_any()
             .downcast_ref::<arrow::array::StringArray>()
