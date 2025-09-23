@@ -1664,9 +1664,20 @@ impl From<SessionState> for SessionStateBuilder {
 /// This is used so the SQL planner can access the state of the session without
 /// having a direct dependency on the [`SessionState`] struct (and core crate)
 #[cfg(feature = "sql")]
-struct SessionContextProvider<'a> {
+pub struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
+}
+
+#[cfg(feature = "sql")]
+impl<'a> SessionContextProvider<'a> {
+    /// Construct the [`SessionContextProvider`] struct
+    pub fn new(state: &'a SessionState, tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>) -> Self {
+        Self {
+            state,
+            tables
+        }
+    }
 }
 
 #[cfg(feature = "sql")]
