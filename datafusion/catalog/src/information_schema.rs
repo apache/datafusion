@@ -726,6 +726,7 @@ impl InformationSchemaColumns {
             Field::new("numeric_scale", DataType::UInt64, true),
             Field::new("datetime_precision", DataType::UInt64, true),
             Field::new("interval_type", DataType::Utf8, true),
+            Field::new("description", DataType::Utf8, true),
         ]));
 
         Self { schema, config }
@@ -753,6 +754,7 @@ impl InformationSchemaColumns {
             numeric_scales: UInt64Builder::with_capacity(default_capacity),
             datetime_precisions: UInt64Builder::with_capacity(default_capacity),
             interval_types: StringBuilder::new(),
+            descriptions: StringBuilder::new(),
             schema: Arc::clone(&self.schema),
         }
     }
@@ -797,6 +799,7 @@ struct InformationSchemaColumnsBuilder {
     numeric_scales: UInt64Builder,
     datetime_precisions: UInt64Builder,
     interval_types: StringBuilder,
+    descriptions: StringBuilder,
 }
 
 impl InformationSchemaColumnsBuilder {
@@ -891,6 +894,10 @@ impl InformationSchemaColumnsBuilder {
 
         self.datetime_precisions.append_option(None);
         self.interval_types.append_null();
+
+        // Extract description from field metadata
+        let description = field.metadata().get("description");
+        self.descriptions.append_option(description);
     }
 
     fn finish(&mut self) -> RecordBatch {
@@ -912,6 +919,7 @@ impl InformationSchemaColumnsBuilder {
                 Arc::new(self.numeric_scales.finish()),
                 Arc::new(self.datetime_precisions.finish()),
                 Arc::new(self.interval_types.finish()),
+                Arc::new(self.descriptions.finish()),
             ],
         )
         .unwrap()
@@ -1447,5 +1455,78 @@ mod tests {
         fn schema(&self, _: &str) -> Option<Arc<dyn SchemaProvider>> {
             Some(Arc::new(Self))
         }
+    }
+
+    #[test]
+    fn test_columns_builder_with_description() {
+        use std::collections::HashMap;
+        use arrow::array::Array;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("table_catalog", DataType::Utf8, false),
+            Field::new("table_schema", DataType::Utf8, false),
+            Field::new("table_name", DataType::Utf8, false),
+            Field::new("column_name", DataType::Utf8, false),
+            Field::new("ordinal_position", DataType::UInt64, false),
+            Field::new("column_default", DataType::Utf8, true),
+            Field::new("is_nullable", DataType::Utf8, false),
+            Field::new("data_type", DataType::Utf8, false),
+            Field::new("character_maximum_length", DataType::UInt64, true),
+            Field::new("character_octet_length", DataType::UInt64, true),
+            Field::new("numeric_precision", DataType::UInt64, true),
+            Field::new("numeric_precision_radix", DataType::UInt64, true),
+            Field::new("numeric_scale", DataType::UInt64, true),
+            Field::new("datetime_precision", DataType::UInt64, true),
+            Field::new("interval_type", DataType::Utf8, true),
+            Field::new("description", DataType::Utf8, true),
+        ]));
+
+        let mut builder = InformationSchemaColumnsBuilder {
+            catalog_names: StringBuilder::new(),
+            schema_names: StringBuilder::new(),
+            table_names: StringBuilder::new(),
+            column_names: StringBuilder::new(),
+            ordinal_positions: UInt64Builder::new(),
+            column_defaults: StringBuilder::new(),
+            is_nullables: StringBuilder::new(),
+            data_types: StringBuilder::new(),
+            character_maximum_lengths: UInt64Builder::new(),
+            character_octet_lengths: UInt64Builder::new(),
+            numeric_precisions: UInt64Builder::new(),
+            numeric_precision_radixes: UInt64Builder::new(),
+            numeric_scales: UInt64Builder::new(),
+            datetime_precisions: UInt64Builder::new(),
+            interval_types: StringBuilder::new(),
+            descriptions: StringBuilder::new(),
+            schema: schema.clone(),
+        };
+
+        // Create a field with description metadata
+        let mut metadata = HashMap::new();
+        metadata.insert("description".to_string(), "Test column description".to_string());
+        let field_with_desc = Field::new("test_column", DataType::Int32, false)
+            .with_metadata(metadata);
+
+        // Create a field without description metadata
+        let field_without_desc = Field::new("other_column", DataType::Utf8, true);
+
+        // Add columns to builder
+        builder.add_column("test_catalog", "test_schema", "test_table", 0, &field_with_desc);
+        builder.add_column("test_catalog", "test_schema", "test_table", 1, &field_without_desc);
+
+        let batch = builder.finish();
+
+        // Verify the descriptions are correctly extracted
+        let descriptions_array = batch.column_by_name("description")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
+
+        // First column should have description
+        assert_eq!(descriptions_array.value(0), "Test column description");
+
+        // Second column should have null description
+        assert!(descriptions_array.is_null(1));
     }
 }
