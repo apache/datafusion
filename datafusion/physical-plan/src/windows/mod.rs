@@ -374,38 +374,39 @@ pub(crate) fn window_equivalence_properties(
 
         // Find "one" valid ordering for partition columns to avoid exponential complexity.
         let mut all_satisfied_lexs = vec![];
-        if !no_partitioning {
-            // Find a single valid ordering using a greedy approach
-            let mut ordering = vec![];
-            for partition_expr in partitioning_exprs.iter() {
-                let sort_options =
-                    sort_options_resolving_constant(Arc::clone(partition_expr), true);
+        let mut candidate_ordering = vec![];
 
-                // Try each sort option and pick the first one that works
-                let mut found = false;
-                for sort_expr in sort_options.iter() {
-                    let mut candidate_ordering = ordering.clone();
-                    candidate_ordering.push(sort_expr.clone());
+        for partition_expr in partitioning_exprs.iter() {
+            let sort_options =
+                sort_options_resolving_constant(Arc::clone(partition_expr), true);
 
-                    if let Some(lex) = LexOrdering::new(candidate_ordering.clone()) {
-                        if window_eq_properties.ordering_satisfy(lex)? {
-                            ordering.push(sort_expr.clone());
-                            found = true;
-                            break;
-                        }
+            // Try each sort option and pick the first one that works
+            let mut found = false;
+            for sort_expr in sort_options.iter() {
+                candidate_ordering.push(sort_expr.clone());
+                if let Some(lex) = LexOrdering::new(candidate_ordering.clone()) {
+                    if window_eq_properties.ordering_satisfy(lex)? {
+                        found = true;
+                        break;
                     }
                 }
-                // If no sort option works for this column, we can't build a valid ordering
-                if !found {
-                    ordering.clear();
-                    break;
-                }
+                // This option didn't work, remove it and try the next one
+                candidate_ordering.pop();
             }
-            // If we successfully built an ordering for all columns, use it
-            if ordering.len() == partitioning_exprs.len() {
-                if let Some(lex) = LexOrdering::new(ordering) {
-                    all_satisfied_lexs.push(lex);
-                }
+            // If no sort option works for this column, we can't build a valid ordering
+            if !found {
+                candidate_ordering.clear();
+                break;
+            }
+        }
+
+        // If we successfully built an ordering for all columns, use it
+        // When there are no partition expressions, candidate_ordering will be empty and won't be added
+        if candidate_ordering.len() == partitioning_exprs.len()
+            && !candidate_ordering.is_empty()
+        {
+            if let Some(lex) = LexOrdering::new(candidate_ordering) {
+                all_satisfied_lexs.push(lex);
             }
         }
         // If there is a partitioning, and no possible ordering cannot satisfy
@@ -492,23 +493,44 @@ pub(crate) fn window_equivalence_properties(
                 // utilize set-monotonicity since the set shrinks as the frame
                 // boundary starts "touching" the end of the table.
                 else if frame.is_causal() {
-                    let args_all_lexs = sliding_expr
-                        .get_aggregate_expr()
-                        .expressions()
-                        .into_iter()
-                        .map(|expr| sort_options_resolving_constant(expr, false))
-                        .multi_cartesian_product();
+                    // Find one valid ordering for aggregate arguments instead of
+                    // checking all combinations
+                    let aggregate_exprs = sliding_expr.get_aggregate_expr().expressions();
+                    let mut candidate_order = vec![];
+                    let mut asc = false;
 
-                    let (mut asc, mut satisfied) = (false, false);
-                    for order in args_all_lexs {
-                        if let Some(f) = order.first() {
-                            asc = !f.options.descending;
+                    for (idx, expr) in aggregate_exprs.iter().enumerate() {
+                        let mut found = false;
+                        let sort_options =
+                            sort_options_resolving_constant(Arc::clone(expr), false);
+
+                        // Try each option and pick the first that works
+                        for sort_expr in sort_options.iter() {
+                            candidate_order.push(sort_expr.clone());
+
+                            if let Some(lex) = LexOrdering::new(candidate_order.clone()) {
+                                if window_eq_properties.ordering_satisfy(lex)? {
+                                    if idx == 0 {
+                                        asc = !sort_expr.options.descending;
+                                    }
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            // This option didn't work, remove it and try the next one
+                            candidate_order.pop();
                         }
-                        if window_eq_properties.ordering_satisfy(order)? {
-                            satisfied = true;
+
+                        // If we couldn't extend the ordering, stop trying
+                        if !found {
                             break;
                         }
                     }
+
+                    // Check if we successfully built a complete ordering
+                    let satisfied = candidate_order.len() == aggregate_exprs.len()
+                        && !aggregate_exprs.is_empty();
+
                     if satisfied {
                         let increasing =
                             set_monotonicity.eq(&SetMonotonicity::Increasing);
