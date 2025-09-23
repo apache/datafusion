@@ -17,35 +17,29 @@
 
 use datafusion::common::{
     arrow_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchemaRef, Statistics, TableReference,
+    DFSchemaRef, ResolvedTableReference, Statistics, TableReference,
 };
 use datafusion::error::Result;
 use datafusion::logical_expr::sqlparser::ast::{
-    SetExpr, Statement, TableFactor, TableSampleMethod,
-    TableSampleUnit,
+    SetExpr, Statement, TableFactor, TableSampleMethod, TableSampleUnit,
 };
 use datafusion::logical_expr::{
-    AggregateUDF, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarUDF, TableSource, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
-    WindowUDF,
+    Extension, LogicalPlan, LogicalPlanBuilder, TableSource, UserDefinedLogicalNode,
+    UserDefinedLogicalNodeCore,
 };
 use std::any::Any;
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
-use arrow::util::pretty::{pretty_format_batches};
+use arrow::util::pretty::pretty_format_batches;
 
-use arrow_schema::{DataType, SchemaRef};
+use arrow_schema::SchemaRef;
 use async_trait::async_trait;
-use datafusion::config::ConfigOptions;
-use datafusion::datasource::{provider_as_source};
+use datafusion::datasource::provider_as_source;
 use datafusion::error::DataFusionError;
 use datafusion::execution::{
-    SendableRecordBatchStream, SessionState, SessionStateBuilder,
-    TaskContext,
+    SendableRecordBatchStream, SessionState, SessionStateBuilder, TaskContext,
 };
-use datafusion::logical_expr::planner::{
-    ContextProvider, ExprPlanner, TypePlanner,
-};
+use datafusion::logical_expr::planner::ContextProvider;
 use datafusion::logical_expr::sqlparser::dialect::PostgreSqlDialect;
 use datafusion::logical_expr::sqlparser::parser::Parser;
 use datafusion::physical_expr::EquivalenceProperties;
@@ -60,9 +54,8 @@ use datafusion::physical_planner::{
     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
 };
 use datafusion::prelude::*;
-use datafusion::sql::planner::{SqlToRel};
-use datafusion::sql::sqlparser::ast::{TableSampleKind};
-use datafusion::variable::VarType;
+use datafusion::sql::planner::SqlToRel;
+use datafusion::sql::sqlparser::ast::TableSampleKind;
 use log::{debug, info};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -77,6 +70,7 @@ use arrow::compute;
 use arrow::record_batch::RecordBatch;
 
 use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::session_state::SessionContextProvider;
 use datafusion::sql::sqlparser::ast;
 use futures::stream::{Stream, StreamExt};
 use futures::{ready, TryStreamExt};
@@ -110,14 +104,19 @@ async fn main() -> Result<()> {
     )
     .await?;
 
+    // Construct a context provider from this parquet table source
     let table_source = provider_as_source(ctx.table_provider("alltypes_plain").await?);
-    let context_provider = MockContextProvider {
-        state: &state,
-        tables: HashMap::<TableReference, Arc<dyn TableSource>>::from([(
-            "alltypes_plain".into(),
+    let resolved_table_ref = TableReference::bare("alltypes_plain").resolve(
+        &state.config_options().catalog.default_catalog,
+        &state.config_options().catalog.default_schema,
+    );
+    let context_provider = SessionContextProvider::new(
+        &state,
+        HashMap::<ResolvedTableReference, Arc<dyn TableSource>>::from([(
+            resolved_table_ref,
             table_source.clone(),
         )]),
-    };
+    );
 
     let sql =
         "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 42 PERCENT REPEATABLE(5) WHERE int_col = 1";
@@ -849,72 +848,14 @@ impl<'a, S: ContextProvider> TableSamplePlanner<'a, S> {
     }
 }
 
-// Context provider for tests
-
-struct MockContextProvider<'a> {
-    state: &'a SessionState,
-    tables: HashMap<TableReference, Arc<dyn TableSource>>,
-}
-
-impl ContextProvider for MockContextProvider<'_> {
-    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
-        self.tables
-            .get(&name)
-            .cloned()
-            .ok_or_else(|| plan_datafusion_err!("table '{name}' not found"))
-    }
-
-    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        self.state.expr_planners()
-    }
-
-    fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
-        None
-    }
-
-    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.state.scalar_functions().get(name).cloned()
-    }
-
-    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.state.aggregate_functions().get(name).cloned()
-    }
-
-    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
-        self.state.window_functions().get(name).cloned()
-    }
-
-    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
-        self.state
-            .execution_props()
-            .var_providers
-            .as_ref()
-            .and_then(|provider| provider.get(&VarType::System)?.get_type(variable_names))
-    }
-
-    fn options(&self) -> &ConfigOptions {
-        self.state.config_options()
-    }
-
-    fn udf_names(&self) -> Vec<String> {
-        self.state.scalar_functions().keys().cloned().collect()
-    }
-
-    fn udaf_names(&self) -> Vec<String> {
-        self.state.aggregate_functions().keys().cloned().collect()
-    }
-
-    fn udwf_names(&self) -> Vec<String> {
-        self.state.window_functions().keys().cloned().collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
     use datafusion::assert_batches_eq;
+    use datafusion::common::ResolvedTableReference;
+    use datafusion::execution::session_state::SessionContextProvider;
     use datafusion::physical_plan::test::TestMemoryExec;
     use futures::TryStreamExt;
     use std::sync::Arc;
@@ -944,13 +885,17 @@ mod tests {
 
         let table_source =
             provider_as_source(ctx.table_provider("alltypes_plain").await?);
-        let context_provider = MockContextProvider {
-            state: &state,
-            tables: HashMap::<TableReference, Arc<dyn TableSource>>::from([(
-                "alltypes_plain".into(),
+        let resolved_table_ref = TableReference::bare("alltypes_plain").resolve(
+            &state.config_options().catalog.default_catalog,
+            &state.config_options().catalog.default_schema,
+        );
+        let context_provider = SessionContextProvider::new(
+            &state,
+            HashMap::<ResolvedTableReference, Arc<dyn TableSource>>::from([(
+                resolved_table_ref,
                 table_source.clone(),
             )]),
-        };
+        );
 
         let dialect = PostgreSqlDialect {};
         let statements = Parser::parse_sql(&dialect, sql)?;
