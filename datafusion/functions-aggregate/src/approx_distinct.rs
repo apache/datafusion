@@ -23,8 +23,11 @@ use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{
-    ArrowPrimitiveType, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    ArrowPrimitiveType, Date32Type, Date64Type, FieldRef, Int16Type, Int32Type,
+    Int64Type, Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
@@ -169,6 +172,9 @@ where
     }
 }
 
+#[derive(Debug)]
+struct NullHLLAccumulator;
+
 macro_rules! default_accumulator_impl {
     () => {
         fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -264,6 +270,29 @@ where
     default_accumulator_impl!();
 }
 
+impl Accumulator for NullHLLAccumulator {
+    fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+        // do nothing, all values are null
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+        Ok(())
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![])
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::UInt64(Some(0)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+}
+
 impl Debug for ApproxDistinct {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApproxDistinct")
@@ -347,11 +376,38 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Int16 => Box::new(NumericHLLAccumulator::<Int16Type>::new()),
             DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::new()),
             DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
+            DataType::Date32 => Box::new(NumericHLLAccumulator::<Date32Type>::new()),
+            DataType::Date64 => Box::new(NumericHLLAccumulator::<Date64Type>::new()),
+            DataType::Time32(TimeUnit::Second) => {
+                Box::new(NumericHLLAccumulator::<Time32SecondType>::new())
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                Box::new(NumericHLLAccumulator::<Time32MillisecondType>::new())
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                Box::new(NumericHLLAccumulator::<Time64MicrosecondType>::new())
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                Box::new(NumericHLLAccumulator::<Time64NanosecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampSecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampMillisecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampMicrosecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
+            }
             DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
             DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
             DataType::Utf8View => Box::new(StringViewHLLAccumulator::<i32>::new()),
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
+            DataType::Null => Box::new(NullHLLAccumulator),
             other => {
                 return not_impl_err!(
                 "Support for 'approx_distinct' for data type {other} is not implemented"

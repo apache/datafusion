@@ -1396,7 +1396,7 @@ mod tests {
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame),
-                &input.schema(),
+                input.schema(),
                 false,
                 false,
                 None,

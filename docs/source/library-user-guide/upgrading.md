@@ -25,6 +25,12 @@
 
 You can see the current [status of the `51.0.0 `release here](https://github.com/apache/datafusion/issues/17558)
 
+### `MSRV` updated to 1.87.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+
+[`1.87.0`]: https://releases.rs/docs/1.87.0/
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
