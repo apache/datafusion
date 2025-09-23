@@ -1503,3 +1503,13 @@ drop table t1;
 
 statement ok
 drop table t0;
+
+# SQLancer fuzzed query (https://github.com/apache/datafusion/issues/14015)
+statement ok
+create table t1(v1 int, v2 int);
+
+query error DataFusion error: Schema error: No field named tt1.v2. Valid fields are tt1.v1.
+select v1 from t1 as tt1 natural join t1 as tt2 group by v1 order by v2;
+
+statement ok
+drop table t1;

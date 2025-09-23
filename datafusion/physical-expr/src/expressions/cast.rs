@@ -232,7 +232,7 @@ pub fn cast_with_options(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
-        not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")
+        not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
     }
 }
 

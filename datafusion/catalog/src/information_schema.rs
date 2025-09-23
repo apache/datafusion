@@ -480,7 +480,7 @@ fn get_udwf_args_and_return_types(
 
 #[inline]
 fn remove_native_type_prefix(native_type: NativeType) -> String {
-    format!("{native_type:?}")
+    format!("{native_type}")
 }
 
 #[async_trait]
@@ -827,8 +827,7 @@ impl InformationSchemaColumnsBuilder {
         self.is_nullables.append_value(nullable_str);
 
         // "System supplied type" --> Use debug format of the datatype
-        self.data_types
-            .append_value(format!("{:?}", field.data_type()));
+        self.data_types.append_value(field.data_type().to_string());
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or

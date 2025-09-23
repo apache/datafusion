@@ -18,13 +18,10 @@
 use std::sync::Arc;
 
 use datafusion::{
-    config::{
-        CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
-        TableParquetOptions,
-    },
+    config::{CsvOptions, JsonOptions},
     datasource::file_format::{
         arrow::ArrowFormatFactory, csv::CsvFormatFactory, json::JsonFormatFactory,
-        parquet::ParquetFormatFactory, FileFormatFactory,
+        FileFormatFactory,
     },
     prelude::SessionContext,
 };
@@ -34,12 +31,7 @@ use datafusion_common::{
 };
 use prost::Message;
 
-use crate::protobuf::{
-    parquet_column_options, parquet_options, CsvOptions as CsvOptionsProto,
-    JsonOptions as JsonOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
-    ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
-    TableParquetOptions as TableParquetOptionsProto,
-};
+use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
 
 use super::LogicalExtensionCodec;
 
@@ -355,16 +347,32 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
     }
 }
 
-impl TableParquetOptionsProto {
-    fn from_factory(factory: &ParquetFormatFactory) -> Self {
-        let global_options = if let Some(ref options) = factory.options {
-            options.clone()
-        } else {
-            return TableParquetOptionsProto::default();
-        };
+#[cfg(feature = "parquet")]
+mod parquet {
+    use super::*;
 
-        let column_specific_options = global_options.column_specific_options;
-        #[allow(deprecated)] // max_statistics_size
+    use crate::protobuf::{
+        parquet_column_options, parquet_options,
+        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
+        ParquetOptions as ParquetOptionsProto,
+        TableParquetOptions as TableParquetOptionsProto,
+    };
+
+    use datafusion::{
+        config::{ParquetColumnOptions, ParquetOptions, TableParquetOptions},
+        datasource::file_format::parquet::ParquetFormatFactory,
+    };
+
+    impl TableParquetOptionsProto {
+        fn from_factory(factory: &ParquetFormatFactory) -> Self {
+            let global_options = if let Some(ref options) = factory.options {
+                options.clone()
+            } else {
+                return TableParquetOptionsProto::default();
+            };
+
+            let column_specific_options = global_options.column_specific_options;
+            #[allow(deprecated)] // max_statistics_size
         TableParquetOptionsProto {
             global: Some(ParquetOptionsProto {
                 enable_page_index: global_options.global.enable_page_index,
@@ -417,6 +425,9 @@ impl TableParquetOptionsProto {
                 coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
                     parquet_options::CoerceInt96Opt::CoerceInt96(compression)
                 }),
+                max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
+                    parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
+                }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -453,12 +464,12 @@ impl TableParquetOptionsProto {
                 })
                 .collect(),
         }
+        }
     }
-}
 
-impl From<&ParquetOptionsProto> for ParquetOptions {
-    fn from(proto: &ParquetOptionsProto) -> Self {
-        #[allow(deprecated)] // max_statistics_size
+    impl From<&ParquetOptionsProto> for ParquetOptions {
+        fn from(proto: &ParquetOptionsProto) -> Self {
+            #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             enable_page_index: proto.enable_page_index,
             pruning: proto.pruning,
@@ -510,13 +521,16 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
                 parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
             }),
+            max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
+                parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
+            }),
+        }
         }
     }
-}
 
-impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
-    fn from(proto: ParquetColumnOptionsProto) -> Self {
-        #[allow(deprecated)] // max_statistics_size
+    impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
+        fn from(proto: ParquetColumnOptionsProto) -> Self {
+            #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,
@@ -540,124 +554,135 @@ impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
                 .bloom_filter_ndv_opt
                 .map(|parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v)| v),
         }
+        }
     }
-}
 
-impl From<&TableParquetOptionsProto> for TableParquetOptions {
-    fn from(proto: &TableParquetOptionsProto) -> Self {
-        TableParquetOptions {
-            global: proto
-                .global
-                .as_ref()
-                .map(ParquetOptions::from)
-                .unwrap_or_default(),
-            column_specific_options: proto
-                .column_specific_options
-                .iter()
-                .map(|parquet_column_options| {
-                    (
-                        parquet_column_options.column_name.clone(),
-                        ParquetColumnOptions::from(
-                            parquet_column_options.options.clone().unwrap_or_default(),
-                        ),
-                    )
-                })
-                .collect(),
-            key_value_metadata: proto
-                .key_value_metadata
-                .iter()
-                .map(|(k, v)| (k.clone(), Some(v.clone())))
-                .collect(),
-            crypto: Default::default(),
+    impl From<&TableParquetOptionsProto> for TableParquetOptions {
+        fn from(proto: &TableParquetOptionsProto) -> Self {
+            TableParquetOptions {
+                global: proto
+                    .global
+                    .as_ref()
+                    .map(ParquetOptions::from)
+                    .unwrap_or_default(),
+                column_specific_options: proto
+                    .column_specific_options
+                    .iter()
+                    .map(|parquet_column_options| {
+                        (
+                            parquet_column_options.column_name.clone(),
+                            ParquetColumnOptions::from(
+                                parquet_column_options
+                                    .options
+                                    .clone()
+                                    .unwrap_or_default(),
+                            ),
+                        )
+                    })
+                    .collect(),
+                key_value_metadata: proto
+                    .key_value_metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Some(v.clone())))
+                    .collect(),
+                crypto: Default::default(),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct ParquetLogicalExtensionCodec;
+
+    // TODO! This is a placeholder for now and needs to be implemented for real.
+    impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[datafusion_expr::LogicalPlan],
+            _ctx: &SessionContext,
+        ) -> datafusion_common::Result<datafusion_expr::Extension> {
+            not_impl_err!("Method not implemented")
+        }
+
+        fn try_encode(
+            &self,
+            _node: &datafusion_expr::Extension,
+            _buf: &mut Vec<u8>,
+        ) -> datafusion_common::Result<()> {
+            not_impl_err!("Method not implemented")
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            _buf: &[u8],
+            _table_ref: &TableReference,
+            _schema: arrow::datatypes::SchemaRef,
+            _ctx: &SessionContext,
+        ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>>
+        {
+            not_impl_err!("Method not implemented")
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            _table_ref: &TableReference,
+            _node: Arc<dyn datafusion::datasource::TableProvider>,
+            _buf: &mut Vec<u8>,
+        ) -> datafusion_common::Result<()> {
+            not_impl_err!("Method not implemented")
+        }
+
+        fn try_decode_file_format(
+            &self,
+            buf: &[u8],
+            _ctx: &SessionContext,
+        ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
+            let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Failed to decode TableParquetOptionsProto: {e:?}"
+                ))
+            })?;
+            let options: TableParquetOptions = (&proto).into();
+            Ok(Arc::new(
+                datafusion::datasource::file_format::parquet::ParquetFormatFactory {
+                    options: Some(options),
+                },
+            ))
+        }
+
+        fn try_encode_file_format(
+            &self,
+            buf: &mut Vec<u8>,
+            node: Arc<dyn FileFormatFactory>,
+        ) -> datafusion_common::Result<()> {
+            use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+
+            let options = if let Some(parquet_factory) =
+                node.as_any().downcast_ref::<ParquetFormatFactory>()
+            {
+                parquet_factory.options.clone().unwrap_or_default()
+            } else {
+                return Err(DataFusionError::Execution(
+                    "Unsupported FileFormatFactory type".to_string(),
+                ));
+            };
+
+            let proto = TableParquetOptionsProto::from_factory(&ParquetFormatFactory {
+                options: Some(options),
+            });
+
+            proto.encode(buf).map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Failed to encode TableParquetOptionsProto: {e:?}"
+                ))
+            })?;
+
+            Ok(())
         }
     }
 }
-
-#[derive(Debug)]
-pub struct ParquetLogicalExtensionCodec;
-
-// TODO! This is a placeholder for now and needs to be implemented for real.
-impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
-    fn try_decode(
-        &self,
-        _buf: &[u8],
-        _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &SessionContext,
-    ) -> datafusion_common::Result<datafusion_expr::Extension> {
-        not_impl_err!("Method not implemented")
-    }
-
-    fn try_encode(
-        &self,
-        _node: &datafusion_expr::Extension,
-        _buf: &mut Vec<u8>,
-    ) -> datafusion_common::Result<()> {
-        not_impl_err!("Method not implemented")
-    }
-
-    fn try_decode_table_provider(
-        &self,
-        _buf: &[u8],
-        _table_ref: &TableReference,
-        _schema: arrow::datatypes::SchemaRef,
-        _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
-        not_impl_err!("Method not implemented")
-    }
-
-    fn try_encode_table_provider(
-        &self,
-        _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
-        _buf: &mut Vec<u8>,
-    ) -> datafusion_common::Result<()> {
-        not_impl_err!("Method not implemented")
-    }
-
-    fn try_decode_file_format(
-        &self,
-        buf: &[u8],
-        _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
-        let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to decode TableParquetOptionsProto: {e:?}"
-            ))
-        })?;
-        let options: TableParquetOptions = (&proto).into();
-        Ok(Arc::new(ParquetFormatFactory {
-            options: Some(options),
-        }))
-    }
-
-    fn try_encode_file_format(
-        &self,
-        buf: &mut Vec<u8>,
-        node: Arc<dyn FileFormatFactory>,
-    ) -> datafusion_common::Result<()> {
-        let options = if let Some(parquet_factory) =
-            node.as_any().downcast_ref::<ParquetFormatFactory>()
-        {
-            parquet_factory.options.clone().unwrap_or_default()
-        } else {
-            return Err(DataFusionError::Execution(
-                "Unsupported FileFormatFactory type".to_string(),
-            ));
-        };
-
-        let proto = TableParquetOptionsProto::from_factory(&ParquetFormatFactory {
-            options: Some(options),
-        });
-
-        proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to encode TableParquetOptionsProto: {e:?}"
-            ))
-        })?;
-
-        Ok(())
-    }
-}
+#[cfg(feature = "parquet")]
+pub use parquet::ParquetLogicalExtensionCodec;
 
 #[derive(Debug)]
 pub struct ArrowLogicalExtensionCodec;
