@@ -181,6 +181,26 @@ impl PhysicalSortExpr {
                     .map_or(true, |opts| self.options.descending == opts.descending)
             }
     }
+
+    /// Returns a [`Display`]able list of `PhysicalSortExpr`.
+    pub fn format_list(input: &[PhysicalSortExpr]) -> impl Display + '_ {
+        struct DisplayableList<'a>(&'a [PhysicalSortExpr]);
+        impl<'a> Display for DisplayableList<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                let mut first = true;
+                for sort_expr in self.0 {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{}", sort_expr)?;
+                }
+                Ok(())
+            }
+        }
+        DisplayableList(input)
+    }
 }
 
 /// Represents sort requirement associated with a plan
