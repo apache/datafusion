@@ -994,8 +994,8 @@ mod tests {
             "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 0.42 where int_col = 1";
         let (_, logical_plan) = parse_to_logical_plan(sql).await?;
         let node = as_table_sample_node(logical_plan)?;
-        assert_eq!(node.lower_bound, 0.0);
-        assert_eq!(node.upper_bound, 0.42);
+        assert_eq!(f64::from(node.lower_bound), 0.0);
+        assert_eq!(f64::from(node.upper_bound), 0.42);
         assert_eq!(node.with_replacement, false);
         Ok(())
     }
@@ -1006,8 +1006,8 @@ mod tests {
             "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 0.42 REPEATABLE(123) where int_col = 1";
         let (_, logical_plan) = parse_to_logical_plan(sql).await?;
         let node = as_table_sample_node(logical_plan)?;
-        assert_eq!(node.lower_bound, 0.0);
-        assert_eq!(node.upper_bound, 0.42);
+        assert_eq!(f64::from(node.lower_bound), 0.0);
+        assert_eq!(f64::from(node.upper_bound), 0.42);
         assert_eq!(node.with_replacement, false);
         assert_eq!(node.seed, 123);
         Ok(())
@@ -1019,8 +1019,8 @@ mod tests {
             "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 42 PERCENT where int_col = 1";
         let (_, logical_plan) = parse_to_logical_plan(sql).await?;
         let node = as_table_sample_node(logical_plan)?;
-        assert_eq!(node.lower_bound, 0.0);
-        assert_eq!(node.upper_bound, 0.42);
+        assert_eq!(f64::from(node.lower_bound), 0.0);
+        assert_eq!(f64::from(node.upper_bound), 0.42);
         assert_eq!(node.with_replacement, false);
         Ok(())
     }
@@ -1074,8 +1074,8 @@ mod tests {
             "SELECT int_col, double_col FROM alltypes_plain SAMPLE 0.42 where int_col = 1";
         let (_, logical_plan) = parse_to_logical_plan(sql).await?;
         let node = as_table_sample_node(logical_plan)?;
-        assert_eq!(node.lower_bound, 0.0);
-        assert_eq!(node.upper_bound, 0.42);
+        assert_eq!(f64::from(node.lower_bound), 0.0);
+        assert_eq!(f64::from(node.upper_bound), 0.42);
         assert_eq!(node.with_replacement, false);
         Ok(())
     }
@@ -1100,8 +1100,8 @@ mod tests {
             "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE (BUCKET 3 OUT OF 16) where int_col = 1";
         let (_, logical_plan) = parse_to_logical_plan(sql).await?;
         let node = as_table_sample_node(logical_plan)?;
-        assert_eq!(node.lower_bound, 0.0);
-        assert!((node.upper_bound - 3.0 / 16.0).abs() < f64::EPSILON);
+        assert_eq!(f64::from(node.lower_bound), 0.0);
+        assert!((f64::from(node.upper_bound) - 3.0 / 16.0).abs() < f64::EPSILON);
         assert_eq!(node.with_replacement, false);
         Ok(())
     }
