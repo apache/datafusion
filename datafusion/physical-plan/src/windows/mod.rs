@@ -383,8 +383,8 @@ pub(crate) fn window_equivalence_properties(
 
             // Try each sort option and pick the first one that works
             let mut found = false;
-            for sort_expr in sort_options.iter() {
-                candidate_ordering.push(sort_expr.clone());
+            for sort_expr in sort_options.into_iter() {
+                candidate_ordering.push(sort_expr);
                 if let Some(lex) = LexOrdering::new(candidate_ordering.clone()) {
                     if window_eq_properties.ordering_satisfy(lex)? {
                         found = true;
