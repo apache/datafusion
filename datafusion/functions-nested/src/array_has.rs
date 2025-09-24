@@ -25,10 +25,10 @@ use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    in_list, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -148,22 +148,22 @@ impl ScalarUDFImpl for ArrayHas {
                         .map(|v| Expr::Literal(v, None))
                         .collect();
 
-                    return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
-                        expr: Box::new(std::mem::take(needle)),
+                    return Ok(ExprSimplifyResult::Simplified(in_list(
+                        std::mem::take(needle),
                         list,
-                        negated: false,
-                    })));
+                        false,
+                    )));
                 }
             }
             Expr::ScalarFunction(ScalarFunction { func, args })
                 if func == &make_array_udf() =>
             {
                 // make_array has a static set of arguments, so we can pull the arguments out from it
-                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
-                    expr: Box::new(std::mem::take(needle)),
-                    list: std::mem::take(args),
-                    negated: false,
-                })));
+                return Ok(ExprSimplifyResult::Simplified(in_list(
+                    std::mem::take(needle),
+                    std::mem::take(args),
+                    false,
+                )));
             }
             _ => {}
         };

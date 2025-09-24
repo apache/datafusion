@@ -3317,6 +3317,7 @@ impl ScalarValue {
                         .map(|i| ScalarValue::try_from_array(&nested_array, i))
                         .collect::<Result<Vec<_>>>(),
                     // TODO: what can we put for null?
+                    //       https://github.com/apache/datafusion/issues/17749
                     None => Ok(vec![]),
                 })
                 .collect()
