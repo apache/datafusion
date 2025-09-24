@@ -308,8 +308,6 @@ jobs:
     name: cargo test datafusion-cli (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
-    container:
-     image: amd64/rust
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
