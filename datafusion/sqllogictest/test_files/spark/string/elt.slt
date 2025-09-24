@@ -36,19 +36,24 @@ SELECT elt(2::int, 'a'::string, 1::int);
 1
 
 query T
-SELECT elt(11, 10, 20)
+SELECT elt(11::int, 10, 20)
 ----
 NULL
 
 query T
-SELECT elt(1, 10, 20)
+SELECT elt(1::int, 10, 20)
 ----
 10
 
 query T
-SELECT elt(1, null, 20)
+SELECT elt(1::int, null, 20)
 ----
 NULL
+
+query T
+SELECT elt(1::int, 10, null)
+----
+10
 
 query T
 SELECT elt(1, 10, null)

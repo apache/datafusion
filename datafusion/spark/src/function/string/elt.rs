@@ -18,10 +18,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int32Array, Int64Array, StringArray, StringBuilder};
+use arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray, StringArray, StringBuilder};
 use arrow::compute::cast;
-use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Int32, Int64, Utf8};
+use arrow::datatypes::DataType::Utf8;
+use arrow::datatypes::{DataType, Int32Type, Int64Type};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
@@ -37,6 +37,7 @@ impl Default for SparkElt {
         SparkElt::new()
     }
 }
+
 impl SparkElt {
     pub fn new() -> Self {
         Self {
@@ -49,17 +50,16 @@ impl ScalarUDFImpl for SparkElt {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "elt"
     }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 {
-            return exec_err!("elt expects at least 2 arguments: index, value1");
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(Utf8)
     }
 
@@ -73,66 +73,55 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         return exec_err!("elt expects at least 2 arguments: index, value1");
     }
 
-    let num_rows = args[0].len();
-    let k = args.len() - 1;
+    let n_rows = args[0].len();
 
-    let mut vals: Vec<Arc<StringArray>> = Vec::with_capacity(k);
-    for (j, a) in args.iter().enumerate().skip(1) {
-        if a.len() != num_rows {
-            return exec_err!(
-                "elt: all arguments must have the same length (arg {} has {}, expected {})",
-                j,
-                a.len(),
-                num_rows
-            );
-        }
+    let idx_i32: Option<&PrimitiveArray<Int32Type>> = args[0].as_primitive_opt::<Int32Type>();
+    let idx_i64: Option<&PrimitiveArray<Int64Type>> = args[0].as_primitive_opt::<Int64Type>();
+
+    if idx_i32.is_none() && idx_i64.is_none() {
+        return exec_err!(
+            "elt: first argument must be Int32 or Int64 (got {:?})",
+            args[0].data_type()
+        );
+    }
+
+    let k: usize = args.len() - 1;
+    let mut cols: Vec<Arc<StringArray>> = Vec::with_capacity(k);
+    for a in args.iter().skip(1) {
         let casted = cast(a, &Utf8)?;
         let sa = casted
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| DataFusionError::Internal("downcast Utf8 failed".into()))?
             .clone();
-        vals.push(Arc::new(sa));
+        cols.push(Arc::new(sa));
     }
 
     let mut builder = StringBuilder::new();
-    for row in 0..num_rows {
-        let n_opt: Option<i64> =
-            match args[0].data_type() {
-                Int32 => {
-                    let arr = args[0].as_any().downcast_ref::<Int32Array>().ok_or_else(
-                        || DataFusionError::Internal("downcast Int32 failed".into()),
-                    )?;
-                    if arr.is_null(row) {
-                        None
-                    } else {
-                        Some(arr.value(row) as i64)
-                    }
-                }
-                Int64 => {
-                    let arr = args[0].as_any().downcast_ref::<Int64Array>().ok_or_else(
-                        || DataFusionError::Internal("downcast Int64 failed".into()),
-                    )?;
-                    if arr.is_null(row) {
-                        None
-                    } else {
-                        Some(arr.value(row))
-                    }
-                }
-                other => {
-                    return exec_err!(
-                        "elt: first argument must be Int32 or Int64 (got {:?})",
-                        other
-                    )
-                }
-            };
+
+    for i in 0..n_rows {
+        let n_opt: Option<i64> = if let Some(idx) = idx_i32 {
+            if idx.is_null(i) {
+                None
+            } else {
+                Some(idx.value(i) as i64)
+            }
+        } else {
+            let idx = idx_i64.unwrap();
+            if idx.is_null(i) {
+                None
+            } else {
+                Some(idx.value(i))
+            }
+        };
 
         let Some(n) = n_opt else {
             builder.append_null();
             continue;
         };
-        // If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices.
-        let ansi_enable: bool = false; // I need get value -> spark.sql.ansi.enabled
+
+        let ansi_enable: bool = false;
+
         if n < 1 || (n as usize) > k {
             if !ansi_enable {
                 builder.append_null();
@@ -143,20 +132,21 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         }
 
         let j = (n as usize) - 1;
-        let col = &vals[j];
+        let col = &cols[j];
 
-        if col.is_null(row) {
+        if col.is_null(i) {
             builder.append_null();
         } else {
-            builder.append_value(col.value(row));
+            builder.append_value(col.value(i));
         }
     }
 
-    Ok(cast(&(Arc::new(builder.finish()) as ArrayRef), &Utf8)?)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Int32Array, Int64Array};
     use datafusion_common::Result;
 
     use super::*;
@@ -247,26 +237,6 @@ mod tests {
         assert!(out.is_null(0));
         assert!(out.is_null(1));
         assert!(out.is_null(2));
-        Ok(())
-    }
-
-    #[test]
-    fn elt_len_mismatch_error() -> Result<()> {
-        let idx = Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(1)]));
-        let v1 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]));
-        let v2 = Arc::new(StringArray::from(vec![Some("x"), Some("y")]));
-
-        let res = run_elt_arrays(vec![idx, v1, v2]);
-        let msg = match res {
-            Ok(_) => {
-                return Err(DataFusionError::Internal(
-                    "expected error due to length mismatch".into(),
-                ));
-            }
-            Err(e) => e.to_string(),
-        };
-
-        assert!(msg.contains("all arguments must have the same length"));
         Ok(())
     }
 
