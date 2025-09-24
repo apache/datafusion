@@ -418,8 +418,8 @@ jobs:
         working-directory: ./datafusion/wasmtest
         run: |
           cargo install --git https://github.com/wasm-bindgen/wasm-bindgen.git wasm-bindgen-cli --rev 444809bcbbc70bc9bed8ec9b0cb1fa97bf1d5277
-          RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C debuginfo="none"' wasm-pack test --headless --firefox
-          RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C debuginfo="none"' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C debuginfo=none' wasm-pack test --headless --firefox
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C debuginfo=none' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
 
   # verify that the benchmark queries return the correct results
   # verify-benchmark-results:
