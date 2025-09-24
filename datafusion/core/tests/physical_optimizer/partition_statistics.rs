@@ -498,7 +498,6 @@ mod test {
     #[tokio::test]
     async fn test_statistic_by_partition_of_coalesce_batches() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
-        dbg!(scan.partition_statistics(Some(0))?);
         let coalesce_batches: Arc<dyn ExecutionPlan> =
             Arc::new(CoalesceBatchesExec::new(scan, 2));
         let expected_statistic_partition_1 =
@@ -929,6 +928,53 @@ mod test {
             Arc::new(TaskContext::default()),
         )?;
         assert_eq!(partitions.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_repartition_hash_partitioning() -> Result<()>
+    {
+        let scan = create_scan_exec_with_statistics(None, Some(1)).await;
+
+        // Create hash partitioning on the 'id' column
+        let hash_expr = vec![col("id", &scan.schema())?];
+        let repartition = Arc::new(RepartitionExec::try_new(
+            scan,
+            Partitioning::Hash(hash_expr, 2),
+        )?);
+
+        // Verify the result of partition statistics of repartition
+        let stats = (0..repartition.partitioning().partition_count())
+            .map(|idx| repartition.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(stats.len(), 2);
+
+        let expected_stats = Statistics {
+            num_rows: Precision::Inexact(2),
+            total_byte_size: Precision::Inexact(110),
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+        assert_eq!(stats[0], expected_stats);
+        assert_eq!(stats[1], expected_stats);
+
+        // Verify the repartition execution results
+        let partitions =
+            execute_stream_partitioned(repartition, Arc::new(TaskContext::default()))?;
+        assert_eq!(partitions.len(), 2);
+
+        let mut partition_row_counts = Vec::new();
+        for partition_stream in partitions.into_iter() {
+            let results: Vec<RecordBatch> = partition_stream.try_collect().await?;
+            let total_rows: usize = results.iter().map(|batch| batch.num_rows()).sum();
+            partition_row_counts.push(total_rows);
+        }
+        assert_eq!(partition_row_counts.len(), 2);
+        assert_eq!(partition_row_counts[0], 1);
+        assert_eq!(partition_row_counts[1], 3);
 
         Ok(())
     }
