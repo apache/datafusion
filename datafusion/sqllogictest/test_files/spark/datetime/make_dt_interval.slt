@@ -111,46 +111,31 @@ SELECT (make_dt_interval(0, 0, 0, 0.1))
 
 
 # doctest https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.make_dt_interval.html
+# extract only the value make_dt_interval
 
-query IIIR?
-SELECT day,
-       hour,
-       min,
-       sec,
-       MAKE_DT_INTERVAL(day) AS interval_val
+query ?
+SELECT MAKE_DT_INTERVAL(day) AS interval_val
 FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
 ----
-1 12 30 1.001001 1 days 0 hours 0 mins 0.000000 secs
+1 days 0 hours 0 mins 0.000000 secs
 
-query IIIR?
-SELECT day,
-       hour,
-       min,
-       sec,
-       MAKE_DT_INTERVAL(day, hour) AS interval_val
+query ?
+SELECT MAKE_DT_INTERVAL(day, hour) AS interval_val
 FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
 ----
-1 12 30 1.001001 1 days 12 hours 0 mins 0.000000 secs
+1 days 12 hours 0 mins 0.000000 secs
 
-query IIIR?
-SELECT day,
-       hour,
-       min,
-       sec,
-       MAKE_DT_INTERVAL(day, hour, min) AS interval_val
+query ?
+SELECT MAKE_DT_INTERVAL(day, hour, min) AS interval_val
 FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
 ----
-1 12 30 1.001001 1 days 12 hours 30 mins 0.000000 secs
+1 days 12 hours 30 mins 0.000000 secs
 
-query IIIR?
-SELECT day,
-       hour,
-       min,
-       sec,
-       MAKE_DT_INTERVAL(day, hour, min, sec) AS interval_val
+query ?
+SELECT MAKE_DT_INTERVAL(day, hour, min, sec) AS interval_val
 FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
 ----
-1 12 30 1.001001 1 days 12 hours 30 mins 1.001001 secs
+1 days 12 hours 30 mins 1.001001 secs
 
 query ?
 SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001)
