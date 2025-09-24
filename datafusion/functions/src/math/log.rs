@@ -48,6 +48,14 @@ use datafusion_macros::user_doc;
     description = "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
     syntax_example = r#"log(base, numeric_expression)
 log(numeric_expression)"#,
+    sql_example = r#"```sql
+> SELECT log(10);
++---------+
+| log(10) |
++---------+
+| 1.0     |
++---------+
+```"#,
     standard_argument(name = "base", prefix = "Base numeric"),
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
