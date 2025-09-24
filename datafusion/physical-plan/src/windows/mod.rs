@@ -373,6 +373,7 @@ pub(crate) fn window_equivalence_properties(
         let no_partitioning = partitioning_exprs.is_empty();
 
         // Find "one" valid ordering for partition columns to avoid exponential complexity.
+        // see https://github.com/apache/datafusion/issues/17401
         let mut all_satisfied_lexs = vec![];
         let mut candidate_ordering = vec![];
 
