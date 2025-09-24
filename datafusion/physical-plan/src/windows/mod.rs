@@ -402,9 +402,7 @@ pub(crate) fn window_equivalence_properties(
 
         // If we successfully built an ordering for all columns, use it
         // When there are no partition expressions, candidate_ordering will be empty and won't be added
-        if candidate_ordering.len() == partitioning_exprs.len()
-            && !candidate_ordering.is_empty()
-        {
+        if candidate_ordering.len() == partitioning_exprs.len() {
             if let Some(lex) = LexOrdering::new(candidate_ordering) {
                 all_satisfied_lexs.push(lex);
             }
@@ -505,13 +503,21 @@ pub(crate) fn window_equivalence_properties(
                             sort_options_resolving_constant(Arc::clone(expr), false);
 
                         // Try each option and pick the first that works
-                        for sort_expr in sort_options.iter() {
-                            candidate_order.push(sort_expr.clone());
+                        for sort_expr in sort_options.into_iter() {
+                            let is_asc = !sort_expr.options.descending;
+                            candidate_order.push(sort_expr);
 
                             if let Some(lex) = LexOrdering::new(candidate_order.clone()) {
                                 if window_eq_properties.ordering_satisfy(lex)? {
                                     if idx == 0 {
-                                        asc = !sort_expr.options.descending;
+                                        // The first column's ordering direction determines the overall
+                                        // monotonicity behavior of the window result.
+                                        // - If the aggregate has increasing set monotonicity (e.g., MAX, COUNT)
+                                        //   and the first arg is ascending, the window result is increasing
+                                        // - If the aggregate has decreasing set monotonicity (e.g., MIN)
+                                        //   and the first arg is ascending, the window result is also increasing
+                                        // This flag is used to determine the final window column ordering.
+                                        asc = is_asc;
                                     }
                                     found = true;
                                     break;
