@@ -22,7 +22,7 @@ use arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray, StringArray, String
 use arrow::compute::cast;
 use arrow::datatypes::DataType::Utf8;
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;
@@ -70,7 +70,7 @@ impl ScalarUDFImpl for SparkElt {
 
 fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     if args.len() < 2 {
-        return exec_err!("elt expects at least 2 arguments: index, value1");
+        plan_datafusion_err!("elt expects at least 2 arguments: index, value1");
     }
 
     let n_rows = args[0].len();
@@ -79,7 +79,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     let idx_i64: Option<&PrimitiveArray<Int64Type>> = args[0].as_primitive_opt::<Int64Type>();
 
     if idx_i32.is_none() && idx_i64.is_none() {
-        return exec_err!(
+        plan_datafusion_err!(
             "elt: first argument must be Int32 or Int64 (got {:?})",
             args[0].data_type()
         );
@@ -127,7 +127,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
                 builder.append_null();
                 continue;
             } else {
-                return exec_err!("ArrayIndexOutOfBoundsException");
+                plan_datafusion_err!("ArrayIndexOutOfBoundsException");
             }
         }
 
