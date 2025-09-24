@@ -1047,7 +1047,10 @@ impl OptimizerRule for PushDownFilter {
                     func.params
                         .partition_by
                         .iter()
-                        .map(|c| Column::from_qualified_name(c.schema_name().to_string()))
+                        .map(|c| {
+                            let (relation, name) = c.qualified_name();
+                            Column::new(relation, name)
+                        })
                         .collect::<HashSet<_>>()
                 };
                 let potential_partition_keys = window
@@ -1643,6 +1646,41 @@ mod tests {
             @r"
         WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: test, full_filters=[test.b > Int64(10)]
+        "
+        )
+    }
+
+    /// verifies that filters with unusual identifier names are pushed down through window functions
+    #[test]
+    fn filter_window_special_identifier() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("$a", DataType::UInt32, false),
+            Field::new("$b", DataType::UInt32, false),
+            Field::new("$c", DataType::UInt32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("$a"), col("$b")])
+        .order_by(vec![col("$c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(col("$b").gt(lit(10i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.$a, test.$b] ORDER BY [test.$c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.$b > Int64(10)]
         "
         )
     }
