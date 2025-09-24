@@ -68,6 +68,158 @@ fn test_decimal_binary_comparison_coercion() -> Result<()> {
 }
 
 #[test]
+fn test_decimal_cross_variant_comparison_coercion() -> Result<()> {
+    // Test cross-variant decimal coercion (different decimal types)
+    let test_cases = [
+        // (lhs, rhs, expected_result)
+        (
+            DataType::Decimal32(5, 2),
+            DataType::Decimal64(10, 3),
+            DataType::Decimal64(10, 3),
+        ),
+        (
+            DataType::Decimal32(7, 1),
+            DataType::Decimal128(15, 4),
+            DataType::Decimal128(15, 4),
+        ),
+        (
+            DataType::Decimal32(9, 0),
+            DataType::Decimal256(20, 5),
+            DataType::Decimal256(20, 5),
+        ),
+        (
+            DataType::Decimal64(12, 3),
+            DataType::Decimal128(18, 2),
+            DataType::Decimal128(19, 3),
+        ),
+        (
+            DataType::Decimal64(15, 4),
+            DataType::Decimal256(25, 6),
+            DataType::Decimal256(25, 6),
+        ),
+        (
+            DataType::Decimal128(20, 5),
+            DataType::Decimal256(30, 8),
+            DataType::Decimal256(30, 8),
+        ),
+        // Reverse order cases
+        (
+            DataType::Decimal64(10, 3),
+            DataType::Decimal32(5, 2),
+            DataType::Decimal64(10, 3),
+        ),
+        (
+            DataType::Decimal128(15, 4),
+            DataType::Decimal32(7, 1),
+            DataType::Decimal128(15, 4),
+        ),
+        (
+            DataType::Decimal256(20, 5),
+            DataType::Decimal32(9, 0),
+            DataType::Decimal256(20, 5),
+        ),
+        (
+            DataType::Decimal128(18, 2),
+            DataType::Decimal64(12, 3),
+            DataType::Decimal128(19, 3),
+        ),
+        (
+            DataType::Decimal256(25, 6),
+            DataType::Decimal64(15, 4),
+            DataType::Decimal256(25, 6),
+        ),
+        (
+            DataType::Decimal256(30, 8),
+            DataType::Decimal128(20, 5),
+            DataType::Decimal256(30, 8),
+        ),
+    ];
+
+    let comparison_op_types = [
+        Operator::NotEq,
+        Operator::Eq,
+        Operator::Gt,
+        Operator::GtEq,
+        Operator::Lt,
+        Operator::LtEq,
+    ];
+
+    for (lhs_type, rhs_type, expected_type) in test_cases {
+        for op in comparison_op_types {
+            let (lhs, rhs) =
+                BinaryTypeCoercer::new(&lhs_type, &op, &rhs_type).get_input_types()?;
+            assert_eq!(expected_type, lhs, "Coercion of type {lhs_type:?} with {rhs_type:?} resulted in unexpected type: {lhs:?}");
+            assert_eq!(expected_type, rhs, "Coercion of type {rhs_type:?} with {lhs_type:?} resulted in unexpected type: {rhs:?}");
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_decimal_variants_with_numeric_comparison_coercion() -> Result<()> {
+    let input_decimal32 = DataType::Decimal32(7, 2);
+    let input_types = [DataType::Int8, DataType::Int16, DataType::Float16];
+    let result_types = [
+        DataType::Decimal32(7, 2),
+        DataType::Decimal32(7, 2),
+        DataType::Decimal32(8, 3),
+    ];
+
+    let input_decimal64 = DataType::Decimal64(12, 3);
+    let input_types_64 = [
+        DataType::Int8,
+        DataType::Int16,
+        DataType::Int32,
+        DataType::Float16,
+        DataType::Float32,
+    ];
+    let result_types_64 = [
+        DataType::Decimal64(12, 3),
+        DataType::Decimal64(12, 3),
+        DataType::Decimal64(13, 3),
+        DataType::Decimal64(12, 3),
+        DataType::Decimal64(16, 7),
+    ];
+
+    let comparison_op_types = [
+        Operator::NotEq,
+        Operator::Eq,
+        Operator::Gt,
+        Operator::GtEq,
+        Operator::Lt,
+        Operator::LtEq,
+    ];
+
+    // Test Decimal32 cases
+    for (i, input_type) in input_types.iter().enumerate() {
+        let expect_type = &result_types[i];
+        for op in comparison_op_types {
+            let (lhs, rhs) = BinaryTypeCoercer::new(&input_decimal32, &op, input_type)
+                .get_input_types()?;
+            assert_eq!(
+                expect_type, &lhs,
+                "Coercion of type {input_decimal32:?} with {input_type:?} resulted in unexpected type: {lhs:?}"
+            );
+            assert_eq!(expect_type, &rhs, "Coercion of type {input_decimal32:?} with {input_type:?} resulted in unexpected type: {rhs:?}");
+        }
+    }
+
+    // Test Decimal64 cases
+    for (i, input_type) in input_types_64.iter().enumerate() {
+        let expect_type = &result_types_64[i];
+        for op in comparison_op_types {
+            let (lhs, rhs) = BinaryTypeCoercer::new(&input_decimal64, &op, input_type)
+                .get_input_types()?;
+            assert_eq!(expect_type, &lhs, "Coercion of type {input_decimal64:?} with {input_type:?} resulted in unexpected type: {lhs:?}");
+            assert_eq!(expect_type, &rhs, "Coercion of type {input_decimal64:?} with {input_type:?} resulted in unexpected type: {rhs:?}");
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_like_coercion() {
     // string coerce to strings
     test_like_rule!(DataType::Utf8, DataType::Utf8, Some(DataType::Utf8));

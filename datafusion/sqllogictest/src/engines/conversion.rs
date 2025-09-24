@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{i256, Decimal128Type, Decimal256Type, DecimalType};
+use arrow::datatypes::{
+    i256, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, DecimalType,
+};
 use bigdecimal::BigDecimal;
 use half::f16;
 use rust_decimal::prelude::*;
@@ -94,6 +96,24 @@ pub(crate) fn spark_f64_to_str(value: f64) -> String {
     } else {
         big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), Some(15))
     }
+}
+
+pub(crate) fn decimal_32_to_str(value: i32, scale: i8) -> String {
+    let precision = u8::MAX; // does not matter
+    big_decimal_to_str(
+        BigDecimal::from_str(&Decimal32Type::format_decimal(value, precision, scale))
+            .unwrap(),
+        None,
+    )
+}
+
+pub(crate) fn decimal_64_to_str(value: i64, scale: i8) -> String {
+    let precision = u8::MAX; // does not matter
+    big_decimal_to_str(
+        BigDecimal::from_str(&Decimal64Type::format_decimal(value, precision, scale))
+            .unwrap(),
+        None,
+    )
 }
 
 pub(crate) fn decimal_128_to_str(value: i128, scale: i8) -> String {

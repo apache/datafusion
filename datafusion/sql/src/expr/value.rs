@@ -495,6 +495,24 @@ mod tests {
             ("123.456e-2", ScalarValue::Decimal32(Some(123456), 6, 5)),
             // Negative scale
             ("123456e128", ScalarValue::Decimal32(Some(123456), 6, -128)),
+            // Decimal32
+            (
+                &("9".repeat(2) + "." + "99999"),
+                ScalarValue::Decimal32(
+                    Some(i32::from_str(&"9".repeat(7)).unwrap()),
+                    7,
+                    5,
+                ),
+            ),
+            // Decimal64
+            (
+                &("9".repeat(10) + "." + "99999"),
+                ScalarValue::Decimal64(
+                    Some(i64::from_str(&"9".repeat(15)).unwrap()),
+                    15,
+                    5,
+                ),
+            ),
             // Decimal128
             (
                 &("9".repeat(19) + "." + "99999"),

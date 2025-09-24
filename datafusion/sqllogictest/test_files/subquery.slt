@@ -348,13 +348,13 @@ where c_acctbal < (
 logical_plan
 01)Sort: customer.c_custkey ASC NULLS LAST
 02)--Projection: customer.c_custkey
-03)----Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.sum(orders.o_totalprice)
+03)----Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal64(18, 2)) < __scalar_sq_1.sum(orders.o_totalprice)
 04)------TableScan: customer projection=[c_custkey, c_acctbal]
 05)------SubqueryAlias: __scalar_sq_1
 06)--------Projection: sum(orders.o_totalprice), orders.o_custkey
 07)----------Aggregate: groupBy=[[orders.o_custkey]], aggr=[[sum(orders.o_totalprice)]]
 08)------------Projection: orders.o_custkey, orders.o_totalprice
-09)--------------Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.price
+09)--------------Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal64(18, 2)) < __scalar_sq_2.price
 10)----------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
 11)----------------SubqueryAlias: __scalar_sq_2
 12)------------------Projection: sum(lineitem.l_extendedprice) AS price, lineitem.l_orderkey

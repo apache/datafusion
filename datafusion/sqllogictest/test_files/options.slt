@@ -147,7 +147,7 @@ select .0 as c1, 0. as c2, 0000. as c3, 00000.00 as c4
 query TTTT
 select arrow_typeof(.0) as c1, arrow_typeof(0.) as c2, arrow_typeof(0000.) as c3, arrow_typeof(00000.00) as c4
 ----
-Decimal128(1, 1) Decimal128(1, 0) Decimal128(1, 0) Decimal128(2, 2)
+Decimal32(1, 1) Decimal32(1, 0) Decimal32(1, 0) Decimal32(2, 2)
 
 query RR
 select 999999999999999999999999999999999999, -999999999999999999999999999999999999
@@ -198,14 +198,14 @@ select 1.23e3, arrow_typeof(1.23e3),
     +1.23e1, arrow_typeof(+1.23e1),
     -1234.56e-3, arrow_typeof(-1234.56e-3)
 ----
-1230 Decimal128(3, -1) 12.3 Decimal128(3, 1) -1.23456 Decimal128(6, 5)
+1230 Decimal32(3, -1) 12.3 Decimal32(3, 1) -1.23456 Decimal32(6, 5)
 
 query RTRTRT
 select 1.23e-2, arrow_typeof(1.23e-2),
     1.23456e0, arrow_typeof(1.23456e0),
     -.0123e2, arrow_typeof(-.0123e2)
 ----
-0.0123 Decimal128(4, 4) 1.23456 Decimal128(6, 5) -1.23 Decimal128(3, 2)
+0.0123 Decimal32(4, 4) 1.23456 Decimal32(6, 5) -1.23 Decimal32(3, 2)
 
 # Decimal256 cases
 query RT
@@ -265,12 +265,12 @@ select 1.00000000000000000000000000000000000000000000000000000000000000000000000
 query TR
 select arrow_typeof(1e77), 1e77
 ----
-Decimal128(1, -77) 100000000000000000000000000000000000000000000000000000000000000000000000000000
+Decimal32(1, -77) 100000000000000000000000000000000000000000000000000000000000000000000000000000
 
 query T
 select arrow_typeof(1e128)
 ----
-Decimal128(1, -128)
+Decimal32(1, -128)
 
 query error Decimal scale \-129 exceeds the minimum supported scale: \-128
 select 1e129
@@ -280,7 +280,7 @@ query RTRT
 select 1e40 + 1e40, arrow_typeof(1e40 + 1e40),
     1e-40 + -1e-40, arrow_typeof(1e-40 + -1e-40)
 ----
-20000000000000000000000000000000000000000 Decimal128(2, -40) 0 Decimal256(41, 40)
+20000000000000000000000000000000000000000 Decimal32(2, -40) 0 Decimal256(41, 40)
 
 # Restore option to default value
 statement ok

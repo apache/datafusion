@@ -887,14 +887,31 @@ SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
-# median decimal
+# median decimal64
 statement ok
 create table t(c decimal(10, 4)) as values (0.0001), (0.0002), (0.0003), (0.0004), (0.0005), (0.0006);
 
 query RT
 select median(c), arrow_typeof(median(c)) from t;
 ----
-0.0003 Decimal128(10, 4)
+0.0003 Decimal64(10, 4)
+
+query RT
+select approx_median(c), arrow_typeof(approx_median(c)) from t;
+----
+0.00035 Float64
+
+statement ok
+drop table t;
+
+# median decimal128
+statement ok
+create table t(c decimal(20, 4)) as values (0.0001), (0.0002), (0.0003), (0.0004), (0.0005), (0.0006);
+
+query RT
+select median(c), arrow_typeof(median(c)) from t;
+----
+0.0003 Decimal128(20, 4)
 
 query RT
 select approx_median(c), arrow_typeof(approx_median(c)) from t;
@@ -911,7 +928,7 @@ create table t(c decimal(10, 4)) as values (0.0001), (null), (0.0003), (0.0004),
 query RT
 select median(c), arrow_typeof(median(c)) from t;
 ----
-0.0003 Decimal128(10, 4)
+0.0003 Decimal64(10, 4)
 
 statement ok
 drop table t;
@@ -923,7 +940,7 @@ create table t(c decimal(10, 4)) as values (null), (null), (null);
 query RT
 select median(c), arrow_typeof(median(c)) from t;
 ----
-NULL Decimal128(10, 4)
+NULL Decimal64(10, 4)
 
 statement ok
 drop table t;
@@ -2529,14 +2546,26 @@ select avg(c1) from test
 ----
 1.75
 
-# avg_decimal
+# avg_decimal64
 statement ok
 create table t (c1 decimal(10, 0)) as values (1), (2), (3), (4), (5), (6);
 
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-3.5 Decimal128(14, 4)
+3.5 Decimal64(14, 4)
+
+statement ok
+drop table t;
+
+# avg_decimal128
+statement ok
+create table t (c1 decimal(20, 0)) as values (1), (2), (3), (4), (5), (6);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.5 Decimal128(24, 4)
 
 statement ok
 drop table t;
@@ -2548,7 +2577,7 @@ create table t (c1 decimal(10, 0)) as values (1), (NULL), (3), (4), (5);
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-3.25 Decimal128(14, 4)
+3.25 Decimal64(14, 4)
 
 statement ok
 drop table t;
@@ -2560,7 +2589,7 @@ create table t (c1 decimal(10, 0)) as values (NULL), (NULL), (NULL), (NULL), (NU
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-NULL Decimal128(14, 4)
+NULL Decimal64(14, 4)
 
 statement ok
 drop table t;
@@ -5028,7 +5057,7 @@ NULL
 query RT
 select sum(c1), arrow_typeof(sum(c1)) from d_table;
 ----
-100 Decimal128(20, 3)
+100 Decimal64(18, 3)
 
 # aggregate sum with decimal
 statement ok
@@ -5064,7 +5093,7 @@ select
   sum(c2), arrow_typeof(sum(c2))
 from t;
 ----
-NULL Decimal128(20, 0) NULL Int64
+NULL Decimal64(18, 0) NULL Int64
 
 statement ok
 drop table t;
@@ -5108,21 +5137,21 @@ drop table t;
 query TRT
 select c2, sum(c1), arrow_typeof(sum(c1)) from d_table GROUP BY c2 ORDER BY c2;
 ----
-A 1100.045 Decimal128(20, 3)
-B -1000.045 Decimal128(20, 3)
+A 1100.045 Decimal64(18, 3)
+B -1000.045 Decimal64(18, 3)
 
 
 # aggregate_decimal_avg
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from d_table
 ----
-5 Decimal128(14, 7)
+5 Decimal64(14, 7)
 
 query TRT
 select c2, avg(c1), arrow_typeof(avg(c1)) from d_table GROUP BY c2 ORDER BY c2
 ----
-A 110.0045 Decimal128(14, 7)
-B -100.0045 Decimal128(14, 7)
+A 110.0045 Decimal64(14, 7)
+B -100.0045 Decimal64(14, 7)
 
 # aggregate_decimal_count_distinct
 query I
@@ -7341,7 +7370,7 @@ create table t_decimal (c decimal(10, 4)) as values (100.00), (125.00), (175.00)
 query RT
 select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal;
 ----
-180 Decimal128(14, 8)
+180 Decimal64(14, 8)
 
 statement ok
 drop table t_decimal;
@@ -7520,7 +7549,7 @@ select
 	avg(d)
 from distinct_avg;
 ----
-3 Float64 37.4255 Float64 698.56005 Decimal128(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.11074444 1272562.81625
+3 Float64 37.4255 Float64 698.56005 Decimal64(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.11074444 1272562.81625
 
 query RRRR rowsort
 select
