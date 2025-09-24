@@ -234,13 +234,13 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 unused_qualifications = "deny"
 
 [patch.crates-io]
-js-sys = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-web-sys = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-wasm-bindgen = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-wasm-bindgen-test = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-wasm-bindgen-test-macro = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-wasm-bindgen-shared = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-wasm-bindgen-futures = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-wasm-bindgen-backend  = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-wasm-bindgen-macro = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
-wasm-bindgen-macro-support = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "81fd832955772cba181a558f07f042080b9d5e84" }
+js-sys = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+web-sys = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+wasm-bindgen = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+wasm-bindgen-test = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+wasm-bindgen-test-macro = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+wasm-bindgen-shared = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+wasm-bindgen-futures = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+wasm-bindgen-backend  = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+wasm-bindgen-macro = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
+wasm-bindgen-macro-support = { git = "https://github.com/wasm-bindgen/wasm-bindgen.git", rev = "d450d5aa7ef5d36fc62d2affcdf1c145410b434b" }
