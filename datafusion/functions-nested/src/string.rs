@@ -25,9 +25,8 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{
-    internal_datafusion_err, not_impl_err, plan_err, DataFusionError, Result,
-};
+use datafusion_common::utils::ListCoercion;
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 
 use std::any::Any;
 
@@ -41,14 +40,17 @@ use arrow::compute::cast;
 use arrow::datatypes::DataType::{
     Dictionary, FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8, Utf8View,
 };
-use datafusion_common::cast::{as_large_list_array, as_list_array};
+use datafusion_common::cast::{
+    as_fixed_size_list_array, as_large_list_array, as_list_array,
+};
 use datafusion_common::exec_err;
 use datafusion_common::types::logical_string;
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, ColumnarValue,
+    Documentation, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass,
+    Volatility,
 };
-use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
@@ -161,7 +163,26 @@ impl Default for ArrayToString {
 impl ArrayToString {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::String,
+                            ArrayFunctionArgument::String,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::String,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    }),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![
                 String::from("list_to_string"),
                 String::from("array_join"),
@@ -184,13 +205,8 @@ impl ScalarUDFImpl for ArrayToString {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
-            _ => {
-                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Utf8)
     }
 
     fn invoke_with_args(
@@ -284,16 +300,10 @@ impl ScalarUDFImpl for StringToArray {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            Utf8 | Utf8View | LargeUtf8 => {
-                List(Arc::new(Field::new_list_field(arg_types[0].clone(), true)))
-            }
-            _ => {
-                return plan_err!(
-                    "The string_to_array function can only accept Utf8, Utf8View or LargeUtf8."
-                );
-            }
-        })
+        Ok(List(Arc::new(Field::new_list_field(
+            arg_types[0].clone(),
+            true,
+        ))))
     }
 
     fn invoke_with_args(
@@ -358,6 +368,20 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         match arr.data_type() {
             List(..) => {
                 let list_array = as_list_array(&arr)?;
+                for i in 0..list_array.len() {
+                    compute_array_to_string(
+                        arg,
+                        list_array.value(i),
+                        delimiter.clone(),
+                        null_string.clone(),
+                        with_null_string,
+                    )?;
+                }
+
+                Ok(arg)
+            }
+            FixedSizeList(..) => {
+                let list_array = as_fixed_size_list_array(&arr)?;
                 for i in 0..list_array.len() {
                     compute_array_to_string(
                         arg,
@@ -451,9 +475,8 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         Ok(StringArray::from(res))
     }
 
-    let arr_type = arr.data_type();
-    let string_arr = match arr_type {
-        List(_) | FixedSizeList(_, _) => {
+    let string_arr = match arr.data_type() {
+        List(_) => {
             let list_array = as_list_array(&arr)?;
             generate_string_array::<i32>(
                 list_array,
@@ -471,29 +494,8 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 with_null_string,
             )?
         }
-        _ => {
-            let mut arg = String::from("");
-            let mut res: Vec<Option<String>> = Vec::new();
-            // delimiter length is 1
-            assert_eq!(delimiters.len(), 1);
-            let delimiter = delimiters[0].unwrap();
-            let s = compute_array_to_string(
-                &mut arg,
-                Arc::clone(arr),
-                delimiter.to_string(),
-                null_string,
-                with_null_string,
-            )?
-            .clone();
-
-            if !s.is_empty() {
-                let s = s.strip_suffix(delimiter).unwrap().to_string();
-                res.push(Some(s));
-            } else {
-                res.push(Some(s));
-            }
-            StringArray::from(res)
-        }
+        // Signature guards against this arm
+        _ => return exec_err!("array_to_string expects list as first argument"),
     };
 
     Ok(Arc::new(string_arr))

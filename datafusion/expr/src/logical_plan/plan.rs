@@ -21,7 +21,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
@@ -30,9 +29,9 @@ use super::invariants::{
     InvariantLevel,
 };
 use super::DdlStatement;
-use crate::builder::{change_redundant_column, unnest_with_options};
+use crate::builder::{unique_field_aliases, unnest_with_options};
 use crate::expr::{
-    intersect_metadata_for_union, Placeholder, Sort as SortExpr, WindowFunction,
+    intersect_metadata_for_union, Alias, Placeholder, Sort as SortExpr, WindowFunction,
     WindowFunctionParams,
 };
 use crate::expr_rewriter::{
@@ -54,6 +53,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -2060,7 +2060,10 @@ pub struct EmptyRelation {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for EmptyRelation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.produce_one_row.partial_cmp(&other.produce_one_row)
+        self.produce_one_row
+            .partial_cmp(&other.produce_one_row)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2114,7 +2117,10 @@ pub struct Values {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Values {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.values.partial_cmp(&other.values)
+        self.values
+            .partial_cmp(&other.values)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2139,6 +2145,8 @@ impl PartialOrd for Projection {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2187,14 +2195,22 @@ impl Projection {
 ///   will be computed.
 /// * `exprs`: A slice of `Expr` expressions representing the projection operation to apply.
 ///
+/// # Metadata Handling
+///
+/// - **Schema-level metadata**: Passed through unchanged from the input schema
+/// - **Field-level metadata**: Determined by each expression via [`exprlist_to_fields`], which
+///   calls [`Expr::to_field`] to handle expression-specific metadata (literals, aliases, etc.)
+///
 /// # Returns
 ///
 /// A `Result` containing an `Arc<DFSchema>` representing the schema of the result
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
+    // Preserve input schema metadata at the schema level
     let metadata = input.schema().metadata().clone();
 
+    // Convert expressions to fields with Field properties determined by `Expr::to_field`
     let schema =
         DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
             .with_functional_dependencies(calc_func_dependencies_for_project(
@@ -2223,15 +2239,47 @@ impl SubqueryAlias {
         alias: impl Into<TableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
-        let fields = change_redundant_column(plan.schema().fields());
-        let meta_data = plan.schema().as_ref().metadata().clone();
-        let schema: Schema =
-            DFSchema::from_unqualified_fields(fields.into(), meta_data)?.into();
-        // Since schema is the same, other than qualifier, we can use existing
-        // functional dependencies:
+
+        // Since SubqueryAlias will replace all field qualification for the output schema of `plan`,
+        // no field must share the same column name as this would lead to ambiguity when referencing
+        // columns in parent logical nodes.
+
+        // Compute unique aliases, if any, for each column of the input's schema.
+        let aliases = unique_field_aliases(plan.schema().fields());
+        let is_projection_needed = aliases.iter().any(Option::is_some);
+
+        // Insert a projection node, if needed, to make sure aliases are applied.
+        let plan = if is_projection_needed {
+            let projection_expressions = aliases
+                .iter()
+                .zip(plan.schema().iter())
+                .map(|(alias, (qualifier, field))| {
+                    let column =
+                        Expr::Column(Column::new(qualifier.cloned(), field.name()));
+                    match alias {
+                        None => column,
+                        Some(alias) => {
+                            Expr::Alias(Alias::new(column, qualifier.cloned(), alias))
+                        }
+                    }
+                })
+                .collect();
+            let projection = Projection::try_new(projection_expressions, plan)?;
+            Arc::new(LogicalPlan::Projection(projection))
+        } else {
+            plan
+        };
+
+        // Requalify fields with the new `alias`.
+        let fields = plan.schema().fields().clone();
+        let meta_data = plan.schema().metadata().clone();
         let func_dependencies = plan.schema().functional_dependencies().clone();
+
+        let schema = DFSchema::from_unqualified_fields(fields, meta_data)?;
+        let schema = schema.as_arrow();
+
         let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
+            DFSchema::try_from_qualified_schema(alias.clone(), schema)?
                 .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
@@ -2249,6 +2297,8 @@ impl PartialOrd for SubqueryAlias {
             Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2606,7 +2656,10 @@ impl PartialOrd for TableScan {
             filters: &other.filters,
             fetch: &other.fetch,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2649,7 +2702,7 @@ impl TableScan {
                 let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
+                            (Some(table_name.clone()), Arc::clone(&schema.fields()[*i]))
                         })
                         .collect(),
                     schema.metadata.clone(),
@@ -2929,7 +2982,10 @@ impl Union {
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Union {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.inputs.partial_cmp(&other.inputs)
+        self.inputs
+            .partial_cmp(&other.inputs)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -2969,154 +3025,6 @@ impl PartialOrd for DescribeTable {
     fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
         // There is no relevant comparison for schemas
         None
-    }
-}
-
-/// Output formats for controlling for Explain plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ExplainFormat {
-    /// Indent mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format indent select x from values (1) t(x);
-    /// +---------------+-----------------------------------------------------+
-    /// | plan_type     | plan                                                |
-    /// +---------------+-----------------------------------------------------+
-    /// | logical_plan  | SubqueryAlias: t                                    |
-    /// |               |   Projection: column1 AS x                          |
-    /// |               |     Values: (Int64(1))                              |
-    /// | physical_plan | ProjectionExec: expr=[column1@0 as x]               |
-    /// |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
-    /// |               |                                                     |
-    /// +---------------+-----------------------------------------------------+
-    /// ```
-    Indent,
-    /// Tree mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format tree select x from values (1) t(x);
-    /// +---------------+-------------------------------+
-    /// | plan_type     | plan                          |
-    /// +---------------+-------------------------------+
-    /// | physical_plan | ┌───────────────────────────┐ |
-    /// |               | │       ProjectionExec      │ |
-    /// |               | │    --------------------   │ |
-    /// |               | │        x: column1@0       │ |
-    /// |               | └─────────────┬─────────────┘ |
-    /// |               | ┌─────────────┴─────────────┐ |
-    /// |               | │       DataSourceExec      │ |
-    /// |               | │    --------------------   │ |
-    /// |               | │         bytes: 128        │ |
-    /// |               | │       format: memory      │ |
-    /// |               | │          rows: 1          │ |
-    /// |               | └───────────────────────────┘ |
-    /// |               |                               |
-    /// +---------------+-------------------------------+
-    /// ```
-    Tree,
-    /// Postgres Json mode
-    ///
-    /// A displayable structure that produces plan in postgresql JSON format.
-    ///
-    /// Users can use this format to visualize the plan in existing plan
-    /// visualization tools, for example [dalibo](https://explain.dalibo.com/)
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format pgjson select x from values (1) t(x);
-    /// +--------------+--------------------------------------+
-    /// | plan_type    | plan                                 |
-    /// +--------------+--------------------------------------+
-    /// | logical_plan | [                                    |
-    /// |              |   {                                  |
-    /// |              |     "Plan": {                        |
-    /// |              |       "Alias": "t",                  |
-    /// |              |       "Node Type": "Subquery",       |
-    /// |              |       "Output": [                    |
-    /// |              |         "x"                          |
-    /// |              |       ],                             |
-    /// |              |       "Plans": [                     |
-    /// |              |         {                            |
-    /// |              |           "Expressions": [           |
-    /// |              |             "column1 AS x"           |
-    /// |              |           ],                         |
-    /// |              |           "Node Type": "Projection", |
-    /// |              |           "Output": [                |
-    /// |              |             "x"                      |
-    /// |              |           ],                         |
-    /// |              |           "Plans": [                 |
-    /// |              |             {                        |
-    /// |              |               "Node Type": "Values", |
-    /// |              |               "Output": [            |
-    /// |              |                 "column1"            |
-    /// |              |               ],                     |
-    /// |              |               "Plans": [],           |
-    /// |              |               "Values": "(Int64(1))" |
-    /// |              |             }                        |
-    /// |              |           ]                          |
-    /// |              |         }                            |
-    /// |              |       ]                              |
-    /// |              |     }                                |
-    /// |              |   }                                  |
-    /// |              | ]                                    |
-    /// +--------------+--------------------------------------+
-    /// ```
-    PostgresJSON,
-    /// Graphviz mode
-    ///
-    /// Example:
-    /// ```text
-    /// > explain format graphviz select x from values (1) t(x);
-    /// +--------------+------------------------------------------------------------------------+
-    /// | plan_type    | plan                                                                   |
-    /// +--------------+------------------------------------------------------------------------+
-    /// | logical_plan |                                                                        |
-    /// |              | // Begin DataFusion GraphViz Plan,                                     |
-    /// |              | // display it online here: https://dreampuf.github.io/GraphvizOnline   |
-    /// |              |                                                                        |
-    /// |              | digraph {                                                              |
-    /// |              |   subgraph cluster_1                                                   |
-    /// |              |   {                                                                    |
-    /// |              |     graph[label="LogicalPlan"]                                         |
-    /// |              |     2[shape=box label="SubqueryAlias: t"]                              |
-    /// |              |     3[shape=box label="Projection: column1 AS x"]                      |
-    /// |              |     2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |     4[shape=box label="Values: (Int64(1))"]                            |
-    /// |              |     3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |   }                                                                    |
-    /// |              |   subgraph cluster_5                                                   |
-    /// |              |   {                                                                    |
-    /// |              |     graph[label="Detailed LogicalPlan"]                                |
-    /// |              |     6[shape=box label="SubqueryAlias: t\nSchema: [x:Int64;N]"]         |
-    /// |              |     7[shape=box label="Projection: column1 AS x\nSchema: [x:Int64;N]"] |
-    /// |              |     6 -> 7 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |     8[shape=box label="Values: (Int64(1))\nSchema: [column1:Int64;N]"] |
-    /// |              |     7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]                |
-    /// |              |   }                                                                    |
-    /// |              | }                                                                      |
-    /// |              | // End DataFusion GraphViz Plan                                        |
-    /// |              |                                                                        |
-    /// +--------------+------------------------------------------------------------------------+
-    /// ```
-    Graphviz,
-}
-
-/// Implement  parsing strings to `ExplainFormat`
-impl FromStr for ExplainFormat {
-    type Err = DataFusionError;
-
-    fn from_str(format: &str) -> std::result::Result<Self, Self::Err> {
-        match format.to_lowercase().as_str() {
-            "indent" => Ok(ExplainFormat::Indent),
-            "tree" => Ok(ExplainFormat::Tree),
-            "pgjson" => Ok(ExplainFormat::PostgresJSON),
-            "graphviz" => Ok(ExplainFormat::Graphviz),
-            _ => {
-                plan_err!("Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'")
-            }
-        }
     }
 }
 
@@ -3210,7 +3118,10 @@ impl PartialOrd for Explain {
             stringified_plans: &other.stringified_plans,
             logical_optimization_succeeded: &other.logical_optimization_succeeded,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3233,6 +3144,8 @@ impl PartialOrd for Analyze {
             Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3460,7 +3373,10 @@ impl PartialOrd for DistinctOn {
             sort_expr: &other.sort_expr,
             input: &other.input,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3647,6 +3563,8 @@ impl PartialOrd for Aggregate {
             }
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -3919,7 +3837,10 @@ impl PartialOrd for Join {
             join_constraint: &other.join_constraint,
             null_equality: &other.null_equality,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -4084,7 +4005,10 @@ impl PartialOrd for Unnest {
             dependency_indices: &other.dependency_indices,
             options: &other.options,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -4263,10 +4187,7 @@ fn get_unnested_columns(
             }))
         }
         _ => {
-            return internal_err!(
-                "trying to unnest on invalid data type {:?}",
-                data_type
-            );
+            return internal_err!("trying to unnest on invalid data type {data_type}");
         }
     };
     Ok(qualified_columns)
@@ -4290,7 +4211,7 @@ fn get_unnested_list_datatype_recursive(
         _ => {}
     };
 
-    internal_err!("trying to unnest on invalid data type {:?}", data_type)
+    internal_err!("trying to unnest on invalid data type {data_type}")
 }
 
 #[cfg(test)]
@@ -5650,7 +5571,7 @@ mod tests {
             )?;
 
             let fields = join.schema.fields();
-            assert_eq!(fields.len(), 6, "Expected 6 fields for {join_type:?} join");
+            assert_eq!(fields.len(), 6, "Expected 6 fields for {join_type} join");
 
             for (i, field) in fields.iter().enumerate() {
                 let expected_nullable = match (i, &join_type) {

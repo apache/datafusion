@@ -18,7 +18,10 @@
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
 use ahash::RandomState;
+use arrow::datatypes::DECIMAL32_MAX_PRECISION;
+use arrow::datatypes::DECIMAL64_MAX_PRECISION;
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::Expr;
 use std::any::Any;
 use std::mem::size_of_val;
 
@@ -27,8 +30,8 @@ use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{ArrowNumericType, AsArray};
 use arrow::datatypes::{ArrowNativeType, FieldRef};
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, Float64Type,
+    Int64Type, UInt64Type, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{
@@ -53,6 +56,17 @@ make_udaf_expr_and_func!(
     sum_udaf
 );
 
+pub fn sum_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        sum_udaf(),
+        vec![expr],
+        true,
+        None,
+        vec![],
+        None,
+    ))
+}
+
 /// Sum only supports a subset of numeric types, instead relying on type coercion
 ///
 /// This macro is similar to [downcast_primitive](arrow::array::downcast_primitive)
@@ -70,6 +84,12 @@ macro_rules! downcast_sum {
             }
             DataType::Float64 => {
                 $helper!(Float64Type, $args.return_field.data_type().clone())
+            }
+            DataType::Decimal32(_, _) => {
+                $helper!(Decimal32Type, $args.return_field.data_type().clone())
+            }
+            DataType::Decimal64(_, _) => {
+                $helper!(Decimal64Type, $args.return_field.data_type().clone())
             }
             DataType::Decimal128(_, _) => {
                 $helper!(Decimal128Type, $args.return_field.data_type().clone())
@@ -145,13 +165,14 @@ impl AggregateUDFImpl for Sum {
                 DataType::Dictionary(_, v) => coerced_type(v),
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)
                 // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
-                    Ok(data_type.clone())
-                }
+                DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => Ok(data_type.clone()),
                 dt if dt.is_signed_integer() => Ok(DataType::Int64),
                 dt if dt.is_unsigned_integer() => Ok(DataType::UInt64),
                 dt if dt.is_floating() => Ok(DataType::Float64),
-                _ => exec_err!("Sum not supported for {}", data_type),
+                _ => exec_err!("Sum not supported for {data_type}"),
             }
         }
 
@@ -163,6 +184,18 @@ impl AggregateUDFImpl for Sum {
             DataType::Int64 => Ok(DataType::Int64),
             DataType::UInt64 => Ok(DataType::UInt64),
             DataType::Float64 => Ok(DataType::Float64),
+            DataType::Decimal32(precision, scale) => {
+                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
+                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+                let new_precision = DECIMAL32_MAX_PRECISION.min(*precision + 10);
+                Ok(DataType::Decimal32(new_precision, *scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
+                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+                let new_precision = DECIMAL64_MAX_PRECISION.min(*precision + 10);
+                Ok(DataType::Decimal64(new_precision, *scale))
+            }
             DataType::Decimal128(precision, scale) => {
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)
                 // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
@@ -314,7 +347,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
         if let Some(x) = arrow::compute::sum(values) {
-            let v = self.sum.get_or_insert(T::Native::usize_as(0));
+            let v = self.sum.get_or_insert_with(|| T::Native::usize_as(0));
             *v = v.add_wrapping(x);
         }
         Ok(())

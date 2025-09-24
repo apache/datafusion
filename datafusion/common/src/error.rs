@@ -35,6 +35,7 @@ use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
+#[cfg(feature = "sql")]
 use sqlparser::parser::ParserError;
 use tokio::task::JoinError;
 
@@ -68,6 +69,7 @@ pub enum DataFusionError {
     /// Error when SQL is syntactically incorrect.
     ///
     /// 2nd argument is for optional backtrace
+    #[cfg(feature = "sql")]
     SQL(Box<ParserError>, Option<String>),
     /// Error when a feature is not yet implemented.
     ///
@@ -329,6 +331,7 @@ impl From<object_store::path::Error> for DataFusionError {
     }
 }
 
+#[cfg(feature = "sql")]
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
         DataFusionError::SQL(Box::new(e), None)
@@ -369,6 +372,7 @@ impl Error for DataFusionError {
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(e) => Some(e.as_ref()),
             DataFusionError::IoError(e) => Some(e),
+            #[cfg(feature = "sql")]
             DataFusionError::SQL(e, _) => Some(e.as_ref()),
             DataFusionError::NotImplemented(_) => None,
             DataFusionError::Internal(_) => None,
@@ -451,12 +455,13 @@ impl DataFusionError {
     /// If backtrace enabled then error has a format "message" [`Self::BACK_TRACE_SEP`] "backtrace"
     /// The method strips the backtrace and outputs "message"
     pub fn strip_backtrace(&self) -> String {
-        self.to_string()
+        (*self
+            .to_string()
             .split(Self::BACK_TRACE_SEP)
             .collect::<Vec<&str>>()
             .first()
-            .unwrap_or(&"")
-            .to_string()
+            .unwrap_or(&""))
+        .to_string()
     }
 
     /// To enable optional rust backtrace in DataFusion:
@@ -497,6 +502,7 @@ impl DataFusionError {
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(_) => "Object Store error: ",
             DataFusionError::IoError(_) => "IO error: ",
+            #[cfg(feature = "sql")]
             DataFusionError::SQL(_, _) => "SQL error: ",
             DataFusionError::NotImplemented(_) => {
                 "This feature is not implemented: "
@@ -534,6 +540,7 @@ impl DataFusionError {
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
+            #[cfg(feature = "sql")]
             DataFusionError::SQL(ref desc, ref backtrace) => {
                 let backtrace: String =
                     backtrace.clone().unwrap_or_else(|| "".to_owned());

@@ -1405,7 +1405,7 @@ impl protobuf::PhysicalPlanNode {
         for input in &union.inputs {
             inputs.push(input.try_into_physical_plan(ctx, runtime, extension_codec)?);
         }
-        Ok(Arc::new(UnionExec::new(inputs)))
+        UnionExec::try_new(inputs)
     }
 
     fn try_into_interleave_physical_plan(

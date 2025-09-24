@@ -26,9 +26,7 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{
-    internal_datafusion_err, not_impl_err, utils::take_function_args, Result,
-};
+use datafusion_common::{not_impl_err, utils::take_function_args, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -110,6 +108,14 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
     doc_section(label = "Math Functions"),
     description = "Returns the absolute value of a number.",
     syntax_example = "abs(numeric_expression)",
+    sql_example = r#"```sql
+> SELECT abs(-5);
++----------+
+| abs(-5)  |
++----------+
+| 5        |
++----------+
+```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

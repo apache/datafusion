@@ -221,7 +221,7 @@ pub async fn from_read_rel(
             .await
         }
         _ => {
-            not_impl_err!("Unsupported ReadType: {:?}", read.read_type)
+            not_impl_err!("Unsupported Readtype: {:?}", read.read_type)
         }
     }
 }

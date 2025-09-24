@@ -17,12 +17,12 @@
 
 use arrow::array::ArrowPrimitiveType;
 use arrow::datatypes::{
-    i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano,
-    IntervalMonthDayNanoType, IntervalYearMonthType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
+    Decimal64Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, IntervalDayTime, IntervalDayTimeType,
+    IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalYearMonthType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
@@ -67,6 +67,8 @@ basic_random_data!(Time32MillisecondType);
 basic_random_data!(Time64MicrosecondType);
 basic_random_data!(Time64NanosecondType);
 basic_random_data!(IntervalYearMonthType);
+basic_random_data!(Decimal32Type);
+basic_random_data!(Decimal64Type);
 basic_random_data!(Decimal128Type);
 basic_random_data!(TimestampSecondType);
 basic_random_data!(TimestampMillisecondType);

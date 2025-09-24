@@ -26,9 +26,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
-};
+use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -39,6 +37,14 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = "Factorial. Returns 1 if value is less than 2.",
     syntax_example = "factorial(numeric_expression)",
+    sql_example = r#"```sql
+> SELECT factorial(5);
++---------------+
+| factorial(5)  |
++---------------+
+| 120           |
++---------------+
+```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
