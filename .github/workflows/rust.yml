@@ -417,7 +417,7 @@ jobs:
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
-          cargo install --git https://github.com/wasm-bindgen/wasm-bindgen.git wasm-bindgen-cli --rev 4e5fa176971c834e83f387064c3acfebf4d35930
+          cargo install --git https://github.com/wasm-bindgen/wasm-bindgen.git wasm-bindgen-cli --rev 7f4afc56c026fae2654a799fcf9632ae6d1ca00b
           RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox
           RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
 
