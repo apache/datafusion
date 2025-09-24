@@ -101,12 +101,8 @@ impl RegexpReplaceFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8View, Utf8View, Utf8View]),
-                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![Utf8View, Utf8View, Utf8View, Utf8View]),
-                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8, LargeUtf8]),
-                    Exact(vec![Utf8, Utf8, Utf8, Utf8]),
+                    Uniform(3, vec![Utf8View, LargeUtf8, Utf8]),
+                    Uniform(4, vec![Utf8View, LargeUtf8, Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -613,109 +609,67 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                 .map(|arg| arg.to_array(inferred_length))
                 .collect::<Result<Vec<_>>>()?;
 
-            if args.get(3).is_none() {
-                match (
-                    args[0].data_type(),
-                    args[1].data_type(),
-                    args[2].data_type(),
-                ) {
-                    (DataType::Utf8, DataType::Utf8, DataType::Utf8) => {
-                        let string_array = args[0].as_string::<i32>();
-                        let pattern_array = args[1].as_string::<i32>();
-                        let replacement_array = args[2].as_string::<i32>();
-                        regexp_replace::<i32, _>(
-                            string_array,
-                            pattern_array,
-                            replacement_array,
-                            None::<&GenericStringArray<i32>>,
-                        )
-                    }
-                    (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
-                        let string_array = args[0].as_string_view();
-                        let pattern_array = args[1].as_string_view();
-                        let replacement_array = args[2].as_string_view();
-                        regexp_replace::<i32, _>(
-                            string_array,
-                            pattern_array,
-                            replacement_array,
-                            None::<&StringViewArray>,
-                        )
-                    }
-                    (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
-                        let string_array = args[0].as_string::<i64>();
-                        let pattern_array = args[1].as_string::<i64>();
-                        let replacement_array = args[2].as_string::<i64>();
-                        regexp_replace::<i64, _>(
-                            string_array,
-                            pattern_array,
-                            replacement_array,
-                            None::<&GenericStringArray<i64>>,
-                        )
-                    }
-                    other => {
-                        exec_err!(
-                            "Unsupported data type {other:?} for function regex_replace"
-                        )
-                    }
+            match (
+                args[0].data_type(),
+                args[1].data_type(),
+                args[2].data_type(),
+                args.get(3).map(|a| a.data_type()),
+            ) {
+                (
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    Some(DataType::Utf8) | None,
+                ) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string::<i32>();
+                    let replacement_array = args[2].as_string::<i32>();
+                    let flags_array = args.get(3).map(|a| a.as_string::<i32>());
+                    regexp_replace::<i32, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
                 }
-            } else {
-                match (
-                    args[0].data_type(),
-                    args[1].data_type(),
-                    args[2].data_type(),
-                    args[3].data_type(),
-                ) {
-                    (DataType::Utf8, DataType::Utf8, DataType::Utf8, DataType::Utf8) => {
-                        let string_array = args[0].as_string::<i32>();
-                        let pattern_array = args[1].as_string::<i32>();
-                        let replacement_array = args[2].as_string::<i32>();
-                        let flags_array = args[3].as_string::<i32>();
-                        regexp_replace::<i32, _>(
-                            string_array,
-                            pattern_array,
-                            replacement_array,
-                            Some(flags_array),
-                        )
-                    }
-                    (
-                        DataType::Utf8View,
-                        DataType::Utf8View,
-                        DataType::Utf8View,
-                        DataType::Utf8View,
-                    ) => {
-                        let string_array = args[0].as_string_view();
-                        let pattern_array = args[1].as_string_view();
-                        let replacement_array = args[2].as_string_view();
-                        let flags_array = args[3].as_string_view();
-                        regexp_replace::<i32, _>(
-                            string_array,
-                            pattern_array,
-                            replacement_array,
-                            Some(flags_array),
-                        )
-                    }
-                    (
-                        DataType::LargeUtf8,
-                        DataType::LargeUtf8,
-                        DataType::LargeUtf8,
-                        DataType::LargeUtf8,
-                    ) => {
-                        let string_array = args[0].as_string::<i64>();
-                        let pattern_array = args[1].as_string::<i64>();
-                        let replacement_array = args[2].as_string::<i64>();
-                        let flags_array = args[3].as_string::<i64>();
-                        regexp_replace::<i64, _>(
-                            string_array,
-                            pattern_array,
-                            replacement_array,
-                            Some(flags_array),
-                        )
-                    }
-                    other => {
-                        exec_err!(
-                            "Unsupported data type {other:?} for function regex_replace"
-                        )
-                    }
+                (
+                    DataType::Utf8View,
+                    DataType::Utf8View,
+                    DataType::Utf8View,
+                    Some(DataType::Utf8View) | None,
+                ) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = args.get(3).map(|a| a.as_string_view());
+                    regexp_replace::<i32, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (
+                    DataType::LargeUtf8,
+                    DataType::LargeUtf8,
+                    DataType::LargeUtf8,
+                    Some(DataType::LargeUtf8) | None,
+                ) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = args.get(3).map(|a| a.as_string::<i64>());
+                    regexp_replace::<i64, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                other => {
+                    exec_err!(
+                        "Unsupported data type {other:?} for function regex_replace"
+                    )
                 }
             }
         }
