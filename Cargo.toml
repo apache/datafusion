@@ -221,6 +221,9 @@ unused_qualifications = "deny"
 # - ci: derived from `dev` but disables incremental builds and strips dependency
 #     symbols to keep CI artifacts small and reproducible.
 #     Run: cargo run --profile ci
+#
+# If you want to optimize compilation, the `compile_profile` benchmark can be useful.
+# See `benchmarks/README.md` for more details.
 [profile.release]
 codegen-units = 1
 lto = true
