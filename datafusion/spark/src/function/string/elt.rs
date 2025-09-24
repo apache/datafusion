@@ -18,7 +18,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray, StringArray, StringBuilder};
+use arrow::array::{
+    Array, ArrayRef, AsArray, PrimitiveArray, StringArray, StringBuilder,
+};
 use arrow::compute::cast;
 use arrow::datatypes::DataType::Utf8;
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
@@ -75,8 +77,10 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 
     let n_rows = args[0].len();
 
-    let idx_i32: Option<&PrimitiveArray<Int32Type>> = args[0].as_primitive_opt::<Int32Type>();
-    let idx_i64: Option<&PrimitiveArray<Int64Type>> = args[0].as_primitive_opt::<Int64Type>();
+    let idx_i32: Option<&PrimitiveArray<Int32Type>> =
+        args[0].as_primitive_opt::<Int32Type>();
+    let idx_i64: Option<&PrimitiveArray<Int64Type>> =
+        args[0].as_primitive_opt::<Int64Type>();
 
     if idx_i32.is_none() && idx_i64.is_none() {
         plan_datafusion_err!(
