@@ -432,6 +432,12 @@ config_namespace! {
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
 
+        /// Number of files to prefetch (open concurrently) within a single FileStream partition.
+        /// This controls the balance between I/O and CPU utilization. Higher values can improve
+        /// I/O throughput by opening more files in parallel while processing current files,
+        /// but use more memory and file handles. Setting to 1 maintains current behavior.
+        pub file_prefetch_depth: usize, default = 1
+
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each
         /// parallel writer. Each writer is closed and a new file opened once
