@@ -39,7 +39,7 @@ use datafusion_functions_aggregate::expr_fn::{
     sum_distinct,
 };
 use datafusion_functions_nested::make_array::make_array_udf;
-use datafusion_functions_window::expr_fn::{first_value, row_number};
+use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
 use std::collections::HashMap;
@@ -91,6 +91,9 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{displayable, ExecutionPlan, ExecutionPlanProperties};
+
+use datafusion::error::Result as DataFusionResult;
+use datafusion_functions_window::expr_fn::lag;
 
 // Get string representation of the plan
 async fn physical_plan_to_string(df: &DataFrame) -> String {
@@ -155,6 +158,46 @@ async fn test_array_agg_ord_schema() -> Result<()> {
 
     let result = ctx.sql(query).await?;
     assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+    Ok(())
+}
+
+type WindowFnCase = (fn() -> Expr, &'static str);
+
+#[tokio::test]
+async fn with_column_window_functions() -> DataFusionResult<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // Define test cases: (expr builder, alias name)
+    let test_cases: Vec<WindowFnCase> = vec![
+        (|| lag(col("a"), Some(1), None), "lag_val"),
+        (|| lead(col("a"), Some(1), None), "lead_val"),
+        (row_number, "row_num"),
+    ];
+
+    for (make_expr, alias) in test_cases {
+        let df = ctx.table("t").await?;
+        let expr = make_expr();
+        let df_with = df.with_column(alias, expr)?;
+        let df_schema = df_with.schema().clone();
+
+        assert!(
+            df_schema.has_column_with_unqualified_name(alias),
+            "Schema does not contain expected column {alias}",
+        );
+
+        assert_eq!(2, df_schema.columns().len());
+    }
+
     Ok(())
 }
 
