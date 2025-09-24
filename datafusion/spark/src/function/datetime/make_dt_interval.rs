@@ -132,9 +132,9 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
         let any_null_present = days.is_null(i)
             || hours.as_ref().is_some_and(|a| a.is_null(i))
             || mins.as_ref().is_some_and(|a| a.is_null(i))
-            || secs.as_ref().is_some_and(|a| {
-                a.is_null(i) || !a.value(i).is_finite()
-            });
+            || secs
+                .as_ref()
+                .is_some_and(|a| a.is_null(i) || !a.value(i).is_finite());
 
         if any_null_present {
             builder.append_null();
