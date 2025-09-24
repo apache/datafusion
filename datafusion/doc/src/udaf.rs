@@ -15,25 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod map_from_arrays;
-mod utils;
+// Aggregate UDF doc sections for use in public documentation
+pub mod aggregate_doc_sections {
+    use crate::DocSection;
 
-use datafusion_expr::ScalarUDF;
-use datafusion_functions::make_udf_function;
-use std::sync::Arc;
+    pub fn doc_sections() -> Vec<DocSection> {
+        vec![
+            DOC_SECTION_GENERAL,
+            DOC_SECTION_STATISTICAL,
+            DOC_SECTION_APPROXIMATE,
+        ]
+    }
 
-make_udf_function!(map_from_arrays::MapFromArrays, map_from_arrays);
+    pub const DOC_SECTION_GENERAL: DocSection = DocSection {
+        include: true,
+        label: "General Functions",
+        description: None,
+    };
 
-pub mod expr_fn {
-    use datafusion_functions::export_functions;
+    pub const DOC_SECTION_STATISTICAL: DocSection = DocSection {
+        include: true,
+        label: "Statistical Functions",
+        description: None,
+    };
 
-    export_functions!((
-        map_from_arrays,
-        "Creates a map from arrays of keys and values.",
-        keys values
-    ));
-}
-
-pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![map_from_arrays()]
+    pub const DOC_SECTION_APPROXIMATE: DocSection = DocSection {
+        include: true,
+        label: "Approximate Functions",
+        description: None,
+    };
 }

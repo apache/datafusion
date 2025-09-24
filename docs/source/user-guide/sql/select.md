@@ -40,6 +40,7 @@ DataFusion supports the following syntax for queries:
 [ [ORDER BY](#order-by-clause) expression [ ASC | DESC ][, ...] ] <br/>
 [ [LIMIT](#limit-clause) count ] <br/>
 [ [EXCLUDE | EXCEPT](#exclude-and-except-clause) ] <br/>
+[Pipe operators](#pipe-operators) <br/>
 
 </code>
 
@@ -326,4 +327,99 @@ FROM table;
 ```sql
 SELECT * EXCLUDE(age, person)
 FROM table;
+```
+
+## Pipe operators
+
+Some SQL dialects (e.g. BigQuery) support the pipe operator `|>`.
+The SQL dialect can be set like this:
+
+```sql
+set datafusion.sql_parser.dialect = 'BigQuery';
+```
+
+DataFusion currently supports the following pipe operators:
+
+- [WHERE](#pipe_where)
+- [ORDER BY](#pipe_order_by)
+- [LIMIT](#pipe_limit)
+- [SELECT](#pipe_select)
+- [EXTEND](#pipe_extend)
+
+(pipe_where)=
+
+### WHERE
+
+```sql
+select * from range(0,10)
+|> where value < 2;
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
++-------+
+```
+
+(pipe_order_by)=
+
+### ORDER BY
+
+```sql
+select * from range(0,3)
+|> order by value desc;
++-------+
+| value |
++-------+
+| 2     |
+| 1     |
+| 0     |
++-------+
+```
+
+(pipe_limit)=
+
+### LIMIT
+
+```sql
+select * from range(0,3)
+|> order by value desc
+|> limit 1;
++-------+
+| value |
++-------+
+| 2     |
++-------+
+```
+
+(pipe_select)=
+
+### SELECT
+
+```sql
+select * from range(0,3)
+|> select value + 10;
++---------------------------+
+| range().value + Int64(10) |
++---------------------------+
+| 10                        |
+| 11                        |
+| 12                        |
++---------------------------+
+```
+
+(pipe_extend)=
+
+### EXTEND
+
+```sql
+select * from range(0,3)
+|> extend -value AS minus_value;
++-------+-------------+
+| value | minus_value |
++-------+-------------+
+| 0     | 0           |
+| 1     | -1          |
+| 2     | -2          |
++-------+-------------+
 ```
