@@ -32,7 +32,6 @@ use sqlparser::ast::{
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
     ObjectName, OrderByExpr, Spanned, WindowType,
 };
-use std::sync::Arc;
 
 /// Suggest a valid function based on an invalid input function name
 ///
@@ -271,26 +270,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
-            let scalar_func_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
-                Arc::clone(&fm),
-                args.clone(),
-            ));
+            let inner = ScalarFunction::new_udf(fm, args);
 
-            if name.eq_ignore_ascii_case(fm.name()) {
-                return Ok(scalar_func_expr);
+            if name.eq_ignore_ascii_case(inner.name()) {
+                return Ok(Expr::ScalarFunction(inner));
             } else {
-                let arg_names = args
+                // If the function is called by an alias, a verbose string representation is created
+                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+                // to ensure the output column name matches the user's query.
+                let arg_names = inner
+                    .args
                     .iter()
                     .map(|arg| arg.to_string())
                     .collect::<Vec<_>>()
                     .join(",");
                 let verbose_alias = format!("{name}({arg_names})");
 
-                return Ok(Expr::Alias(expr::Alias::new(
-                    scalar_func_expr,
-                    None::<datafusion_common::TableReference>,
-                    verbose_alias,
-                )));
+                return Ok(Expr::ScalarFunction(inner).alias(verbose_alias));
             }
         }
 
@@ -493,31 +489,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     null_treatment,
                 } = aggregate_expr;
 
-                let agg_func_expr =
-                    Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                        Arc::clone(&func),
-                        args.clone(),
-                        distinct,
-                        filter,
-                        order_by,
-                        null_treatment,
-                    ));
+                let inner = expr::AggregateFunction::new_udf(
+                    func,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                );
 
-                if name.eq_ignore_ascii_case(func.name()) {
-                    return Ok(agg_func_expr);
+                if name.eq_ignore_ascii_case(inner.func.name()) {
+                    return Ok(Expr::AggregateFunction(inner));
                 } else {
-                    let arg_names = args
+                    // If the function is called by an alias, a verbose string representation is created
+                    // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+                    // to ensure the output column name matches the user's query.
+                    let arg_names = inner
+                        .params
+                        .args
                         .iter()
                         .map(|arg| arg.to_string())
                         .collect::<Vec<_>>()
                         .join(",");
                     let verbose_alias = format!("{name}({arg_names})");
 
-                    return Ok(Expr::Alias(expr::Alias::new(
-                        agg_func_expr,
-                        None::<datafusion_common::TableReference>,
-                        verbose_alias,
-                    )));
+                    return Ok(Expr::AggregateFunction(inner).alias(verbose_alias));
                 }
             }
         }
