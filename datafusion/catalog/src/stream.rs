@@ -55,7 +55,11 @@ impl TableProviderFactory for StreamTableFactory {
     ) -> Result<Arc<dyn TableProvider>> {
         let location = match cmd.locations.len() {
             1 => &cmd.locations[0],
-            _ => return config_err!("Stream table factory supports only a single table location"),
+            _ => {
+                return config_err!(
+                    "Stream table factory supports only a single table location"
+                )
+            }
         };
 
         let schema: SchemaRef = Arc::clone(cmd.schema.inner());

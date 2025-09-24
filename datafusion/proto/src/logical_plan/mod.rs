@@ -625,7 +625,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             create_extern_table.name.as_ref(),
                             "CreateExternalTable",
                         )?,
-                        locations: create_extern_table.location.clone(),
+                        locations: vec![create_extern_table.location.clone()],
                         file_type: create_extern_table.file_type.clone(),
                         table_partition_cols: create_extern_table
                             .table_partition_cols
@@ -1499,7 +1499,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                         protobuf::CreateExternalTableNode {
                             name: Some(name.clone().into()),
-                            location: location.clone(),
+                            location: location.clone().join(","),
                             file_type: file_type.clone(),
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),

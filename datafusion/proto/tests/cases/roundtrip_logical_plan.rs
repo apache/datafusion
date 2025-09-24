@@ -196,7 +196,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         })?;
         assert_eq!(msg.table_name, table_ref.to_string());
         let provider = TestTableProvider {
-            url: msg.url,
+            url: vec![msg.url],
             schema,
         };
         Ok(Arc::new(provider))
@@ -214,7 +214,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             .downcast_ref::<TestTableProvider>()
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {
-            url: table.url.clone(),
+            url: table.url.join(","),
             table_name: table_ref.to_string(),
         };
         msg.encode(buf).map_err(|_| {

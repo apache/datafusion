@@ -26,8 +26,6 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
-use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{config_datafusion_err, Result};
 use datafusion_common::{plan_err, DFSchema, DataFusionError, ToDFSchema};
