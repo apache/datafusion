@@ -19,8 +19,9 @@ use crate::logical_plan::producer::{to_substrait_type, SubstraitProducer};
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DECIMAL_128_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
@@ -280,6 +281,20 @@ pub(crate) fn to_substrait_literal(
             };
             (map, DEFAULT_CONTAINER_TYPE_VARIATION_REF)
         }
+        ScalarValue::Time32Second(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 0,
+                value: *t as i64,
+            }),
+            TIME_32_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Time32Millisecond(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 3,
+                value: *t as i64,
+            }),
+            TIME_32_TYPE_VARIATION_REF,
+        ),
         ScalarValue::Time64Microsecond(Some(t)) => (
             LiteralType::PrecisionTime(PrecisionTime {
                 precision: 6,
@@ -411,6 +426,12 @@ mod tests {
             round_trip_literal(ScalarValue::TimestampMicrosecond(ts, tz.clone()))?;
             round_trip_literal(ScalarValue::TimestampNanosecond(ts, tz))?;
         }
+
+        // Test Time32 literals
+        round_trip_literal(ScalarValue::Time32Second(Some(45296)))?;
+        round_trip_literal(ScalarValue::Time32Second(None))?;
+        round_trip_literal(ScalarValue::Time32Millisecond(Some(45296789)))?;
+        round_trip_literal(ScalarValue::Time32Millisecond(None))?;
 
         // Test Time64 literals
         round_trip_literal(ScalarValue::Time64Microsecond(Some(45296789123)))?;

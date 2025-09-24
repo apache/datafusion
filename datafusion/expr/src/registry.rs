@@ -27,8 +27,24 @@ use std::sync::Arc;
 
 /// A registry knows how to build logical expressions out of user-defined function' names
 pub trait FunctionRegistry {
-    /// Set of all available udfs.
+    /// Returns names of all available scalar user defined functions.
     fn udfs(&self) -> HashSet<String>;
+
+    /// Returns names of all available aggregate user defined functions.
+    fn udafs(&self) -> HashSet<String> {
+        // This default implementation is provided temporarily
+        // to maintain backward compatibility for the 50.1 release.
+        // It will be reverted to a required method in future versions.
+        HashSet::default()
+    }
+
+    /// Returns names of all available window user defined functions.
+    fn udwfs(&self) -> HashSet<String> {
+        // This default implementation is provided temporarily
+        // to maintain backward compatibility for the 50.1 release.
+        // It will be reverted to a required method in future versions.
+        HashSet::default()
+    }
 
     /// Returns a reference to the user defined scalar function (udf) named
     /// `name`.
@@ -199,5 +215,13 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
+    }
+
+    fn udafs(&self) -> HashSet<String> {
+        self.udafs.keys().cloned().collect()
+    }
+
+    fn udwfs(&self) -> HashSet<String> {
+        self.udwfs.keys().cloned().collect()
     }
 }

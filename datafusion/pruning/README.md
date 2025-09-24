@@ -17,16 +17,13 @@
   under the License.
 -->
 
-# Apache DataFusion Physical Expression Adapter
+# Apache DataFusion Pruning Logic
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
-This crate provides utilities for adapting physical expressions to different schemas in DataFusion.
-
-It handles schema differences in file scans by rewriting expressions to match the physical schema,
-including type casting, missing columns, and partition values.
-
-For detailed documentation, see the [`PhysicalExprAdapter`] trait documentation.
+This crate is a submodule of DataFusion that contains pruning logic, to analyze filter expressions with
+statistics such as min/max values and null counts, proving files / large subsections of files can be skipped
+without reading the actual data.
 
 Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no
@@ -35,4 +32,3 @@ reason to use this crate directly in your project as well.
 [apache arrow]: https://arrow.apache.org/
 [apache datafusion]: https://datafusion.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion
-[`physicalexpradapter`]: https://docs.rs/datafusion/latest/datafusion/physical_expr_adapter/trait.PhysicalExprAdapter.html

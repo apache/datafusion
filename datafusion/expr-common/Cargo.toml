@@ -19,6 +19,7 @@
 name = "datafusion-expr-common"
 description = "Logical plan and expression representation for DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }

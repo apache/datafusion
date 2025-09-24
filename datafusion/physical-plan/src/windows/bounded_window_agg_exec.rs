@@ -429,16 +429,25 @@ trait PartitionSearcher: Send {
         let partition_batches =
             self.evaluate_partition_batches(&record_batch, window_expr)?;
         for (partition_row, partition_batch) in partition_batches {
-            let partition_batch_state = partition_buffers
-                .entry(partition_row)
+            if let Some(partition_batch_state) = partition_buffers.get_mut(&partition_row)
+            {
+                partition_batch_state.extend(&partition_batch)?
+            } else {
+                let options = RecordBatchOptions::new()
+                    .with_row_count(Some(partition_batch.num_rows()));
                 // Use input_schema for the buffer schema, not `record_batch.schema()`
                 // as it may not have the "correct" schema in terms of output
                 // nullability constraints. For details, see the following issue:
                 // https://github.com/apache/datafusion/issues/9320
-                .or_insert_with(|| {
-                    PartitionBatchState::new(Arc::clone(self.input_schema()))
-                });
-            partition_batch_state.extend(&partition_batch)?;
+                let partition_batch = RecordBatch::try_new_with_options(
+                    Arc::clone(self.input_schema()),
+                    partition_batch.columns().to_vec(),
+                    &options,
+                )?;
+                let partition_batch_state =
+                    PartitionBatchState::new_with_batch(partition_batch);
+                partition_buffers.insert(partition_row, partition_batch_state);
+            }
         }
 
         if self.is_mode_linear() {
@@ -870,9 +879,11 @@ impl SortedSearch {
             cur_window_expr_out_result_len
         });
         argmin(out_col_counts).map_or(0, |(min_idx, minima)| {
-            for (row, count) in counts.swap_remove(min_idx).into_iter() {
-                let partition_batch = &mut partition_buffers[row];
-                partition_batch.n_out_row = count;
+            let mut slowest_partition = counts.swap_remove(min_idx);
+            for (partition_key, partition_batch) in partition_buffers.iter_mut() {
+                if let Some(count) = slowest_partition.remove(partition_key) {
+                    partition_batch.n_out_row = count;
+                }
             }
             minima
         })
@@ -1176,6 +1187,7 @@ fn get_aggregate_result_out_column(
 ) -> Result<ArrayRef> {
     let mut result = None;
     let mut running_length = 0;
+    let mut batches_to_concat = vec![];
     // We assume that iteration order is according to insertion order
     for (
         _,
@@ -1187,16 +1199,25 @@ fn get_aggregate_result_out_column(
     {
         if running_length < len_to_show {
             let n_to_use = min(len_to_show - running_length, out_col.len());
-            let slice_to_use = out_col.slice(0, n_to_use);
-            result = Some(match result {
-                Some(arr) => concat(&[&arr, &slice_to_use])?,
-                None => slice_to_use,
-            });
+            let slice_to_use = if n_to_use == out_col.len() {
+                // avoid slice when the entire column is used
+                Arc::clone(out_col)
+            } else {
+                out_col.slice(0, n_to_use)
+            };
+            batches_to_concat.push(slice_to_use);
             running_length += n_to_use;
         } else {
             break;
         }
     }
+
+    if !batches_to_concat.is_empty() {
+        let array_refs: Vec<&dyn Array> =
+            batches_to_concat.iter().map(|a| a.as_ref()).collect();
+        result = Some(concat(&array_refs)?);
+    }
+
     if running_length != len_to_show {
         return exec_err!(
             "Generated row number should be {len_to_show}, it is {running_length}"
@@ -1375,7 +1396,7 @@ mod tests {
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame),
-                &input.schema(),
+                input.schema(),
                 false,
                 false,
                 None,

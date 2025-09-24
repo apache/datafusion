@@ -170,6 +170,14 @@ impl Serializeable for Expr {
             fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
                 vec![]
             }
+
+            fn udafs(&self) -> std::collections::HashSet<String> {
+                std::collections::HashSet::default()
+            }
+
+            fn udwfs(&self) -> std::collections::HashSet<String> {
+                std::collections::HashSet::default()
+            }
         }
         Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;
 
