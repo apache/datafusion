@@ -53,13 +53,13 @@ pub mod expr_fn {
     ));
     export_functions!((
         make_dt_interval,
-        "Make dt interval from weeks, days, hours, mins and secs.",
-        arg1 arg2 arg3 arg4 arg5
+        "Make a DayTime interval from given days, hours, mins and secs.",
+         days hours mins secs
     ));
     export_functions!((
         make_interval,
         "Make interval from years, months, weeks, days, hours, mins and secs.",
-        arg1 arg2 arg3 arg4 arg5 arg6 arg7
+        years months weeks days hours mins secs
     ));
     // TODO: add once ANSI support is added:
     // "When both of the input parameters are not NULL and day_of_week is an invalid input, the function throws SparkIllegalArgumentException if spark.sql.ansi.enabled is set to true, otherwise NULL."

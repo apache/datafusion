@@ -133,7 +133,7 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
             || hours.as_ref().is_some_and(|a| a.is_null(i))
             || mins.as_ref().is_some_and(|a| a.is_null(i))
             || secs.as_ref().is_some_and(|a| {
-                a.is_null(i) || a.value(i).is_infinite() || a.value(i).is_nan()
+                a.is_null(i) || !a.value(i).is_finite()
             });
 
         if any_null_present {
