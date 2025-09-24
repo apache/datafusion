@@ -79,7 +79,10 @@ pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
 
-pub use datafusion_doc::{DocSection, Documentation, DocumentationBuilder};
+pub use datafusion_doc::{
+    aggregate_doc_sections, scalar_doc_sections, window_doc_sections, DocSection,
+    Documentation, DocumentationBuilder,
+};
 pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
@@ -108,15 +111,13 @@ pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
-    aggregate_doc_sections, udaf_default_display_name, udaf_default_human_display,
-    udaf_default_return_field, udaf_default_schema_name,
-    udaf_default_window_function_display_name, udaf_default_window_function_schema_name,
-    AggregateUDF, AggregateUDFImpl, ReversedUDAF, SetMonotonicity, StatisticsArgs,
+    udaf_default_display_name, udaf_default_human_display, udaf_default_return_field,
+    udaf_default_schema_name, udaf_default_window_function_display_name,
+    udaf_default_window_function_schema_name, AggregateUDF, AggregateUDFImpl,
+    ReversedUDAF, SetMonotonicity, StatisticsArgs,
 };
-pub use udf::{
-    scalar_doc_sections, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-};
-pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
+pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udwf::{ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]

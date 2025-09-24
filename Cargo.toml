@@ -76,7 +76,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.86.0"
+rust-version = "1.87.0"
 # Define DataFusion version
 version = "50.0.0"
 
@@ -161,7 +161,6 @@ parquet = { version = "56.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
-    "encryption",
 ] }
 pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"

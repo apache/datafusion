@@ -108,6 +108,14 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
     doc_section(label = "Math Functions"),
     description = "Returns the absolute value of a number.",
     syntax_example = "abs(numeric_expression)",
+    sql_example = r#"```sql
+> SELECT abs(-5);
++----------+
+| abs(-5)  |
++----------+
+| 5        |
++----------+
+```"#,
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

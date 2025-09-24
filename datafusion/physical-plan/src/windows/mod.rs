@@ -96,7 +96,7 @@ pub fn create_window_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
-    input_schema: &Schema,
+    input_schema: SchemaRef,
     ignore_nulls: bool,
     distinct: bool,
     filter: Option<Arc<dyn PhysicalExpr>>,
@@ -105,7 +105,7 @@ pub fn create_window_expr(
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = if distinct {
                 AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                    .schema(Arc::new(input_schema.clone()))
+                    .schema(input_schema)
                     .alias(name)
                     .with_ignore_nulls(ignore_nulls)
                     .distinct()
@@ -113,7 +113,7 @@ pub fn create_window_expr(
                     .map(Arc::new)?
             } else {
                 AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                    .schema(Arc::new(input_schema.clone()))
+                    .schema(input_schema)
                     .alias(name)
                     .with_ignore_nulls(ignore_nulls)
                     .build()
@@ -128,7 +128,7 @@ pub fn create_window_expr(
             )
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
-            create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
+            create_udwf_window_expr(fun, args, &input_schema, name, ignore_nulls)?,
             partition_by,
             order_by,
             window_frame,
@@ -814,7 +814,7 @@ mod tests {
                 &[],
                 &[],
                 Arc::new(WindowFrame::new(None)),
-                schema.as_ref(),
+                schema,
                 false,
                 false,
                 None,
