@@ -978,8 +978,11 @@ impl OptimizerRule for PushDownFilter {
                 let group_expr_columns = agg
                     .group_expr
                     .iter()
-                    .map(|e| Ok(Column::from_qualified_name(e.schema_name().to_string())))
-                    .collect::<Result<HashSet<_>>>()?;
+                    .map(|e| {
+                        let (relation, name) = e.qualified_name();
+                        Column::new(relation, name)
+                    })
+                    .collect::<HashSet<_>>();
 
                 let predicates = split_conjunction_owned(filter.predicate);
 
@@ -1566,6 +1569,30 @@ mod tests {
             @r"
         Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS total_salary]]
           TableScan: test, full_filters=[test.a > Int64(10)]
+        "
+        )
+    }
+
+    /// verifies that filters with unusual column names are pushed down through aggregate operators
+    #[test]
+    fn filter_move_agg_special() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("$a", DataType::UInt32, false),
+            Field::new("$b", DataType::UInt32, false),
+            Field::new("$c", DataType::UInt32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("$a")], vec![sum(col("$b")).alias("total_salary")])?
+            .filter(col("$a").gt(lit(10i64)))?
+            .build()?;
+        // filter of key aggregation is commutative
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.$a]], aggr=[[sum(test.$b) AS total_salary]]
+          TableScan: test, full_filters=[test.$a > Int64(10)]
         "
         )
     }
