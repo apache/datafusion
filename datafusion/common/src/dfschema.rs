@@ -1332,6 +1332,7 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::TimeUnit;
     use crate::assert_contains;
 
     use super::*;
@@ -1816,6 +1817,12 @@ mod tests {
             &DataType::Decimal256(2, 1),
         ));
 
+        // Any two timestamp types should match
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        ));
+
         // Test lists
 
         // Succeeds if both have the same element type, disregards names and nullability
@@ -2111,7 +2118,7 @@ mod tests {
                 Field::new(
                     "timestamp_field",
                     DataType::Timestamp(
-                        arrow::datatypes::TimeUnit::Microsecond,
+                        TimeUnit::Microsecond,
                         Some("UTC".into()),
                     ),
                     false,
@@ -2407,12 +2414,12 @@ mod tests {
                 Field::new("date64", DataType::Date64, false),
                 Field::new(
                     "time32_seconds",
-                    DataType::Time32(arrow::datatypes::TimeUnit::Second),
+                    DataType::Time32(TimeUnit::Second),
                     true,
                 ),
                 Field::new(
                     "time64_nanoseconds",
-                    DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+                    DataType::Time64(TimeUnit::Nanosecond),
                     false,
                 ),
             ]
