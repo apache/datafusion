@@ -35,10 +35,11 @@ use arrow_schema::{SortOptions, TimeUnit};
 use datafusion::{assert_batches_eq, dataframe};
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
-    array_agg, avg, count, count_distinct, max, median, min, sum,
+    array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
+    sum_distinct,
 };
 use datafusion_functions_nested::make_array::make_array_udf;
-use datafusion_functions_window::expr_fn::{first_value, row_number};
+use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
 use std::collections::HashMap;
@@ -90,6 +91,9 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{displayable, ExecutionPlan, ExecutionPlanProperties};
+
+use datafusion::error::Result as DataFusionResult;
+use datafusion_functions_window::expr_fn::lag;
 
 // Get string representation of the plan
 async fn physical_plan_to_string(df: &DataFrame) -> String {
@@ -154,6 +158,46 @@ async fn test_array_agg_ord_schema() -> Result<()> {
 
     let result = ctx.sql(query).await?;
     assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+    Ok(())
+}
+
+type WindowFnCase = (fn() -> Expr, &'static str);
+
+#[tokio::test]
+async fn with_column_window_functions() -> DataFusionResult<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // Define test cases: (expr builder, alias name)
+    let test_cases: Vec<WindowFnCase> = vec![
+        (|| lag(col("a"), Some(1), None), "lag_val"),
+        (|| lead(col("a"), Some(1), None), "lead_val"),
+        (row_number, "row_num"),
+    ];
+
+    for (make_expr, alias) in test_cases {
+        let df = ctx.table("t").await?;
+        let expr = make_expr();
+        let df_with = df.with_column(alias, expr)?;
+        let df_schema = df_with.schema().clone();
+
+        assert!(
+            df_schema.has_column_with_unqualified_name(alias),
+            "Schema does not contain expected column {alias}",
+        );
+
+        assert_eq!(2, df_schema.columns().len());
+    }
+
     Ok(())
 }
 
@@ -502,32 +546,35 @@ async fn drop_with_periods() -> Result<()> {
 #[tokio::test]
 async fn aggregate() -> Result<()> {
     // build plan using DataFrame API
-    let df = test_table().await?;
+    // union so some of the distincts have a clearly distinct result
+    let df = test_table().await?.union(test_table().await?)?;
     let group_expr = vec![col("c1")];
     let aggr_expr = vec![
-        min(col("c12")),
-        max(col("c12")),
-        avg(col("c12")),
-        sum(col("c12")),
-        count(col("c12")),
-        count_distinct(col("c12")),
+        min(col("c4")).alias("min(c4)"),
+        max(col("c4")).alias("max(c4)"),
+        avg(col("c4")).alias("avg(c4)"),
+        avg_distinct(col("c4")).alias("avg_distinct(c4)"),
+        sum(col("c4")).alias("sum(c4)"),
+        sum_distinct(col("c4")).alias("sum_distinct(c4)"),
+        count(col("c4")).alias("count(c4)"),
+        count_distinct(col("c4")).alias("count_distinct(c4)"),
     ];
 
     let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
 
     assert_snapshot!(
         batches_to_sort_string(&df),
-        @r###"
-    +----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+
-    | c1 | min(aggregate_test_100.c12) | max(aggregate_test_100.c12) | avg(aggregate_test_100.c12) | sum(aggregate_test_100.c12) | count(aggregate_test_100.c12) | count(DISTINCT aggregate_test_100.c12) |
-    +----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+
-    | a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |
-    | b  | 0.04893135681998029         | 0.9185813970744787          | 0.41040709263815384         | 7.797734760124923           | 19                            | 19                                     |
-    | c  | 0.0494924465469434          | 0.991517828651004           | 0.6600456536439784          | 13.860958726523545          | 21                            | 21                                     |
-    | d  | 0.061029375346466685        | 0.9748360509016578          | 0.48855379387549824         | 8.793968289758968           | 18                            | 18                                     |
-    | e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |
-    +----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+
-    "###
+        @r"
+    +----+---------+---------+---------------------+---------------------+---------+------------------+-----------+--------------------+
+    | c1 | min(c4) | max(c4) | avg(c4)             | avg_distinct(c4)    | sum(c4) | sum_distinct(c4) | count(c4) | count_distinct(c4) |
+    +----+---------+---------+---------------------+---------------------+---------+------------------+-----------+--------------------+
+    | a  | -28462  | 32064   | 306.04761904761904  | 306.04761904761904  | 12854   | 6427             | 42        | 21                 |
+    | b  | -28070  | 25286   | 7732.315789473684   | 7732.315789473684   | 293828  | 146914           | 38        | 19                 |
+    | c  | -30508  | 29106   | -1320.5238095238096 | -1320.5238095238096 | -55462  | -27731           | 42        | 21                 |
+    | d  | -24558  | 31106   | 10890.111111111111  | 10890.111111111111  | 392044  | 196022           | 36        | 18                 |
+    | e  | -31500  | 32514   | -4268.333333333333  | -4268.333333333333  | -179270 | -89635           | 42        | 21                 |
+    +----+---------+---------+---------------------+---------------------+---------+------------------+-----------+--------------------+
+    "
     );
 
     Ok(())
@@ -542,7 +589,9 @@ async fn aggregate_assert_no_empty_batches() -> Result<()> {
         min(col("c12")),
         max(col("c12")),
         avg(col("c12")),
+        avg_distinct(col("c12")),
         sum(col("c12")),
+        sum_distinct(col("c12")),
         count(col("c12")),
         count_distinct(col("c12")),
         median(col("c12")),
