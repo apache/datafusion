@@ -747,7 +747,8 @@ impl DFSchema {
     }
 
     /// Returns true of two [`DataType`]s are semantically equal (same
-    /// name and type), ignoring both metadata and nullability, and decimal precision/scale.
+    /// name and type), ignoring both metadata and nullability, decimal precision/scale,
+    /// and timezone time units/timezones.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
     pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
@@ -813,6 +814,10 @@ impl DFSchema {
             (
                 DataType::Decimal256(_l_precision, _l_scale),
                 DataType::Decimal256(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Timestamp(_l_time_unit, _l_timezone),
+                DataType::Timestamp(_r_time_unit, _r_timezone),
             ) => true,
             _ => dt1 == dt2,
         }
