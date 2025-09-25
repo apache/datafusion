@@ -24,7 +24,9 @@ use arrow::array::{
 use arrow::compute::cast;
 use arrow::datatypes::DataType::Utf8;
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_datafusion_err, plan_datafusion_err, DataFusionError, Result,
+};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;
@@ -72,7 +74,7 @@ impl ScalarUDFImpl for SparkElt {
 
 fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     if args.len() < 2 {
-        plan_datafusion_err!("elt expects at least 2 arguments: index, value1");
+        plan_datafusion_err!("ELT function expects at least 2 arguments: index, value1");
     }
 
     let n_rows = args[0].len();
@@ -84,7 +86,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 
     if idx_i32.is_none() && idx_i64.is_none() {
         plan_datafusion_err!(
-            "elt: first argument must be Int32 or Int64 (got {:?})",
+            "ELT function: first argument must be Int32 or Int64 (got {:?})",
             args[0].data_type()
         );
     }
@@ -96,7 +98,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         let sa = casted
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Internal("downcast Utf8 failed".into()))?
+            .ok_or_else(|| internal_datafusion_err!("downcast Utf8 failed"))?
             .clone();
         cols.push(Arc::new(sa));
     }
