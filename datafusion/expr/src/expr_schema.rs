@@ -112,7 +112,7 @@ impl ExprSchemable for Expr {
             },
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
+            Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
@@ -276,7 +276,7 @@ impl ExprSchemable for Expr {
                 || high.nullable(input_schema)?),
 
             Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(_, _) => Ok(true),
+            Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // This expression is nullable if any of the input expressions are nullable
@@ -457,8 +457,8 @@ impl ExprSchemable for Expr {
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
-            Expr::OuterReferenceColumn(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
+            Expr::OuterReferenceColumn(field, _) => {
+                Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
             }
             Expr::ScalarVariable(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
@@ -482,7 +482,7 @@ impl ExprSchemable for Expr {
                 Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
             }
             Expr::ScalarSubquery(subquery) => {
-                Ok(Arc::new(subquery.subquery.schema().field(0).clone()))
+                Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
             }
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
@@ -642,7 +642,7 @@ impl ExprSchemable for Expr {
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
-            plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
+            plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
         }
     }
 }
@@ -777,7 +777,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, lit};
+    use crate::{col, lit, out_ref_col_with_metadata};
 
     use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
 
@@ -911,6 +911,14 @@ mod tests {
 
         // verify to_field method populates metadata
         assert_eq!(meta, expr.metadata(&schema).unwrap());
+
+        // outer ref constructed by `out_ref_col_with_metadata` should be metadata-preserving
+        let outer_ref = out_ref_col_with_metadata(
+            DataType::Int32,
+            meta.to_hashmap(),
+            Column::from_name("foo"),
+        );
+        assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
     }
 
     #[derive(Debug)]

@@ -267,7 +267,7 @@ pub(crate) fn can_cast_field(
                 Ok(true)
             } else {
                 plan_err!(
-                    "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                    "Cannot cast file schema field {} of type {} to table schema field of type {}",
                     file_field.name(),
                     file_field.data_type(),
                     table_field.data_type()

@@ -43,6 +43,7 @@ use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableRefer
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::Not;
@@ -69,8 +70,22 @@ pub fn col(ident: impl Into<Column>) -> Expr {
 
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
+/// The expression created by this function does not preserve the metadata of the outer column.
+/// Please use `out_ref_col_with_metadata` if you want to preserve the metadata.
 pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
-    Expr::OuterReferenceColumn(dt, ident.into())
+    out_ref_col_with_metadata(dt, HashMap::new(), ident)
+}
+
+/// Create an out reference column from an existing field (preserving metadata)
+pub fn out_ref_col_with_metadata(
+    dt: DataType,
+    metadata: HashMap<String, String>,
+    ident: impl Into<Column>,
+) -> Expr {
+    let column = ident.into();
+    let field: FieldRef =
+        Arc::new(Field::new(column.name(), dt, true).with_metadata(metadata));
+    Expr::OuterReferenceColumn(field, column)
 }
 
 /// Create an unqualified column expression from the provided name, without normalizing
