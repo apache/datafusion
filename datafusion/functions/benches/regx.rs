@@ -267,11 +267,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_replace::<i32, _, _>(
+                regexp_replace::<i32, _>(
                     data.as_string::<i32>(),
                     regex.as_string::<i32>(),
                     replacement.as_string::<i32>(),
-                    Some(&flags),
+                    Some(flags.as_string::<i32>()),
                 )
                 .expect("regexp_replace should work on valid values"),
             )
@@ -282,19 +282,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut rng = rand::rng();
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
-        // flags are not allowed to be utf8view according to the function
-        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+        let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
         let replacement = Arc::new(StringViewArray::from_iter_values(iter::repeat_n(
             "XX", 1000,
         )));
 
         b.iter(|| {
             black_box(
-                regexp_replace::<i32, _, _>(
+                regexp_replace::<i32, _>(
                     data.as_string_view(),
                     regex.as_string_view(),
-                    &replacement,
-                    Some(&flags),
+                    &*replacement,
+                    Some(flags.as_string_view()),
                 )
                 .expect("regexp_replace should work on valid values"),
             )

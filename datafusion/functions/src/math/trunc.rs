@@ -45,7 +45,16 @@ use datafusion_macros::user_doc;
   `decimal_places` is a positive integer, truncates digits to the
   right of the decimal point. If `decimal_places` is a negative
   integer, replaces digits to the left of the decimal point with `0`."#
-    )
+    ),
+    sql_example = r#"
+  ```sql
+  > SELECT trunc(42.738);
+  +----------------+
+  | trunc(42.738)  |
+  +----------------+
+  | 42             |
+  +----------------+
+  ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TruncFunc {
