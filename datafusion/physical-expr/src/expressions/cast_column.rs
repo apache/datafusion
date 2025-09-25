@@ -42,7 +42,7 @@ use std::{
 ///
 /// This expression is intended for schema rewriting scenarios where the
 /// planner already resolved the input column but needs to adapt its physical
-/// representation to a new [`Field`]. It mirrors the behaviour of the
+/// representation to a new [`arrow::datatypes::Field`]. It mirrors the behaviour of the
 /// [`datafusion_common::nested_struct::cast_column`] helper while integrating
 /// with the `PhysicalExpr` trait so it can participate in the execution plan
 /// like any other column expression.
