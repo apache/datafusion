@@ -667,12 +667,12 @@ async fn test_aggregate_with_pk2() -> Result<()> {
     let df = df.filter(predicate)?;
     assert_snapshot!(
         physical_plan_to_string(&df).await,
-        @r###"
-    CoalesceBatchesExec: target_batch_size=8192
-      FilterExec: id@0 = 1 AND name@1 = a
-        AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+        @r"
+    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[], ordering_mode=Sorted
+      CoalesceBatchesExec: target_batch_size=8192
+        FilterExec: id@0 = 1 AND name@1 = a
           DataSourceExec: partitions=1, partition_sizes=[1]
-    "###
+    "
     );
 
     // Since id and name are functionally dependant, we can use name among expression
@@ -716,12 +716,12 @@ async fn test_aggregate_with_pk3() -> Result<()> {
     let df = df.select(vec![col("id"), col("name")])?;
     assert_snapshot!(
         physical_plan_to_string(&df).await,
-        @r###"
-    CoalesceBatchesExec: target_batch_size=8192
-      FilterExec: id@0 = 1
-        AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+        @r"
+    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[], ordering_mode=PartiallySorted([0])
+      CoalesceBatchesExec: target_batch_size=8192
+        FilterExec: id@0 = 1
           DataSourceExec: partitions=1, partition_sizes=[1]
-    "###
+    "
     );
 
     // Since id and name are functionally dependant, we can use name among expression
@@ -767,12 +767,12 @@ async fn test_aggregate_with_pk4() -> Result<()> {
     // columns are not used.
     assert_snapshot!(
         physical_plan_to_string(&df).await,
-        @r###"
-    CoalesceBatchesExec: target_batch_size=8192
-      FilterExec: id@0 = 1
-        AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]
+        @r"
+    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+      CoalesceBatchesExec: target_batch_size=8192
+        FilterExec: id@0 = 1
           DataSourceExec: partitions=1, partition_sizes=[1]
-    "###
+    "
     );
 
     let df_results = df.collect().await?;
