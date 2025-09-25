@@ -60,6 +60,7 @@ mod tests {
     use futures::stream::BoxStream;
     use futures::StreamExt;
     use insta::assert_snapshot;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
@@ -104,6 +105,14 @@ mod tests {
         }
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+            self.get_opts(location, GetOptions::default()).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            _opts: GetOptions,
+        ) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
             let len = bytes.len() as u64;
             let range = 0..len * self.max_iterations;
@@ -128,14 +137,6 @@ mod tests {
                 range: Default::default(),
                 attributes: Attributes::default(),
             })
-        }
-
-        async fn get_opts(
-            &self,
-            _location: &Path,
-            _opts: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            unimplemented!()
         }
 
         async fn get_ranges(
@@ -467,6 +468,47 @@ mod tests {
             vec!["c1: Float64", "c2: Utf8", "c3: Utf8", "c4: Int64",],
             actual_fields
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_stream_separated_chunks_with_nulls() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let variable_object_store = Arc::new(VariableStream::new(
+            Bytes::from(
+                r#"c1,c2
+1,1.0
+,
+"#,
+            ),
+            1,
+        ));
+        let chunked_object_store = Arc::new(ChunkedStore::new(variable_object_store, 1));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        let csv_format = CsvFormat::default().with_has_header(true);
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(chunked_object_store as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        let actual_fields: Vec<_> = inferred_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+
+        assert_eq!(vec!["c1: Int64", "c2: Float64"], actual_fields);
         Ok(())
     }
 

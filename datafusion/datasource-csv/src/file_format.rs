@@ -593,15 +593,23 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
         .zip(types)
         .map(|(field_name, data_type_possibilities)| {
             // ripped from arrow::csv::reader::infer_reader_schema_with_csv_options
-            // determine data type based on possible types
-            // if there are incompatible types, use DataType::Utf8
-            match data_type_possibilities.len() {
-                1 => Field::new(
+            // determine data type based on possible types, ignoring DataType::Null,
+            // if there are incompatible types, use DataType::Utf8.
+            match (
+                data_type_possibilities.contains(&DataType::Null),
+                data_type_possibilities.len(),
+            ) {
+                (true, 1) => Field::new(field_name, DataType::Null, true),
+                (false, 1) | (true, 2) => Field::new(
                     field_name,
-                    data_type_possibilities.iter().next().unwrap().clone(),
+                    data_type_possibilities
+                        .iter()
+                        .find(|&d| d != &DataType::Null)
+                        .unwrap()
+                        .clone(),
                     true,
                 ),
-                2 => {
+                (false, 2) | (true, 3) => {
                     if data_type_possibilities.contains(&DataType::Int64)
                         && data_type_possibilities.contains(&DataType::Float64)
                     {
