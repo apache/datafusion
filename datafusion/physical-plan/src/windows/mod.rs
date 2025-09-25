@@ -696,34 +696,34 @@ pub fn get_window_mode(
 ///
 /// # Parameters
 /// - `expr`: The physical expression to generate sort options for
-/// - `all_options`: If true, generates all 4 possible sort options (ASC/DESC × NULLS FIRST/LAST).
-///   If false, generates only 2 options that preserve set monotonicity.
+/// - `only_monotonic`: If false, generates all 4 possible sort options (ASC/DESC × NULLS FIRST/LAST).
+///   If true, generates only 2 options that preserve set monotonicity.
 ///
-/// # When to use `all_options = true`:
+/// # When to use `only_monotonic = false`:
 /// Use for PARTITION BY columns where we want to explore all possible orderings to find
 /// one that matches the existing data ordering.
 ///
-/// # When to use `all_options = false`:
+/// # When to use `only_monotonic = true`:
 /// Use for aggregate/window function arguments where set monotonicity needs to be preserved.
 /// Only generates ASC NULLS LAST and DESC NULLS FIRST because:
 /// - Set monotonicity is broken if data has increasing order but nulls come first
 /// - Set monotonicity is broken if data has decreasing order but nulls come last
 fn sort_options_resolving_constant(
     expr: Arc<dyn PhysicalExpr>,
-    all_options: bool,
+    only_monotonic: bool,
 ) -> Vec<PhysicalSortExpr> {
-    if all_options {
+    if only_monotonic {
+        // Generate only the 2 options that preserve set monotonicity
+        vec![
+            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)), // ASC NULLS LAST
+            PhysicalSortExpr::new(expr, SortOptions::new(true, true)), // DESC NULLS FIRST
+        ]
+    } else {
         // Generate all 4 possible sort options for partition columns
         vec![
             PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)), // ASC NULLS LAST
             PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, true)), // ASC NULLS FIRST
             PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(true, false)), // DESC NULLS LAST
-            PhysicalSortExpr::new(expr, SortOptions::new(true, true)), // DESC NULLS FIRST
-        ]
-    } else {
-        // Generate only the 2 options that preserve set monotonicity
-        vec![
-            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)), // ASC NULLS LAST
             PhysicalSortExpr::new(expr, SortOptions::new(true, true)), // DESC NULLS FIRST
         ]
     }
