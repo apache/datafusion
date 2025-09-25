@@ -17,21 +17,22 @@
 
 //! Physical expression for struct-aware casting of columns.
 
-use std::any::Any;
-use std::fmt::{self, Display};
-use std::hash::Hash;
-use std::sync::Arc;
-
 use crate::physical_expr::PhysicalExpr;
-
-use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, FieldRef, Schema};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::nested_struct::cast_column;
-use datafusion_common::{Result, ScalarValue};
+use arrow::{
+    compute::CastOptions,
+    datatypes::{DataType, FieldRef, Schema},
+    record_batch::RecordBatch,
+};
+use datafusion_common::{
+    format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column, Result, ScalarValue,
+};
 use datafusion_expr_common::columnar_value::ColumnarValue;
-
+use std::{
+    any::Any,
+    fmt::{self, Display},
+    hash::Hash,
+    sync::Arc,
+};
 /// A physical expression that applies [`cast_column`] to its input.
 ///
 /// [`CastColumnExpr`] extends the regular [`CastExpr`](super::CastExpr) by
@@ -186,15 +187,14 @@ mod tests {
     use super::*;
 
     use crate::expressions::{Column, Literal};
-
-    use arrow::array::{
-        Array, ArrayRef, BooleanArray, Int32Array, StringArray, StructArray,
+    use arrow::{
+        array::{Array, ArrayRef, BooleanArray, Int32Array, StringArray, StructArray},
+        datatypes::{DataType, Field, Fields, SchemaRef},
     };
-    use arrow::datatypes::{DataType, Field, Fields, SchemaRef};
-    use datafusion_common::cast::{
-        as_int64_array, as_string_array, as_struct_array, as_uint8_array,
+    use datafusion_common::{
+        cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
+        Result as DFResult, ScalarValue,
     };
-    use datafusion_common::{Result as DFResult, ScalarValue};
 
     fn make_schema(field: &Field) -> SchemaRef {
         Arc::new(Schema::new(vec![field.clone()]))
