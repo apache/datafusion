@@ -185,11 +185,12 @@ impl StreamedBatch {
 }
 
 /// A buffered batch that contains contiguous rows with same join key
+///
+/// `BufferedBatch` can exist as either an in-memory `RecordBatch` or a `RefCountedTempFile` on disk.
 #[derive(Debug)]
 pub(super) struct BufferedBatch {
-    /// The buffered record batch
-    /// None if the batch spilled to disk th
-    pub batch: Option<RecordBatch>,
+    /// Represents in memory or spilled record batch
+    pub batch: BufferedBatchState,
     /// The range in which the rows share the same join key
     pub range: Range<usize>,
     /// Array refs of the join key
@@ -207,10 +208,6 @@ pub(super) struct BufferedBatch {
     /// but if batch is spilled to disk this property is preferable
     /// and less expensive
     pub num_rows: usize,
-    /// An optional temp spill file name on the disk if the batch spilled
-    /// None by default
-    /// Some(fileName) if the batch spilled to the disk
-    pub spill_file: Option<RefCountedTempFile>,
 }
 
 impl BufferedBatch {
@@ -238,16 +235,25 @@ impl BufferedBatch {
 
         let num_rows = batch.num_rows();
         BufferedBatch {
-            batch: Some(batch),
+            batch: BufferedBatchState::InMemory(batch),
             range,
             join_arrays,
             null_joined: vec![],
             size_estimation,
             join_filter_not_matched_map: HashMap::new(),
             num_rows,
-            spill_file: None,
         }
     }
+}
+
+// TODO: Spill join arrays (https://github.com/apache/datafusion/pull/17429)
+// Used to represent whether the buffered data is currently in memory or written to disk
+#[derive(Debug)]
+pub(super) enum BufferedBatchState {
+    // In memory record batch
+    InMemory(RecordBatch),
+    // Spilled temp file
+    Spilled(RefCountedTempFile),
 }
 
 /// Sort-Merge join stream that consumes streamed and buffered data streams
@@ -849,11 +855,10 @@ impl SortMergeJoinStream {
 
     fn free_reservation(&mut self, buffered_batch: BufferedBatch) -> Result<()> {
         // Shrink memory usage for in-memory batches only
-        if buffered_batch.spill_file.is_none() && buffered_batch.batch.is_some() {
+        if let BufferedBatchState::InMemory(_) = buffered_batch.batch {
             self.reservation
                 .try_shrink(buffered_batch.size_estimation)?;
         }
-
         Ok(())
     }
 
@@ -867,21 +872,21 @@ impl SortMergeJoinStream {
             }
             Err(_) if self.runtime_env.disk_manager.tmp_files_enabled() => {
                 // Spill buffered batch to disk
-                if let Some(batch) = buffered_batch.batch {
-                    let spill_file = self
-                        .spill_manager
-                        .spill_record_batch_and_finish(
-                            &[batch],
-                            "sort_merge_join_buffered_spill",
-                        )?
-                        .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
-                    buffered_batch.spill_file = Some(spill_file);
-                    buffered_batch.batch = None;
+                match buffered_batch.batch {
+                    BufferedBatchState::InMemory(batch) => {
+                        let spill_file = self
+                            .spill_manager
+                            .spill_record_batch_and_finish(
+                                &[batch],
+                                "sort_merge_join_buffered_spill",
+                            )?
+                            .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
-                    Ok(())
-                } else {
-                    internal_err!("Buffered batch has empty body")
+                        buffered_batch.batch = BufferedBatchState::Spilled(spill_file);
+                        Ok(())
+                    }
+                    _ => internal_err!("Buffered batch has empty body"),
                 }
             }
             Err(e) => exec_err!("{}. Disk spilling disabled.", e.message()),
@@ -1741,16 +1746,16 @@ fn fetch_right_columns_from_batch_by_idxs(
     buffered_batch: &BufferedBatch,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>> {
-    match (&buffered_batch.spill_file, &buffered_batch.batch) {
+    match &buffered_batch.batch {
         // In memory batch
-        (None, Some(batch)) => Ok(batch
+        BufferedBatchState::InMemory(batch) => Ok(batch
             .columns()
             .iter()
             .map(|column| take(column, &buffered_indices, None))
             .collect::<Result<Vec<_>, ArrowError>>()
             .map_err(Into::<DataFusionError>::into)?),
         // If the batch was spilled to disk, less likely
-        (Some(spill_file), None) => {
+        BufferedBatchState::Spilled(spill_file) => {
             let mut buffered_cols: Vec<ArrayRef> =
                 Vec::with_capacity(buffered_indices.len());
 
@@ -1763,10 +1768,8 @@ fn fetch_right_columns_from_batch_by_idxs(
                 });
             }
 
-                Ok(buffered_cols)
-            }
-        // Invalid combination
-        (spill, batch) => internal_err!("Unexpected buffered batch spill status. Spill exists: {}. In-memory exists: {}", spill.is_some(), batch.is_some()),
+            Ok(buffered_cols)
+        }
     }
 }
 
@@ -1915,6 +1918,10 @@ fn compare_join_arrays(
             DataType::Utf8 => compare_value!(StringArray),
             DataType::Utf8View => compare_value!(StringViewArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
+            DataType::LargeBinary => compare_value!(LargeBinaryArray),
             DataType::Decimal128(..) => compare_value!(Decimal128Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
@@ -1983,6 +1990,10 @@ fn is_join_arrays_equal(
             DataType::Utf8 => compare_value!(StringArray),
             DataType::Utf8View => compare_value!(StringViewArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
+            DataType::LargeBinary => compare_value!(LargeBinaryArray),
             DataType::Decimal128(..) => compare_value!(Decimal128Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),

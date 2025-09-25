@@ -110,11 +110,12 @@ impl TopKAggregation {
                 }
             } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
                 // track renames due to successive projections
-                for (src_expr, proj_name) in proj.expr() {
-                    let Some(src_col) = src_expr.as_any().downcast_ref::<Column>() else {
+                for proj_expr in proj.expr() {
+                    let Some(src_col) = proj_expr.expr.as_any().downcast_ref::<Column>()
+                    else {
                         continue;
                     };
-                    if *proj_name == cur_col_name {
+                    if proj_expr.alias == cur_col_name {
                         cur_col_name = src_col.name().to_string();
                     }
                 }

@@ -28,6 +28,7 @@ use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
@@ -288,7 +289,7 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
     // use easier to understand "tree" mode by default
     // if the user hasn't specified an explain format in the environment
     if env::var_os("DATAFUSION_EXPLAIN_FORMAT").is_none() {
-        config_options.explain.format = String::from("tree");
+        config_options.explain.format = ExplainFormat::Tree;
     }
 
     // in the CLI, we want to show NULL values rather the empty strings
@@ -570,15 +571,15 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&rbs),@r#"
+        assert_snapshot!(batches_to_string(&rbs),@r"
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | alltypes_plain.parquet            | 1851            | 10181               | 2    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 881634              | 2    | page_index=true  |
+        | alltypes_tiny_pages.parquet       | 454233          | 881418              | 2    | page_index=true  |
         | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        "#);
+        ");
 
         // increase the number of hits
         ctx.sql("select * from alltypes_plain")
@@ -601,15 +602,15 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&rbs),@r#"
+        assert_snapshot!(batches_to_string(&rbs),@r"
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | alltypes_plain.parquet            | 1851            | 10181               | 5    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 881634              | 2    | page_index=true  |
+        | alltypes_tiny_pages.parquet       | 454233          | 881418              | 2    | page_index=true  |
         | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 3    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        "#);
+        ");
 
         Ok(())
     }

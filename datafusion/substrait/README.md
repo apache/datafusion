@@ -19,9 +19,12 @@
 
 # Apache DataFusion Substrait
 
-This crate contains a [Substrait] producer and consumer for [Apache DataFusion]
+[Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
+
+This crate is a submodule of DataFusion that provides a [Substrait] producer and consumer for DataFusion
 plans. See [API Docs] for details and examples.
 
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
 [substrait]: https://substrait.io
-[apache datafusion]: https://datafusion.apache.org
 [api docs]: https://docs.rs/datafusion-substrait/latest

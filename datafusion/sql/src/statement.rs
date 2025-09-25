@@ -519,7 +519,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
             }
-
             Statement::CreateView {
                 or_replace,
                 materialized,
@@ -977,16 +976,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 returning,
                 or,
             } => {
-                let froms =
+                let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
-                        UpdateTableFromKind::BeforeSet(froms) => froms,
-                        UpdateTableFromKind::AfterSet(froms) => froms,
+                        UpdateTableFromKind::BeforeSet(from_clauses) => from_clauses,
+                        UpdateTableFromKind::AfterSet(from_clauses) => from_clauses,
                     });
                 // TODO: support multiple tables in UPDATE SET FROM
-                if froms.as_ref().is_some_and(|f| f.len() > 1) {
+                if from_clauses.as_ref().is_some_and(|f| f.len() > 1) {
                     plan_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
                 }
-                let update_from = froms.and_then(|mut f| f.pop());
+                let update_from = from_clauses.and_then(|mut f| f.pop());
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }
@@ -1445,25 +1444,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .map(|order_by_expr| {
                             let ordered_expr = &order_by_expr.expr;
                             let ordered_expr = ordered_expr.to_owned();
-                            let ordered_expr = self
-                                .sql_expr_to_logical_expr(
-                                    ordered_expr,
-                                    schema,
-                                    planner_context,
-                                )
-                                .unwrap();
+                            let ordered_expr = self.sql_expr_to_logical_expr(
+                                ordered_expr,
+                                schema,
+                                planner_context,
+                            )?;
                             let asc = order_by_expr.options.asc.unwrap_or(true);
                             let nulls_first =
                                 order_by_expr.options.nulls_first.unwrap_or_else(|| {
                                     self.options.default_null_ordering.nulls_first(asc)
                                 });
 
-                            SortExpr::new(ordered_expr, asc, nulls_first)
+                            Ok(SortExpr::new(ordered_expr, asc, nulls_first))
                         })
-                        .collect::<Vec<SortExpr>>();
-                    result
+                        .collect::<Result<Vec<SortExpr>>>()?;
+                    Ok(result)
                 })
-                .collect::<Vec<Vec<SortExpr>>>();
+                .collect::<Result<Vec<Vec<SortExpr>>>>()?;
 
             return Ok(results);
         }
@@ -1506,6 +1503,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             unbounded,
             options,
             constraints,
+            or_replace,
         } = statement;
 
         // Merge inline constraints and existing constraints
@@ -1554,6 +1552,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 file_type,
                 table_partition_cols,
                 if_not_exists,
+                or_replace,
                 temporary,
                 definition,
                 order_exprs: ordered_exprs,
@@ -1713,10 +1712,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
 
             // default to configuration value
+            // verbose mode only supports indent format
             let options = self.context_provider.options();
-            let format = format.as_ref().unwrap_or(&options.explain.format);
-
-            let format: ExplainFormat = format.parse()?;
+            let format = if verbose {
+                ExplainFormat::Indent
+            } else if let Some(format) = format {
+                ExplainFormat::from_str(&format)?
+            } else {
+                options.explain.format.clone()
+            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
@@ -2026,9 +2030,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut value_indices = vec![None; table_schema.fields().len()];
             let fields = columns
                 .into_iter()
-                .map(|c| self.ident_normalizer.normalize(c))
                 .enumerate()
                 .map(|(i, c)| {
+                    let c = self.ident_normalizer.normalize(c);
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;

@@ -47,7 +47,7 @@ mod test {
     use datafusion_physical_plan::joins::CrossJoinExec;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-    use datafusion_physical_plan::projection::ProjectionExec;
+    use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
@@ -235,8 +235,10 @@ mod test {
     async fn test_statistics_by_partition_of_projection() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         // Add projection execution plan
-        let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-            vec![(Arc::new(Column::new("id", 0)), "id".to_string())];
+        let exprs = vec![ProjectionExpr {
+            expr: Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            alias: "id".to_string(),
+        }];
         let projection: Arc<dyn ExecutionPlan> =
             Arc::new(ProjectionExec::try_new(exprs, scan)?);
         let statistics = (0..projection.output_partitioning().partition_count())
@@ -355,7 +357,7 @@ mod test {
     async fn test_statistic_by_partition_of_union() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let union_exec: Arc<dyn ExecutionPlan> =
-            Arc::new(UnionExec::new(vec![scan.clone(), scan]));
+            UnionExec::try_new(vec![scan.clone(), scan])?;
         let statistics = (0..union_exec.output_partitioning().partition_count())
             .map(|idx| union_exec.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
@@ -488,11 +490,20 @@ mod test {
             .map(|idx| local_limit.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        let schema = scan.schema();
-        let mut expected_statistic_partition = Statistics::new_unknown(&schema);
-        expected_statistic_partition.num_rows = Precision::Exact(1);
-        assert_eq!(statistics[0], expected_statistic_partition);
-        assert_eq!(statistics[1], expected_statistic_partition);
+        let mut expected_0 = statistics[0].clone();
+        expected_0.column_statistics = expected_0
+            .column_statistics
+            .into_iter()
+            .map(|c| c.to_inexact())
+            .collect();
+        let mut expected_1 = statistics[1].clone();
+        expected_1.column_statistics = expected_1
+            .column_statistics
+            .into_iter()
+            .map(|c| c.to_inexact())
+            .collect();
+        assert_eq!(statistics[0], expected_0);
+        assert_eq!(statistics[1], expected_1);
         Ok(())
     }
 
