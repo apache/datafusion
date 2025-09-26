@@ -98,7 +98,7 @@ use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
-use log::debug;
+use log::{debug, trace};
 use tokio::sync::Mutex;
 
 /// Physical query planner that converts a `LogicalPlan` to an
@@ -2135,7 +2135,15 @@ impl DefaultPhysicalPlanner {
             "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent(false)
         );
-        debug!("Detailed optimized physical plan:\n{new_plan:?}");
+
+        // This is potentially very large, so only log at trace level,
+        // otherwise it can overflow the tokio runtime stack because without
+        // tree_maximum_render_width setting.
+        //
+        // For example:
+        // thread 'tokio-runtime-worker' has overflowed its stack
+        // fatal runtime error: stack overflow, aborting
+        trace!("Detailed optimized physical plan:\n{new_plan:?}");
         Ok(new_plan)
     }
 
