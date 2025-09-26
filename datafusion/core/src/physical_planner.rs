@@ -2137,8 +2137,7 @@ impl DefaultPhysicalPlanner {
         );
 
         // This is potentially very large, so only log at trace level,
-        // otherwise it can overflow the tokio runtime stack because without
-        // tree_maximum_render_width setting.
+        // otherwise it can overflow the tokio runtime stack.
         //
         // For example:
         // thread 'tokio-runtime-worker' has overflowed its stack
