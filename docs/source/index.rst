@@ -51,15 +51,14 @@ The following related subprojects target end users and have separate documentati
   queries.
 - `DataFusion Comet <https://datafusion.apache.org/comet/>`_ is an accelerator for Apache Spark based on
   DataFusion.
-- `DataFusion Ballista <https://datafusion.apache.org/ballista/>`_ is a distributed compute platform built on
-  top of DataFusion for scalable execution.
+- `DataFusion Ballista <https://datafusion.apache.org/ballista/>`_ is distributed processing extension for DataFusion.
 
 "Out of the box," DataFusion offers `SQL <https://datafusion.apache.org/user-guide/sql/index.html>`_
 and `Dataframe <https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html>`_ APIs,
 excellent `performance <https://benchmark.clickhouse.com/>`_, built-in support for CSV, Parquet, JSON, and Avro,
 extensive customization, and a great community.
 `Python Bindings <https://github.com/apache/datafusion-python>`_ are also available.
-A distributed compute platform is also available via `Ballista <https://datafusion.apache.org/ballista/>`_.
+`Ballista <https://datafusion.apache.org/ballista/>`_ is Apache DataFusion extension enabling the parallelized execution of workloads across multiple nodes in a distributed environment.
 
 DataFusion features a full query planner, a columnar, streaming, multi-threaded,
 vectorized execution engine, and partitioned data sources. You can
