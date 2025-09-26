@@ -2119,7 +2119,10 @@ mod tests {
                 map_field,
                 Field::new(
                     "timestamp_field",
-                    DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into())),
+                    DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Microsecond,
+                        Some("UTC".into()),
+                    ),
                     false,
                 ),
             ]
@@ -2411,7 +2414,11 @@ mod tests {
                 Field::new("decimal256", DataType::Decimal256(38, 10), false),
                 Field::new("date32", DataType::Date32, true),
                 Field::new("date64", DataType::Date64, false),
-                Field::new("time32_seconds", DataType::Time32(arrow::datatypes::TimeUnit::Second), true),
+                Field::new(
+                    "time32_seconds",
+                    DataType::Time32(arrow::datatypes::TimeUnit::Second),
+                    true,
+                ),
                 Field::new(
                     "time64_nanoseconds",
                     DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
