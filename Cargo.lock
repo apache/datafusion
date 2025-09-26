@@ -4546,15 +4546,6 @@ dependencies = [
 
 [[package]]
 name = "phf"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
-dependencies = [
- "phf_shared 0.11.3",
-]
-
-[[package]]
-name = "phf"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
@@ -4563,12 +4554,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "phf_shared"
-version = "0.11.3"
+name = "phf"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
 dependencies = [
- "siphasher",
+ "phf_shared 0.13.1",
+ "serde",
 ]
 
 [[package]]
@@ -4576,6 +4568,15 @@ name = "phf_shared"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e57fef6bc5981e38c2ce2d63bfa546861309f875b8a75f092d1d54ae2d64f266"
 dependencies = [
  "siphasher",
 ]
@@ -6469,9 +6470,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.7.13"
+version = "0.7.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c95d533c83082bb6490e0189acaa0bbeef9084e60471b696ca6988cd0541fb0"
+checksum = "a156efe7fff213168257853e1dfde202eed5f487522cbbbf7d219941d753d853"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -6482,12 +6483,12 @@ dependencies = [
  "log",
  "parking_lot",
  "percent-encoding",
- "phf 0.11.3",
+ "phf 0.13.1",
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
  "rand 0.9.2",
- "socket2 0.5.10",
+ "socket2 0.6.0",
  "tokio",
  "tokio-util",
  "whoami",
