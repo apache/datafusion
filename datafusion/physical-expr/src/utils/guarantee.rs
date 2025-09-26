@@ -1064,8 +1064,7 @@ mod test {
     /// Tests that analyzing expr results in the expected guarantees
     fn test_analyze(expr: Expr, expected: Vec<LiteralGuarantee>) {
         println!("Begin analyze of {expr}");
-        let schema = schema();
-        let physical_expr = logical2physical(&expr, &schema);
+        let physical_expr = logical2physical(&expr, schema());
 
         let actual = LiteralGuarantee::analyze(&physical_expr)
             .into_iter()
