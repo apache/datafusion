@@ -581,6 +581,28 @@
      updated to 1.87.0
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#datafusion-proto-use-taskcontext-rather-than-sessioncontext-in-physical-plan-serde-methods">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       datafusion-proto
+      </span>
+     </code>
+     use
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       TaskContext
+      </span>
+     </code>
+     rather than
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SessionContext
+      </span>
+     </code>
+     in physical plan serde methods
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1337,10 +1359,37 @@
 <section id="datafusion-51-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code><a class="headerlink" href="#datafusion-51-0-0" title="Link to this heading">¶</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
-<p>You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/17558">status of the <code class="docutils literal notranslate"><span class="pre">51.0.0</span> </code>release here</a></p>
+<p>You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/17558">status of the <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code>release here</a></p>
 <section id="msrv-updated-to-1-87-0">
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.87.0<a class="headerlink" href="#msrv-updated-to-1-87-0" title="Link to this heading">¶</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.87.0/"><code class="docutils literal notranslate"><span class="pre">1.87.0</span></code></a>.</p>
+</section>
+<section id="datafusion-proto-use-taskcontext-rather-than-sessioncontext-in-physical-plan-serde-methods">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code> use <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code> rather than <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code> in physical plan serde methods<a class="headerlink" href="#datafusion-proto-use-taskcontext-rather-than-sessioncontext-in-physical-plan-serde-methods" title="Link to this heading">¶</a></h3>
+<p>There have been changes in the public API methods of <code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code> which handle physical plan serde.</p>
+<p>Methods like <code class="docutils literal notranslate"><span class="pre">physical_plan_from_bytes</span></code>, <code class="docutils literal notranslate"><span class="pre">parse_physical_expr</span></code> and similar, expect <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code> instead of <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code></p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let plan2 = physical_plan_from_bytes(&amp;bytes, &amp;ctx)?;</span>
+<span class="gi">+ let plan2 = physical_plan_from_bytes(&amp;bytes, &amp;ctx.task_ctx())?;</span>
+</pre></div>
+</div>
+<p>as <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code> contains <code class="docutils literal notranslate"><span class="pre">RuntimeEnv</span></code> methods such as <code class="docutils literal notranslate"><span class="pre">try_into_physical_plan</span></code> will not have explicit <code class="docutils literal notranslate"><span class="pre">RuntimeEnv</span></code> parameter.</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>let result_exec_plan: Arc&lt;dyn ExecutionPlan&gt; = proto
+<span class="gd">-   .try_into_physical_plan(&amp;ctx, runtime.deref(), &amp;composed_codec)</span>
+<span class="gi">+.  .try_into_physical_plan(&amp;ctx.task_ctx(), &amp;composed_codec)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">PhysicalExtensionCodec::try_decode()</span></code> expects <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code> instead of <code class="docutils literal notranslate"><span class="pre">FunctionRegistry</span></code>:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>pub trait PhysicalExtensionCodec {
+<span class="w"> </span>   fn try_decode(
+<span class="w"> </span>       &amp;self,
+<span class="w"> </span>       buf: &amp;[u8],
+<span class="w"> </span>       inputs: &amp;[Arc&lt;dyn ExecutionPlan&gt;],
+<span class="gd">-        registry: &amp;dyn FunctionRegistry,</span>
+<span class="gi">+        ctx: &amp;TaskContext,</span>
+<span class="w"> </span>   ) -&gt; Result&lt;Arc&lt;dyn ExecutionPlan&gt;&gt;;
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/17601">issue #17601</a> for more details.</p>
 </section>
 </section>
 <section id="datafusion-50-0-0">
