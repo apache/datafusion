@@ -23,10 +23,39 @@
 
 ## Original Query: SELECT elt(1, 'scala', 'java');
 ## PySpark 3.5.5 Result: {'elt(1, scala, java)': 'scala', 'typeof(elt(1, scala, java))': 'string', 'typeof(1)': 'int', 'typeof(scala)': 'string', 'typeof(java)': 'string'}
-#query
-#SELECT elt(1::int, 'scala'::string, 'java'::string);
+query T
+SELECT elt(1::int, 'scala'::string, 'java'::string);
+----
+scala
 
 ## Original Query: SELECT elt(2, 'a', 1);
 ## PySpark 3.5.5 Result: {'elt(2, a, 1)': '1', 'typeof(elt(2, a, 1))': 'string', 'typeof(2)': 'int', 'typeof(a)': 'string', 'typeof(1)': 'int'}
-#query
-#SELECT elt(2::int, 'a'::string, 1::int);
+query T
+SELECT elt(2::int, 'a'::string, 1::int);
+----
+1
+
+query T
+SELECT elt(11::int, 10, 20)
+----
+NULL
+
+query T
+SELECT elt(1::int, 10, 20)
+----
+10
+
+query T
+SELECT elt(1::int, null, 20)
+----
+NULL
+
+query T
+SELECT elt(1::int, 10, null)
+----
+10
+
+query T
+SELECT elt(1, 10, null)
+----
+10
