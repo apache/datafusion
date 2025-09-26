@@ -63,11 +63,12 @@ use arrow::array::{
     FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
     Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, MapArray, MutableArrayData, PrimitiveArray, Scalar,
-    StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
+    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
+    PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array, UnionArray,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::compute::kernels::cast::{cast_with_options, CastOptions};
@@ -876,8 +877,9 @@ impl Hash for ScalarValue {
 }
 
 fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
-    let arrays = vec![arr.to_owned()];
-    let hashes_buffer = &mut vec![0; arr.len()];
+    let len = arr.len();
+    let arrays = vec![arr];
+    let hashes_buffer = &mut vec![0; len];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
     let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
     // Hash back to std::hash::Hasher
@@ -3304,17 +3306,30 @@ impl ScalarValue {
     /// assert_eq!(scalar_vec, expected);
     /// ```
     pub fn convert_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
-        let mut scalars = Vec::with_capacity(array.len());
-
-        for index in 0..array.len() {
-            let nested_array = array.as_list::<i32>().value(index);
-            let scalar_values = (0..nested_array.len())
-                .map(|i| ScalarValue::try_from_array(&nested_array, i))
-                .collect::<Result<Vec<_>>>()?;
-            scalars.push(scalar_values);
+        fn generic_collect<OffsetSize: OffsetSizeTrait>(
+            array: &dyn Array,
+        ) -> Result<Vec<Vec<ScalarValue>>> {
+            array
+                .as_list::<OffsetSize>()
+                .iter()
+                .map(|nested_array| match nested_array {
+                    Some(nested_array) => (0..nested_array.len())
+                        .map(|i| ScalarValue::try_from_array(&nested_array, i))
+                        .collect::<Result<Vec<_>>>(),
+                    // TODO: what can we put for null?
+                    //       https://github.com/apache/datafusion/issues/17749
+                    None => Ok(vec![]),
+                })
+                .collect()
         }
 
-        Ok(scalars)
+        match array.data_type() {
+            DataType::List(_) => generic_collect::<i32>(array),
+            DataType::LargeList(_) => generic_collect::<i64>(array),
+            _ => _internal_err!(
+                "ScalarValue::convert_array_to_scalar_vec input must be a List/LargeList type"
+            ),
+        }
     }
 
     #[deprecated(
@@ -4946,6 +4961,8 @@ impl ScalarType<i32> for Date32Type {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::cast::{as_list_array, as_map_array, as_struct_array};
     use crate::test_util::batches_to_string;
@@ -4954,7 +4971,7 @@ mod tests {
         NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveBuilder, RecordBatch,
         StringBuilder, StringDictionaryBuilder, StructBuilder, UnionBuilder,
     };
-    use arrow::buffer::{Buffer, OffsetBuffer};
+    use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{
         ArrowNumericType, Fields, Float64Type, DECIMAL256_MAX_PRECISION,
@@ -8994,5 +9011,67 @@ mod tests {
             }
             _ => panic!("Expected TimestampMillisecond with timezone"),
         }
+    }
+
+    #[test]
+    fn test_convert_array_to_scalar_vec() {
+        // Regular ListArray
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(4)]),
+        ]);
+        let converted = ScalarValue::convert_array_to_scalar_vec(&list).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                vec![ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))],
+                vec![],
+                vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(None),
+                    ScalarValue::Int64(Some(4))
+                ],
+            ]
+        );
+
+        // Regular LargeListArray
+        let large_list = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(4)]),
+        ]);
+        let converted = ScalarValue::convert_array_to_scalar_vec(&large_list).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                vec![ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))],
+                vec![],
+                vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(None),
+                    ScalarValue::Int64(Some(4))
+                ],
+            ]
+        );
+
+        // Funky (null slot has non-zero list offsets)
+        // Offsets + Values looks like this: [[1, 2], [3, 4], [5]]
+        // But with NullBuffer it's like this: [[1, 2], NULL, [5]]
+        let funky = ListArray::new(
+            Field::new_list_field(DataType::Int64, true).into(),
+            OffsetBuffer::new(vec![0, 2, 4, 5].into()),
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let converted = ScalarValue::convert_array_to_scalar_vec(&funky).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                vec![ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))],
+                vec![],
+                vec![ScalarValue::Int64(Some(5))],
+            ]
+        );
     }
 }

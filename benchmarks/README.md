@@ -87,6 +87,39 @@ To run for specific query, for example Q21
 ./bench.sh run tpch10 21
 ```
 
+## Compile profile benchmark
+
+Generate the data required for the compile profile helper (TPC-H SF=1):
+
+```shell
+./bench.sh data compile_profile
+```
+
+Run the benchmark across all default Cargo profiles (`dev`, `release`, `ci`, `release-nonlto`):
+
+```shell
+./bench.sh run compile_profile
+```
+
+Limit the run to a single profile:
+
+```shell
+./bench.sh run compile_profile dev
+```
+
+Or specify a subset of profiles:
+
+```shell
+./bench.sh run compile_profile dev release
+```
+
+You can also invoke the helper directly if you need to customise arguments further:
+
+```shell
+./benchmarks/compile_profile.py --profiles dev release --data /path/to/tpch_sf1
+```
+
+
 ## Benchmark with modified configurations
 
 ### Select join algorithm
