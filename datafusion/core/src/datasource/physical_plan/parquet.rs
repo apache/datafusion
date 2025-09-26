@@ -159,7 +159,7 @@ mod tests {
             let predicate = self
                 .predicate
                 .as_ref()
-                .map(|p| logical2physical(p, &table_schema));
+                .map(|p| logical2physical(p, Arc::clone(&table_schema)));
 
             let mut source = ParquetSource::new(table_schema);
             if let Some(predicate) = predicate {

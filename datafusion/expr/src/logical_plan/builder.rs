@@ -1026,7 +1026,7 @@ impl LogicalPlanBuilder {
 
     pub fn join_detailed_with_options(
         self,
-        right: LogicalPlan,
+        right: impl Into<Arc<LogicalPlan>>,
         join_type: JoinType,
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
