@@ -398,7 +398,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     distinct,
                 } = window_expr;
 
-                let expr = Expr::from(WindowFunction {
+                let inner = WindowFunction {
                     fun: func_def,
                     params: expr::WindowFunctionParams {
                         args,
@@ -409,9 +409,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         null_treatment,
                         distinct,
                     },
-                });
+                };
 
-                return Ok(expr);
+                if name.eq_ignore_ascii_case(inner.fun.name()) {
+                    return Ok(Expr::WindowFunction(Box::new(inner)));
+                } else {
+                    // If the function is called by an alias, a verbose string representation is created
+                    // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+                    // to ensure the output column name matches the user's query.
+                    let arg_names = inner
+                        .params
+                        .args
+                        .iter()
+                        .map(|arg| arg.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let verbose_alias = format!("{name}({arg_names})");
+
+                    return Ok(Expr::WindowFunction(Box::new(inner)).alias(verbose_alias));
+                }
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
