@@ -38,7 +38,7 @@ use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_typ
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
     ReversedUDAF, Signature,
 };
 
@@ -65,6 +65,17 @@ make_udaf_expr_and_func!(
     "Returns the avg of a group of values.",
     avg_udaf
 );
+
+pub fn avg_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        avg_udaf(),
+        vec![expr],
+        true,
+        None,
+        vec![],
+        None,
+    ))
+}
 
 #[user_doc(
     doc_section(label = "General Functions"),
@@ -528,7 +539,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
         self.count += (values.len() - values.null_count()) as u64;
 
         if let Some(x) = sum(values) {
-            let v = self.sum.get_or_insert(T::Native::default());
+            let v = self.sum.get_or_insert_with(T::Native::default);
             self.sum = Some(v.add_wrapping(x));
         }
         Ok(())
@@ -573,7 +584,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
 
         // sums are summed
         if let Some(x) = sum(states[1].as_primitive::<T>()) {
-            let v = self.sum.get_or_insert(T::Native::default());
+            let v = self.sum.get_or_insert_with(T::Native::default);
             self.sum = Some(v.add_wrapping(x));
         }
         Ok(())

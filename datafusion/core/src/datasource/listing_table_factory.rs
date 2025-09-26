@@ -27,7 +27,7 @@ use crate::datasource::listing::{
 };
 use crate::execution::context::SessionState;
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::DataType;
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
 use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
@@ -105,7 +105,7 @@ impl TableProviderFactory for ListingTableFactory {
                     .collect::<Vec<_>>(),
             )
         } else {
-            let schema: SchemaRef = Arc::new(cmd.schema.as_ref().to_owned().into());
+            let schema = Arc::clone(cmd.schema.inner());
             let table_partition_cols = cmd
                 .table_partition_cols
                 .iter()
