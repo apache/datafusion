@@ -472,19 +472,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_infer_schema_stream_separated_chunks_with_nulls() -> Result<()> {
+    async fn test_infer_schema_stream_null_chunks() -> Result<()> {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
-        let variable_object_store = Arc::new(VariableStream::new(
-            Bytes::from(
-                r#"c1,c2
-1,1.0
-,
+
+        // a stream where each line is read as a separate chunk,
+        // data type for each chunk is inferred separately.
+        // +----+-----+----+
+        // | c1 | c2  | c3 |
+        // +----+-----+----+
+        // | 1  | 1.0 |    |  type: Int64, Float64, Null
+        // |    |     |    |  type: Null, Null, Null
+        // +----+-----+----+
+        let chunked_object_store = Arc::new(ChunkedStore::new(
+            Arc::new(VariableStream::new(
+                Bytes::from(
+                    r#"c1,c2,c3
+1,1.0,
+,,
 "#,
-            ),
+                ),
+                1,
+            )),
             1,
         ));
-        let chunked_object_store = Arc::new(ChunkedStore::new(variable_object_store, 1));
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
@@ -508,7 +519,8 @@ mod tests {
             .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
             .collect();
 
-        assert_eq!(vec!["c1: Int64", "c2: Float64"], actual_fields);
+        // ensure null chunks don't skew type inference
+        assert_eq!(vec!["c1: Int64", "c2: Float64", "c3: Null"], actual_fields);
         Ok(())
     }
 
