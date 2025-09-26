@@ -1835,6 +1835,29 @@ c 122
 d 124
 e 115
 
+
+# using approx_percentile_cont on 2 columns with same signature
+query TII
+SELECT c1, approx_percentile_cont(c2, 0.95) AS c2, approx_percentile_cont(c3, 0.95) AS c3 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 5 73
+b 5 68
+c 5 122
+d 5 124
+e 5 115
+
+# error is unique to this UDAF
+query TRR
+SELECT c1, avg(c2) AS c2, avg(c3) AS c3 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 2.857142857143 -18.333333333333
+b 3.263157894737 -5.842105263158
+c 2.666666666667 -1.333333333333
+d 2.444444444444 25.444444444444
+e 3 40.333333333333
+
+
+
 query TI
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
