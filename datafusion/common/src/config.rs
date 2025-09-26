@@ -365,6 +365,11 @@ config_namespace! {
         /// target batch size is determined by the configuration setting
         pub coalesce_batches: bool, default = true
 
+        /// When set to true, hash joins will allow passing hashes from the build
+        /// side to the right side of the join. This can be useful to prune rows early on,
+        /// but may consume more memory.
+        pub hash_join_sideways_hash_passing: bool, default = false
+
         /// Should DataFusion collect statistics when first creating a table.
         /// Has no effect after the table is created. Applies to the default
         /// `ListingTableProvider` in DataFusion. Defaults to true.

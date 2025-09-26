@@ -117,6 +117,10 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns `true` if the join hash map contains no entries.
     fn is_empty(&self) -> bool;
+
+    fn num_hashes(&self) -> usize;
+
+    fn hashes(&self) -> Box<dyn Iterator<Item = u64> + '_>;
 }
 
 pub struct JoinHashMapU32 {
@@ -183,6 +187,15 @@ impl JoinHashMapType for JoinHashMapU32 {
     fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+
+    fn hashes(&self) -> Box<dyn Iterator<Item = u64> + '_> {
+        let iter = self.map.iter().map(|(hash, _)| *hash);
+        Box::new(iter)
+    }
+
+    fn num_hashes(&self) -> usize {
+        self.map.len()
+    }
 }
 
 pub struct JoinHashMapU64 {
@@ -190,6 +203,15 @@ pub struct JoinHashMapU64 {
     map: HashTable<(u64, u64)>,
     // Stores indices in chained list data structure
     next: Vec<u64>,
+}
+
+impl Default for JoinHashMapU64 {
+    fn default() -> Self {
+        Self {
+            map: HashTable::new(),
+            next: Vec::new(),
+        }
+    }
 }
 
 impl JoinHashMapU64 {
@@ -248,6 +270,15 @@ impl JoinHashMapType for JoinHashMapU64 {
 
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn hashes(&self) -> Box<dyn Iterator<Item = u64> + '_> {
+        let iter = self.map.iter().map(|(hash, _)| *hash);
+        Box::new(iter)
+    }
+
+    fn num_hashes(&self) -> usize {
+        self.map.len()
     }
 }
 
