@@ -63,9 +63,12 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
         &self.signature
     }
 
-    /// <https://github.com/lakehq/sail/blob/dc5368daa24d40a7758a299e1ba8fc985cb29108/docs/guide/dataframe/data-types/compatibility.md?plain=1#L260>
-    /// Spark return Type      -> Arrow return type
-    /// interval day to second -> DataType::Duration(TimeUnit::Microsecond)
+    /// Note the return type is `DataType::Duration(TimeUnit::Microsecond)` and not `DataType::Interval(DayTime)` as you might expect.
+    /// This is because `DataType::Interval(DayTime)` has precision only to the millisecond, whilst Spark's `DayTimeIntervalType` has
+    /// precision to the microsecond. We use `DataType::Duration(TimeUnit::Microsecond)` in order to not lose any precision. See the
+    /// [Sail compatibility doc] for reference.
+    ///
+    /// [Sail compatibility doc]: https://github.com/lakehq/sail/blob/dc5368daa24d40a7758a299e1ba8fc985cb29108/docs/guide/dataframe/data-types/compatibility.md?plain=1#L260
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Duration(Microsecond))
     }

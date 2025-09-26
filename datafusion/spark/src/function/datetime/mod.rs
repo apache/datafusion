@@ -53,7 +53,7 @@ pub mod expr_fn {
     ));
     export_functions!((
         make_dt_interval,
-        "Make a DayTime interval from given days, hours, mins and secs.",
+        "Make a day time interval from given days, hours, mins and secs (return type is actually a Duration(Microsecond))",
          days hours mins secs
     ));
     export_functions!((
