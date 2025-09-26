@@ -20,8 +20,6 @@ description: 'Setup Rust Runtime Environment'
 runs:
   using: "composite"
   steps:
-    - name: Run sccache-cache
-      uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
     - name: Configure runtime env
       shell: bash
       # do not produce debug symbols to keep memory usage down
@@ -32,7 +30,4 @@ runs:
       # See for more details: https://github.com/rust-lang/rust/issues/119560
       run: |
         echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
         echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false" >> $GITHUB_ENV
-
