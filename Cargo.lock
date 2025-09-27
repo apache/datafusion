@@ -2234,6 +2234,7 @@ dependencies = [
 name = "datafusion-functions"
 version = "50.0.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "arrow-buffer",
  "base64 0.22.1",
@@ -2476,6 +2477,7 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window",

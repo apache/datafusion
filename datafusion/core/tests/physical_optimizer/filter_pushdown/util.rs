@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::UInt64Array;
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
+use arrow_schema::DataType;
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
 use datafusion_datasource::{
@@ -25,6 +27,8 @@ use datafusion_datasource::{
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
+use datafusion_execution::RecordBatchStream;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
@@ -42,6 +46,7 @@ use datafusion_physical_plan::{
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
+use std::future::Future;
 use std::{
     any::Any,
     fmt::{Display, Formatter},
@@ -574,5 +579,265 @@ impl ExecutionPlan for TestNode {
             let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
+    }
+}
+
+pub struct Flag {
+    sender: tokio::sync::watch::Sender<bool>,
+}
+
+impl Flag {
+    /// Creates a new flag object.
+    pub fn new() -> Self {
+        Self {
+            sender: tokio::sync::watch::channel(false).0,
+        }
+    }
+
+    /// Enables the flag.
+    pub fn enable(&self) {
+        self.sender.send_if_modified(|value| {
+            if *value {
+                false
+            } else {
+                *value = true;
+
+                true
+            }
+        });
+    }
+
+    /// Waits the flag to become enabled.
+    pub async fn wait_enabled(&self) {
+        if !*self.sender.borrow() {
+            let mut receiver = self.sender.subscribe();
+
+            if !*receiver.borrow() {
+                receiver.changed().await.ok();
+            }
+        }
+    }
+}
+
+/// An execution plan node that waits for a notification before yielding any data from designated partitions.
+pub struct SlowPartitionNode {
+    input: Arc<dyn ExecutionPlan>,
+    flag: Arc<Flag>,
+    slow_partitions: Vec<usize>,
+}
+
+impl SlowPartitionNode {
+    pub fn new(input: Arc<dyn ExecutionPlan>, slow_partitions: Vec<usize>) -> Self {
+        Self {
+            input,
+            flag: Arc::new(Flag::new()),
+            slow_partitions,
+        }
+    }
+
+    pub fn unblock(&self) {
+        self.flag.enable();
+    }
+}
+
+impl std::fmt::Debug for SlowPartitionNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SlowPartitionNode")
+    }
+}
+
+impl DisplayAs for SlowPartitionNode {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "SlowPartitionNode")
+    }
+}
+
+impl ExecutionPlan for SlowPartitionNode {
+    fn name(&self) -> &str {
+        "SlowPartitionNode"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        self.input.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(children.len() == 1);
+        Ok(Arc::new(SlowPartitionNode {
+            input: children[0].clone(),
+            flag: Arc::clone(&self.flag),
+            slow_partitions: self.slow_partitions.clone(),
+        }))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
+        if self.slow_partitions.contains(&partition) {
+            let stream = self.input.execute(partition, context)?;
+            let waiter_stream = WaiterStream {
+                inner: stream,
+                flag: Arc::clone(&self.flag),
+                flag_checked: false,
+            };
+            Ok(Box::pin(waiter_stream)
+                as datafusion_execution::SendableRecordBatchStream)
+        } else {
+            self.input.execute(partition, context)
+        }
+    }
+}
+
+/// Stream that waits for a notification before yielding the first batch
+struct WaiterStream {
+    inner: datafusion_execution::SendableRecordBatchStream,
+    flag: Arc<Flag>,
+    flag_checked: bool,
+}
+
+impl Stream for WaiterStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        // If we haven't checked the flag yet, wait for it to be enabled
+        if !this.flag_checked {
+            let flag = Arc::clone(&this.flag);
+            let wait_future = flag.wait_enabled();
+            futures::pin_mut!(wait_future);
+
+            match wait_future.poll(cx) {
+                Poll::Ready(()) => {
+                    // Flag is now enabled, mark as checked and continue
+                    this.flag_checked = true;
+                }
+                Poll::Pending => {
+                    // Still waiting for flag to be enabled
+                    return Poll::Pending;
+                }
+            }
+        }
+
+        // Flag has been checked and is enabled, delegate to inner stream
+        Pin::new(&mut this.inner).poll_next(cx)
+    }
+}
+
+impl RecordBatchStream for WaiterStream {
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+}
+
+/// A hash repartition implementation that only accepts integers and hashes them to themselves.
+#[derive(Debug)]
+pub struct TestRepartitionHash {
+    signature: datafusion_expr::Signature,
+}
+
+impl TestRepartitionHash {
+    pub fn new() -> Self {
+        Self {
+            signature: datafusion_expr::Signature::one_of(
+                vec![datafusion_expr::TypeSignature::VariadicAny],
+                datafusion_expr::Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl PartialEq for TestRepartitionHash {
+    fn eq(&self, other: &Self) -> bool {
+        // RandomState doesn't implement PartialEq, so we just compare signatures
+        self.signature == other.signature
+    }
+}
+
+impl Eq for TestRepartitionHash {}
+
+impl std::hash::Hash for TestRepartitionHash {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Only hash the signature since RandomState doesn't implement Hash
+        self.signature.hash(state);
+    }
+}
+
+impl ScalarUDFImpl for TestRepartitionHash {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "test_repartition_hash"
+    }
+
+    fn signature(&self) -> &datafusion_expr::Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // Always return UInt64Array regardless of input types
+        Ok(DataType::UInt64)
+    }
+
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        // All inputs must be arrays of UInt64
+        let arrays: Vec<UInt64Array> = args
+            .args
+            .iter()
+            .map(|cv| {
+                let ColumnarValue::Array(array) = cv else {
+                    panic!("Expected array input");
+                };
+                let Some(array) = array.as_any().downcast_ref::<UInt64Array>() else {
+                    panic!("Expected UInt64Array input");
+                };
+                array.clone()
+            })
+            .collect();
+        // We accept only 1 array
+        if arrays.is_empty() {
+            return Err(datafusion_common::DataFusionError::Internal(
+                "Expected at least one argument".to_string(),
+            ));
+        }
+
+        let num_rows = arrays[0].len();
+        let mut result_values = Vec::with_capacity(num_rows);
+
+        // Add together all the integer values from all input arrays
+        for row_idx in 0..num_rows {
+            let mut sum = 0u64;
+            for array in &arrays {
+                let value = array.value(row_idx);
+                sum = sum.wrapping_add(value);
+            }
+            result_values.push(sum);
+        }
+        // Return the summed values as a UInt64Array
+        Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
+            result_values,
+        ))))
+    }
+
+    fn documentation(&self) -> Option<&datafusion_expr::Documentation> {
+        None
     }
 }
