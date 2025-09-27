@@ -20,13 +20,37 @@ use std::sync::Arc;
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
-    execution::{context::SessionState, TaskContext},
+    execution::{context::SessionState, memory_pool::TrackedPool, TaskContext},
     logical_expr::LogicalPlan,
     prelude::SessionContext,
 };
 use object_store::ObjectStore;
 
 use crate::object_storage::{AwsOptions, GcpOptions};
+
+/// Registers table option extensions based on the provided URL scheme.
+///
+/// Supported schemes are:
+/// * `s3`, `oss`, `cos` - registers [`AwsOptions`]
+/// * `gs`, `gcs` - registers [`GcpOptions`]
+///
+/// Any other scheme is ignored.
+pub fn register_table_options_from_scheme(ctx: &SessionContext, scheme: &str) {
+    match scheme {
+        // For Amazon S3 or Alibaba Cloud OSS
+        "s3" | "oss" | "cos" => {
+            // Register AWS specific table options in the session context:
+            ctx.register_table_options_extension(AwsOptions::default())
+        }
+        // For Google Cloud Storage
+        "gs" | "gcs" => {
+            // Register GCP specific table options in the session context:
+            ctx.register_table_options_extension(GcpOptions::default())
+        }
+        // For unsupported schemes, do nothing:
+        _ => {}
+    }
+}
 
 #[async_trait::async_trait]
 /// The CLI session context trait provides a way to have a session context that can be used with datafusion's CLI code.
@@ -52,6 +76,19 @@ pub trait CliSessionContext {
         &self,
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError>;
+
+    /// Return true if memory profiling is enabled.
+    fn memory_profiling(&self) -> bool {
+        false
+    }
+
+    /// Enable or disable memory profiling.
+    fn set_memory_profiling(&self, _enable: bool) {}
+
+    /// Return the tracked memory pool used for profiling, if any.
+    fn tracked_memory_pool(&self) -> Option<Arc<dyn TrackedPool>> {
+        None
+    }
 }
 
 #[async_trait::async_trait]
@@ -73,26 +110,82 @@ impl CliSessionContext for SessionContext {
     }
 
     fn register_table_options_extension_from_scheme(&self, scheme: &str) {
-        match scheme {
-            // For Amazon S3 or Alibaba Cloud OSS
-            "s3" | "oss" | "cos" => {
-                // Register AWS specific table options in the session context:
-                self.register_table_options_extension(AwsOptions::default())
-            }
-            // For Google Cloud Storage
-            "gs" | "gcs" => {
-                // Register GCP specific table options in the session context:
-                self.register_table_options_extension(GcpOptions::default())
-            }
-            // For unsupported schemes, do nothing:
-            _ => {}
-        }
+        register_table_options_from_scheme(self, scheme);
     }
 
     async fn execute_logical_plan(
         &self,
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError> {
-        self.execute_logical_plan(plan).await
+        SessionContext::execute_logical_plan(self, plan).await
+    }
+}
+
+/// Session context used by the CLI with memory profiling support.
+pub struct ReplSessionContext {
+    ctx: SessionContext,
+    tracked_memory_pool: Option<Arc<dyn TrackedPool>>,
+}
+
+impl ReplSessionContext {
+    pub fn new(
+        ctx: SessionContext,
+        tracked_memory_pool: Option<Arc<dyn TrackedPool>>,
+    ) -> Self {
+        Self {
+            ctx,
+            tracked_memory_pool,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CliSessionContext for ReplSessionContext {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        self.ctx.task_ctx()
+    }
+
+    fn session_state(&self) -> SessionState {
+        self.ctx.state()
+    }
+
+    fn register_object_store(
+        &self,
+        url: &url::Url,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore + 'static>> {
+        self.ctx.register_object_store(url, object_store)
+    }
+
+    fn register_table_options_extension_from_scheme(&self, scheme: &str) {
+        register_table_options_from_scheme(&self.ctx, scheme);
+    }
+
+    async fn execute_logical_plan(
+        &self,
+        plan: LogicalPlan,
+    ) -> Result<DataFrame, DataFusionError> {
+        self.ctx.execute_logical_plan(plan).await
+    }
+
+    fn memory_profiling(&self) -> bool {
+        self.tracked_memory_pool
+            .as_ref()
+            .map(|pool| pool.tracking_enabled())
+            .unwrap_or(false)
+    }
+
+    fn set_memory_profiling(&self, enable: bool) {
+        if let Some(pool) = &self.tracked_memory_pool {
+            if enable {
+                pool.enable_tracking();
+            } else {
+                pool.disable_tracking();
+            }
+        }
+    }
+
+    fn tracked_memory_pool(&self) -> Option<Arc<dyn TrackedPool>> {
+        self.tracked_memory_pool.clone()
     }
 }
