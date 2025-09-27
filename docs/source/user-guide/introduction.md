@@ -124,6 +124,7 @@ Here are some active projects using DataFusion:
 - [ROAPI] Create full-fledged APIs for slowly moving datasets without writing a single line of code
 - [Sail](https://github.com/lakehq/sail) Unifying stream, batch and AI workloads with Apache Spark compatibility
 - [Seafowl] CDN-friendly analytical database
+- [SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
 - [Spice.ai] Building blocks for data-driven AI applications
 - [Synnada] Streaming-first framework for data products
