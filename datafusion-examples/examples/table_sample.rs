@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Hashable and comparible f64 for sampling bounds
+/// Hashable and comparable f64 for sampling bounds
 #[derive(Debug, Clone, Copy, PartialOrd)]
 struct Bound(f64);
 
