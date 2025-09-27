@@ -31,7 +31,8 @@ use arrow::error::ArrowError;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
-    not_impl_err, DataFusionError, GetExt, Result, Statistics, DEFAULT_CSV_EXTENSION,
+    exec_err, not_impl_err, DataFusionError, GetExt, Result, Statistics,
+    DEFAULT_CSV_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::decoder::Decoder;
@@ -572,6 +573,25 @@ impl CsvFormat {
                     })
                     .unzip();
             } else {
+                if fields.len() != column_type_possibilities.len()
+                    && !self.options.truncated_rows.unwrap_or(false)
+                {
+                    return exec_err!(
+                        "Encountered unequal lengths between records on CSV file whilst inferring schema. \
+                         Expected {} fields, found {} fields at record {}",
+                        column_type_possibilities.len(),
+                        fields.len(),
+                        record_number + 1
+                    );
+                }
+
+                // First update type possibilities for existing columns using zip
+                column_type_possibilities.iter_mut().zip(&fields).for_each(
+                    |(possibilities, field)| {
+                        possibilities.insert(field.data_type().clone());
+                    },
+                );
+
                 // Handle files with different numbers of columns by extending the schema
                 if fields.len() > column_type_possibilities.len() {
                     // New columns found - extend our tracking structures
@@ -582,15 +602,6 @@ impl CsvFormat {
                             possibilities.insert(field.data_type().clone());
                         }
                         column_type_possibilities.push(possibilities);
-                    }
-                }
-
-                // Update type possibilities for columns that exist in this file
-                // Only process fields that exist in both the current file and our tracking structures
-                for (field_idx, field) in fields.iter().enumerate() {
-                    if field_idx < column_type_possibilities.len() {
-                        column_type_possibilities[field_idx]
-                            .insert(field.data_type().clone());
                     }
                 }
             }
@@ -605,10 +616,7 @@ impl CsvFormat {
     }
 }
 
-pub(crate) fn build_schema_helper(
-    names: Vec<String>,
-    types: &[HashSet<DataType>],
-) -> Schema {
+fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schema {
     let fields = names
         .into_iter()
         .zip(types)

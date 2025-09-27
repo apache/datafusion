@@ -19,6 +19,8 @@
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_common::test_util::batches_to_sort_string;
+use insta::assert_snapshot;
 use std::fs;
 use tempfile::TempDir;
 
@@ -102,66 +104,19 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
         );
     }
 
-    // Verify the actual content of the data
-    // Since we don't know the exact order of rows, just verify the overall structure
-
-    // Check that all batches have nulls in the correct places
-    let mut null_count_col3 = 0;
-    let mut null_count_col4 = 0;
-    let mut null_count_col5 = 0;
-    let mut non_null_count_col3 = 0;
-    let mut non_null_count_col4 = 0;
-    let mut non_null_count_col5 = 0;
-
-    for batch in &results {
-        // Count nulls and non-nulls for columns 3-5 (platform_number, direction, stop_sequence)
-        for i in 0..batch.num_rows() {
-            if batch.column(3).is_null(i) {
-                null_count_col3 += 1;
-            } else {
-                non_null_count_col3 += 1;
-            }
-
-            if batch.column(4).is_null(i) {
-                null_count_col4 += 1;
-            } else {
-                non_null_count_col4 += 1;
-            }
-
-            if batch.column(5).is_null(i) {
-                null_count_col5 += 1;
-            } else {
-                non_null_count_col5 += 1;
-            }
-        }
-    }
-
-    // Verify that we have the expected pattern:
-    // 3 rows with nulls (from file1) and 3 rows with non-nulls (from file2)
-    assert_eq!(
-        null_count_col3, 3,
-        "Should have 3 null values in platform_number column"
-    );
-    assert_eq!(
-        non_null_count_col3, 3,
-        "Should have 3 non-null values in platform_number column"
-    );
-    assert_eq!(
-        null_count_col4, 3,
-        "Should have 3 null values in direction column"
-    );
-    assert_eq!(
-        non_null_count_col4, 3,
-        "Should have 3 non-null values in direction column"
-    );
-    assert_eq!(
-        null_count_col5, 3,
-        "Should have 3 null values in stop_sequence column"
-    );
-    assert_eq!(
-        non_null_count_col5, 3,
-        "Should have 3 non-null values in stop_sequence column"
-    );
+    // Verify the actual content of the data using snapshot testing
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +------------+------------+-----------+----------------------+-----------------------+----------------------+
+    | service_id | route_type | agency_id | stop_platform_change | stop_planned_platform | stop_actual_platform |
+    +------------+------------+-----------+----------------------+-----------------------+----------------------+
+    | 1          | bus        | agency1   |                      |                       |                      |
+    | 2          | rail       | agency2   |                      |                       |                      |
+    | 3          | bus        | agency3   |                      |                       |                      |
+    | 4          | rail       | agency2   | true                 | Platform A            | Platform B           |
+    | 5          | bus        | agency1   | false                | Stop 1                | Stop 1               |
+    | 6          | rail       | agency3   | true                 | Platform C            | Platform D           |
+    +------------+------------+-----------+----------------------+-----------------------+----------------------+
+    ");
 
     Ok(())
 }
