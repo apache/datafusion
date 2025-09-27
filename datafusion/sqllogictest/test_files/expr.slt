@@ -2080,9 +2080,6 @@ host2 2.2 202
 host3 3.3 303
 
 statement ok
-set datafusion.sql_parser.dialect = 'Postgres';
-
-statement ok
 create table t (a float) as values (1), (2), (3);
 
 query TT
@@ -2100,9 +2097,6 @@ physical_plan
 
 statement ok
 drop table t;
-
-statement ok
-set datafusion.sql_parser.dialect = 'Generic';
 
 # test between expression with null
 query I

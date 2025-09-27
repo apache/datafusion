@@ -4475,10 +4475,6 @@ physical_plan
 12)----------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], file_type=csv, has_header=true
 
-# Use PostgreSQL dialect
-statement ok
-set datafusion.sql_parser.dialect = 'Postgres';
-
 query II
 SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a') FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
@@ -4496,10 +4492,6 @@ SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a'), count(c5) FILTER (WHERE 
 3 13 17
 4 19 18
 5 11 9
-
-# Restore the default dialect
-statement ok
-set datafusion.sql_parser.dialect = 'Generic';
 
 statement ok
 drop table aggregate_test_100;
