@@ -212,6 +212,14 @@ pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result
                     Ok(f64_to_str(result))
                 }
             }
+            DataType::Decimal32(_, scale) => {
+                let value = get_row_value!(array::Decimal32Array, col, row);
+                Ok(decimal_32_to_str(value, *scale))
+            }
+            DataType::Decimal64(_, scale) => {
+                let value = get_row_value!(array::Decimal64Array, col, row);
+                Ok(decimal_64_to_str(value, *scale))
+            }
             DataType::Decimal128(_, scale) => {
                 let value = get_row_value!(array::Decimal128Array, col, row);
                 Ok(decimal_128_to_str(value, *scale))
@@ -274,6 +282,8 @@ pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
             DataType::Float16
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => DFColumnType::Float,
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
