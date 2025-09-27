@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Install HawkEye
-        run: cargo install hawkeye --locked
+        run: cargo install hawkeye --version 6.2.0 --locked --profile dev
       - name: Run license header check
         run: ci/scripts/license_header.sh
 
