@@ -15,6 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt;
+use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
+use std::pin::Pin;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use arrow::array::UInt32Array;
+use arrow::compute;
+use arrow::record_batch::RecordBatch;
+use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::SchemaRef;
+
 use datafusion::common::{
     arrow_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchemaRef, ResolvedTableReference, Statistics, TableReference,
@@ -27,15 +43,11 @@ use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, TableSource, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
-use std::any::Any;
-use std::collections::HashMap;
 
-use arrow::util::pretty::pretty_format_batches;
-
-use arrow_schema::SchemaRef;
-use async_trait::async_trait;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::DataFusionError;
+use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::session_state::SessionContextProvider;
 use datafusion::execution::{
     SendableRecordBatchStream, SessionState, SessionStateBuilder, TaskContext,
 };
@@ -55,25 +67,12 @@ use datafusion::physical_planner::{
 };
 use datafusion::prelude::*;
 use datafusion::sql::planner::SqlToRel;
-use datafusion::sql::sqlparser::ast::TableSampleKind;
-use log::{debug, info};
-use std::fmt;
-use std::fmt::{Debug, Formatter};
-use std::hash::{Hash, Hasher};
-use std::pin::Pin;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
-use arrow::array::UInt32Array;
-use arrow::compute;
-use arrow::record_batch::RecordBatch;
-
-use datafusion::execution::context::QueryPlanner;
-use datafusion::execution::session_state::SessionContextProvider;
 use datafusion::sql::sqlparser::ast;
+
+use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use futures::{ready, TryStreamExt};
+use log::{debug, info};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, Poisson};
