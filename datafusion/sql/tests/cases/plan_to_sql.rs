@@ -995,7 +995,7 @@ fn test_aggregation_without_projection() -> Result<()> {
     ]);
 
     let plan = LogicalPlanBuilder::from(
-        table_scan(Some("users"), &schema, Some(vec![0, 1]))?.build()?,
+        table_scan(Some("users"), schema, Some(vec![0, 1]))?.build()?,
     )
     .aggregate(vec![col("name")], vec![sum(col("age"))])?
     .build()?;
@@ -1135,7 +1135,7 @@ fn table_references_in_plan_helper(
     expr: impl IntoIterator<Item = impl Into<datafusion_expr::select_expr::SelectExpr>>,
     dialect: &impl UnparserDialect,
 ) -> Statement {
-    let plan = table_scan(Some(table_name), &table_schema, None)
+    let plan = table_scan(Some(table_name), table_schema, None)
         .unwrap()
         .project(expr)
         .unwrap()
@@ -1240,7 +1240,7 @@ fn table_scan_with_empty_projection_and_none_projection_helper(
     table_schema: Schema,
     projection: Option<Vec<usize>>,
 ) -> LogicalPlan {
-    table_scan(Some(table_name), &table_schema, projection)
+    table_scan(Some(table_name), table_schema, projection)
         .unwrap()
         .build()
         .unwrap()
@@ -1354,12 +1354,12 @@ where
 
 #[test]
 fn test_table_scan_alias() -> Result<()> {
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("age", DataType::Utf8, false),
-    ]);
+    ]));
 
-    let plan = table_scan(Some("t1"), &schema, None)?
+    let plan = table_scan(Some("t1"), Arc::clone(&schema), None)?
         .project(vec![col("id")])?
         .alias("a")?
         .build()?;
@@ -1369,7 +1369,7 @@ fn test_table_scan_alias() -> Result<()> {
         @"SELECT * FROM (SELECT t1.id FROM t1) AS a"
     );
 
-    let plan = table_scan(Some("t1"), &schema, None)?
+    let plan = table_scan(Some("t1"), Arc::clone(&schema), None)?
         .project(vec![col("id")])?
         .alias("a")?
         .build()?;
@@ -1380,7 +1380,7 @@ fn test_table_scan_alias() -> Result<()> {
         @"SELECT * FROM (SELECT t1.id FROM t1) AS a"
     );
 
-    let plan = table_scan(Some("t1"), &schema, None)?
+    let plan = table_scan(Some("t1"), Arc::clone(&schema), None)?
         .filter(col("id").gt(lit(5)))?
         .project(vec![col("id")])?
         .alias("a")?
@@ -1393,7 +1393,7 @@ fn test_table_scan_alias() -> Result<()> {
 
     let table_scan_with_two_filter = table_scan_with_filters(
         Some("t1"),
-        &schema,
+        Arc::clone(&schema),
         None,
         vec![col("id").gt(lit(1)), col("age").lt(lit(2))],
     )?
@@ -1406,11 +1406,16 @@ fn test_table_scan_alias() -> Result<()> {
         @r#"SELECT a.id FROM t1 AS a WHERE ((a.id > 1) AND (a.age < 2))"#
     );
 
-    let table_scan_with_fetch =
-        table_scan_with_filter_and_fetch(Some("t1"), &schema, None, vec![], Some(10))?
-            .project(vec![col("id")])?
-            .alias("a")?
-            .build()?;
+    let table_scan_with_fetch = table_scan_with_filter_and_fetch(
+        Some("t1"),
+        Arc::clone(&schema),
+        None,
+        vec![],
+        Some(10),
+    )?
+    .project(vec![col("id")])?
+    .alias("a")?
+    .build()?;
     let table_scan_with_fetch = plan_to_sql(&table_scan_with_fetch)?;
     assert_snapshot!(
         table_scan_with_fetch,
@@ -1419,7 +1424,7 @@ fn test_table_scan_alias() -> Result<()> {
 
     let table_scan_with_pushdown_all = table_scan_with_filter_and_fetch(
         Some("t1"),
-        &schema,
+        schema,
         Some(vec![0, 1]),
         vec![col("id").gt(lit(1))],
         Some(10),
@@ -1437,26 +1442,28 @@ fn test_table_scan_alias() -> Result<()> {
 
 #[test]
 fn test_table_scan_pushdown() -> Result<()> {
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("age", DataType::Utf8, false),
-    ]);
+    ]));
     let scan_with_projection =
-        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?.build()?;
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_snapshot!(
         scan_with_projection,
         @r#"SELECT t1.id, t1.age FROM t1"#
     );
 
-    let scan_with_projection = table_scan(Some("t1"), &schema, Some(vec![1]))?.build()?;
+    let scan_with_projection =
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![1]))?.build()?;
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_snapshot!(
         scan_with_projection,
         @r#"SELECT t1.age FROM t1"#
     );
 
-    let scan_with_no_projection = table_scan(Some("t1"), &schema, None)?.build()?;
+    let scan_with_no_projection =
+        table_scan(Some("t1"), Arc::clone(&schema), None)?.build()?;
     let scan_with_no_projection = plan_to_sql(&scan_with_no_projection)?;
     assert_snapshot!(
         scan_with_no_projection,
@@ -1464,7 +1471,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     );
 
     let table_scan_with_projection_alias =
-        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?
             .alias("ta")?
             .build()?;
     let table_scan_with_projection_alias =
@@ -1475,7 +1482,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     );
 
     let table_scan_with_projection_alias =
-        table_scan(Some("t1"), &schema, Some(vec![1]))?
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![1]))?
             .alias("ta")?
             .build()?;
     let table_scan_with_projection_alias =
@@ -1485,9 +1492,10 @@ fn test_table_scan_pushdown() -> Result<()> {
         @r#"SELECT ta.age FROM t1 AS ta"#
     );
 
-    let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
-        .alias("ta")?
-        .build()?;
+    let table_scan_with_no_projection_alias =
+        table_scan(Some("t1"), Arc::clone(&schema), None)?
+            .alias("ta")?
+            .build()?;
     let table_scan_with_no_projection_alias =
         plan_to_sql(&table_scan_with_no_projection_alias)?;
     assert_snapshot!(
@@ -1496,7 +1504,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     );
 
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
-        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?.build()?,
     )
     .project(vec![col("id"), col("age")])?
     .build()?;
@@ -1508,7 +1516,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     );
 
     let query_from_table_scan_with_two_projections = LogicalPlanBuilder::from(
-        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?.build()?,
     )
     .project(vec![col("id"), col("age")])?
     .project(vec![wildcard()])?
@@ -1522,7 +1530,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 
     let table_scan_with_filter = table_scan_with_filters(
         Some("t1"),
-        &schema,
+        Arc::clone(&schema),
         None,
         vec![col("id").gt(col("age"))],
     )?
@@ -1535,7 +1543,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 
     let table_scan_with_two_filter = table_scan_with_filters(
         Some("t1"),
-        &schema,
+        Arc::clone(&schema),
         None,
         vec![col("id").gt(lit(1)), col("age").lt(lit(2))],
     )?
@@ -1548,7 +1556,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 
     let table_scan_with_filter_alias = table_scan_with_filters(
         Some("t1"),
-        &schema,
+        Arc::clone(&schema),
         None,
         vec![col("id").gt(col("age"))],
     )?
@@ -1562,7 +1570,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 
     let table_scan_with_projection_and_filter = table_scan_with_filters(
         Some("t1"),
-        &schema,
+        Arc::clone(&schema),
         Some(vec![0, 1]),
         vec![col("id").gt(col("age"))],
     )?
@@ -1576,7 +1584,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 
     let table_scan_with_projection_and_filter = table_scan_with_filters(
         Some("t1"),
-        &schema,
+        Arc::clone(&schema),
         Some(vec![1]),
         vec![col("id").gt(col("age"))],
     )?
@@ -1588,9 +1596,14 @@ fn test_table_scan_pushdown() -> Result<()> {
         @r#"SELECT t1.age FROM t1 WHERE (t1.id > t1.age)"#
     );
 
-    let table_scan_with_inline_fetch =
-        table_scan_with_filter_and_fetch(Some("t1"), &schema, None, vec![], Some(10))?
-            .build()?;
+    let table_scan_with_inline_fetch = table_scan_with_filter_and_fetch(
+        Some("t1"),
+        Arc::clone(&schema),
+        None,
+        vec![],
+        Some(10),
+    )?
+    .build()?;
     let table_scan_with_inline_fetch = plan_to_sql(&table_scan_with_inline_fetch)?;
     assert_snapshot!(
         table_scan_with_inline_fetch,
@@ -1599,7 +1612,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 
     let table_scan_with_projection_and_inline_fetch = table_scan_with_filter_and_fetch(
         Some("t1"),
-        &schema,
+        Arc::clone(&schema),
         Some(vec![0, 1]),
         vec![],
         Some(10),
@@ -1614,7 +1627,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 
     let table_scan_with_all = table_scan_with_filter_and_fetch(
         Some("t1"),
-        &schema,
+        Arc::clone(&schema),
         Some(vec![0, 1]),
         vec![col("id").gt(col("age"))],
         Some(10),
@@ -1628,7 +1641,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 
     let table_scan_with_additional_filter = table_scan_with_filters(
         Some("t1"),
-        &schema,
+        schema,
         None,
         vec![col("id").gt(col("age"))],
     )?
@@ -1650,7 +1663,7 @@ fn test_sort_with_push_down_fetch() -> Result<()> {
         Field::new("age", DataType::Utf8, false),
     ]);
 
-    let plan = table_scan(Some("t1"), &schema, None)?
+    let plan = table_scan(Some("t1"), schema, None)?
         .project(vec![col("id"), col("age")])?
         .sort_with_limit(vec![col("age").sort(true, true)], Some(10))?
         .build()?;
@@ -1670,14 +1683,14 @@ fn test_join_with_table_scan_filters() -> Result<()> {
         Field::new("name", DataType::Utf8, false),
     ]);
 
-    let schema_right = Schema::new(vec![
+    let schema_right = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("age", DataType::Utf8, false),
-    ]);
+    ]));
 
     let left_plan = table_scan_with_filters(
         Some("left_table"),
-        &schema_left,
+        schema_left,
         None,
         vec![col("name").like(lit("some_name"))],
     )?
@@ -1686,7 +1699,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     let right_plan = table_scan_with_filters(
         Some("right_table"),
-        &schema_right,
+        Arc::clone(&schema_right),
         None,
         vec![col("age").gt(lit(10))],
     )?
@@ -1724,7 +1737,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     let right_plan_with_filter = table_scan_with_filters(
         Some("right_table"),
-        &schema_right,
+        Arc::clone(&schema_right),
         None,
         vec![col("age").gt(lit(10))],
     )?
@@ -1749,7 +1762,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     let right_plan_with_filter_schema = table_scan_with_filters(
         Some("right_table"),
-        &schema_right,
+        Arc::clone(&schema_right),
         None,
         vec![
             col("right_table.age").gt(lit(10)),
@@ -2230,7 +2243,7 @@ fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
         Field::new("c_name", DataType::Utf8, false),
     ]);
 
-    let table_scan = table_scan(Some("customer"), &schema, Some(vec![0, 1]))?.build()?;
+    let table_scan = table_scan(Some("customer"), schema, Some(vec![0, 1]))?.build()?;
 
     let plan = LogicalPlanBuilder::from(table_scan)
         .alias("customer")?
@@ -2262,18 +2275,19 @@ fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
 #[test]
 fn test_unparse_left_anti_join() -> Result<()> {
     // select t1.d from t1 where c not in (select c from t2)
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
-    ]);
+    ]));
 
     // LeftAnti Join: t1.c = __correlated_sq_1.c
     //   TableScan: t1 projection=[c]
     //   SubqueryAlias: __correlated_sq_1
     //     TableScan: t2 projection=[c]
 
-    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), schema, Some(vec![0]))?.build()?;
     let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
     let plan = LogicalPlanBuilder::from(table_scan1)
         .project(vec![col("t1.d")])?
@@ -2296,18 +2310,19 @@ fn test_unparse_left_anti_join() -> Result<()> {
 #[test]
 fn test_unparse_left_semi_join() -> Result<()> {
     // select t1.d from t1 where c in (select c from t2)
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
-    ]);
+    ]));
 
     // LeftSemi Join: t1.c = __correlated_sq_1.c
     //   TableScan: t1 projection=[c]
     //   SubqueryAlias: __correlated_sq_1
     //     TableScan: t2 projection=[c]
 
-    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), schema, Some(vec![0]))?.build()?;
     let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
     let plan = LogicalPlanBuilder::from(table_scan1)
         .project(vec![col("t1.d")])?
@@ -2330,18 +2345,19 @@ fn test_unparse_left_semi_join() -> Result<()> {
 #[test]
 fn test_unparse_left_mark_join() -> Result<()> {
     // select t1.d from t1 where t1.d < 0 OR exists (select 1 from t2 where t1.c = t2.c)
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
-    ]);
+    ]));
     // Filter: __correlated_sq_1.mark OR t1.d < Int32(0)
     //   Projection: t1.d
     //     LeftMark Join:  Filter: t1.c = __correlated_sq_1.c
     //       TableScan: t1 projection=[c, d]
     //       SubqueryAlias: __correlated_sq_1
     //         TableScan: t2 projection=[c]
-    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), schema, Some(vec![0]))?.build()?;
     let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
     let plan = LogicalPlanBuilder::from(table_scan1)
         .join_on(
@@ -2365,17 +2381,17 @@ fn test_unparse_left_mark_join() -> Result<()> {
 #[test]
 fn test_unparse_right_semi_join() -> Result<()> {
     // select t2.c, t2.d from t1 right semi join t2 on t1.c = t2.c where t2.c <= 1
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
-    ]);
+    ]));
     // Filter: t2.c <= Int64(1)
     //   RightSemi Join: t1.c = t2.c
     //     TableScan: t1 projection=[c, d]
     //     Projection: t2.c, t2.d
     //       TableScan: t2 projection=[c, d]
-    let left = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let right_table_scan = table_scan(Some("t2"), &schema, Some(vec![0, 1]))?.build()?;
+    let left = table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?.build()?;
+    let right_table_scan = table_scan(Some("t2"), schema, Some(vec![0, 1]))?.build()?;
     let right = LogicalPlanBuilder::from(right_table_scan)
         .project(vec![col("c"), col("d")])?
         .build()?;
@@ -2403,17 +2419,17 @@ fn test_unparse_right_semi_join() -> Result<()> {
 #[test]
 fn test_unparse_right_anti_join() -> Result<()> {
     // select t2.c, t2.d from t1 right anti join t2 on t1.c = t2.c where t2.c <= 1
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
-    ]);
+    ]));
     // Filter: t2.c <= Int64(1)
     //   RightAnti Join: t1.c = t2.c
     //     TableScan: t1 projection=[c, d]
     //     Projection: t2.c, t2.d
     //       TableScan: t2 projection=[c, d]
-    let left = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let right_table_scan = table_scan(Some("t2"), &schema, Some(vec![0, 1]))?.build()?;
+    let left = table_scan(Some("t1"), Arc::clone(&schema), Some(vec![0, 1]))?.build()?;
+    let right_table_scan = table_scan(Some("t2"), schema, Some(vec![0, 1]))?.build()?;
     let right = LogicalPlanBuilder::from(right_table_scan)
         .project(vec![col("c"), col("d")])?
         .build()?;
@@ -2440,17 +2456,18 @@ fn test_unparse_right_anti_join() -> Result<()> {
 
 #[test]
 fn test_unparse_cross_join_with_table_scan_projection() -> Result<()> {
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Int32, false),
         Field::new("v", DataType::Int32, false),
-    ]);
+    ]));
     // Cross Join:
     //   SubqueryAlias: t1
     //     TableScan: test projection=[v]
     //   SubqueryAlias: t2
     //     TableScan: test projection=[v]
-    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
-    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("test"), Arc::clone(&schema), Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), schema, Some(vec![1]))?.build()?;
     let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
         .cross_join(subquery_alias(table_scan2, "t2")?)?
         .build()?;
@@ -2465,17 +2482,18 @@ fn test_unparse_cross_join_with_table_scan_projection() -> Result<()> {
 
 #[test]
 fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Int32, false),
         Field::new("v", DataType::Int32, false),
-    ]);
+    ]));
     // Inner Join:
     //   SubqueryAlias: t1
     //     TableScan: test projection=[v]
     //   SubqueryAlias: t2
     //     TableScan: test projection=[v]
-    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
-    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("test"), Arc::clone(&schema), Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), schema, Some(vec![1]))?.build()?;
     let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
         .join_on(
             subquery_alias(table_scan2, "t2")?,
@@ -2494,17 +2512,18 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
 
 #[test]
 fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
-    let schema = Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Int32, false),
         Field::new("v", DataType::Int32, false),
-    ]);
+    ]));
     // LeftSemi Join:
     //   SubqueryAlias: t1
     //     TableScan: test projection=[v]
     //   SubqueryAlias: t2
     //     TableScan: test projection=[v]
-    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
-    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("test"), Arc::clone(&schema), Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), schema, Some(vec![1]))?.build()?;
     let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
         .join_on(
             subquery_alias(table_scan2, "t2")?,

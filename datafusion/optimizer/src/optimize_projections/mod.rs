@@ -862,7 +862,7 @@ mod tests {
     use crate::optimize_projections::OptimizeProjections;
     use crate::optimizer::Optimizer;
     use crate::test::{
-        assert_fields_eq, scan_empty, test_table_scan, test_table_scan_fields,
+        assert_fields_eq, test_table_scan, test_table_scan_fields,
         test_table_scan_with_name,
     };
     use crate::{OptimizerContext, OptimizerRule};
@@ -1161,7 +1161,7 @@ mod tests {
 
         let groups: Vec<Expr> = vec![];
 
-        let plan = table_scan(TableReference::none(), &schema, None)
+        let plan = table_scan(TableReference::none(), schema, None)
             .unwrap()
             .aggregate(groups.clone(), vec![count(lit(1))])
             .unwrap()
@@ -1646,7 +1646,7 @@ mod tests {
         // Projection: tag.one
         //   Aggregate: groupBy=[], aggr=[max("tag.one") AS "tag.one"]
         //    TableScan
-        let plan = table_scan(Some("m4"), &schema, None)?
+        let plan = table_scan(Some("m4"), schema, None)?
             .aggregate(
                 Vec::<Expr>::new(),
                 vec![max(col(Column::new_unqualified("tag.one"))).alias("tag.one")],
@@ -1684,7 +1684,7 @@ mod tests {
     fn reorder_scan() -> Result<()> {
         let schema = Schema::new(test_table_scan_fields());
 
-        let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?.build()?;
+        let plan = table_scan(Some("test"), schema, Some(vec![1, 0, 2]))?.build()?;
         assert_optimized_plan_equal!(
             plan,
             @"TableScan: test projection=[b, a, c]"
@@ -1695,7 +1695,7 @@ mod tests {
     fn reorder_scan_projection() -> Result<()> {
         let schema = Schema::new(test_table_scan_fields());
 
-        let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?
+        let plan = table_scan(Some("test"), schema, Some(vec![1, 0, 2]))?
             .project(vec![col("a"), col("b")])?
             .build()?;
         assert_optimized_plan_equal!(
@@ -1754,7 +1754,8 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan =
+            datafusion_expr::table_scan(Some("test2"), schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
@@ -1806,7 +1807,8 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan =
+            datafusion_expr::table_scan(Some("test2"), schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
@@ -1861,7 +1863,8 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let schema = Schema::new(vec![Field::new("a", DataType::UInt32, false)]);
-        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+        let table2_scan =
+            datafusion_expr::table_scan(Some("test2"), schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .join_using(table2_scan, JoinType::Left, vec!["a".into()])?
@@ -2073,7 +2076,7 @@ mod tests {
 
         let table_scan = table_scan_with_filters(
             Some("test"),
-            &schema,
+            schema,
             None,
             vec![col("b").eq(lit(1))],
         )?

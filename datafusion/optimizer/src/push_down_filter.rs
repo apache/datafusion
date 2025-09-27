@@ -1581,8 +1581,8 @@ mod tests {
             Field::new("$b", DataType::UInt32, false),
             Field::new("$c", DataType::UInt32, false),
         ]);
-        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
 
+        let table_scan = table_scan(Some("test"), schema, None)?.build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("$a")], vec![sum(col("$b")).alias("total_salary")])?
             .filter(col("$a").gt(lit(10i64)))?
@@ -1685,8 +1685,8 @@ mod tests {
             Field::new("$b", DataType::UInt32, false),
             Field::new("$c", DataType::UInt32, false),
         ]);
-        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
 
+        let table_scan = table_scan(Some("test"), schema, None)?.build()?;
         let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
@@ -2321,9 +2321,9 @@ mod tests {
             Field::new("e", DataType::UInt32, false),
             Field::new("f", DataType::UInt32, false),
         ]);
-        let right = table_scan(Some("test1"), &schema, None)?
+        let right = table_scan(Some("test1"), schema, None)?
             .project(vec![col("d"), col("e"), col("f")])?
-            .build()?;
+            .build_arc()?;
         let filter = and(col("test.a").eq(lit(1)), col("test1.d").gt(lit(2)));
         let plan = LogicalPlanBuilder::from(left)
             .cross_join(right)?
@@ -2353,7 +2353,7 @@ mod tests {
         let right_table_scan = test_table_scan_with_name("test1")?;
         let right = LogicalPlanBuilder::from(right_table_scan)
             .project(vec![col("a"), col("b"), col("c")])?
-            .build()?;
+            .build_arc()?;
         let filter = and(col("test.a").eq(lit(1)), col("test1.a").gt(lit(2)));
         let plan = LogicalPlanBuilder::from(left)
             .cross_join(right)?
