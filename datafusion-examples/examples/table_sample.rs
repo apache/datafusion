@@ -702,11 +702,11 @@ impl<'a, S: ContextProvider> TableSamplePlanner<'a, S> {
     fn sample_to_logical_plan(
         &self,
         input: LogicalPlan,
-        sample: TableSampleKind,
+        sample: ast::TableSampleKind,
     ) -> Result<LogicalPlan> {
         let sample = match sample {
-            TableSampleKind::BeforeTableAlias(sample) => sample,
-            TableSampleKind::AfterTableAlias(sample) => sample,
+            ast::TableSampleKind::BeforeTableAlias(sample) => sample,
+            ast::TableSampleKind::AfterTableAlias(sample) => sample,
         };
         if let Some(name) = &sample.name {
             if *name != TableSampleMethod::Bernoulli && *name != TableSampleMethod::Row {
