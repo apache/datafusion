@@ -30,7 +30,7 @@ mod properties;
 
 pub use class::{AcrossPartitions, ConstExpr, EquivalenceClass, EquivalenceGroup};
 pub use ordering::OrderingEquivalenceClass;
-pub use projection::ProjectionMapping;
+pub use projection::{project_ordering, project_orderings, ProjectionMapping};
 pub use properties::{
     calculate_union, join_equivalence_properties, EquivalenceProperties,
 };

@@ -23,8 +23,9 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, plan_err, Result};
 
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use indexmap::IndexMap;
 
 /// Stores target expressions, along with their indices, that associate with a
@@ -154,6 +155,97 @@ impl FromIterator<(Arc<dyn PhysicalExpr>, ProjectionTargets)> for ProjectionMapp
             map: IndexMap::from_iter(iter),
         }
     }
+}
+
+/// Projects a slice of [LexOrdering]s onto the given schema.
+///
+/// This is a convenience wrapper that applies [project_ordering] to each
+/// input ordering and collects the successful projections:
+/// - For each input ordering, the result of [project_ordering] is appended to
+///   the output if it is `Some(...)`.
+/// - Order is preserved and no deduplication is attempted.
+/// - If none of the input orderings can be projected, an empty `Vec` is
+///   returned.
+///
+/// See [project_ordering] for the semantics of projecting a single
+/// [LexOrdering].
+pub fn project_orderings(
+    orderings: &[LexOrdering],
+    schema: &SchemaRef,
+) -> Vec<LexOrdering> {
+    let mut projected_orderings = vec![];
+
+    for ordering in orderings {
+        projected_orderings.extend(project_ordering(ordering, schema));
+    }
+
+    projected_orderings
+}
+
+/// Projects a single [LexOrdering] onto the given schema.
+///
+/// This function attempts to rewrite every [PhysicalSortExpr] in the provided
+/// [LexOrdering] so that any [Column] expressions point at the correct field
+/// indices in `schema`.
+///
+/// Key details:
+/// - Columns are matched by name, not by index. The index of each matched
+///   column is looked up with [Schema::column_with_name](arrow::datatypes::Schema::column_with_name) and a new
+///   [Column] with the correct [index](Column::index) is substituted.
+/// - If an expression references a column name that does not exist in
+///   `schema`, projection of the current ordering stops and only the already
+///   rewritten prefix is kept. This models the fact that a lexicographical
+///   ordering remains valid for any leading prefix whose expressions are
+///   present in the projected schema.
+/// - If no expressions can be projected (i.e. the first one is missing), the
+///   function returns `None`.
+///
+/// Return value:
+/// - `Some(LexOrdering)` if at least one sort expression could be projected.
+///   The returned ordering may be a strict prefix of the input ordering.
+/// - `None` if no part of the ordering can be projected onto `schema`.
+///
+/// Example
+///
+/// Suppose we have an input ordering `[col("a@0"), col("b@1")]` but the projected
+/// schema only contains b and not a. The result will be `Some([col("a@0")])`. In other
+/// words, the column reference is reindexed to match the projected schema.
+/// If neither a nor b is present, the result will be None.
+pub fn project_ordering(
+    ordering: &LexOrdering,
+    schema: &SchemaRef,
+) -> Option<LexOrdering> {
+    let mut projected_exprs = vec![];
+    for PhysicalSortExpr { expr, options } in ordering.iter() {
+        let transformed = Arc::clone(expr).transform_up(|expr| {
+            let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+                return Ok(Transformed::no(expr));
+            };
+
+            let name = col.name();
+            if let Some((idx, _)) = schema.column_with_name(name) {
+                // Compute the new column expression (with correct index) after projection:
+                Ok(Transformed::yes(Arc::new(Column::new(name, idx))))
+            } else {
+                // Cannot find expression in the projected_schema,
+                // signal this using an Err result
+                plan_err!("")
+            }
+        });
+
+        match transformed {
+            Ok(transformed) => {
+                projected_exprs.push(PhysicalSortExpr::new(transformed.data, *options));
+            }
+            Err(_) => {
+                // Err result indicates an expression could not be found in the
+                // projected_schema, stop iterating since rest of the orderings are violated
+                break;
+            }
+        }
+    }
+
+    LexOrdering::new(projected_exprs)
 }
 
 #[cfg(test)]
