@@ -253,10 +253,7 @@ pub fn reassign_expr_columns(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.transform_down(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            let index = match schema.index_of(column.name()) {
-                Ok(idx) => idx,
-                Err(e) => return Err(e.into()),
-            };
+            let index = schema.index_of(column.name())?;
 
             return Ok(Transformed::yes(Arc::new(Column::new(
                 column.name(),
