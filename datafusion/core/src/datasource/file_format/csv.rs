@@ -60,6 +60,7 @@ mod tests {
     use futures::stream::BoxStream;
     use futures::StreamExt;
     use insta::assert_snapshot;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
@@ -104,6 +105,14 @@ mod tests {
         }
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+            self.get_opts(location, GetOptions::default()).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            _opts: GetOptions,
+        ) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
             let len = bytes.len() as u64;
             let range = 0..len * self.max_iterations;
@@ -128,14 +137,6 @@ mod tests {
                 range: Default::default(),
                 attributes: Attributes::default(),
             })
-        }
-
-        async fn get_opts(
-            &self,
-            _location: &Path,
-            _opts: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            unimplemented!()
         }
 
         async fn get_ranges(
@@ -250,18 +251,8 @@ mod tests {
         let state = session_ctx.state();
 
         let projection = None;
-        let root = "./tests/data/csv";
-        let format = CsvFormat::default().with_has_header(true);
-        let exec = scan_format(
-            &state,
-            &format,
-            None,
-            root,
-            "aggregate_test_100_with_nulls.csv",
-            projection,
-            None,
-        )
-        .await?;
+        let exec =
+            get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -284,10 +275,51 @@ mod tests {
                 "c11: Float64",
                 "c12: Float64",
                 "c13: Utf8",
-                "c14: Null",
-                "c15: Utf8"
             ],
             x
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema_with_null() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let variable_object_store = Arc::new(VariableStream::new(
+            Bytes::from(
+                r#"has_nulls,all_nulls,utf8
+1,,NULL
+,,
+2,,NULL"#,
+            ),
+            1,
+        ));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        let csv_format = CsvFormat::default().with_has_header(true);
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        let actual_fields: Vec<_> = inferred_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        assert_eq!(
+            vec!["has_nulls: Int64", "all_nulls: Utf8", "utf8: Utf8"],
+            actual_fields
         );
 
         Ok(())
@@ -297,48 +329,47 @@ mod tests {
     async fn infer_schema_with_null_regex() -> Result<()> {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
+        let variable_object_store = Arc::new(VariableStream::new(
+            Bytes::from(
+                r#"has_nulls,all_nulls,has_nulls_regex,all_nulls_regex
+1,,1,NULL
+,,NULL,NULL
+2,,2,NULL"#,
+            ),
+            1,
+        ));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
 
-        let projection = None;
-        let root = "./tests/data/csv";
-        let format = CsvFormat::default()
+        let csv_format = CsvFormat::default()
             .with_has_header(true)
             .with_null_regex(Some("^NULL$|^$".to_string()));
-        let exec = scan_format(
-            &state,
-            &format,
-            None,
-            root,
-            "aggregate_test_100_with_nulls.csv",
-            projection,
-            None,
-        )
-        .await?;
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
 
-        let x: Vec<String> = exec
-            .schema()
+        let actual_fields: Vec<_> = inferred_schema
             .fields()
             .iter()
             .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
             .collect();
         assert_eq!(
             vec![
-                "c1: Utf8",
-                "c2: Int64",
-                "c3: Int64",
-                "c4: Int64",
-                "c5: Int64",
-                "c6: Int64",
-                "c7: Int64",
-                "c8: Int64",
-                "c9: Int64",
-                "c10: Utf8",
-                "c11: Float64",
-                "c12: Float64",
-                "c13: Utf8",
-                "c14: Null",
-                "c15: Null"
+                "has_nulls: Int64",
+                "all_nulls: Utf8",
+                "has_nulls_regex: Int64",
+                "all_nulls_regex: Utf8"
             ],
-            x
+            actual_fields
         );
 
         Ok(())
@@ -467,6 +498,58 @@ mod tests {
             vec!["c1: Float64", "c2: Utf8", "c3: Utf8", "c4: Int64",],
             actual_fields
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_stream_null_chunks() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        // a stream where each line is read as a separate chunk,
+        // data type for each chunk is inferred separately.
+        // +----+-----+----+
+        // | c1 | c2  | c3 |
+        // +----+-----+----+
+        // | 1  | 1.0 |    |  type: Int64, Float64, Null
+        // |    |     |    |  type: Null, Null, Null
+        // +----+-----+----+
+        let chunked_object_store = Arc::new(ChunkedStore::new(
+            Arc::new(VariableStream::new(
+                Bytes::from(
+                    r#"c1,c2,c3
+1,1.0,
+,,"#,
+                ),
+                1,
+            )),
+            1,
+        ));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        let csv_format = CsvFormat::default().with_has_header(true);
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(chunked_object_store as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        let actual_fields: Vec<_> = inferred_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+
+        // ensure null chunks don't skew type inference
+        assert_eq!(vec!["c1: Int64", "c2: Float64", "c3: Utf8"], actual_fields);
         Ok(())
     }
 
