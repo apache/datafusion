@@ -291,3 +291,93 @@ fn test_coercion_arithmetic_decimal() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_coercion_arithmetic_decimal_cross_variant() -> Result<()> {
+    let test_cases = [
+        (
+            DataType::Decimal32(5, 2),
+            DataType::Decimal64(10, 3),
+            DataType::Decimal64(10, 3),
+            DataType::Decimal64(10, 3),
+        ),
+        (
+            DataType::Decimal32(7, 1),
+            DataType::Decimal128(15, 4),
+            DataType::Decimal128(15, 4),
+            DataType::Decimal128(15, 4),
+        ),
+        (
+            DataType::Decimal32(9, 0),
+            DataType::Decimal256(20, 5),
+            DataType::Decimal256(20, 5),
+            DataType::Decimal256(20, 5),
+        ),
+        (
+            DataType::Decimal64(12, 3),
+            DataType::Decimal128(18, 2),
+            DataType::Decimal128(19, 3),
+            DataType::Decimal128(19, 3),
+        ),
+        (
+            DataType::Decimal64(15, 4),
+            DataType::Decimal256(25, 6),
+            DataType::Decimal256(25, 6),
+            DataType::Decimal256(25, 6),
+        ),
+        (
+            DataType::Decimal128(20, 5),
+            DataType::Decimal256(30, 8),
+            DataType::Decimal256(30, 8),
+            DataType::Decimal256(30, 8),
+        ),
+        // Reverse order cases
+        (
+            DataType::Decimal64(10, 3),
+            DataType::Decimal32(5, 2),
+            DataType::Decimal64(10, 3),
+            DataType::Decimal64(10, 3),
+        ),
+        (
+            DataType::Decimal128(15, 4),
+            DataType::Decimal32(7, 1),
+            DataType::Decimal128(15, 4),
+            DataType::Decimal128(15, 4),
+        ),
+        (
+            DataType::Decimal256(20, 5),
+            DataType::Decimal32(9, 0),
+            DataType::Decimal256(20, 5),
+            DataType::Decimal256(20, 5),
+        ),
+        (
+            DataType::Decimal128(18, 2),
+            DataType::Decimal64(12, 3),
+            DataType::Decimal128(19, 3),
+            DataType::Decimal128(19, 3),
+        ),
+        (
+            DataType::Decimal256(25, 6),
+            DataType::Decimal64(15, 4),
+            DataType::Decimal256(25, 6),
+            DataType::Decimal256(25, 6),
+        ),
+        (
+            DataType::Decimal256(30, 8),
+            DataType::Decimal128(20, 5),
+            DataType::Decimal256(30, 8),
+            DataType::Decimal256(30, 8),
+        ),
+    ];
+
+    for (lhs_type, rhs_type, expected_lhs_type, expected_rhs_type) in test_cases {
+        test_math_decimal_coercion_rule(
+            lhs_type,
+            rhs_type,
+            expected_lhs_type,
+            expected_rhs_type,
+        );
+    }
+
+    Ok(())
+}
