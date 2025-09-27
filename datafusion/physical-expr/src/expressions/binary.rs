@@ -43,6 +43,7 @@ use datafusion_expr::statistics::{
     combine_bernoullis, combine_gaussians, create_bernoulli_from_comparison,
     new_generic_from_binary_op, Distribution,
 };
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 
@@ -1095,8 +1096,14 @@ pub fn binary(
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
     _input_schema: &Schema,
+    execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
+    let fail_on_overflow = execution_props
+        .config_options
+        .as_ref()
+        .map(|cfg| cfg.execution.fail_on_overflow)
+        .unwrap_or(true);
+    Ok(Arc::new(BinaryExpr::new(lhs, op, rhs).with_fail_on_overflow(fail_on_overflow)))
 }
 
 /// Create a similar to expression
@@ -1141,7 +1148,18 @@ mod tests {
 
         let left_expr = try_cast(left, schema, lhs)?;
         let right_expr = try_cast(right, schema, rhs)?;
-        binary(left_expr, op, right_expr, schema)
+        binary_test(left_expr, op, right_expr, schema)
+    }
+
+    /// Helper function for tests that creates a binary expression with default ExecutionProps
+    fn binary_test(
+        lhs: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        rhs: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let exec_props = ExecutionProps::new();
+        binary(lhs, op, rhs, schema, &exec_props)
     }
 
     #[test]
@@ -1154,7 +1172,7 @@ mod tests {
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
 
         // expression: "a < b"
-        let lt = binary(
+        let lt = binary_test(
             col("a", &schema)?,
             Operator::Lt,
             col("b", &schema)?,
@@ -1189,15 +1207,15 @@ mod tests {
         let b = Int32Array::from(vec![2, 5, 4, 8, 8]);
 
         // expression: "a < b OR a == b"
-        let expr = binary(
-            binary(
+        let expr = binary_test(
+            binary_test(
                 col("a", &schema)?,
                 Operator::Lt,
                 col("b", &schema)?,
                 &schema,
             )?,
             Operator::Or,
-            binary(
+            binary_test(
                 col("a", &schema)?,
                 Operator::Eq,
                 col("b", &schema)?,
@@ -1247,7 +1265,7 @@ mod tests {
             let right = try_cast(col("b", &schema)?, &schema, rhs)?;
 
             // verify that we can construct the expression
-            let expression = binary(left, $OP, right, &schema)?;
+            let expression = binary_test(left, $OP, right, &schema)?;
             let batch = RecordBatch::try_new(
                 Arc::new(schema.clone()),
                 vec![Arc::new(a), Arc::new(b)],
@@ -3609,7 +3627,7 @@ mod tests {
         let tree_depth: i32 = 100;
         let expr = (0..tree_depth)
             .map(|_| col("a", schema.as_ref()).unwrap())
-            .reduce(|l, r| binary(l, Operator::Plus, r, &schema).unwrap())
+            .reduce(|l, r| binary_test(l, Operator::Plus, r, &schema).unwrap())
             .unwrap();
 
         let result = expr
