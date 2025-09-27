@@ -265,7 +265,7 @@ impl FilterExec {
             default_selectivity,
         )?;
         let mut eq_properties = input.equivalence_properties().clone();
-        let (equal_pairs, _) = collect_columns_from_predicate(predicate);
+        let (equal_pairs, _) = collect_columns_from_predicate_inner(predicate);
         for (lhs, rhs) in equal_pairs {
             eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
         }
@@ -716,7 +716,17 @@ impl RecordBatchStream for FilterExecStream {
 }
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
+#[deprecated(
+    since = "51.0.0",
+    note = "This function will be internal in the future"
+)]
 pub fn collect_columns_from_predicate(
+    predicate: &'_ Arc<dyn PhysicalExpr>,
+) -> EqualAndNonEqual<'_> {
+    collect_columns_from_predicate_inner(predicate)
+}
+
+fn collect_columns_from_predicate_inner(
     predicate: &'_ Arc<dyn PhysicalExpr>,
 ) -> EqualAndNonEqual<'_> {
     let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
@@ -787,7 +797,7 @@ mod tests {
             &schema,
         )?;
 
-        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&predicate);
+        let (equal_pairs, ne_pairs) = collect_columns_from_predicate_inner(&predicate);
         assert_eq!(2, equal_pairs.len());
         assert!(equal_pairs[0].0.eq(&col("c2", &schema)?));
         assert!(equal_pairs[0].1.eq(&lit(4u32)));
