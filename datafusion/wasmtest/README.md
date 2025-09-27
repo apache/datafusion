@@ -40,6 +40,20 @@ Then use wasm-pack to compile the crate from within this directory
 wasm-pack build
 ```
 
+### Apple silicon
+
+The default installation of Clang on Apple silicon does not support wasm, so you'll need to install LLVM Clang. For example via Homebrew:
+
+```sh
+brew install llvm
+# You will also need to install wasm-bindgen-cli separately, changing version as needed (0.3.53 = 0.2.103)
+cargo install wasm-bindgen-cli@0.2.103
+# Need to run commands like so, unless you edit your PATH to prepend the LLVM version of Clang
+PATH="/opt/homebrew/opt/llvm/bin:$PATH" RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack build
+```
+
+- For reference: https://github.com/briansmith/ring/issues/1824
+
 ## Try it out
 
 The `datafusion-wasm-app` directory contains a simple app (created with [`create-wasm-app`](https://github.com/rustwasm/create-wasm-app) and then manually updated to WebPack 5) that invokes DataFusion and writes results to the browser console.
