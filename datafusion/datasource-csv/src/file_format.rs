@@ -600,7 +600,6 @@ fn build_schema_helper(names: Vec<String>, types: Vec<HashSet<DataType>>) -> Sch
             data_type_possibilities.remove(&DataType::Null);
 
             match data_type_possibilities.len() {
-                0 => Field::new(field_name, DataType::Null, true),
                 1 => Field::new(
                     field_name,
                     data_type_possibilities.iter().next().unwrap().clone(),
