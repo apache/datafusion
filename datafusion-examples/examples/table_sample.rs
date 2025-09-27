@@ -125,11 +125,8 @@ async fn main() -> Result<()> {
     let statements = Parser::parse_sql(&dialect, sql)?;
     let statement = statements.first().expect("one statement");
 
-    // Classical way
-    // let sql_to_rel = SqlToRel::new(&context_provider);
-    // let logical_plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
-
-    // Use sampling planner to create a logical plan
+    // Use a custom sampling planner to create a logical plan
+    // instead of [SqlToRel::sql_statement_to_plan]
     let table_sample_planner = TableSamplePlanner::new(&context_provider);
     let logical_plan = table_sample_planner.create_logical_plan(statement.clone())?;
 
@@ -146,10 +143,6 @@ async fn main() -> Result<()> {
         "SampleExec: lower_bound=0, upper_bound=0.42, with_replacement=false, seed=5"
     );
 
-    // Execute via standard sql call - doesn't work
-    // let df = ctx.sql(sql).await?;
-    // let batches = df.collect().await?;
-
     // Execute directly via physical plan
     let task_context = Arc::new(TaskContext::from(&ctx));
     let stream = physical_plan.execute(0, task_context)?;
@@ -158,7 +151,6 @@ async fn main() -> Result<()> {
     info!("Batches: {:?}", &batches);
 
     let result_string = pretty_format_batches(&batches)
-        // pretty_format_batches_with_schema(table_source.schema(), &batches)
         .map_err(|e| arrow_datafusion_err!(e))
         .map(|d| d.to_string())?;
     let result_strings = result_string.lines().collect::<Vec<_>>();
