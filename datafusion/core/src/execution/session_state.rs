@@ -505,6 +505,7 @@ impl SessionState {
             collect_spans: sql_parser_options.collect_spans,
             default_null_ordering: sql_parser_options
                 .default_null_ordering
+                .to_string()
                 .as_str()
                 .into(),
         }

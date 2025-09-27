@@ -22,10 +22,11 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::ExplainFormat;
+use crate::format::{DFDurationFormat, ExplainFormat, NullOrdering};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
+use arrow::util::display::DurationFormat;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -288,7 +289,7 @@ config_namespace! {
         ///
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
-        pub default_null_ordering: String, default = "nulls_max".to_string()
+        pub default_null_ordering: NullOrdering, default = NullOrdering::NullsMax
     }
 }
 
@@ -310,7 +311,7 @@ impl FromStr for SpillCompression {
             "uncompressed" | "" => Ok(Self::Uncompressed),
             other => Err(DataFusionError::Configuration(format!(
                 "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4_frame, uncompressed"
-            ))),
+            ))), // TODO unify the format
         }
     }
 }
@@ -442,7 +443,7 @@ config_namespace! {
         /// This is a soft max, so it can be exceeded slightly. There also
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
-        pub soft_max_rows_per_output_file: usize, default = 50000000
+        pub soft_max_rows_per_output_file: usize, default = 50_000_000
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
@@ -929,7 +930,7 @@ config_namespace! {
         /// Time format for time arrays
         pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
         /// Duration format. Can be either `"pretty"` or `"ISO8601"`
-        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
+        pub duration_format: DFDurationFormat, default = DFDurationFormat(DurationFormat::Pretty)
         /// Show types in visual representation batches
         pub types_info: bool, default = false
     }
@@ -938,17 +939,7 @@ config_namespace! {
 impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
     type Error = DataFusionError;
     fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
-        let duration_format = match self.duration_format.as_str() {
-            "pretty" => arrow::util::display::DurationFormat::Pretty,
-            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
-            _ => {
-                return _config_err!(
-                    "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    self.duration_format
-                )
-            }
-        };
-
+        let duration_format = self.duration_format.0;
         Ok(arrow::util::display::FormatOptions::new()
             .with_display_error(self.safe)
             .with_null(&self.null)

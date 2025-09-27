@@ -159,7 +159,11 @@ impl From<&SqlParserOptions> for ParserOptions {
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
-            default_null_ordering: options.default_null_ordering.as_str().into(),
+            default_null_ordering: options
+                .default_null_ordering
+                .to_string()
+                .as_str()
+                .into(),
         }
     }
 }
