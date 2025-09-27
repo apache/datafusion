@@ -742,18 +742,23 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// If this function is ordered-set aggregate function, return true
     /// otherwise, return false
     ///
-    /// Ordered-set aggregate functions require an explicit `ORDER BY` clause
-    /// because the calculation performed by these functions is dependent on the
-    /// specific sequence of the input rows, unlike other aggregate functions
-    /// like `SUM`, `AVG`, or `COUNT`.
+    /// Ordered-set aggregate functions allow an `ORDER BY` clause because the
+    /// calculation performed by these functions is dependent on the specific
+    /// sequence of the input rows, unlike other aggregate functions like `SUM`
+    /// `AVG`, or `COUNT`. If explit order is specified then a default order
+    /// of ascending is assumed.
     ///
-    /// An example of an ordered-set aggregate function is `percentile_cont`
-    /// which computes a specific percentile value from a sorted list of values, and
-    /// is only meaningful when the input data is ordered.
+    /// Note that setting this to `true` does not guarantee input sort order to
+    /// the aggregate function; it instead gives the function full control over
+    /// the sorting process and they are expected to handle order of input values
+    /// themselves.
+    ///
+    /// An example of an ordered-set aggregate function is `approx_percentile_cont`
+    /// which computes an approximate percentile value from a sorted list of values.
     ///
     /// In SQL syntax, ordered-set aggregate functions are used with the
     /// `WITHIN GROUP (ORDER BY ...)` clause to specify the ordering of the input
-    /// data.
+    /// data, or can be simply omitted to assume ascending.
     fn is_ordered_set_aggregate(&self) -> bool {
         false
     }
