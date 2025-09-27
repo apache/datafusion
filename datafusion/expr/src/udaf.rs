@@ -745,7 +745,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Ordered-set aggregate functions allow an `ORDER BY` clause because the
     /// calculation performed by these functions is dependent on the specific
     /// sequence of the input rows, unlike other aggregate functions like `SUM`
-    /// `AVG`, or `COUNT`. If explit order is specified then a default order
+    /// `AVG`, or `COUNT`. If explicit order is specified then a default order
     /// of ascending is assumed.
     ///
     /// Note that setting this to `true` does not guarantee input sort order to
