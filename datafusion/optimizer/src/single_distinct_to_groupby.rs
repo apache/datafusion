@@ -280,7 +280,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 }
 
 /// Rewrite the outer aggregate functions that may require special handling
-/// when duplicated to accomodate two-phase aggregation.
+/// when duplicated to accommodate two-phase aggregation.
 fn rewrite_outer_aggregate_func(func: Arc<AggregateUDF>) -> Arc<AggregateUDF> {
     let inner = func.inner();
 
