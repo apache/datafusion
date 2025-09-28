@@ -2056,7 +2056,15 @@ pub fn binary(
     _input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let fail_on_overflow = execution_props
+    // Only enable overflow checking for arithmetic operations
+    let fail_on_overflow = matches!(
+        op,
+        Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+    ) && execution_props
         .config_options
         .as_ref()
         .map(|cfg| cfg.execution.fail_on_overflow)
@@ -2123,8 +2131,10 @@ mod tests {
         _schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         // For backward compatibility in tests, use the legacy behavior (no overflow checking)
-        #[allow(deprecated)]
-        Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
+        Ok(Arc::new(
+            BinaryExpr::new_with_overflow_check(lhs, op, rhs)
+                .with_fail_on_overflow(false),
+        ))
     }
 
     #[test]

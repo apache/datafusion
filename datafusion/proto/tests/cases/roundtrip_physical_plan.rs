@@ -869,7 +869,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let predicate = Arc::new(BinaryExpr::new(
+    let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new("col", 1)),
         Operator::Eq,
         lit("1"),
@@ -1242,10 +1242,14 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     ));
 
     let filter = Arc::new(FilterExec::try_new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("published", &schema)?,
             Operator::And,
-            Arc::new(BinaryExpr::new(udf_expr.clone(), Operator::Gt, lit(0))),
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                udf_expr.clone(),
+                Operator::Gt,
+                lit(0),
+            )),
         )),
         input,
     )?);
@@ -1358,10 +1362,14 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         .map(Arc::new)?;
 
     let filter = Arc::new(FilterExec::try_new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("published", &schema)?,
             Operator::And,
-            Arc::new(BinaryExpr::new(udf_expr, Operator::Gt, lit(0))),
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                udf_expr,
+                Operator::Gt,
+                lit(0),
+            )),
         )),
         input,
     )?);
@@ -1815,7 +1823,11 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let filter = Arc::new(
         FilterExec::try_new(
-            Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                col("c", &schema)?,
+                Operator::Eq,
+                lit(1),
+            )),
             DataSourceExec::from_data_source(scan_config),
         )?
         .with_projection(Some(vec![0, 1]))?,
@@ -2141,7 +2153,7 @@ fn roundtrip_sort_merge_join() -> Result<()> {
     )];
 
     let filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("col_a", 1)),
             Operator::Gt,
             Arc::new(Column::new("col_b", 0)),

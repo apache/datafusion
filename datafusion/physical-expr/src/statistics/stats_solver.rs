@@ -218,17 +218,6 @@ mod tests {
     use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-    /// Helper function for tests that provides default ExecutionProps for binary function calls
-    fn binary_test(
-        lhs: Arc<dyn PhysicalExpr>,
-        op: Operator,
-        rhs: Arc<dyn PhysicalExpr>,
-        schema: &Schema,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let execution_props = ExecutionProps::new();
-        binary(lhs, op, rhs, schema, &execution_props)
-    }
-
     pub fn binary_expr(
         left: Arc<dyn PhysicalExpr>,
         op: Operator,
@@ -242,7 +231,8 @@ mod tests {
 
         let left_expr = try_cast(left, schema, lhs)?;
         let right_expr = try_cast(right, schema, rhs)?;
-        binary_test(left_expr, op, right_expr, schema)
+        let execution_props = ExecutionProps::new();
+        binary(left_expr, op, right_expr, schema, &execution_props)
     }
 
     #[test]

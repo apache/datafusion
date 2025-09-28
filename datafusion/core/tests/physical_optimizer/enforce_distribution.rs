@@ -325,7 +325,7 @@ fn hash_join_exec(
 }
 
 fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    let predicate = Arc::new(BinaryExpr::new(
+    let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
         col("c", &schema()).unwrap(),
         Operator::Eq,
         Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
@@ -2222,7 +2222,7 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
 fn repartition_transitively_with_projection() -> Result<()> {
     let schema = schema();
     let proj_exprs = vec![ProjectionExpr {
-        expr: Arc::new(BinaryExpr::new(
+        expr: Arc::new(BinaryExpr::new_with_overflow_check(
             col("a", &schema)?,
             Operator::Plus,
             col("b", &schema)?,

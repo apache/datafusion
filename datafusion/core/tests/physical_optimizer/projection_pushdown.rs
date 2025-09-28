@@ -112,7 +112,7 @@ impl ScalarUDFImpl for DummyUDF {
 #[test]
 fn test_update_matching_exprs() -> Result<()> {
     let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 3)),
             Operator::Divide,
             Arc::new(Column::new("e", 5)),
@@ -127,12 +127,12 @@ fn test_update_matching_exprs() -> Result<()> {
             "scalar_expr",
             Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
             vec![
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("b", 1)),
                     Operator::Divide,
                     Arc::new(Column::new("c", 0)),
                 )),
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("c", 0)),
                     Operator::Divide,
                     Arc::new(Column::new("b", 1)),
@@ -146,7 +146,7 @@ fn test_update_matching_exprs() -> Result<()> {
             vec![
                 (
                     Arc::new(Column::new("a", 3)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("d", 2)),
                         Operator::Plus,
                         Arc::new(Column::new("e", 5)),
@@ -154,14 +154,14 @@ fn test_update_matching_exprs() -> Result<()> {
                 ),
                 (
                     Arc::new(Column::new("a", 3)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("e", 5)),
                         Operator::Plus,
                         Arc::new(Column::new("d", 2)),
                     )) as Arc<dyn PhysicalExpr>,
                 ),
             ],
-            Some(Arc::new(BinaryExpr::new(
+            Some(Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 3)),
                 Operator::Modulo,
                 Arc::new(Column::new("e", 5)),
@@ -178,7 +178,7 @@ fn test_update_matching_exprs() -> Result<()> {
     ];
 
     let expected_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Divide,
             Arc::new(Column::new("e", 4)),
@@ -193,12 +193,12 @@ fn test_update_matching_exprs() -> Result<()> {
             "scalar_expr",
             Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
             vec![
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("b", 1)),
                     Operator::Divide,
                     Arc::new(Column::new("c", 2)),
                 )),
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("c", 2)),
                     Operator::Divide,
                     Arc::new(Column::new("b", 1)),
@@ -212,7 +212,7 @@ fn test_update_matching_exprs() -> Result<()> {
             vec![
                 (
                     Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("d", 3)),
                         Operator::Plus,
                         Arc::new(Column::new("e", 4)),
@@ -220,14 +220,14 @@ fn test_update_matching_exprs() -> Result<()> {
                 ),
                 (
                     Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("e", 4)),
                         Operator::Plus,
                         Arc::new(Column::new("d", 3)),
                     )) as Arc<dyn PhysicalExpr>,
                 ),
             ],
-            Some(Arc::new(BinaryExpr::new(
+            Some(Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::Modulo,
                 Arc::new(Column::new("e", 4)),
@@ -251,7 +251,7 @@ fn test_update_matching_exprs() -> Result<()> {
 #[test]
 fn test_update_projected_exprs() -> Result<()> {
     let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 3)),
             Operator::Divide,
             Arc::new(Column::new("e", 5)),
@@ -266,12 +266,12 @@ fn test_update_projected_exprs() -> Result<()> {
             "scalar_expr",
             Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
             vec![
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("b", 1)),
                     Operator::Divide,
                     Arc::new(Column::new("c", 0)),
                 )),
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("c", 0)),
                     Operator::Divide,
                     Arc::new(Column::new("b", 1)),
@@ -285,7 +285,7 @@ fn test_update_projected_exprs() -> Result<()> {
             vec![
                 (
                     Arc::new(Column::new("a", 3)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("d", 2)),
                         Operator::Plus,
                         Arc::new(Column::new("e", 5)),
@@ -293,14 +293,14 @@ fn test_update_projected_exprs() -> Result<()> {
                 ),
                 (
                     Arc::new(Column::new("a", 3)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("e", 5)),
                         Operator::Plus,
                         Arc::new(Column::new("d", 2)),
                     )) as Arc<dyn PhysicalExpr>,
                 ),
             ],
-            Some(Arc::new(BinaryExpr::new(
+            Some(Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 3)),
                 Operator::Modulo,
                 Arc::new(Column::new("e", 5)),
@@ -317,7 +317,7 @@ fn test_update_projected_exprs() -> Result<()> {
     ];
 
     let expected_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Divide,
             Arc::new(Column::new("e", 4)),
@@ -332,12 +332,12 @@ fn test_update_projected_exprs() -> Result<()> {
             "scalar_expr",
             Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
             vec![
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("b_new", 1)),
                     Operator::Divide,
                     Arc::new(Column::new("c", 2)),
                 )),
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("c", 2)),
                     Operator::Divide,
                     Arc::new(Column::new("b_new", 1)),
@@ -351,7 +351,7 @@ fn test_update_projected_exprs() -> Result<()> {
             vec![
                 (
                     Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("d_new", 3)),
                         Operator::Plus,
                         Arc::new(Column::new("e", 4)),
@@ -359,14 +359,14 @@ fn test_update_projected_exprs() -> Result<()> {
                 ),
                 (
                     Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("e", 4)),
                         Operator::Plus,
                         Arc::new(Column::new("d_new", 3)),
                     )) as Arc<dyn PhysicalExpr>,
                 ),
             ],
-            Some(Arc::new(BinaryExpr::new(
+            Some(Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::Modulo,
                 Arc::new(Column::new("e", 4)),
@@ -664,7 +664,7 @@ fn test_projection_after_projection() -> Result<()> {
         vec![
             ProjectionExpr::new(Arc::new(Column::new("new_b", 3)), "new_b".to_string()),
             ProjectionExpr::new(
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("c", 0)),
                     Operator::Plus,
                     Arc::new(Column::new("new_e", 1)),
@@ -724,7 +724,7 @@ fn test_output_req_after_projection() -> Result<()> {
                     Some(SortOptions::default()),
                 ),
                 PhysicalSortRequirement::new(
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("c", 2)),
                         Operator::Plus,
                         Arc::new(Column::new("a", 0)),
@@ -785,7 +785,7 @@ fn test_output_req_after_projection() -> Result<()> {
                 Some(SortOptions::default()),
             ),
             PhysicalSortRequirement::new(
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("c", 0)),
                     Operator::Plus,
                     Arc::new(Column::new("new_a", 1)),
@@ -875,14 +875,14 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
 #[test]
 fn test_filter_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
-    let predicate = Arc::new(BinaryExpr::new(
-        Arc::new(BinaryExpr::new(
+    let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("b", 1)),
             Operator::Minus,
             Arc::new(Column::new("a", 0)),
         )),
         Operator::Gt,
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("d", 3)),
             Operator::Minus,
             Arc::new(Column::new("a", 0)),
@@ -941,18 +941,18 @@ fn test_join_after_projection() -> Result<()> {
         vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
         // b_left-(1+a_right)<=a_right+c_left
         Some(JoinFilter::new(
-            Arc::new(BinaryExpr::new(
-                Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("b_left_inter", 0)),
                     Operator::Minus,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
                         Operator::Plus,
                         Arc::new(Column::new("a_right_inter", 1)),
                     )),
                 )),
                 Operator::LtEq,
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("a_right_inter", 1)),
                     Operator::Plus,
                     Arc::new(Column::new("c_left_inter", 2)),
@@ -1072,18 +1072,18 @@ fn test_join_after_required_projection() -> Result<()> {
         vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
         // b_left-(1+a_right)<=a_right+c_left
         Some(JoinFilter::new(
-            Arc::new(BinaryExpr::new(
-                Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("b_left_inter", 0)),
                     Operator::Minus,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
                         Operator::Plus,
                         Arc::new(Column::new("a_right_inter", 1)),
                     )),
                 )),
                 Operator::LtEq,
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("a_right_inter", 1)),
                     Operator::Plus,
                     Arc::new(Column::new("c_left_inter", 2)),
@@ -1253,18 +1253,18 @@ fn test_hash_join_after_projection() -> Result<()> {
         vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
         // b_left-(1+a_right)<=a_right+c_left
         Some(JoinFilter::new(
-            Arc::new(BinaryExpr::new(
-                Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("b_left_inter", 0)),
                     Operator::Minus,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
                         Operator::Plus,
                         Arc::new(Column::new("a_right_inter", 1)),
                     )),
                 )),
                 Operator::LtEq,
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("a_right_inter", 1)),
                     Operator::Plus,
                     Arc::new(Column::new("c_left_inter", 2)),
@@ -1442,7 +1442,7 @@ fn test_sort_after_projection() -> Result<()> {
     let sort_exec = SortExec::new(
         [
             PhysicalSortExpr::new_default(Arc::new(Column::new("b", 1))),
-            PhysicalSortExpr::new_default(Arc::new(BinaryExpr::new(
+            PhysicalSortExpr::new_default(Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("c", 2)),
                 Operator::Plus,
                 Arc::new(Column::new("a", 0)),
@@ -1496,7 +1496,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
     let sort_exec = SortPreservingMergeExec::new(
         [
             PhysicalSortExpr::new_default(Arc::new(Column::new("b", 1))),
-            PhysicalSortExpr::new_default(Arc::new(BinaryExpr::new(
+            PhysicalSortExpr::new_default(Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("c", 2)),
                 Operator::Plus,
                 Arc::new(Column::new("a", 0)),

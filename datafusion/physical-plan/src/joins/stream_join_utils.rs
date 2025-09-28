@@ -826,6 +826,7 @@ pub mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col};
 
@@ -850,6 +851,7 @@ pub mod tests {
                 Operator::Plus,
                 col("right_2", &right_child_schema)?,
                 &right_child_schema,
+                &ExecutionProps::new(),
             )?,
             options: SortOptions::default(),
         };
@@ -866,12 +868,14 @@ pub mod tests {
             Operator::Plus,
             col("filter_3", &intermediate_schema)?,
             &intermediate_schema,
+            &ExecutionProps::new(),
         )?;
         let filter_expr = binary(
             Arc::clone(&filter_left),
             Operator::Gt,
             Arc::clone(&filter_right),
             &intermediate_schema,
+            &ExecutionProps::new(),
         )?;
         let column_indices = vec![
             ColumnIndex {
@@ -956,6 +960,7 @@ pub mod tests {
                 Operator::Plus,
                 col("1", &schema)?,
                 &schema,
+                &ExecutionProps::new(),
             )?,
             &schema,
             DataType::Int64,
@@ -1077,6 +1082,7 @@ pub mod tests {
             Operator::Minus,
             col("1", &intermediate_schema)?,
             &intermediate_schema,
+            &ExecutionProps::new(),
         )?;
         let column_indices = vec![
             ColumnIndex {
@@ -1102,6 +1108,7 @@ pub mod tests {
                 Operator::Plus,
                 col("b", &schema)?,
                 &schema,
+                &ExecutionProps::new(),
             )?,
             options: SortOptions::default(),
         };

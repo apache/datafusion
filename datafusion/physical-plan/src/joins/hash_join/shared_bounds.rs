@@ -202,19 +202,21 @@ impl SharedBoundsAccumulator {
             for (col_idx, right_expr) in self.on_right.iter().enumerate() {
                 if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
                     // Create predicate: col >= min AND col <= max
-                    let min_expr = Arc::new(BinaryExpr::new(
+                    let min_expr = Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::clone(right_expr),
                         Operator::GtEq,
                         lit(column_bounds.min.clone()),
                     )) as Arc<dyn PhysicalExpr>;
-                    let max_expr = Arc::new(BinaryExpr::new(
+                    let max_expr = Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::clone(right_expr),
                         Operator::LtEq,
                         lit(column_bounds.max.clone()),
                     )) as Arc<dyn PhysicalExpr>;
-                    let range_expr =
-                        Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
-                            as Arc<dyn PhysicalExpr>;
+                    let range_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+                        min_expr,
+                        Operator::And,
+                        max_expr,
+                    )) as Arc<dyn PhysicalExpr>;
                     column_predicates.push(range_expr);
                 }
             }
@@ -224,8 +226,11 @@ impl SharedBoundsAccumulator {
                 let partition_predicate = column_predicates
                     .into_iter()
                     .reduce(|acc, pred| {
-                        Arc::new(BinaryExpr::new(acc, Operator::And, pred))
-                            as Arc<dyn PhysicalExpr>
+                        Arc::new(BinaryExpr::new_with_overflow_check(
+                            acc,
+                            Operator::And,
+                            pred,
+                        )) as Arc<dyn PhysicalExpr>
                     })
                     .unwrap();
                 partition_predicates.push(partition_predicate);
@@ -236,7 +241,7 @@ impl SharedBoundsAccumulator {
         let combined_predicate = partition_predicates
             .into_iter()
             .reduce(|acc, pred| {
-                Arc::new(BinaryExpr::new(acc, Operator::Or, pred))
+                Arc::new(BinaryExpr::new_with_overflow_check(acc, Operator::Or, pred))
                     as Arc<dyn PhysicalExpr>
             })
             .unwrap_or_else(|| lit(true));

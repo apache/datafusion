@@ -1773,6 +1773,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -1887,6 +1888,7 @@ mod tests {
                 Operator::Plus,
                 col("la2", left_schema)?,
                 left_schema,
+                &ExecutionProps::new(),
             )?,
             options: SortOptions::default(),
         }]
@@ -1909,6 +1911,7 @@ mod tests {
                 Operator::Plus,
                 lit(ScalarValue::Int32(Some(1))),
                 left_schema,
+                &ExecutionProps::new(),
             )?,
             Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];

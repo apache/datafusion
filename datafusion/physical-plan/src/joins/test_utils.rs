@@ -35,6 +35,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{NullEquality, Result, ScalarValue};
 use datafusion_execution::TaskContext;
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{binary, cast, col, lit};
 use datafusion_physical_expr::intervals::test_utils::{
@@ -551,6 +552,7 @@ pub(crate) fn complicated_filter(
                 Operator::Plus,
                 col("1", filter_schema)?,
                 filter_schema,
+                &ExecutionProps::new(),
             )?,
             filter_schema,
             DataType::Int64,
@@ -561,8 +563,10 @@ pub(crate) fn complicated_filter(
             Operator::Plus,
             lit(ScalarValue::Int64(Some(10))),
             filter_schema,
+            &ExecutionProps::new(),
         )?,
         filter_schema,
+        &ExecutionProps::new(),
     )?;
 
     let right_expr = binary(
@@ -572,6 +576,7 @@ pub(crate) fn complicated_filter(
                 Operator::Plus,
                 col("1", filter_schema)?,
                 filter_schema,
+                &ExecutionProps::new(),
             )?,
             filter_schema,
             DataType::Int64,
@@ -582,10 +587,18 @@ pub(crate) fn complicated_filter(
             Operator::Plus,
             lit(ScalarValue::Int64(Some(100))),
             filter_schema,
+            &ExecutionProps::new(),
         )?,
         filter_schema,
+        &ExecutionProps::new(),
     )?;
-    binary(left_expr, Operator::And, right_expr, filter_schema)
+    binary(
+        left_expr,
+        Operator::And,
+        right_expr,
+        filter_schema,
+        &ExecutionProps::new(),
+    )
 }
 
 fn generate_ordered_array(size: i32, duplicate_ratio: f32) -> Arc<Int32Array> {

@@ -1253,12 +1253,16 @@ fn build_single_column_expr(
             // The only way we know a column couldn't match is if both the min and max are true
             // !(min && max)
             Some(Arc::new(phys_expr::NotExpr::new(Arc::new(
-                phys_expr::BinaryExpr::new(min, Operator::And, max),
+                phys_expr::BinaryExpr::new_with_overflow_check(min, Operator::And, max),
             ))))
         } else {
             // the only way we know a column couldn't match is if both the min and max are false
             // !(!min && !max) --> min || max
-            Some(Arc::new(phys_expr::BinaryExpr::new(min, Operator::Or, max)))
+            Some(Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
+                min,
+                Operator::Or,
+                max,
+            )))
         }
     } else {
         None
@@ -1291,7 +1295,7 @@ fn build_is_null_column_expr(
                     .null_count_column_expr(col, expr, null_count_field)
                     .map(|null_count_column_expr| {
                         // IsNotNull(column) => null_count != row_count
-                        Arc::new(phys_expr::BinaryExpr::new(
+                        Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                             null_count_column_expr,
                             Operator::NotEq,
                             row_count_expr,
@@ -1306,7 +1310,7 @@ fn build_is_null_column_expr(
                 .null_count_column_expr(col, expr, null_count_field)
                 .map(|null_count_column_expr| {
                     // IsNull(column) => null_count > 0
-                    Arc::new(phys_expr::BinaryExpr::new(
+                    Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                         null_count_column_expr,
                         Operator::Gt,
                         Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
@@ -1441,13 +1445,16 @@ fn build_predicate_expression(
                 .list()
                 .iter()
                 .map(|e| {
-                    Arc::new(phys_expr::BinaryExpr::new(
+                    Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                         Arc::clone(in_list.expr()),
                         eq_op,
                         Arc::clone(e),
                     )) as _
                 })
-                .reduce(|a, b| Arc::new(phys_expr::BinaryExpr::new(a, re_op, b)) as _)
+                .reduce(|a, b| {
+                    Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(a, re_op, b))
+                        as _
+                })
                 .unwrap();
             return build_predicate_expression(
                 &change_expr,
@@ -1509,7 +1516,9 @@ fn build_predicate_expression(
             (left, Operator::Or, _) if is_always_false(left) => right_expr,
             (_, Operator::Or, right) if is_always_false(right) => left_expr,
 
-            _ => Arc::new(phys_expr::BinaryExpr::new(left_expr, op, right_expr)),
+            _ => Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
+                left_expr, op, right_expr,
+            )),
         };
         return expr;
     }
@@ -1540,14 +1549,14 @@ fn build_statistics_expr(
             // min != literal || literal != max
             let min_column_expr = expr_builder.min_column_expr()?;
             let max_column_expr = expr_builder.max_column_expr()?;
-            Arc::new(phys_expr::BinaryExpr::new(
-                Arc::new(phys_expr::BinaryExpr::new(
+            Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
+                Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                     min_column_expr,
                     Operator::NotEq,
                     Arc::clone(expr_builder.scalar_expr()),
                 )),
                 Operator::Or,
-                Arc::new(phys_expr::BinaryExpr::new(
+                Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                     Arc::clone(expr_builder.scalar_expr()),
                     Operator::NotEq,
                     max_column_expr,
@@ -1559,14 +1568,14 @@ fn build_statistics_expr(
             // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
             let min_column_expr = expr_builder.min_column_expr()?;
             let max_column_expr = expr_builder.max_column_expr()?;
-            Arc::new(phys_expr::BinaryExpr::new(
-                Arc::new(phys_expr::BinaryExpr::new(
+            Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
+                Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                     min_column_expr,
                     Operator::LtEq,
                     Arc::clone(expr_builder.scalar_expr()),
                 )),
                 Operator::And,
-                Arc::new(phys_expr::BinaryExpr::new(
+                Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                     Arc::clone(expr_builder.scalar_expr()),
                     Operator::LtEq,
                     max_column_expr,
@@ -1581,7 +1590,7 @@ fn build_statistics_expr(
         })?,
         Operator::Gt => {
             // column > literal => (min, max) > literal => max > literal
-            Arc::new(phys_expr::BinaryExpr::new(
+            Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                 expr_builder.max_column_expr()?,
                 Operator::Gt,
                 Arc::clone(expr_builder.scalar_expr()),
@@ -1589,7 +1598,7 @@ fn build_statistics_expr(
         }
         Operator::GtEq => {
             // column >= literal => (min, max) >= literal => max >= literal
-            Arc::new(phys_expr::BinaryExpr::new(
+            Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                 expr_builder.max_column_expr()?,
                 Operator::GtEq,
                 Arc::clone(expr_builder.scalar_expr()),
@@ -1597,7 +1606,7 @@ fn build_statistics_expr(
         }
         Operator::Lt => {
             // column < literal => (min, max) < literal => min < literal
-            Arc::new(phys_expr::BinaryExpr::new(
+            Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                 expr_builder.min_column_expr()?,
                 Operator::Lt,
                 Arc::clone(expr_builder.scalar_expr()),
@@ -1605,7 +1614,7 @@ fn build_statistics_expr(
         }
         Operator::LtEq => {
             // column <= literal => (min, max) <= literal => min <= literal
-            Arc::new(phys_expr::BinaryExpr::new(
+            Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
                 expr_builder.min_column_expr()?,
                 Operator::LtEq,
                 Arc::clone(expr_builder.scalar_expr()),
@@ -1676,17 +1685,17 @@ fn build_like_match(
         ))));
         (Arc::clone(&bound), bound)
     };
-    let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
+    let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
         lower_bound,
         Operator::LtEq,
         Arc::clone(&max_column_expr),
     ));
-    let upper_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
+    let upper_bound_expr = Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
         Arc::clone(&min_column_expr),
         Operator::LtEq,
         upper_bound,
     ));
-    let combined = Arc::new(phys_expr::BinaryExpr::new(
+    let combined = Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
         upper_bound_expr,
         Operator::And,
         lower_bound_expr,
@@ -1745,7 +1754,7 @@ fn build_not_like_match(
         Arc::clone(scalar_expr),
     ));
 
-    Ok(Arc::new(phys_expr::BinaryExpr::new(
+    Ok(Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
         min_col_not_like_epxr,
         Operator::Or,
         max_col_not_like_expr,
@@ -1839,14 +1848,15 @@ fn wrap_null_count_check_expr(
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     // x_null_count != x_row_count
-    let not_when_null_count_eq_row_count = Arc::new(phys_expr::BinaryExpr::new(
-        expr_builder.null_count_column_expr()?,
-        Operator::NotEq,
-        expr_builder.row_count_column_expr()?,
-    ));
+    let not_when_null_count_eq_row_count =
+        Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
+            expr_builder.null_count_column_expr()?,
+            Operator::NotEq,
+            expr_builder.row_count_column_expr()?,
+        ));
 
     // (x_null_count != x_row_count) AND (<statistics_expr>)
-    Ok(Arc::new(phys_expr::BinaryExpr::new(
+    Ok(Arc::new(phys_expr::BinaryExpr::new_with_overflow_check(
         not_when_null_count_eq_row_count,
         Operator::And,
         statistics_expr,
@@ -4615,7 +4625,7 @@ mod tests {
 
         // more complex case with unknown column
         let input = known_expression.clone().and(input.clone());
-        let expected = phys_expr::BinaryExpr::new(
+        let expected = phys_expr::BinaryExpr::new_with_overflow_check(
             Arc::<dyn PhysicalExpr>::clone(&known_expression_transformed),
             Operator::And,
             logical2physical(&lit(42), &schema),
@@ -4631,7 +4641,7 @@ mod tests {
 
         // more complex case with unknown expression
         let input = known_expression.and(input);
-        let expected = phys_expr::BinaryExpr::new(
+        let expected = phys_expr::BinaryExpr::new_with_overflow_check(
             Arc::<dyn PhysicalExpr>::clone(&known_expression_transformed),
             Operator::And,
             logical2physical(&lit(42), &schema),

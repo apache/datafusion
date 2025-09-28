@@ -153,7 +153,7 @@ fn nl_join_filter() -> Option<JoinFilter> {
         Field::new("big_col", DataType::Int32, false),
         Field::new("small_col", DataType::Int32, false),
     ]);
-    let expression = Arc::new(BinaryExpr::new(
+    let expression = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new_with_schema("big_col", &intermediate_schema).unwrap()),
         Operator::Gt,
         Arc::new(Column::new_with_schema("small_col", &intermediate_schema).unwrap()),
@@ -1129,7 +1129,7 @@ fn check_expr_supported() {
         Field::new("a", DataType::Int32, false),
         Field::new("b", DataType::Utf8, false),
     ]));
-    let supported_expr = Arc::new(BinaryExpr::new(
+    let supported_expr = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new("a", 0)),
         Operator::Plus,
         Arc::new(Column::new("a", 0)),
@@ -1137,13 +1137,13 @@ fn check_expr_supported() {
     assert!(check_support(&supported_expr, &schema));
     let supported_expr_2 = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
     assert!(check_support(&supported_expr_2, &schema));
-    let unsupported_expr = Arc::new(BinaryExpr::new(
+    let unsupported_expr = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new("a", 0)),
         Operator::Or,
         Arc::new(Column::new("a", 0)),
     )) as Arc<dyn PhysicalExpr>;
     assert!(!check_support(&unsupported_expr, &schema));
-    let unsupported_expr_2 = Arc::new(BinaryExpr::new(
+    let unsupported_expr_2 = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new("a", 0)),
         Operator::Or,
         Arc::new(NegativeExpr::new(Arc::new(Column::new("a", 0)))),

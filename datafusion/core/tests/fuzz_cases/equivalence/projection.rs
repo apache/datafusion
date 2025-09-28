@@ -53,7 +53,7 @@ fn project_orderings_random() -> Result<()> {
             Arc::new(ConfigOptions::default()),
         )?);
         // a + b
-        let a_plus_b = Arc::new(BinaryExpr::new(
+        let a_plus_b = Arc::new(BinaryExpr::new_with_overflow_check(
             col("a", &test_schema)?,
             Operator::Plus,
             col("b", &test_schema)?,
@@ -127,7 +127,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             Arc::new(ConfigOptions::default()),
         )?) as PhysicalExprRef;
         // a + b
-        let a_plus_b = Arc::new(BinaryExpr::new(
+        let a_plus_b = Arc::new(BinaryExpr::new_with_overflow_check(
             col("a", &test_schema)?,
             Operator::Plus,
             col("b", &test_schema)?,

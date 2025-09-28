@@ -843,7 +843,7 @@ async fn join_right_anti_two_with_filter() -> Result<()> {
         ),
     ];
     let filter = JoinFilter::new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("c2", 1)),
             Operator::Gt,
             Arc::new(Column::new("c1", 0)),
@@ -1116,7 +1116,7 @@ async fn join_right_semi_two_with_filter() -> Result<()> {
         ),
     ];
     let filter = JoinFilter::new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("c2", 1)),
             Operator::Lt,
             Arc::new(Column::new("c1", 0)),

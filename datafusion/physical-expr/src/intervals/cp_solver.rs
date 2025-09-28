@@ -569,7 +569,7 @@ impl ExprIntervalGraph {
     /// use datafusion_physical_expr::PhysicalExpr;
     /// use std::sync::Arc;
     ///
-    /// let expr = Arc::new(BinaryExpr::new(
+    /// let expr = Arc::new(BinaryExpr::new_with_overflow_check(
     ///     Arc::new(Column::new("gnz", 0)),
     ///     Operator::Plus,
     ///     Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
@@ -922,12 +922,12 @@ mod tests {
         let right_col = Arc::new(Column::new("right_watermark", 0));
 
         // left_watermark > right_watermark + 5
-        let left_and_1 = Arc::new(BinaryExpr::new(
+        let left_and_1 = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(&left_col) as Arc<dyn PhysicalExpr>,
             Operator::Plus,
             Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
         ));
-        let expr = Arc::new(BinaryExpr::new(
+        let expr = Arc::new(BinaryExpr::new_with_overflow_check(
             left_and_1,
             Operator::Gt,
             Arc::clone(&right_col) as Arc<dyn PhysicalExpr>,
@@ -1243,8 +1243,8 @@ mod tests {
         // Expression: a@0 + b@1 + 1 > a@0 - b@1, given a@0 + b@1.
         // Do not remove a@0 or b@1, only remove edges since a@0 - b@1 also
         // depends on leaf nodes a@0 and b@1.
-        let left_expr = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
+        let left_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::Plus,
                 Arc::new(Column::new("b", 1)),
@@ -1253,12 +1253,16 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
         ));
 
-        let right_expr = Arc::new(BinaryExpr::new(
+        let right_expr = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Minus,
             Arc::new(Column::new("b", 1)),
         ));
-        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
+        let expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            left_expr,
+            Operator::Gt,
+            right_expr,
+        ));
         let mut graph = ExprIntervalGraph::try_new(
             expr,
             &Schema::new(vec![
@@ -1268,7 +1272,7 @@ mod tests {
         )
         .unwrap();
         // Define a test leaf node.
-        let leaf_node = Arc::new(BinaryExpr::new(
+        let leaf_node = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Plus,
             Arc::new(Column::new("b", 1)),
@@ -1289,8 +1293,8 @@ mod tests {
     fn test_gather_node_indices_remove() -> Result<()> {
         // Expression: a@0 + b@1 + 1 > y@0 - z@1, given a@0 + b@1.
         // We expect to remove two nodes since we do not need a@ and b@.
-        let left_expr = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
+        let left_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::Plus,
                 Arc::new(Column::new("b", 1)),
@@ -1299,12 +1303,16 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
         ));
 
-        let right_expr = Arc::new(BinaryExpr::new(
+        let right_expr = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("y", 0)),
             Operator::Minus,
             Arc::new(Column::new("z", 1)),
         ));
-        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
+        let expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            left_expr,
+            Operator::Gt,
+            right_expr,
+        ));
         let mut graph = ExprIntervalGraph::try_new(
             expr,
             &Schema::new(vec![
@@ -1316,7 +1324,7 @@ mod tests {
         )
         .unwrap();
         // Define a test leaf node.
-        let leaf_node = Arc::new(BinaryExpr::new(
+        let leaf_node = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Plus,
             Arc::new(Column::new("b", 1)),
@@ -1337,8 +1345,8 @@ mod tests {
     fn test_gather_node_indices_remove_one() -> Result<()> {
         // Expression: a@0 + b@1 + 1 > a@0 - z@1, given a@0 + b@1.
         // We expect to remove one nodesince we still need a@ but not b@.
-        let left_expr = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
+        let left_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::Plus,
                 Arc::new(Column::new("b", 1)),
@@ -1347,12 +1355,16 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
         ));
 
-        let right_expr = Arc::new(BinaryExpr::new(
+        let right_expr = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Minus,
             Arc::new(Column::new("z", 1)),
         ));
-        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
+        let expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            left_expr,
+            Operator::Gt,
+            right_expr,
+        ));
         let mut graph = ExprIntervalGraph::try_new(
             expr,
             &Schema::new(vec![
@@ -1363,7 +1375,7 @@ mod tests {
         )
         .unwrap();
         // Define a test leaf node.
-        let leaf_node = Arc::new(BinaryExpr::new(
+        let leaf_node = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Plus,
             Arc::new(Column::new("b", 1)),
@@ -1387,8 +1399,8 @@ mod tests {
         // However, we do not have an exact node for a@0 + b@1 due to the binary tree structure of the expressions.
         // Pruning and interval providing for BinaryExpr expressions are more challenging without exact matches.
         // Currently, we only support exact matches for BinaryExprs, but we plan to extend support beyond exact matches in the future.
-        let left_expr = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
+        let left_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::Plus,
                 Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
@@ -1397,12 +1409,16 @@ mod tests {
             Arc::new(Column::new("b", 1)),
         ));
 
-        let right_expr = Arc::new(BinaryExpr::new(
+        let right_expr = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("y", 0)),
             Operator::Minus,
             Arc::new(Column::new("z", 1)),
         ));
-        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
+        let expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            left_expr,
+            Operator::Gt,
+            right_expr,
+        ));
         let mut graph = ExprIntervalGraph::try_new(
             expr,
             &Schema::new(vec![
@@ -1414,7 +1430,7 @@ mod tests {
         )
         .unwrap();
         // Define a test leaf node.
-        let leaf_node = Arc::new(BinaryExpr::new(
+        let leaf_node = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Plus,
             Arc::new(Column::new("b", 1)),
@@ -1432,7 +1448,7 @@ mod tests {
 
     #[test]
     fn test_propagate_constraints_singleton_interval_at_right() -> Result<()> {
-        let expression = BinaryExpr::new(
+        let expression = BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("ts_column", 0)),
             Operator::Plus,
             Arc::new(Literal::new(ScalarValue::new_interval_mdn(0, 1, 321))),
@@ -1505,7 +1521,7 @@ mod tests {
 
     #[test]
     fn test_propagate_constraints_column_interval_at_left() -> Result<()> {
-        let expression = BinaryExpr::new(
+        let expression = BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("interval_column", 1)),
             Operator::Plus,
             Arc::new(Column::new("ts_column", 0)),
@@ -1652,7 +1668,7 @@ mod tests {
 
     #[test]
     fn test_propagate_or() -> Result<()> {
-        let expr = Arc::new(BinaryExpr::new(
+        let expr = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Or,
             Arc::new(Column::new("b", 1)),
@@ -1700,7 +1716,7 @@ mod tests {
 
     #[test]
     fn test_propagate_certainly_false_and() -> Result<()> {
-        let expr = Arc::new(BinaryExpr::new(
+        let expr = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::And,
             Arc::new(Column::new("b", 1)),

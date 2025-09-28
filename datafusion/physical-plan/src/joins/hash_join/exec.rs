@@ -2587,7 +2587,7 @@ mod tests {
         let intermediate_schema =
             Schema::new(vec![Field::new("x", DataType::Int32, true)]);
 
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
@@ -2627,7 +2627,7 @@ mod tests {
         }
 
         // left_table left semi join right_table on left_table.b1 = right_table.b2 and right_table.a2 > 10
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::Gt,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
@@ -2729,7 +2729,7 @@ mod tests {
         let intermediate_schema =
             Schema::new(vec![Field::new("x", DataType::Int32, true)]);
 
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(9)))),
@@ -2770,7 +2770,7 @@ mod tests {
         }
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::Gt,
             Arc::new(Literal::new(ScalarValue::Int32(Some(11)))),
@@ -2867,7 +2867,7 @@ mod tests {
         }];
         let intermediate_schema =
             Schema::new(vec![Field::new("x", DataType::Int32, true)]);
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
@@ -2910,7 +2910,7 @@ mod tests {
         }
 
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2 != 13
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
@@ -3014,7 +3014,7 @@ mod tests {
         let intermediate_schema =
             Schema::new(vec![Field::new("x", DataType::Int32, true)]);
 
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(13)))),
@@ -3061,7 +3061,7 @@ mod tests {
             index: 1,
             side: JoinSide::Right,
         }];
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
@@ -3638,7 +3638,7 @@ mod tests {
             Field::new("c", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let filter_expression = Arc::new(BinaryExpr::new(
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("c", 0)),
             Operator::Gt,
             Arc::new(Column::new("c", 1)),

@@ -113,7 +113,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             &test_schema,
             Arc::new(ConfigOptions::default()),
         )?);
-        let a_plus_b = Arc::new(BinaryExpr::new(
+        let a_plus_b = Arc::new(BinaryExpr::new_with_overflow_check(
             col("a", &test_schema)?,
             Operator::Plus,
             col("b", &test_schema)?,

@@ -426,7 +426,7 @@ mod tests {
 
         // Test composite expression: volatile_expr AND literal
         // The BinaryExpr itself is not volatile, but contains a volatile child
-        let composite_expr = Arc::new(BinaryExpr::new(
+        let composite_expr = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(&volatile_expr),
             Operator::And,
             Arc::clone(&literal),
@@ -436,7 +436,7 @@ mod tests {
         assert!(is_volatile(&composite_expr)); // But it contains a volatile child
 
         // Test composite expression with all non-volatile children
-        let stable_composite = Arc::new(BinaryExpr::new(
+        let stable_composite = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(&stable_expr),
             Operator::And,
             Arc::clone(&literal),

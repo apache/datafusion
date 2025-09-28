@@ -2228,11 +2228,13 @@ mod tests {
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
         // Create a file source with a filter
         let file_source: Arc<dyn FileSource> =
-            Arc::new(MockSource::default().with_filter(Arc::new(BinaryExpr::new(
-                col("c2", &file_schema).unwrap(),
-                Operator::Eq,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
-            ))));
+            Arc::new(MockSource::default().with_filter(Arc::new(
+                BinaryExpr::new_with_overflow_check(
+                    col("c2", &file_schema).unwrap(),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+                ),
+            )));
 
         let config = FileScanConfigBuilder::new(
             object_store_url.clone(),

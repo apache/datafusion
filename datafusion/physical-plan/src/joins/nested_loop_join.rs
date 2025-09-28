@@ -1997,13 +1997,13 @@ pub(crate) mod tests {
             Field::new("x", DataType::Int32, true),
         ]);
         // left.b1!=8
-        let left_filter = Arc::new(BinaryExpr::new(
+        let left_filter = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 0)),
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
         // right.b2!=10
-        let right_filter = Arc::new(BinaryExpr::new(
+        let right_filter = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("x", 1)),
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
@@ -2018,9 +2018,11 @@ pub(crate) mod tests {
         // ("a2", &vec![12, 2]),
         // ("b2", &vec![10, 2]),
         // ("c2", &vec![40, 80]),
-        let filter_expression =
-            Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
-                as Arc<dyn PhysicalExpr>;
+        let filter_expression = Arc::new(BinaryExpr::new_with_overflow_check(
+            left_filter,
+            Operator::And,
+            right_filter,
+        )) as Arc<dyn PhysicalExpr>;
 
         JoinFilter::new(
             filter_expression,
