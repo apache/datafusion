@@ -42,8 +42,8 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_expr::{JoinType, Operator};
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{self, lit, BinaryExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
@@ -71,7 +71,7 @@ use datafusion_physical_plan::{
     PlanProperties, Statistics,
 };
 
-fn binary_test(
+fn binary_expr(
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
@@ -1034,7 +1034,7 @@ fn multi_hash_join_key_ordering() -> Result<()> {
         &JoinType::Inner,
     );
 
-    let predicate: Arc<dyn PhysicalExpr> = binary_test(
+    let predicate: Arc<dyn PhysicalExpr> = binary_expr(
         col("c", top_join.schema().deref())?,
         Operator::Gt,
         lit(1i64),

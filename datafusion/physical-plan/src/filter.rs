@@ -766,16 +766,30 @@ mod tests {
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
     use datafusion_common::ScalarValue;
+    use datafusion_expr::execution_props::ExecutionProps;
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {
         let schema = test::aggr_test_schema();
         let predicate: Arc<dyn PhysicalExpr> = binary(
             binary(
-                binary(col("c2", &schema)?, Operator::GtEq, lit(1u32), &schema)?,
+                binary(
+                    col("c2", &schema)?,
+                    Operator::GtEq,
+                    lit(1u32),
+                    &schema,
+                    &ExecutionProps::new(),
+                )?,
                 Operator::And,
-                binary(col("c2", &schema)?, Operator::Eq, lit(4u32), &schema)?,
+                binary(
+                    col("c2", &schema)?,
+                    Operator::Eq,
+                    lit(4u32),
+                    &schema,
+                    &ExecutionProps::new(),
+                )?,
                 &schema,
+                &ExecutionProps::new(),
             )?,
             Operator::And,
             binary(
@@ -784,6 +798,7 @@ mod tests {
                     Operator::Eq,
                     col("c9", &schema)?,
                     &schema,
+                    &ExecutionProps::new(),
                 )?,
                 Operator::And,
                 binary(
@@ -791,10 +806,13 @@ mod tests {
                     Operator::NotEq,
                     col("c13", &schema)?,
                     &schema,
+                    &ExecutionProps::new(),
                 )?,
                 &schema,
+                &ExecutionProps::new(),
             )?,
             &schema,
+            &ExecutionProps::new(),
         )?;
 
         let (equal_pairs, ne_pairs) = collect_columns_from_predicate_inner(&predicate);
@@ -832,8 +850,13 @@ mod tests {
         ));
 
         // a <= 25
-        let predicate: Arc<dyn PhysicalExpr> =
-            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?;
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("a", &schema)?,
+            Operator::LtEq,
+            lit(25i32),
+            &schema,
+            &ExecutionProps::new(),
+        )?;
 
         // WHERE a <= 25
         let filter: Arc<dyn ExecutionPlan> =
@@ -877,7 +900,13 @@ mod tests {
 
         // WHERE a <= 25
         let sub_filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
-            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?,
+            binary(
+                col("a", &schema)?,
+                Operator::LtEq,
+                lit(25i32),
+                &schema,
+                &ExecutionProps::new(),
+            )?,
             input,
         )?);
 
@@ -885,7 +914,13 @@ mod tests {
         // WHERE a >= 10
         // WHERE a <= 25
         let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
-            binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
+            binary(
+                col("a", &schema)?,
+                Operator::GtEq,
+                lit(10i32),
+                &schema,
+                &ExecutionProps::new(),
+            )?,
             sub_filter,
         )?);
 
@@ -934,19 +969,37 @@ mod tests {
 
         // WHERE a <= 25
         let a_lte_25: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
-            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?,
+            binary(
+                col("a", &schema)?,
+                Operator::LtEq,
+                lit(25i32),
+                &schema,
+                &ExecutionProps::new(),
+            )?,
             input,
         )?);
 
         // WHERE b > 45
         let b_gt_5: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
-            binary(col("b", &schema)?, Operator::Gt, lit(45i32), &schema)?,
+            binary(
+                col("b", &schema)?,
+                Operator::Gt,
+                lit(45i32),
+                &schema,
+                &ExecutionProps::new(),
+            )?,
             a_lte_25,
         )?);
 
         // WHERE a >= 10
         let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
-            binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
+            binary(
+                col("a", &schema)?,
+                Operator::GtEq,
+                lit(10i32),
+                &schema,
+                &ExecutionProps::new(),
+            )?,
             b_gt_5,
         )?);
         let statistics = filter.partition_statistics(None)?;
@@ -987,8 +1040,13 @@ mod tests {
         ));
 
         // a <= 25
-        let predicate: Arc<dyn PhysicalExpr> =
-            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?;
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("a", &schema)?,
+            Operator::LtEq,
+            lit(25i32),
+            &schema,
+            &ExecutionProps::new(),
+        )?;
 
         // WHERE a <= 25
         let filter: Arc<dyn ExecutionPlan> =
@@ -1036,28 +1094,28 @@ mod tests {
             schema,
         ));
         // WHERE a<=53 AND (b=3 AND (c<=1075.0 AND a>b))
-        let predicate = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::LtEq,
                 Arc::new(Literal::new(ScalarValue::Int32(Some(53)))),
             )),
             Operator::And,
-            Arc::new(BinaryExpr::new(
-                Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("b", 1)),
                     Operator::Eq,
                     Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
                 )),
                 Operator::And,
-                Arc::new(BinaryExpr::new(
-                    Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("c", 2)),
                         Operator::LtEq,
                         Arc::new(Literal::new(ScalarValue::Float32(Some(1075.0)))),
                     )),
                     Operator::And,
-                    Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::new(Column::new("a", 0)),
                         Operator::Gt,
                         Arc::new(Column::new("b", 1)),
@@ -1149,14 +1207,14 @@ mod tests {
             schema,
         ));
         // WHERE a<200 AND 1<=b
-        let predicate = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::Lt,
                 Arc::new(Literal::new(ScalarValue::Int32(Some(200)))),
             )),
             Operator::And,
-            Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
                 Operator::LtEq,
                 Arc::new(Column::new("b", 1)),
@@ -1204,14 +1262,14 @@ mod tests {
             schema,
         ));
         // WHERE a>200 AND 1<=b
-        let predicate = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::Gt,
                 Arc::new(Literal::new(ScalarValue::Int32(Some(200)))),
             )),
             Operator::And,
-            Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
                 Operator::LtEq,
                 Arc::new(Column::new("b", 1)),
@@ -1272,7 +1330,7 @@ mod tests {
             schema,
         ));
         // WHERE a<50
-        let predicate = Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Lt,
             Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
@@ -1310,17 +1368,17 @@ mod tests {
             schema,
         ));
         // WHERE a <= 10 AND 0 <= a - 5
-        let predicate = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Column::new("a", 0)),
                 Operator::LtEq,
                 Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
             )),
             Operator::And,
-            Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
                 Operator::LtEq,
-                Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("a", 0)),
                     Operator::Minus,
                     Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
@@ -1356,7 +1414,7 @@ mod tests {
             schema,
         ));
         // WHERE a = 10
-        let predicate = Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Eq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
@@ -1378,7 +1436,7 @@ mod tests {
             schema,
         ));
         // WHERE a = 10
-        let predicate = Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Eq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
@@ -1404,7 +1462,7 @@ mod tests {
             schema,
         ));
         // WHERE a = 10
-        let predicate = Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", 0)),
             Operator::Eq,
             Arc::new(Literal::new(ScalarValue::Decimal128(Some(10), 10, 10))),
@@ -1440,10 +1498,23 @@ mod tests {
 
         let exec = FilterExec::try_new(
             binary(
-                binary(col("c1", &schema)?, Operator::GtEq, lit(1i32), &schema)?,
+                binary(
+                    col("c1", &schema)?,
+                    Operator::GtEq,
+                    lit(1i32),
+                    &schema,
+                    &ExecutionProps::new(),
+                )?,
                 Operator::And,
-                binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
+                binary(
+                    col("c1", &schema)?,
+                    Operator::LtEq,
+                    lit(4i32),
+                    &schema,
+                    &ExecutionProps::new(),
+                )?,
                 &schema,
+                &ExecutionProps::new(),
             )?,
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
         )?;

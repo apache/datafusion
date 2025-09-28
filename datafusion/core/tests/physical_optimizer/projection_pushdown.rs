@@ -29,10 +29,10 @@ use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr::expressions::{
     self, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
@@ -63,7 +63,7 @@ use datafusion_physical_plan::{displayable, ExecutionPlan};
 use insta::assert_snapshot;
 use itertools::Itertools;
 
-fn binary_test(
+fn binary_expr(
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
@@ -1172,7 +1172,8 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
     let col_right_b = col("b", &right_csv.schema())?;
     let col_left_c = col("c", &left_csv.schema())?;
     // left_a < right_b
-    let filter_expr = binary_test(col_left_a, Operator::Lt, col_right_b, &Schema::empty())?;
+    let filter_expr =
+        binary_expr(col_left_a, Operator::Lt, col_right_b, &Schema::empty())?;
     let filter_column_indices = vec![
         ColumnIndex {
             index: 0,

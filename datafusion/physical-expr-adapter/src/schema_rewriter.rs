@@ -491,15 +491,15 @@ mod tests {
         // Create a complex expression: (a + 5) OR (c > 0.0) that tests the recursive case of the rewriter
         let column_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let column_c = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
-        let expr = expressions::BinaryExpr::new(
+        let expr = expressions::BinaryExpr::new_with_overflow_check(
             Arc::clone(&column_a),
             Operator::Plus,
             Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
         );
-        let expr = expressions::BinaryExpr::new(
+        let expr = expressions::BinaryExpr::new_with_overflow_check(
             Arc::new(expr),
             Operator::Or,
-            Arc::new(expressions::BinaryExpr::new(
+            Arc::new(expressions::BinaryExpr::new_with_overflow_check(
                 Arc::clone(&column_c),
                 Operator::Gt,
                 Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
@@ -509,7 +509,7 @@ mod tests {
         let result = adapter.rewrite(Arc::new(expr)).unwrap();
         println!("Rewritten expression: {result}");
 
-        let expected = expressions::BinaryExpr::new(
+        let expected = expressions::BinaryExpr::new_with_overflow_check(
             Arc::new(CastExpr::new(
                 Arc::new(Column::new("a", 0)),
                 DataType::Int64,
@@ -518,10 +518,10 @@ mod tests {
             Operator::Plus,
             Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
         );
-        let expected = Arc::new(expressions::BinaryExpr::new(
+        let expected = Arc::new(expressions::BinaryExpr::new_with_overflow_check(
             Arc::new(expected),
             Operator::Or,
-            Arc::new(expressions::BinaryExpr::new(
+            Arc::new(expressions::BinaryExpr::new_with_overflow_check(
                 lit(ScalarValue::Float64(None)), // c is missing, so it becomes null
                 Operator::Gt,
                 Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),

@@ -913,7 +913,7 @@ mod tests {
     use datafusion_expr::Operator;
 
     /// Helper function for tests that provides default ExecutionProps for binary function calls
-    fn binary_test(
+    fn binary_expr(
         lhs: Arc<dyn PhysicalExpr>,
         op: Operator,
         rhs: Arc<dyn PhysicalExpr>,
@@ -1107,12 +1107,12 @@ mod tests {
             },
             // Complex expression tests
             TestCase {
-                left: Arc::new(BinaryExpr::new(
+                left: Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::clone(&col_a),
                     Operator::Plus,
                     Arc::clone(&col_b),
                 )) as _,
-                right: Arc::new(BinaryExpr::new(
+                right: Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::clone(&col_x),
                     Operator::Plus,
                     Arc::clone(&col_y),
@@ -1122,12 +1122,12 @@ mod tests {
                     "Binary expressions with equivalent operands should be equal",
             },
             TestCase {
-                left: Arc::new(BinaryExpr::new(
+                left: Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::clone(&col_a),
                     Operator::Plus,
                     Arc::clone(&col_b),
                 )) as _,
-                right: Arc::new(BinaryExpr::new(
+                right: Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::clone(&col_x),
                     Operator::Plus,
                     Arc::clone(&col_a),
@@ -1137,12 +1137,12 @@ mod tests {
                     "Binary expressions with non-equivalent operands should not be equal",
             },
             TestCase {
-                left: Arc::new(BinaryExpr::new(
+                left: Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::clone(&col_a),
                     Operator::Plus,
                     Arc::clone(&lit_1),
                 )) as _,
-                right: Arc::new(BinaryExpr::new(
+                right: Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::clone(&col_x),
                     Operator::Plus,
                     Arc::clone(&lit_1),
@@ -1151,8 +1151,8 @@ mod tests {
                 description: "Binary expressions with equivalent column and same literal should be equal",
             },
             TestCase {
-                left: Arc::new(BinaryExpr::new(
-                    Arc::new(BinaryExpr::new(
+                left: Arc::new(BinaryExpr::new_with_overflow_check(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::clone(&col_a),
                         Operator::Plus,
                         Arc::clone(&col_b),
@@ -1160,8 +1160,8 @@ mod tests {
                     Operator::Multiply,
                     Arc::clone(&lit_1),
                 )) as _,
-                right: Arc::new(BinaryExpr::new(
-                    Arc::new(BinaryExpr::new(
+                right: Arc::new(BinaryExpr::new_with_overflow_check(
+                    Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::clone(&col_x),
                         Operator::Plus,
                         Arc::clone(&col_y),
@@ -1212,7 +1212,7 @@ mod tests {
 
         let mapping = [
             (
-                binary_test(
+                binary_expr(
                     col("a", &schema)?,
                     Operator::Plus,
                     col("c", &schema)?,
@@ -1221,7 +1221,7 @@ mod tests {
                 vec![(col("a+c", &projected_schema)?, 0)].into(),
             ),
             (
-                binary_test(
+                binary_expr(
                     col("b", &schema)?,
                     Operator::Plus,
                     col("c", &schema)?,

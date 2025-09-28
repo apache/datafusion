@@ -186,22 +186,22 @@ mod tests {
         let col_d = &col("d", &schema)?;
         let col_e = &col("e", &schema)?;
         let col_ts = &col("ts", &schema)?;
-        let a_plus_b = Arc::new(BinaryExpr::new(
+        let a_plus_b = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_a),
             Operator::Plus,
             Arc::clone(col_b),
         )) as Arc<dyn PhysicalExpr>;
-        let b_plus_d = Arc::new(BinaryExpr::new(
+        let b_plus_d = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_b),
             Operator::Plus,
             Arc::clone(col_d),
         )) as Arc<dyn PhysicalExpr>;
-        let b_plus_e = Arc::new(BinaryExpr::new(
+        let b_plus_e = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_b),
             Operator::Plus,
             Arc::clone(col_e),
         )) as Arc<dyn PhysicalExpr>;
-        let c_plus_d = Arc::new(BinaryExpr::new(
+        let c_plus_d = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_c),
             Operator::Plus,
             Arc::clone(col_d),
@@ -678,7 +678,7 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let col_ts = &col("ts", &schema)?;
-        let a_plus_b = Arc::new(BinaryExpr::new(
+        let a_plus_b = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_a),
             Operator::Plus,
             Arc::clone(col_b),
@@ -714,7 +714,7 @@ mod tests {
         let col_b_new = &col("b_new", &output_schema)?;
         let col_c_new = &col("c_new", &output_schema)?;
         let col_round_c_res = &col("round_c_res", &output_schema)?;
-        let a_new_plus_b_new = Arc::new(BinaryExpr::new(
+        let a_new_plus_b_new = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_a_new),
             Operator::Plus,
             Arc::clone(col_b_new),
@@ -867,7 +867,7 @@ mod tests {
         let col_d = &col("d", &schema)?;
         let col_e = &col("e", &schema)?;
         let col_f = &col("f", &schema)?;
-        let a_plus_b = Arc::new(BinaryExpr::new(
+        let a_plus_b = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_a),
             Operator::Plus,
             Arc::clone(col_b),

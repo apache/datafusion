@@ -28,8 +28,8 @@ use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_expr::Operator;
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
@@ -43,7 +43,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::ExecutionPlan;
 
-fn binary_test(
+fn binary_expr(
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
@@ -249,7 +249,7 @@ async fn test_count_inexact_stat() -> Result<()> {
 
     // adding a filter makes the statistics inexact
     let filter = Arc::new(FilterExec::try_new(
-        binary_test(
+        binary_expr(
             expressions::col("a", &schema)?,
             Operator::Gt,
             cast(expressions::lit(1u32), &schema, DataType::Int32)?,
@@ -293,7 +293,7 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
 
     // adding a filter makes the statistics inexact
     let filter = Arc::new(FilterExec::try_new(
-        binary_test(
+        binary_expr(
             expressions::col("a", &schema)?,
             Operator::Gt,
             cast(expressions::lit(1u32), &schema, DataType::Int32)?,

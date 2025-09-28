@@ -29,8 +29,8 @@ mod test {
     use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
-    use datafusion_expr_common::operator::Operator;
     use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr_common::operator::Operator;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::{self, col, lit, Column};
@@ -59,7 +59,7 @@ mod test {
 
     use futures::TryStreamExt;
 
-    fn binary_test(
+    fn binary_expr(
         lhs: Arc<dyn PhysicalExpr>,
         op: Operator,
         rhs: Arc<dyn PhysicalExpr>,
@@ -324,7 +324,7 @@ mod test {
     async fn test_statistics_by_partition_of_filter() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
-        let predicate = binary_test(
+        let predicate = binary_expr(
             Arc::new(Column::new("id", 0)),
             Operator::Lt,
             lit(1i32),
@@ -544,7 +544,7 @@ mod test {
         let group_by = PhysicalGroupBy::new_single(vec![
             (col("id", &scan_schema)?, "id".to_string()),
             (
-                binary_test(
+                binary_expr(
                     lit(1),
                     Operator::Plus,
                     col("id", &scan_schema)?,

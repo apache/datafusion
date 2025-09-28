@@ -135,7 +135,8 @@ fn try_unwrap_cast_comparison(
     // Try to cast the literal to the inner expression's type
     if let Some(casted_literal) = try_cast_literal_to_type(literal_value, &inner_type) {
         let literal_expr = lit(casted_literal);
-        let binary_expr = BinaryExpr::new(inner_expr, op, literal_expr);
+        let binary_expr =
+            BinaryExpr::new_with_overflow_check(inner_expr, op, literal_expr);
         return Ok(Some(Arc::new(binary_expr)));
     }
 
@@ -186,8 +187,11 @@ mod tests {
         let column_expr = col("c1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let literal_expr = lit(10i64);
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            cast_expr,
+            Operator::Gt,
+            literal_expr,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -219,8 +223,11 @@ mod tests {
         let column_expr = col("c1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let literal_expr = lit(10i64);
-        let binary_expr =
-            Arc::new(BinaryExpr::new(literal_expr, Operator::Lt, cast_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            literal_expr,
+            Operator::Lt,
+            cast_expr,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -244,8 +251,11 @@ mod tests {
         let column_expr = col("f1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Float64, None));
         let literal_expr = lit(10.5f64);
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            cast_expr,
+            Operator::Gt,
+            literal_expr,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -261,8 +271,11 @@ mod tests {
         let column_expr = col("c1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let literal_expr = lit(10i64);
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            cast_expr,
+            Operator::Gt,
+            literal_expr,
+        ));
         let binary_ref = binary_expr.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
         assert!(is_binary_expr_with_cast_and_literal(binary_ref));
@@ -286,8 +299,11 @@ mod tests {
             None,
         ));
         let literal_expr = lit(ScalarValue::Decimal128(Some(400), 22, 2));
-        let binary_expr =
-            Arc::new(BinaryExpr::new(literal_expr, Operator::LtEq, cast_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            literal_expr,
+            Operator::LtEq,
+            cast_expr,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -336,8 +352,11 @@ mod tests {
             let column_expr = col("int_col", &schema).unwrap();
             let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
             let literal_expr = lit(100i64);
-            let binary_expr =
-                Arc::new(BinaryExpr::new(literal_expr, original_op, cast_expr));
+            let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+                literal_expr,
+                original_op,
+                cast_expr,
+            ));
 
             // Apply unwrap cast optimization
             let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -396,8 +415,11 @@ mod tests {
                 None,
             ));
             let literal_expr = lit(ScalarValue::Decimal128(Some(value), cast_p, cast_s));
-            let binary_expr =
-                Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
+            let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+                cast_expr,
+                Operator::Gt,
+                literal_expr,
+            ));
 
             let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
             assert!(result.transformed);
@@ -409,8 +431,11 @@ mod tests {
                 None,
             ));
             let literal_expr = lit(ScalarValue::Decimal128(Some(value), cast_p, cast_s));
-            let binary_expr =
-                Arc::new(BinaryExpr::new(literal_expr, Operator::Lt, cast_expr));
+            let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+                literal_expr,
+                Operator::Lt,
+                cast_expr,
+            ));
 
             let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
             assert!(result.transformed);
@@ -426,8 +451,11 @@ mod tests {
         let column_expr = col("int_col", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let null_literal = lit(ScalarValue::Int64(None));
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, null_literal));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            cast_expr,
+            Operator::Eq,
+            null_literal,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -455,8 +483,11 @@ mod tests {
         let column_expr = col("str_col", &schema).unwrap();
         let try_cast_expr = Arc::new(TryCastExpr::new(column_expr, DataType::Int64));
         let literal_expr = lit(100i64);
-        let binary_expr =
-            Arc::new(BinaryExpr::new(try_cast_expr, Operator::Gt, literal_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            try_cast_expr,
+            Operator::Gt,
+            literal_expr,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -479,13 +510,25 @@ mod tests {
             None,
         ));
         let lit1 = lit(10i64);
-        let compare1 = Arc::new(BinaryExpr::new(cast1, Operator::Gt, lit1));
+        let compare1 = Arc::new(BinaryExpr::new_with_overflow_check(
+            cast1,
+            Operator::Gt,
+            lit1,
+        ));
 
         let cast2 = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let lit2 = lit(20i64);
-        let compare2 = Arc::new(BinaryExpr::new(cast2, Operator::Lt, lit2));
+        let compare2 = Arc::new(BinaryExpr::new_with_overflow_check(
+            cast2,
+            Operator::Lt,
+            lit2,
+        ));
 
-        let and_expr = Arc::new(BinaryExpr::new(compare1, Operator::And, compare2));
+        let and_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            compare1,
+            Operator::And,
+            compare2,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(and_expr, &schema).unwrap();
@@ -522,8 +565,11 @@ mod tests {
         let column_expr = col("c1", &schema).unwrap();
         let try_cast_expr = Arc::new(TryCastExpr::new(column_expr, DataType::Int64));
         let literal_expr = lit(100i64);
-        let binary_expr =
-            Arc::new(BinaryExpr::new(try_cast_expr, Operator::LtEq, literal_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            try_cast_expr,
+            Operator::LtEq,
+            literal_expr,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -556,8 +602,11 @@ mod tests {
         let column_expr = col("int_col", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let literal_expr = lit(10i64);
-        let binary_expr =
-            Arc::new(BinaryExpr::new(literal_expr, Operator::Plus, cast_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            literal_expr,
+            Operator::Plus,
+            cast_expr,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -576,8 +625,11 @@ mod tests {
         let column_expr = col("small_int", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
         let literal_expr = lit(1000i64); // Value too large for Int8
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            cast_expr,
+            Operator::Gt,
+            literal_expr,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
@@ -595,15 +647,27 @@ mod tests {
         let c1_expr = col("c1", &schema).unwrap();
         let c1_cast = Arc::new(CastExpr::new(c1_expr, DataType::Int64, None));
         let c1_literal = lit(10i64);
-        let c1_binary = Arc::new(BinaryExpr::new(c1_cast, Operator::Gt, c1_literal));
+        let c1_binary = Arc::new(BinaryExpr::new_with_overflow_check(
+            c1_cast,
+            Operator::Gt,
+            c1_literal,
+        ));
 
         let c2_expr = col("c2", &schema).unwrap();
         let c2_cast = Arc::new(CastExpr::new(c2_expr, DataType::Int32, None));
         let c2_literal = lit(20i32);
-        let c2_binary = Arc::new(BinaryExpr::new(c2_cast, Operator::Eq, c2_literal));
+        let c2_binary = Arc::new(BinaryExpr::new_with_overflow_check(
+            c2_cast,
+            Operator::Eq,
+            c2_literal,
+        ));
 
         // Create AND expression
-        let and_expr = Arc::new(BinaryExpr::new(c1_binary, Operator::And, c2_binary));
+        let and_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            c1_binary,
+            Operator::And,
+            c2_binary,
+        ));
 
         // Apply unwrap cast optimization
         let result = unwrap_cast_in_comparison(and_expr, &schema).unwrap();

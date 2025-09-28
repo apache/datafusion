@@ -30,8 +30,8 @@ use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
-use datafusion_expr::Operator;
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -42,7 +42,7 @@ use datafusion_physical_plan::{
     ExecutionPlan,
 };
 
-fn binary_test(
+fn binary_expr(
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
@@ -379,7 +379,7 @@ fn test_has_filter() -> Result<()> {
 
     // `SELECT a FROM DataSourceExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
     // the `a > 1` filter is applied in the AggregateExec
-    let filter_expr = Some(binary_test(
+    let filter_expr = Some(binary_expr(
         col("a", &schema)?,
         Operator::Gt,
         cast(expressions::lit(1u32), &schema, DataType::Int32)?,

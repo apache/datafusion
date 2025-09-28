@@ -66,7 +66,11 @@ pub fn conjunction_opt(
         .into_iter()
         .fold(None, |acc, predicate| match acc {
             None => Some(predicate),
-            Some(acc) => Some(Arc::new(BinaryExpr::new(acc, Operator::And, predicate))),
+            Some(acc) => Some(Arc::new(BinaryExpr::new_with_overflow_check(
+                acc,
+                Operator::And,
+                predicate,
+            ))),
         })
 }
 
@@ -285,7 +289,7 @@ pub(crate) mod tests {
     use petgraph::visit::Bfs;
 
     /// Helper function for tests that provides default ExecutionProps for binary function calls
-    fn binary_test(
+    fn binary_expr(
         lhs: Arc<dyn PhysicalExpr>,
         op: Operator,
         rhs: Arc<dyn PhysicalExpr>,
@@ -431,9 +435,9 @@ pub(crate) mod tests {
             Field::new("1", DataType::Int32, true),
             Field::new("2", DataType::Int32, true),
         ]);
-        let expr = binary_test(
+        let expr = binary_expr(
             cast(
-                binary_test(
+                binary_expr(
                     col("0", &schema)?,
                     Operator::Plus,
                     col("1", &schema)?,
@@ -443,7 +447,7 @@ pub(crate) mod tests {
                 DataType::Int64,
             )?,
             Operator::Gt,
-            binary_test(
+            binary_expr(
                 cast(col("2", &schema)?, &schema, DataType::Int64)?,
                 Operator::Plus,
                 lit(ScalarValue::Int64(Some(10))),
@@ -567,7 +571,11 @@ pub(crate) mod tests {
         expected.insert(Column::new("col2", 5));
         assert_eq!(collect_columns(&expr2), expected);
 
-        let expr3 = Arc::new(BinaryExpr::new(expr1, Operator::Plus, expr2)) as _;
+        let expr3 = Arc::new(BinaryExpr::new_with_overflow_check(
+            expr1,
+            Operator::Plus,
+            expr2,
+        )) as _;
         let mut expected = HashSet::new();
         expected.insert(Column::new("col1", 2));
         expected.insert(Column::new("col2", 5));

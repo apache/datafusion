@@ -636,7 +636,11 @@ mod tests {
         let test_cases = vec![
             // d + b
             (
-                Arc::new(BinaryExpr::new(col_d, Operator::Plus, Arc::clone(&col_b))) as _,
+                Arc::new(BinaryExpr::new_with_overflow_check(
+                    col_d,
+                    Operator::Plus,
+                    Arc::clone(&col_b),
+                )) as _,
                 SortProperties::Ordered(option_asc),
             ),
             // b
@@ -645,7 +649,11 @@ mod tests {
             (Arc::clone(&col_a), SortProperties::Ordered(option_asc)),
             // a + c
             (
-                Arc::new(BinaryExpr::new(col_a, Operator::Plus, col_c)),
+                Arc::new(BinaryExpr::new_with_overflow_check(
+                    col_a,
+                    Operator::Plus,
+                    col_c,
+                )),
                 SortProperties::Unordered,
             ),
         ];
@@ -682,7 +690,7 @@ mod tests {
         let col_f = &col("f", &test_schema)?;
         let col_h = &col("h", &test_schema)?;
         // a + d
-        let a_plus_d = Arc::new(BinaryExpr::new(
+        let a_plus_d = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_a),
             Operator::Plus,
             Arc::clone(col_d),
@@ -1080,7 +1088,7 @@ mod tests {
         let col_b = col("b", &schema)?;
         let col_c = col("c", &schema)?;
 
-        let a_times_b = Arc::new(BinaryExpr::new(
+        let a_times_b = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(&col_a),
             Operator::Multiply,
             Arc::clone(&col_b),

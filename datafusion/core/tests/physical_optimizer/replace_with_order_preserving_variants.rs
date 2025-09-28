@@ -1146,7 +1146,7 @@ fn repartition_exec_hash(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan
 
 fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let input_schema = input.schema();
-    let predicate = binary_test(
+    let predicate = binary_expr(
         col("c", &input_schema).unwrap(),
         Operator::Gt,
         expressions::lit(3i32),
@@ -1156,7 +1156,7 @@ fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
 }
 
-fn binary_test(
+fn binary_expr(
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,

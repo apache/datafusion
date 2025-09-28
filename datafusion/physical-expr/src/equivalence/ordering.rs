@@ -406,7 +406,7 @@ mod tests {
             Arc::new(ConfigOptions::default()),
         )?) as PhysicalExprRef;
 
-        let a_plus_b = Arc::new(BinaryExpr::new(
+        let a_plus_b = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::clone(col_a),
             Operator::Plus,
             Arc::clone(col_b),
