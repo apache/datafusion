@@ -1540,6 +1540,19 @@ SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(
 ----
 NULL
 
+# percentile_cont_with_weight_with_nulls
+query I
+SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(w, 0.5) WITHIN GROUP (ORDER BY v)
+FROM (VALUES (1, 1), (2, 1), (3, 1), (4, NULL), (NULL, 1), (NULL, NULL)) as t (v, w);
+----
+2
+
+# percentile_cont_with_weight_nulls_only
+query I
+SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(1, 0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
+----
+NULL
+
 #
 # percentile_cont edge cases
 #
