@@ -53,19 +53,21 @@ pub struct RunOpt {
 /// Each query's comment includes:
 ///   - Left row count × Right row count
 ///   - Join predicate selectivity (approximate output fraction).
+///   - Q11 and Q12 selectivity is relative to cartesian product while the others are
+///     relative to probe side.
 const HASH_QUERIES: &[&str] = &[
-    // Q1: INNER 10K x 10K | LOW ~0.1%
+    // Q1: INNER 10 x 10K | LOW ~0.1%
     // equality on key + cheap filter to downselect
     r#"
         SELECT t1.value, t2.value
-        FROM generate_series(0,10000, 1000) AS t1(value)
+        FROM generate_series(0, 9000, 1000) AS t1(value)
         JOIN range(10000) AS t2
         ON t1.value = t2.value;
     "#,
-    // Q2: INNER 10K x 10K | MEDIUM ~20%
+    // Q2: INNER 10 x 10K | LOW ~0.1%
     r#"
         SELECT t1.value, t2.value
-        FROM range(10000) AS t1
+        FROM generate_series(0, 9000, 1000) AS t1
         JOIN range(10000) AS t2
           ON t1.value = t2.value
         WHERE t1.value % 5 = 0
@@ -78,90 +80,90 @@ const HASH_QUERIES: &[&str] = &[
           ON t1.value = t2.value
         WHERE t1.value % 10 <> 0
     "#,
-    // Q4: INNER 30K x 30K | MEDIUM ~20%
+    // Q4: INNER 30 x 30K | LOW ~0.1%
     r#"
         SELECT t1.value, t2.value
-        FROM range(30000) AS t1
+        FROM generate_series(0, 29000, 1000) AS t1
         JOIN range(30000) AS t2
           ON t1.value = t2.value
         WHERE t1.value % 5 = 0
     "#,
-    // Q5: INNER 10K x 200K | LOW ~0.1% (small to large)
+    // Q5: INNER 10 x 200K | VERY LOW ~0.005% (small to large)
     r#"
         SELECT t1.value, t2.value
-        FROM range(10000) AS t1
+        FROM generate_series(0, 9000, 1000) AS t1
         JOIN range(200000) AS t2
           ON t1.value = t2.value
         WHERE t1.value % 1000 = 0
     "#,
-    // Q6: INNER 200K x 10K | LOW ~0.1% (large to small)
+    // Q6: INNER 200K x 10 | VERY LOW ~0.005% (large to small)
     r#"
         SELECT t1.value, t2.value
         FROM range(200000) AS t1
-        JOIN range(10000) AS t2
+        JOIN generate_series(0, 9000, 1000) AS t2
           ON t1.value = t2.value
         WHERE t1.value % 1000 = 0
     "#,
-    // Q7: RIGHT OUTER 10K x 200K | LOW ~0.1%
+    // Q7: RIGHT OUTER 10 x 200K | LOW ~0.1%
     // Outer join still uses HashJoin for equi-keys; the extra filter reduces matches
     r#"
         SELECT t1.value AS l, t2.value AS r
-        FROM range(10000) AS t1
+        FROM generate_series(0, 9000, 1000) AS t1
         RIGHT JOIN range(200000) AS t2
           ON t1.value = t2.value
         WHERE t2.value % 1000 = 0
     "#,
-    // Q8: LEFT OUTER 200K x 10K | LOW ~0.1%
+    // Q8: LEFT OUTER 200K x 10 | LOW ~0.1%
     r#"
         SELECT t1.value AS l, t2.value AS r
         FROM range(200000) AS t1
-        LEFT JOIN range(10000) AS t2
+        LEFT JOIN generate_series(0, 9000, 1000) AS t2
           ON t1.value = t2.value
         WHERE t1.value % 1000 = 0
     "#,
-    // Q9: FULL OUTER 30K x 30K | LOW ~0.1%
+    // Q9: FULL OUTER 30 x 30K | LOW ~0.1%
     r#"
         SELECT t1.value AS l, t2.value AS r
-        FROM range(30000) AS t1
+        FROM generate_series(0, 29000, 1000) AS t1
         FULL JOIN range(30000) AS t2
           ON t1.value = t2.value
         WHERE COALESCE(t1.value, t2.value) % 1000 = 0
     "#,
-    // Q10: FULL OUTER 30K x 30K | HIGH ~90%
+    // Q10: FULL OUTER 30 x 30K | HIGH ~90%
     r#"
         SELECT t1.value AS l, t2.value AS r
-        FROM range(30000) AS t1
+        FROM generate_series(0, 29000, 1000) AS t1
         FULL JOIN range(30000) AS t2
           ON t1.value = t2.value
         WHERE COALESCE(t1.value, t2.value) % 10 <> 0
     "#,
-    // Q11: INNER 30K x 30K | MEDIUM ~50% | cheap predicate on parity
+    // Q11: INNER 30 x 30K | MEDIUM ~50% | cheap predicate on parity
     r#"
         SELECT t1.value, t2.value
-        FROM range(30000) AS t1
+        FROM generate_series(0, 29000, 1000) AS t1
         INNER JOIN range(30000) AS t2
           ON (t1.value % 2) = (t2.value % 2)
     "#,
-    // Q12: FULL OUTER 30K x 30K | MEDIUM ~50% | expression key
+    // Q12: FULL OUTER 30 x 30K | MEDIUM ~50% | expression key
     r#"
         SELECT t1.value AS l, t2.value AS r
-        FROM range(30000) AS t1
+        FROM generate_series(0, 29000, 1000) AS t1
         FULL JOIN range(30000) AS t2
           ON (t1.value % 2) = (t2.value % 2)
     "#,
-    // Q13: INNER 30K x 30K | MEDIUM ~33% | double predicate
+    // Q13: INNER 30 x 30K | LOW 0.1% | modulo with adding values
     r#"
         SELECT t1.value, t2.value
-        FROM range(30000) AS t1
+        FROM generate_series(0, 29000, 1000) AS t1
         INNER JOIN range(30000) AS t2
-          ON (t1.value = t2.value) AND (t1.value > 10000 and t2.value < 20000)
+          ON (t1.value = t2.value) AND ((t1.value + t2.value) % 10 < 1)
     "#,
-    // Q14: FULL OUTER 30K x 30K | MEDIUM ~50% | modulo
+    // Q14: FULL OUTER 30 x 30K | ALL ~100% | modulo
     r#"
         SELECT t1.value AS l, t2.value AS r
-        FROM range(30000) AS t1
+        FROM generate_series(0, 29000, 1000) AS t1
         FULL JOIN range(30000) AS t2
-          ON (t1.value = t2.value) AND ((t1.value+t2.value)%10 = 0)
+          ON (t1.value = t2.value) AND ((t1.value + t2.value) % 10 = 0)
     "#,
 ];
 
