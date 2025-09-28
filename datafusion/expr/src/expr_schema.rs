@@ -32,6 +32,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
     Result, Spans, TableReference,
 };
+use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::sync::Arc;
@@ -283,6 +284,11 @@ impl ExprSchemable for Expr {
                 let then_nullable = case
                     .when_then_expr
                     .iter()
+                    .filter(|(w, t)| {
+                        // Disregard branches where we can determine statically that the predicate
+                        // is always false when the then expression would evaluate to null
+                        const_result_when_value_is_null(w, t).unwrap_or(true)
+                    })
                     .map(|(_, t)| t.nullable(input_schema))
                     .collect::<Result<Vec<_>>>()?;
                 if then_nullable.contains(&true) {
@@ -647,6 +653,50 @@ impl ExprSchemable for Expr {
     }
 }
 
+/// Determines if the given `predicate` can be const evaluated if `value` were to evaluate to `NULL`.
+/// Returns a `Some` value containing the const result if so; otherwise returns `None`.
+fn const_result_when_value_is_null(predicate: &Expr, value: &Expr) -> Option<bool> {
+    match predicate {
+        Expr::IsNotNull(e) => {
+            if e.as_ref().eq(value) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Expr::IsNull(e) => {
+            if e.as_ref().eq(value) {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        Expr::Not(e) => const_result_when_value_is_null(e, value).map(|b| !b),
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
+            Operator::And => {
+                let l = const_result_when_value_is_null(left, value);
+                let r = const_result_when_value_is_null(right, value);
+                match (l, r) {
+                    (Some(l), Some(r)) => Some(l && r),
+                    (Some(l), None) => Some(l),
+                    (None, Some(r)) => Some(r),
+                    _ => None,
+                }
+            }
+            Operator::Or => {
+                let l = const_result_when_value_is_null(left, value);
+                let r = const_result_when_value_is_null(right, value);
+                match (l, r) {
+                    (Some(l), Some(r)) => Some(l || r),
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 impl Expr {
     /// Common method for window functions that applies type coercion
     /// to all arguments of the window function to check if it matches
@@ -777,7 +827,10 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, lit, out_ref_col_with_metadata};
+    use crate::{
+        and, binary_expr, col, is_not_null, is_null, lit, not, or,
+        out_ref_col_with_metadata, when,
+    };
 
     use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
 
@@ -828,6 +881,150 @@ mod tests {
 
         let expr = col("foo").between(null.clone(), null);
         assert!(expr.nullable(&get_schema(false)).unwrap());
+    }
+
+    fn check_nullability(
+        expr: Expr,
+        nullable: bool,
+        get_schema: fn(bool) -> MockExprSchema,
+    ) -> Result<()> {
+        assert_eq!(
+            expr.nullable(&get_schema(true))?,
+            nullable,
+            "Nullability of '{expr}' should be {nullable} when column is nullable"
+        );
+        assert!(
+            !expr.nullable(&get_schema(false))?,
+            "Nullability of '{expr}' should be false when column is not nullable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_case_expression_nullability() -> Result<()> {
+        let get_schema = |nullable| {
+            MockExprSchema::new()
+                .with_data_type(DataType::Int32)
+                .with_nullable(nullable)
+        };
+
+        check_nullability(
+            when(is_not_null(col("foo")), col("foo")).otherwise(lit(0))?,
+            false,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(not(is_null(col("foo"))), col("foo")).otherwise(lit(0))?,
+            false,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(binary_expr(col("foo"), Operator::Eq, lit(5)), col("foo"))
+                .otherwise(lit(0))?,
+            true,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(
+                and(
+                    is_not_null(col("foo")),
+                    binary_expr(col("foo"), Operator::Eq, lit(5)),
+                ),
+                col("foo"),
+            )
+            .otherwise(lit(0))?,
+            false,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(
+                and(
+                    binary_expr(col("foo"), Operator::Eq, lit(5)),
+                    is_not_null(col("foo")),
+                ),
+                col("foo"),
+            )
+            .otherwise(lit(0))?,
+            false,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(
+                or(
+                    is_not_null(col("foo")),
+                    binary_expr(col("foo"), Operator::Eq, lit(5)),
+                ),
+                col("foo"),
+            )
+            .otherwise(lit(0))?,
+            true,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(
+                or(
+                    binary_expr(col("foo"), Operator::Eq, lit(5)),
+                    is_not_null(col("foo")),
+                ),
+                col("foo"),
+            )
+            .otherwise(lit(0))?,
+            true,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(
+                or(
+                    is_not_null(col("foo")),
+                    binary_expr(col("foo"), Operator::Eq, lit(5)),
+                ),
+                col("foo"),
+            )
+            .otherwise(lit(0))?,
+            true,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(
+                or(
+                    binary_expr(col("foo"), Operator::Eq, lit(5)),
+                    is_not_null(col("foo")),
+                ),
+                col("foo"),
+            )
+            .otherwise(lit(0))?,
+            true,
+            get_schema,
+        )?;
+
+        check_nullability(
+            when(
+                or(
+                    and(
+                        binary_expr(col("foo"), Operator::Eq, lit(5)),
+                        is_not_null(col("foo")),
+                    ),
+                    and(
+                        binary_expr(col("foo"), Operator::Eq, col("bar")),
+                        is_not_null(col("foo")),
+                    ),
+                ),
+                col("foo"),
+            )
+            .otherwise(lit(0))?,
+            false,
+            get_schema,
+        )?;
+
+        Ok(())
     }
 
     #[test]
