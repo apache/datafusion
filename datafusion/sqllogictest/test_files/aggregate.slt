@@ -7611,3 +7611,31 @@ NULL NULL NULL NULL
 
 statement ok
 drop table distinct_avg;
+
+
+# Regression test for https://github.com/apache/datafusion/issues/17699
+
+statement ok
+CREATE TABLE orders (
+    o_orderkey INT,
+    o_totalprice DECIMAL(15, 2)
+);
+
+statement ok
+INSERT INTO orders VALUES (1, 10.00);
+
+query R
+SELECT total_spent
+FROM (
+    SELECT
+        SUM(o_totalprice) AS total_spent,
+        COUNT(DISTINCT o_orderkey) AS order_count
+    FROM orders
+) t
+WHERE total_spent > 0;
+----
+10
+
+
+statement ok
+DROP TABLE orders;

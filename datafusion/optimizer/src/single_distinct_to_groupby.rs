@@ -27,12 +27,14 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
+use datafusion_expr::AggregateUDF;
 use datafusion_expr::{
     col,
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan},
     Expr,
 };
+use datafusion_functions_aggregate::sum::{Sum, SumProperties};
 
 /// single distinct to group by optimizer rule
 ///  ```text
@@ -219,7 +221,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     .alias(&alias_str),
                                 );
                                 Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                    func,
+                                    rewrite_outer_aggregate_func(func),
                                     vec![col(&alias_str)],
                                     false,
                                     None,
@@ -277,13 +279,34 @@ impl OptimizerRule for SingleDistinctToGroupBy {
     }
 }
 
+/// Rewrite the outer aggregate functions that may require special handling
+/// when duplicated to accomodate two-phase aggregation.
+fn rewrite_outer_aggregate_func(func: Arc<AggregateUDF>) -> Arc<AggregateUDF> {
+    let inner = func.inner();
+
+    if inner.as_any().is::<Sum>() {
+        // For SUM, we should maintain the precision from the initial aggregation.
+        // There should be no precision expansion in the second phase.
+        return Arc::new(AggregateUDF::new_from_impl(Sum::new_with_properties(
+            SumProperties {
+                maintains_decimal_precision: true,
+            },
+        )));
+    }
+
+    func
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::test::*;
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::expr::GroupingSet;
+    use datafusion_expr::table_scan;
     use datafusion_expr::ExprFunctionExt;
+    use datafusion_expr::LogicalPlanBuilderOptions;
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
@@ -715,6 +738,36 @@ mod tests {
             @r"
         Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) ORDER BY [test.a ASC NULLS LAST]]] [c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) ORDER BY [test.a ASC NULLS LAST]:Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn sum_maintains_decimal_precision() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("o_orderkey", DataType::Int32, false),
+            Field::new("o_totalprice", DataType::Decimal128(15, 2), false),
+        ]);
+
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let builder = LogicalPlanBuilder::from(table_scan).with_options(
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true),
+        );
+
+        let plan = builder
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![sum(col("o_totalprice")), count_distinct(col("o_orderkey"))],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: sum(alias2) AS sum(test.o_totalprice), count(alias1) AS count(DISTINCT test.o_orderkey) [sum(test.o_totalprice):Decimal128(25, 2);N, count(DISTINCT test.o_orderkey):Int64]
+          Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]] [sum(alias2):Decimal128(25, 2);N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.o_orderkey AS alias1]], aggr=[[sum(test.o_totalprice) AS alias2]] [alias1:Int32, alias2:Decimal128(25, 2);N]
+              TableScan: test [o_orderkey:Int32, o_totalprice:Decimal128(15, 2)]
         "
         )
     }
