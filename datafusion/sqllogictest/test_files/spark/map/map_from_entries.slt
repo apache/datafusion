@@ -47,6 +47,51 @@ as tab(data);
 {}
 NULL
 
+# Test with NULL key, should fail
+query error DataFusion error: Arrow error: Invalid argument error: Found unmasked nulls for non-nullable StructArray field "key"
+SELECT map_from_entries(array[struct(NULL, 1)]);
+
+# Tests with NULL and array of Null type, should fail
+query error DataFusion error: Execution error: map_from_entries: expected array<struct<key, value>>, got Null
+SELECT map_from_entries(NULL);
+
+query error DataFusion error: Execution error: map_from_entries: expected array<struct<key, value>>, got Null
+SELECT map_from_entries(array[NULL]);
+
+# Test with NULL array and NULL entries in arrays
+# output is NULL if any entry is NULL
+query ?
+SELECT map_from_entries(data)
+from values
+    (
+        array[
+            struct(1 as a, 'a' as b), 
+            cast(NULL as struct<a int, b string>), 
+            cast(NULL as struct<a int, b string>)
+        ]
+    ),
+    (NULL),
+    (
+        array[
+            struct(2 as a, 'b' as b), 
+            struct(3 as a, 'c' as b)
+        ]
+    ),
+    (
+        array[
+            struct(4 as a, 'd' as b),
+            cast(NULL as struct<a int, b string>),
+            struct(5 as a, 'e' as b),
+            struct(6 as a, 'f' as b)
+        ]
+    )
+as tab(data);
+----
+NULL
+NULL
+{2: b, 3: c}
+NULL
+
 #Test with multiple rows: good, empty and nullable
 query ?
 SELECT map_from_entries(data) 

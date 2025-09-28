@@ -21,7 +21,8 @@ use crate::function::map::utils::{
     get_element_type, get_list_offsets, get_list_values,
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
 };
-use arrow::array::{Array, ArrayRef, StructArray};
+use arrow::array::{Array, ArrayRef, NullBufferBuilder, StructArray};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result};
@@ -99,12 +100,34 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             ),
         }?;
 
+    let entries_with_nulls = entries_values.nulls().and_then(|entries_inner_nulls| {
+        let mut builder = NullBufferBuilder::new_with_len(0);
+        let mut cur_offset = entries_offsets
+            .first()
+            .map(|offset| *offset as usize)
+            .unwrap_or(0);
+
+        for next_offset in entries_offsets.iter().skip(1) {
+            let num_entries = *next_offset as usize - cur_offset;
+            builder.append(
+                entries_inner_nulls
+                    .slice(cur_offset, num_entries)
+                    .null_count()
+                    == 0,
+            );
+            cur_offset = *next_offset as usize;
+        }
+        builder.finish()
+    });
+
+    let res_nulls = NullBuffer::union(entries.nulls(), entries_with_nulls.as_ref());
+
     map_from_keys_values_offsets_nulls(
         flat_keys,
         flat_values,
         &entries_offsets,
         &entries_offsets,
-        entries.nulls(),
-        entries.nulls(),
+        None,
+        res_nulls.as_ref(),
     )
 }
