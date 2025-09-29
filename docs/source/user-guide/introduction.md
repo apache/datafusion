@@ -103,6 +103,7 @@ Here are some active projects using DataFusion:
 - [Cube Store] Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
 - [Dask SQL] Distributed SQL query engine in Python
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
+- [dbt Fusion engine](https://github.com/dbt-labs/dbt-fusion) The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.
 - [delta-rs] Native Rust implementation of Delta Lake
 - [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [Feldera](https://github.com/feldera/feldera) Fast query engine for incremental computation
@@ -120,10 +121,12 @@ Here are some active projects using DataFusion:
 - [Parseable] Log storage and observability platform
 - [Polygon.io](https://polygon.io/) Stock Market API
 - [qv] Quickly view your data
+- [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI] Create full-fledged APIs for slowly moving datasets without writing a single line of code
 - [Sail](https://github.com/lakehq/sail) Unifying stream, batch and AI workloads with Apache Spark compatibility
 - [Seafowl] CDN-friendly analytical database
+- [SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
 - [Spice.ai] Building blocks for data-driven AI applications
 - [Synnada] Streaming-first framework for data products
