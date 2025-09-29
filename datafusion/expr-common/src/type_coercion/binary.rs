@@ -972,40 +972,36 @@ pub fn binary_numeric_coercion(
 pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
+    // Prefer decimal data type over floating point for comparison operation
     match (lhs_type, rhs_type) {
-        // Prefer decimal data type over floating point for comparison operation
-        (Decimal32(_, _), Decimal32(_, _)) => get_wider_decimal_type(lhs_type, rhs_type),
-        (Decimal32(_, _), Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)) => {
-            get_wider_decimal_type_cross_variant(lhs_type, rhs_type)
-        }
-        (Decimal32(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
-        (Decimal64(_, _), Decimal64(_, _)) => get_wider_decimal_type(lhs_type, rhs_type),
-        (Decimal64(_, _), Decimal32(_, _) | Decimal128(_, _) | Decimal256(_, _)) => {
-            get_wider_decimal_type_cross_variant(lhs_type, rhs_type)
-        }
-        (Decimal64(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
-        (Decimal128(_, _), Decimal128(_, _)) => {
+        // Same decimal types
+        (lhs_type, rhs_type)
+            if is_decimal(lhs_type)
+                && is_decimal(rhs_type)
+                && std::mem::discriminant(lhs_type)
+                    == std::mem::discriminant(rhs_type) =>
+        {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
-        (Decimal128(_, _), Decimal32(_, _) | Decimal64(_, _) | Decimal256(_, _)) => {
+        // Mismatched decimal types
+        (lhs_type, rhs_type)
+            if is_decimal(lhs_type)
+                && is_decimal(rhs_type)
+                && std::mem::discriminant(lhs_type)
+                    != std::mem::discriminant(rhs_type) =>
+        {
             get_wider_decimal_type_cross_variant(lhs_type, rhs_type)
         }
-        (Decimal128(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
-        (Decimal256(_, _), Decimal256(_, _)) => {
-            get_wider_decimal_type(lhs_type, rhs_type)
+        // Decimal + non-decimal types
+        (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _), _) => {
+            get_common_decimal_type(lhs_type, rhs_type)
         }
-        (Decimal256(_, _), Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _)) => {
-            get_wider_decimal_type_cross_variant(lhs_type, rhs_type)
+        (_, Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)) => {
+            get_common_decimal_type(rhs_type, lhs_type)
         }
-        (Decimal256(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal32(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
-        (_, Decimal64(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
-        (_, Decimal128(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
-        (_, Decimal256(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
         (_, _) => None,
     }
 }
-
 /// Handle cross-variant decimal widening by choosing the larger variant
 fn get_wider_decimal_type_cross_variant(
     lhs_type: &DataType,
@@ -1034,29 +1030,29 @@ fn get_wider_decimal_type_cross_variant(
     let range = (p1 as i8 - s1).max(p2 as i8 - s2);
     let required_precision = (range + s) as u8;
 
-    // We currently don't handle cases where the required precision overflows
-    if required_precision > DECIMAL256_MAX_PRECISION {
-        return None;
-    }
-
-    // Choose the larger variant between the two input types
+    // Choose the larger variant between the two input types, while making sure we don't overflow the precision.
     match (lhs_type, rhs_type) {
-        (Decimal32(_, _), Decimal64(_, _)) | (Decimal64(_, _), Decimal32(_, _)) => {
+        (Decimal32(_, _), Decimal64(_, _)) | (Decimal64(_, _), Decimal32(_, _))
+            if required_precision <= DECIMAL64_MAX_PRECISION =>
+        {
             Some(Decimal64(required_precision, s))
         }
-        (Decimal32(_, _), Decimal128(_, _)) | (Decimal128(_, _), Decimal32(_, _)) => {
+        (Decimal32(_, _), Decimal128(_, _))
+        | (Decimal128(_, _), Decimal32(_, _))
+        | (Decimal64(_, _), Decimal128(_, _))
+        | (Decimal128(_, _), Decimal64(_, _))
+            if required_precision <= DECIMAL128_MAX_PRECISION =>
+        {
             Some(Decimal128(required_precision, s))
         }
-        (Decimal32(_, _), Decimal256(_, _)) | (Decimal256(_, _), Decimal32(_, _)) => {
-            Some(Decimal256(required_precision, s))
-        }
-        (Decimal64(_, _), Decimal128(_, _)) | (Decimal128(_, _), Decimal64(_, _)) => {
-            Some(Decimal128(required_precision, s))
-        }
-        (Decimal64(_, _), Decimal256(_, _)) | (Decimal256(_, _), Decimal64(_, _)) => {
-            Some(Decimal256(required_precision, s))
-        }
-        (Decimal128(_, _), Decimal256(_, _)) | (Decimal256(_, _), Decimal128(_, _)) => {
+        (Decimal32(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal32(_, _))
+        | (Decimal64(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal64(_, _))
+        | (Decimal128(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal128(_, _))
+            if required_precision <= DECIMAL256_MAX_PRECISION =>
+        {
             Some(Decimal256(required_precision, s))
         }
         _ => None,

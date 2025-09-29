@@ -381,3 +381,43 @@ fn test_coercion_arithmetic_decimal_cross_variant() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_decimal_precision_overflow_cross_variant() -> Result<()> {
+    // s = max(0, 1) = 1, range = max(76-0, 38-1) = 76, required_precision = 76 + 1 = 77 (overflow)
+    let result = get_wider_decimal_type_cross_variant(
+        &DataType::Decimal256(76, 0),
+        &DataType::Decimal128(38, 1),
+    );
+    assert!(result.is_none());
+
+    // s = max(0, 10) = 10, range = max(9-0, 18-10) = 9, required_precision = 9 + 10 = 19 (overflow > 18)
+    let result = get_wider_decimal_type_cross_variant(
+        &DataType::Decimal32(9, 0),
+        &DataType::Decimal64(18, 10),
+    );
+    assert!(result.is_none());
+
+    // s = max(5, 26) = 26, range = max(18-5, 38-26) = 13, required_precision = 13 + 26 = 39 (overflow > 38)
+    let result = get_wider_decimal_type_cross_variant(
+        &DataType::Decimal64(18, 5),
+        &DataType::Decimal128(38, 26),
+    );
+    assert!(result.is_none());
+
+    // s = max(10, 49) = 49, range = max(38-10, 76-49) = 28, required_precision = 28 + 49 = 77 (overflow > 76)
+    let result = get_wider_decimal_type_cross_variant(
+        &DataType::Decimal128(38, 10),
+        &DataType::Decimal256(76, 49),
+    );
+    assert!(result.is_none());
+
+    // s = max(2, 3) = 3, range = max(5-2, 10-3) = 7, required_precision = 7 + 3 = 10 (valid <= 18)
+    let result = get_wider_decimal_type_cross_variant(
+        &DataType::Decimal32(5, 2),
+        &DataType::Decimal64(10, 3),
+    );
+    assert!(result.is_some());
+
+    Ok(())
+}
