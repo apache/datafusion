@@ -760,6 +760,20 @@ Different queries are included to test nested loop joins under various workloads
 ./bench.sh run nlj
 ```
 
+## Hash Join
+
+This benchmark focuses on the performance of queries with nested hash joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Several queries are included to test hash joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run hj
+```
+
 ## Cancellation
 
 Test performance of cancelling queries.
