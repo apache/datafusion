@@ -530,14 +530,17 @@ fn push_down_join(
     parent_predicate: Option<&Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
     // Split the parent predicate into individual conjunctive parts.
-    let predicates = parent_predicate
-        .map_or_else(Vec::new, |pred| split_conjunction_owned(pred.clone()));
+    let predicates =
+        parent_predicate.map_or_else(Vec::new, |pred| split_conjunction(pred));
 
     // Extract conjunctions from the JOIN's ON filter, if present.
     let on_filters = join
         .filter
         .as_ref()
-        .map_or_else(Vec::new, |filter| split_conjunction_owned(filter.clone()));
+        .map_or_else(Vec::new, |filter| split_conjunction(filter));
+
+    let predicates: Vec<Expr> = predicates.into_iter().cloned().collect();
+    let on_filters: Vec<Expr> = on_filters.into_iter().cloned().collect();
 
     // Are there any new join predicates that can be inferred from the filter expressions?
     let inferred_join_predicates =
@@ -563,10 +566,10 @@ fn push_down_join(
 /// * `on_filters` filters from the join ON clause that have not already been
 ///   identified as join predicates
 ///
-fn infer_join_predicates(
+fn infer_join_predicates<'a>(
     join: &Join,
-    predicates: &[Expr],
-    on_filters: &[Expr],
+    predicates: impl IntoIterator<Item = &'a Expr>,
+    on_filters: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<Vec<Expr>> {
     // Only allow both side key is column.
     let join_col_keys = join
@@ -650,9 +653,9 @@ impl InferredPredicates {
 ///
 /// * `inferred_predicates` the inferred results
 ///
-fn infer_join_predicates_from_predicates(
+fn infer_join_predicates_from_predicates<'a>(
     join_col_keys: &[(&Column, &Column)],
-    predicates: &[Expr],
+    predicates: impl IntoIterator<Item = &'a Expr>,
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     infer_join_predicates_impl::<true, true>(
@@ -674,10 +677,10 @@ fn infer_join_predicates_from_predicates(
 ///
 /// * `inferred_predicates` the inferred results
 ///
-fn infer_join_predicates_from_on_filters(
+fn infer_join_predicates_from_on_filters<'a>(
     join_col_keys: &[(&Column, &Column)],
     join_type: JoinType,
-    on_filters: &[Expr],
+    on_filters: impl IntoIterator<Item = &'a Expr>,
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     match join_type {
@@ -721,11 +724,12 @@ fn infer_join_predicates_from_on_filters(
 ///   be inferred from the right table related predicate
 ///
 fn infer_join_predicates_impl<
+    'a,
     const ENABLE_LEFT_TO_RIGHT: bool,
     const ENABLE_RIGHT_TO_LEFT: bool,
 >(
     join_col_keys: &[(&Column, &Column)],
-    input_predicates: &[Expr],
+    input_predicates: impl IntoIterator<Item = &'a Expr>,
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     for predicate in input_predicates {
