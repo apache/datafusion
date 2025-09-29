@@ -22,9 +22,10 @@
 
 use crate::{downcast_value, Result};
 use arrow::array::{
-    BinaryViewArray, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, Float16Array, Int16Array, Int8Array,
-    LargeBinaryArray, LargeStringArray, StringViewArray, UInt16Array,
+    BinaryViewArray, Decimal32Array, Decimal64Array, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
+    Int16Array, Int8Array, LargeBinaryArray, LargeStringArray, StringViewArray,
+    UInt16Array,
 };
 use arrow::{
     array::{
@@ -95,6 +96,16 @@ pub fn as_int64_array(array: &dyn Array) -> Result<&Int64Array> {
 // Downcast Array to UInt64Array
 pub fn as_uint64_array(array: &dyn Array) -> Result<&UInt64Array> {
     Ok(downcast_value!(array, UInt64Array))
+}
+
+// Downcast Array to Decimal32Array
+pub fn as_decimal32_array(array: &dyn Array) -> Result<&Decimal32Array> {
+    Ok(downcast_value!(array, Decimal32Array))
+}
+
+// Downcast Array to Decimal64Array
+pub fn as_decimal64_array(array: &dyn Array) -> Result<&Decimal64Array> {
+    Ok(downcast_value!(array, Decimal64Array))
 }
 
 // Downcast Array to Decimal128Array
@@ -302,7 +313,7 @@ pub fn as_fixed_size_list_array(array: &dyn Array) -> Result<&FixedSizeListArray
     Ok(downcast_value!(array, FixedSizeListArray))
 }
 
-// Downcast Array to FixedSizeListArray
+// Downcast Array to FixedSizeBinaryArray
 pub fn as_fixed_size_binary_array(array: &dyn Array) -> Result<&FixedSizeBinaryArray> {
     Ok(downcast_value!(array, FixedSizeBinaryArray))
 }

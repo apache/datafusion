@@ -20,6 +20,7 @@
 use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, SchemaRef};
+use async_trait::async_trait;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
@@ -175,7 +176,9 @@ async fn round_trip_parquet_with_encryption_factory() {
     // Crypto factory should have generated one key per partition file
     assert_eq!(encryption_factory.encryption_keys.lock().unwrap().len(), 3);
 
-    verify_table_encrypted(tmpdir.path(), &encryption_factory).unwrap();
+    verify_table_encrypted(tmpdir.path(), &encryption_factory)
+        .await
+        .unwrap();
 
     // Registering table without decryption properties should fail
     let table_path = format!("file://{}/", tmpdir.path().to_str().unwrap());
@@ -255,7 +258,7 @@ async fn round_trip_parquet_with_encryption_factory() {
     assert_batches_sorted_eq!(expected, &table);
 }
 
-fn verify_table_encrypted(
+async fn verify_table_encrypted(
     table_path: &Path,
     encryption_factory: &Arc<MockEncryptionFactory>,
 ) -> datafusion_common::Result<()> {
@@ -267,7 +270,7 @@ fn verify_table_encrypted(
             if path.is_dir() {
                 directories.push(path);
             } else {
-                verify_file_encrypted(&path, encryption_factory)?;
+                verify_file_encrypted(&path, encryption_factory).await?;
                 files_visited += 1;
             }
         }
@@ -276,7 +279,7 @@ fn verify_table_encrypted(
     Ok(())
 }
 
-fn verify_file_encrypted(
+async fn verify_file_encrypted(
     file_path: &Path,
     encryption_factory: &Arc<MockEncryptionFactory>,
 ) -> datafusion_common::Result<()> {
@@ -284,9 +287,20 @@ fn verify_file_encrypted(
     options
         .options
         .insert("test_key".to_string(), "test value".to_string());
-    let object_path = object_store::path::Path::from(file_path.to_str().unwrap());
+
+    let file_path_str = if cfg!(target_os = "windows") {
+        // Windows backslashes are eventually converted to slashes when writing the Parquet files,
+        // through `ListingTableUrl::parse`, making `encryption_factory.encryption_keys` store them
+        // it that format. So we also replace backslashes here to ensure they match.
+        file_path.to_str().unwrap().replace("\\", "/")
+    } else {
+        file_path.to_str().unwrap().to_owned()
+    };
+
+    let object_path = object_store::path::Path::from(file_path_str);
     let decryption_properties = encryption_factory
-        .get_file_decryption_properties(&options, &object_path)?
+        .get_file_decryption_properties(&options, &object_path)
+        .await?
         .unwrap();
 
     let reader_options =
@@ -315,8 +329,9 @@ struct MockEncryptionFactory {
     pub counter: AtomicU8,
 }
 
+#[async_trait]
 impl EncryptionFactory for MockEncryptionFactory {
-    fn get_file_encryption_properties(
+    async fn get_file_encryption_properties(
         &self,
         config: &EncryptionFactoryOptions,
         _schema: &SchemaRef,
@@ -334,7 +349,7 @@ impl EncryptionFactory for MockEncryptionFactory {
         Ok(Some(encryption_properties))
     }
 
-    fn get_file_decryption_properties(
+    async fn get_file_decryption_properties(
         &self,
         config: &EncryptionFactoryOptions,
         file_path: &object_store::path::Path,

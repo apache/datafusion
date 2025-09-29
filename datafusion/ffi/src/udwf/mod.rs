@@ -25,7 +25,6 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
 };
 use arrow_schema::{Field, FieldRef};
-use datafusion::logical_expr::udf_equals_hash;
 use datafusion::{
     error::DataFusionError,
     logical_expr::{
@@ -82,7 +81,7 @@ pub struct FFI_WindowUDF {
         display_name: RString,
     ) -> RResult<WrappedSchema, RString>,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`WindowUDF`]
@@ -349,8 +348,6 @@ impl WindowUDFImpl for ForeignWindowUDF {
         let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref().into();
         options.map(|s| s.into())
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 #[repr(C)]

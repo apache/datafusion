@@ -20,8 +20,8 @@ use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, PartitionEvaluator,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
+    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -81,8 +81,6 @@ impl ScalarUDFImpl for MyRegexUdf {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -126,8 +124,6 @@ impl AggregateUDFImpl for MyAggregateUDF {
     ) -> datafusion_common::Result<Box<dyn Accumulator>> {
         unimplemented!()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -177,8 +173,6 @@ impl WindowUDFImpl for CustomUDWF {
     ) -> datafusion_common::Result<FieldRef> {
         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 #[derive(Debug)]

@@ -55,7 +55,7 @@ use datafusion_common::{assert_contains, exec_datafusion_err};
 use datafusion_common::{cast::as_primitive_array, exec_err};
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
-    col, create_udaf, function::AccumulatorArgs, udf_equals_hash, AggregateUDFImpl, Expr,
+    col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, Expr,
     GroupsAccumulator, LogicalPlanBuilder, SimpleAggregateUDF, WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::average::AvgAccumulator;
@@ -379,13 +379,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
 
-    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
-    +------------+
-    | dummy(t.i) |
-    +------------+
-    | 1.0        |
-    +------------+
-    "###);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r"
+    +------------------+
+    | dummy_alias(t.i) |
+    +------------------+
+    | 1.0              |
+    +------------------+
+    ");
 
     Ok(())
 }
@@ -816,8 +816,6 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(self.clone()))
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 impl Accumulator for TestGroupsAccumulator {
@@ -970,8 +968,6 @@ impl AggregateUDFImpl for MetadataBasedAggregateUdf {
             curr_sum: 0,
         }))
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]

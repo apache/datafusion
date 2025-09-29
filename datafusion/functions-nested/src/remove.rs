@@ -26,9 +26,11 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -63,7 +65,7 @@ make_udf_expr_and_func!(
         description = "Element to be removed from the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayRemove {
     signature: Signature,
     aliases: Vec<String>,
@@ -147,7 +149,7 @@ make_udf_expr_and_func!(
     ),
     argument(name = "max", description = "Number of first occurrences to remove.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayRemoveN {
     signature: Signature,
     aliases: Vec<String>,
@@ -156,7 +158,17 @@ pub(super) struct ArrayRemoveN {
 impl ArrayRemoveN {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(3, Volatility::Immutable),
+            signature: Signature::new(
+                TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Element,
+                        ArrayFunctionArgument::Index,
+                    ],
+                    array_coercion: Some(ListCoercion::FixedSizedListToList),
+                }),
+                Volatility::Immutable,
+            ),
             aliases: vec!["list_remove_n".to_string()],
         }
     }
@@ -224,7 +236,7 @@ make_udf_expr_and_func!(
         description = "Element to be removed from the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayRemoveAll {
     signature: Signature,
     aliases: Vec<String>,
@@ -311,7 +323,7 @@ fn array_remove_internal(
             general_remove::<i64>(list_array, element_array, arr_n)
         }
         array_type => {
-            exec_err!("array_remove_all does not support type '{array_type:?}'.")
+            exec_err!("array_remove_all does not support type '{array_type}'.")
         }
     }
 }

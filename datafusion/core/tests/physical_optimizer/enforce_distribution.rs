@@ -63,7 +63,7 @@ use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
@@ -244,7 +244,10 @@ fn projection_exec_with_alias(
 ) -> Arc<dyn ExecutionPlan> {
     let mut exprs = vec![];
     for (column, alias) in alias_pairs.iter() {
-        exprs.push((col(column, &input.schema()).unwrap(), alias.to_string()));
+        exprs.push(ProjectionExpr {
+            expr: col(column, &input.schema()).unwrap(),
+            alias: alias.to_string(),
+        });
     }
     Arc::new(ProjectionExec::try_new(exprs, input).unwrap())
 }
@@ -426,7 +429,7 @@ impl TestConfig {
 
     /// Perform a series of runs using the current [`TestConfig`],
     /// assert the expected plan result,
-    /// and return the result plan (for potentional subsequent runs).
+    /// and return the result plan (for potential subsequent runs).
     fn run_and_get_plan_string(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -2086,7 +2089,7 @@ fn union_to_interleave() -> Result<()> {
     );
 
     //  Union
-    let plan = Arc::new(UnionExec::new(vec![left, right]));
+    let plan = UnionExec::try_new(vec![left, right])?;
 
     // final agg
     let plan =
@@ -2138,7 +2141,7 @@ fn union_not_to_interleave() -> Result<()> {
     );
 
     //  Union
-    let plan = Arc::new(UnionExec::new(vec![left, right]));
+    let plan = UnionExec::try_new(vec![left, right])?;
 
     // final agg
     let plan =
@@ -2615,14 +2618,14 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
 #[test]
 fn repartition_transitively_with_projection() -> Result<()> {
     let schema = schema();
-    let proj_exprs = vec![(
-        Arc::new(BinaryExpr::new(
+    let proj_exprs = vec![ProjectionExpr {
+        expr: Arc::new(BinaryExpr::new(
             col("a", &schema)?,
             Operator::Plus,
             col("b", &schema)?,
         )) as _,
-        "sum".to_string(),
-    )];
+        alias: "sum".to_string(),
+    }];
     // non sorted input
     let proj = Arc::new(ProjectionExec::try_new(proj_exprs, parquet_exec())?);
     let sort_key = [PhysicalSortExpr {
@@ -3120,6 +3123,7 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
     let actual_2 =
         test_config.run_and_get_plan_string(plan_csv, &SORT_DISTRIB_DISTRIB)?;
 
+    // Multiple source files split across partitions
     for actual in [&actual_1, &actual_2] {
         allow_duplicates! {
             assert_snapshot!(

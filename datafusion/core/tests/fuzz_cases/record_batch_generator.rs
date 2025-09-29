@@ -20,18 +20,19 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, DictionaryArray, PrimitiveArray, RecordBatch};
 use arrow::datatypes::{
     ArrowPrimitiveType, BooleanType, DataType, Date32Type, Date64Type, Decimal128Type,
-    Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Field, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Schema,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    Decimal256Type, Decimal32Type, Decimal64Type, DurationMicrosecondType,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Field,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
 use arrow_schema::{
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE,
+    DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
+    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
 };
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use rand::{rng, rngs::StdRng, Rng, SeedableRng};
@@ -104,6 +105,20 @@ pub fn get_supported_types_columns(rng_seed: u64) -> Vec<ColumnDescr> {
             "duration_nanosecond",
             DataType::Duration(TimeUnit::Nanosecond),
         ),
+        ColumnDescr::new("decimal32", {
+            let precision: u8 = rng.random_range(1..=DECIMAL32_MAX_PRECISION);
+            let scale: i8 = rng.random_range(
+                i8::MIN..=std::cmp::min(precision as i8, DECIMAL32_MAX_SCALE),
+            );
+            DataType::Decimal32(precision, scale)
+        }),
+        ColumnDescr::new("decimal64", {
+            let precision: u8 = rng.random_range(1..=DECIMAL64_MAX_PRECISION);
+            let scale: i8 = rng.random_range(
+                i8::MIN..=std::cmp::min(precision as i8, DECIMAL64_MAX_SCALE),
+            );
+            DataType::Decimal64(precision, scale)
+        }),
         ColumnDescr::new("decimal128", {
             let precision: u8 = rng.random_range(1..=DECIMAL128_MAX_PRECISION);
             let scale: i8 = rng.random_range(
@@ -681,6 +696,32 @@ impl RecordBatchGenerator {
                     DataType::BinaryView => generator.gen_binary_view(),
                     _ => unreachable!(),
                 }
+            }
+            DataType::Decimal32(precision, scale) => {
+                generate_decimal_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    null_pct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    precision,
+                    scale,
+                    Decimal32Type
+                )
+            }
+            DataType::Decimal64(precision, scale) => {
+                generate_decimal_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    null_pct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    precision,
+                    scale,
+                    Decimal64Type
+                )
             }
             DataType::Decimal128(precision, scale) => {
                 generate_decimal_array!(

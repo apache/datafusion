@@ -134,6 +134,10 @@ impl RecordBatchStream for MemoryStream {
 }
 
 pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
+    /// Returns the generator as [`Any`] so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
     fn boundedness(&self) -> Boundedness {
         Boundedness::Bounded
     }
@@ -218,6 +222,11 @@ impl LazyMemoryExec {
         self.cache
             .eq_properties
             .add_orderings(std::iter::once(ordering));
+    }
+
+    /// Get the batch generators
+    pub fn generators(&self) -> &Vec<Arc<RwLock<dyn LazyBatchGenerator>>> {
+        &self.batch_generators
     }
 }
 
@@ -394,6 +403,10 @@ mod lazy_memory_tests {
     }
 
     impl LazyBatchGenerator for TestGenerator {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
         fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
             if self.counter >= self.max_batches {
                 return Ok(None);

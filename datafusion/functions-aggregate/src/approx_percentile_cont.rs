@@ -39,8 +39,8 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr,
-    Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
@@ -91,7 +91,24 @@ pub fn approx_percentile_cont(
 +-----------------------------------------------------------------------+
 | 65.0                                                                  |
 +-----------------------------------------------------------------------+
-```"#,
+```
+An alternate syntax is also supported:
+```sql
+> SELECT approx_percentile_cont(column_name, 0.75) FROM table_name;
++-----------------------------------------------+
+| approx_percentile_cont(column_name, 0.75)     |
++-----------------------------------------------+
+| 65.0                                          |
++-----------------------------------------------+
+
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++----------------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)           |
++----------------------------------------------------------+
+| 65.0                                                     |
++----------------------------------------------------------+
+```
+"#,
     standard_argument(name = "expression",),
     argument(
         name = "percentile",
@@ -337,8 +354,6 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]
@@ -369,19 +384,23 @@ impl ApproxPercentileAccumulator {
         }
     }
 
-    // public for approx_percentile_cont_with_weight
+    // pub(crate) for approx_percentile_cont_with_weight
     pub(crate) fn max_size(&self) -> usize {
         self.digest.max_size()
     }
 
-    // public for approx_percentile_cont_with_weight
-    pub fn merge_digests(&mut self, digests: &[TDigest]) {
+    // pub(crate) for approx_percentile_cont_with_weight
+    pub(crate) fn merge_digests(&mut self, digests: &[TDigest]) {
         let digests = digests.iter().chain(std::iter::once(&self.digest));
         self.digest = TDigest::merge_digests(digests)
     }
 
-    // public for approx_percentile_cont_with_weight
-    pub fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
+    // pub(crate) for approx_percentile_cont_with_weight
+    pub(crate) fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
+        debug_assert!(
+            values.null_count() == 0,
+            "convert_to_float assumes nulls have already been filtered out"
+        );
         match values.data_type() {
             DataType::Float64 => {
                 let array = downcast_value!(values, Float64Array);
@@ -478,7 +497,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // Remove any nulls before computing the percentile
         let mut values = Arc::clone(&values[0]);
-        if values.nulls().is_some() {
+        if values.null_count() > 0 {
             values = filter(&values, &is_not_null(&values)?)?;
         }
         let sorted_values = &arrow::compute::sort(&values, None)?;
@@ -506,7 +525,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
             DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
             DataType::Float64 => ScalarValue::Float64(Some(q)),
-            v => unreachable!("unexpected return type {:?}", v),
+            v => unreachable!("unexpected return type {}", v),
         })
     }
 

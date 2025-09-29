@@ -39,6 +39,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use itertools::Itertools as _;
 
 make_udf_expr_and_func!(
     MakeArray,
@@ -64,7 +65,7 @@ make_udf_expr_and_func!(
         description = "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeArray {
     signature: Signature,
     aliases: Vec<String>,
@@ -132,8 +133,9 @@ impl ScalarUDFImpl for MakeArray {
             Ok(vec![unified; arg_types.len()])
         } else {
             plan_err!(
-                "Failed to unify argument types of {}: {arg_types:?}",
-                self.name()
+                "Failed to unify argument types of {}: [{}]",
+                self.name(),
+                arg_types.iter().join(", ")
             )
         }
     }

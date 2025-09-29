@@ -708,7 +708,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {
                     // We don't support TIMETZ and TIME WITH TIME ZONE for now
-                    not_impl_err!("Unsupported SQL type {sql_type:?}")
+                    not_impl_err!("Unsupported SQL type {sql_type}")
                 }
             }
             SQLDataType::Numeric(exact_number_info)
@@ -809,8 +809,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::AnyType
             | SQLDataType::Table(_)
             | SQLDataType::VarBit(_)
+            | SQLDataType::UTinyInt
+            | SQLDataType::USmallInt
+            | SQLDataType::HugeInt
+            | SQLDataType::UHugeInt
+            | SQLDataType::UBigInt
+            | SQLDataType::TimestampNtz
+            | SQLDataType::NamedTable { .. }
+            | SQLDataType::TsVector
+            | SQLDataType::TsQuery
             | SQLDataType::GeometricType(_) => {
-                not_impl_err!("Unsupported SQL type {sql_type:?}")
+                not_impl_err!("Unsupported SQL type {sql_type}")
             }
         }
     }

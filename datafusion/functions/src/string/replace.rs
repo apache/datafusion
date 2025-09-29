@@ -52,7 +52,7 @@ use datafusion_macros::user_doc;
     ),
     standard_argument(name = "replacement", prefix = "Replacement substring")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ReplaceFunc {
     signature: Signature,
 }
@@ -145,7 +145,7 @@ impl ScalarUDFImpl for ReplaceFunc {
             }
         } else {
             exec_err!(
-                "Unsupported data type {:?}, {:?}, {:?} for function replace.",
+                "Unsupported data type {}, {:?}, {:?} for function replace.",
                 data_types[0],
                 data_types[1],
                 data_types[2]

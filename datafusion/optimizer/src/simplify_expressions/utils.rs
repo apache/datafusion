@@ -22,7 +22,7 @@ use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr, InList},
     expr_fn::{and, bitwise_and, bitwise_or, or},
-    Expr, Like, Operator,
+    Case, Expr, Like, Operator,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [
@@ -263,6 +263,31 @@ pub fn as_bool_lit(expr: &Expr) -> Result<Option<bool>> {
         Expr::Literal(ScalarValue::Boolean(v), _) => Ok(*v),
         _ => internal_err!("Expected boolean literal, got {expr:?}"),
     }
+}
+
+pub fn is_case_with_literal_outputs(expr: &Expr) -> bool {
+    match expr {
+        Expr::Case(Case {
+            expr: None,
+            when_then_expr,
+            else_expr,
+        }) => {
+            when_then_expr.iter().all(|(_, then)| is_lit(then))
+                && else_expr.as_deref().is_none_or(is_lit)
+        }
+        _ => false,
+    }
+}
+
+pub fn into_case(expr: Expr) -> Result<Case> {
+    match expr {
+        Expr::Case(case) => Ok(case),
+        _ => internal_err!("Expected case, got {expr:?}"),
+    }
+}
+
+pub fn is_lit(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(_, _))
 }
 
 /// negate a Not clause

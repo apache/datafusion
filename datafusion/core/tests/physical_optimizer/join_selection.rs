@@ -36,9 +36,7 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion_physical_optimizer::join_selection::{
-    hash_join_swap_subrule, JoinSelection,
-};
+use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
@@ -238,12 +236,12 @@ async fn test_join_with_swap() {
         .expect("A proj is required to swap columns back to their original order");
 
     assert_eq!(swapping_projection.expr().len(), 2);
-    let (col, name) = &swapping_projection.expr()[0];
-    assert_eq!(name, "big_col");
-    assert_col_expr(col, "big_col", 1);
-    let (col, name) = &swapping_projection.expr()[1];
-    assert_eq!(name, "small_col");
-    assert_col_expr(col, "small_col", 0);
+    let proj_expr = &swapping_projection.expr()[0];
+    assert_eq!(proj_expr.alias, "big_col");
+    assert_col_expr(&proj_expr.expr, "big_col", 1);
+    let proj_expr = &swapping_projection.expr()[1];
+    assert_eq!(proj_expr.alias, "small_col");
+    assert_col_expr(&proj_expr.expr, "small_col", 0);
 
     let swapped_join = swapping_projection
         .input()
@@ -528,12 +526,12 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
         .expect("A proj is required to swap columns back to their original order");
 
     assert_eq!(swapping_projection.expr().len(), 2);
-    let (col, name) = &swapping_projection.expr()[0];
-    assert_eq!(name, "big_col");
-    assert_col_expr(col, "big_col", 1);
-    let (col, name) = &swapping_projection.expr()[1];
-    assert_eq!(name, "small_col");
-    assert_col_expr(col, "small_col", 0);
+    let proj_expr = &swapping_projection.expr()[0];
+    assert_eq!(proj_expr.alias, "big_col");
+    assert_col_expr(&proj_expr.expr, "big_col", 1);
+    let proj_expr = &swapping_projection.expr()[1];
+    assert_eq!(proj_expr.alias, "small_col");
+    assert_col_expr(&proj_expr.expr, "small_col", 0);
 
     let swapped_join = swapping_projection
         .input()
@@ -1501,7 +1499,8 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         NullEquality::NullEqualsNothing,
     )?) as _;
 
-    let optimized_join_plan = hash_join_swap_subrule(join, &ConfigOptions::new())?;
+    let optimized_join_plan =
+        JoinSelection::new().optimize(Arc::clone(&join), &ConfigOptions::new())?;
 
     // If swap did happen
     let projection_added = optimized_join_plan.as_any().is::<ProjectionExec>();

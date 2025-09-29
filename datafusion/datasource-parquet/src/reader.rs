@@ -18,18 +18,21 @@
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
 
+use crate::metadata::DFParquetMetadata;
 use crate::ParquetFileMetrics;
 use bytes::Bytes;
 use datafusion_datasource::file_meta::FileMeta;
-use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
+use datafusion_execution::cache::cache_manager::FileMetadata;
+use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::ParquetMetaData;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -91,7 +94,7 @@ impl DefaultParquetFileReaderFactory {
 /// This implementation does not coalesce I/O operations or cache bytes. Such
 /// optimizations can be done either at the object store level or by providing a
 /// custom implementation of [`ParquetFileReaderFactory`].
-pub(crate) struct ParquetFileReader {
+pub struct ParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
 }
@@ -201,10 +204,12 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         };
 
         Ok(Box::new(CachedParquetFileReader {
+            store: Arc::clone(&self.store),
             inner,
             file_metrics,
             file_meta,
             metadata_cache: Arc::clone(&self.metadata_cache),
+            metadata_size_hint,
         }))
     }
 }
@@ -212,11 +217,13 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 /// Implements [`AsyncFileReader`] for a Parquet file in object storage. Reads the file metadata
 /// from the [`FileMetadataCache`], if available, otherwise reads it directly from the file and then
 /// updates the cache.
-pub(crate) struct CachedParquetFileReader {
+pub struct CachedParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
+    store: Arc<dyn ObjectStore>,
     pub inner: ParquetObjectReader,
     file_meta: FileMeta,
     metadata_cache: Arc<dyn FileMetadataCache>,
+    metadata_size_hint: Option<usize>,
 }
 
 impl AsyncFileReader for CachedParquetFileReader {
@@ -243,46 +250,48 @@ impl AsyncFileReader for CachedParquetFileReader {
 
     fn get_metadata<'a>(
         &'a mut self,
-        options: Option<&'a ArrowReaderOptions>,
+        #[allow(unused_variables)] options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let file_meta = self.file_meta.clone();
         let metadata_cache = Arc::clone(&self.metadata_cache);
 
         async move {
-            let object_meta = &file_meta.object_meta;
+            #[cfg(feature = "parquet_encryption")]
+            let file_decryption_properties =
+                options.and_then(|o| o.file_decryption_properties());
 
-            // lookup if the metadata is already cached
-            if let Some(metadata) = metadata_cache.get(object_meta) {
-                if let Some(parquet_metadata) =
-                    metadata.as_any().downcast_ref::<CachedParquetMetaData>()
-                {
-                    return Ok(Arc::clone(&parquet_metadata.0));
-                }
-            }
+            #[cfg(not(feature = "parquet_encryption"))]
+            let file_decryption_properties = None;
 
-            let mut reader = ParquetMetaDataReader::new();
-            // the page index can only be loaded with unencrypted files
-            if let Some(file_decryption_properties) =
-                options.and_then(|o| o.file_decryption_properties())
-            {
-                reader =
-                    reader.with_decryption_properties(Some(file_decryption_properties));
-            } else {
-                reader = reader.with_page_indexes(true);
-            }
-            reader.try_load(&mut self.inner, object_meta.size).await?;
-            let metadata = Arc::new(reader.finish()?);
-            let cached_metadata = Arc::new(CachedParquetMetaData(Arc::clone(&metadata)));
-
-            metadata_cache.put(object_meta, cached_metadata);
-            Ok(metadata)
+            DFParquetMetadata::new(&self.store, &file_meta.object_meta)
+                .with_decryption_properties(file_decryption_properties)
+                .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
+                .with_metadata_size_hint(self.metadata_size_hint)
+                .fetch_metadata()
+                .await
+                .map_err(|e| {
+                    parquet::errors::ParquetError::General(format!(
+                        "Failed to fetch metadata for file {}: {e}",
+                        file_meta.object_meta.location,
+                    ))
+                })
         }
         .boxed()
     }
 }
 
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
-struct CachedParquetMetaData(Arc<ParquetMetaData>);
+pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
+
+impl CachedParquetMetaData {
+    pub fn new(metadata: Arc<ParquetMetaData>) -> Self {
+        Self(metadata)
+    }
+
+    pub fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
+        &self.0
+    }
+}
 
 impl FileMetadata for CachedParquetMetaData {
     fn as_any(&self) -> &dyn Any {
@@ -291,5 +300,11 @@ impl FileMetadata for CachedParquetMetaData {
 
     fn memory_size(&self) -> usize {
         self.0.memory_size()
+    }
+
+    fn extra_info(&self) -> HashMap<String, String> {
+        let page_index =
+            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }
