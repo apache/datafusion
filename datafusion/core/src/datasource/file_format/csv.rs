@@ -876,6 +876,48 @@ mod tests {
         Ok(())
     }
 
+    /// Read multiple csv files (some are empty) with header
+    ///
+    /// some_empty_with_header
+    /// ├── a_empty.csv
+    /// ├── b.csv
+    /// └── c_nulls_column.csv
+    ///
+    /// a_empty.csv:
+    /// c1,c2,c3
+    ///
+    /// b.csv:
+    /// c1,c2,c3
+    /// 1,1,1
+    /// 2,2,2
+    ///
+    /// c_nulls_column.csv:
+    /// c1,c2,c3
+    /// 3,3,
+    #[tokio::test]
+    async fn test_csv_some_empty_with_header() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.register_csv(
+            "some_empty_with_header",
+            "tests/data/empty_files/some_empty_with_header",
+            CsvReadOptions::new().has_header(true),
+        )
+        .await?;
+
+        let query = "select sum(c3) from some_empty_with_header;";
+        let query_result = ctx.sql(query).await?.collect().await?;
+
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        +--------------------------------+
+        | sum(some_empty_with_header.c3) |
+        +--------------------------------+
+        | 3                              |
+        +--------------------------------+
+        ");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_csv_extension_compressed() -> Result<()> {
         // Write compressed CSV files
