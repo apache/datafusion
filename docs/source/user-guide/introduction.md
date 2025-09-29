@@ -104,6 +104,7 @@ Here are some active projects using DataFusion:
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
 - [dbt Fusion engine](https://github.com/dbt-labs/dbt-fusion) The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.
 - [delta-rs] Native Rust implementation of Delta Lake
+- [EDB Postgres Lakehouse] built with [Seafowl]
 - [Feldera](https://github.com/feldera/feldera) Fast query engine for incremental computation
 - [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
@@ -138,14 +139,19 @@ Here are some less active projects that used DataFusion:
 - [Cloudfuse Buzz]
 - [Flock]
 - [Tensorbase]
+- [Dask SQL] Distributed SQL query engine in Python
+- [Exon] Analysis toolkit for life-science applications
 
 [ballista]: https://github.com/apache/datafusion-ballista
 [auron]: https://github.com/apache/auron
 [cloudfuse buzz]: https://github.com/cloudfuse-io/buzz-rust
 [cnosdb]: https://github.com/cnosdb/cnosdb
 [cube store]: https://github.com/cube-js/cube.js/tree/master/rust
+[dask sql]: https://github.com/dask-contrib/dask-sql
 [datafusion-tui]: https://github.com/datafusion-contrib/datafusion-tui
 [delta-rs]: https://github.com/delta-io/delta-rs
+[EDB Postgres Lakehouse]: https://www.enterprisedb.com/products/analytics
+[exon]: https://github.com/wheretrue/exon
 [flock]: https://github.com/flock-lab/flock
 [kamu]: https://github.com/kamu-data/kamu-cli
 [greptimedb]: https://github.com/GreptimeTeam/greptimedb
@@ -156,6 +162,7 @@ Here are some less active projects that used DataFusion:
 [prql-query]: https://github.com/prql/prql-query
 [qv]: https://github.com/timvw/qv
 [roapi]: https://github.com/roapi/roapi
+[seafowl]: https://github.com/splitgraph/seafowl
 [spice.ai]: https://github.com/spiceai/spiceai
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
