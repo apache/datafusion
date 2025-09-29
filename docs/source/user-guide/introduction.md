@@ -150,7 +150,7 @@ Here are some less active projects that used DataFusion:
 [dask sql]: https://github.com/dask-contrib/dask-sql
 [datafusion-tui]: https://github.com/datafusion-contrib/datafusion-tui
 [delta-rs]: https://github.com/delta-io/delta-rs
-[EDB Postgres Lakehouse]: https://www.enterprisedb.com/products/analytics
+[edb postgres lakehouse]: https://www.enterprisedb.com/products/analytics
 [exon]: https://github.com/wheretrue/exon
 [flock]: https://github.com/flock-lab/flock
 [kamu]: https://github.com/kamu-data/kamu-cli
