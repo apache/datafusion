@@ -101,6 +101,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, not_impl_err, DataFusionError, NullEquality, Result, UnnestOptions,
 };
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound, WindowUDF,
@@ -206,8 +207,14 @@ fn roundtrip_date_time_interval() -> Result<()> {
     let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
     let date_expr = col("some_date", &schema)?;
     let literal_expr = col("some_interval", &schema)?;
-    let date_time_interval_expr =
-        binary(date_expr, Operator::Plus, literal_expr, &schema)?;
+    let execution_props = ExecutionProps::default();
+    let date_time_interval_expr = binary(
+        date_expr,
+        Operator::Plus,
+        literal_expr,
+        &schema,
+        &execution_props,
+    )?;
     let plan = Arc::new(ProjectionExec::try_new(
         vec![ProjectionExpr {
             expr: date_time_interval_expr,
@@ -762,7 +769,8 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
         &false,
         schema.as_ref(),
     )?;
-    let and = binary(not, Operator::And, in_list, &schema)?;
+    let execution_props = ExecutionProps::default();
+    let and = binary(not, Operator::And, in_list, &schema, &execution_props)?;
     roundtrip_test(Arc::new(FilterExec::try_new(
         and,
         Arc::new(EmptyExec::new(schema.clone())),

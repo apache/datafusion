@@ -62,7 +62,7 @@ mod fast_arithmetic {
     use arrow::array::Datum;
     use arrow::array::{Array, AsArray, PrimitiveArray};
     use arrow::compute::kernels::numeric::{
-        add, add_wrapping, mul, mul_wrapping, sub, sub_wrapping,
+        add, add_wrapping, mul, sub, sub_wrapping,
     };
     use arrow::datatypes::{DataType, Int32Type, Int64Type};
     use arrow::error::ArrowError;
@@ -412,21 +412,13 @@ mod fast_arithmetic {
         }
     }
 
-    /// Fast conditional multiplication that uses wrapping arithmetic when safe
-    pub fn mul_conditional(
-        lhs: &dyn Datum,
-        rhs: &dyn Datum,
-    ) -> Result<ArrayRef, ArrowError> {
+    /// Simple checked multiplication that fails on overflow
+    pub fn mul_checked(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
         let (left_array, _) = lhs.get();
         let (right_array, _) = rhs.get();
 
-        // Smart optimization: check if overflow is likely based on actual values
-        if should_use_fast_path_mul(lhs, rhs) {
-            mul_wrapping(&left_array, &right_array)
-        } else {
-            // Use checked arithmetic when overflow is possible
-            mul(&left_array, &right_array)
-        }
+        // Use the standard checked multiplication from Arrow
+        mul(&left_array, &right_array)
     }
 
     // Smart optimization functions for detecting overflow risk
@@ -1387,7 +1379,7 @@ impl PhysicalExpr for BinaryExpr {
             }
             Operator::Multiply => {
                 if self.fail_on_overflow {
-                    return apply(&lhs, &rhs, fast_arithmetic::mul_conditional);
+                    return apply(&lhs, &rhs, mul);
                 } else {
                     return apply(&lhs, &rhs, mul_wrapping);
                 }
@@ -7082,6 +7074,38 @@ mod tests {
         assert!(
             config.execution.fail_on_overflow,
             "Default configuration should enable overflow checking for SQL-standard behavior"
+        );
+    }
+
+    #[test]
+    fn test_multiplication_overflow_checking() {
+        use crate::expressions::{col, lit};
+        use arrow::array::Int64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        // Create schema and test data
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        // Value that will overflow when multiplied by large number
+        let test_value = i64::MAX / 100 + 1;
+        let array = Arc::new(Int64Array::from(vec![test_value]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+
+        // Create multiplication expression: a * 200 (should overflow)
+        let left = col("a", &schema).unwrap();
+        let right = lit(200i64);
+
+        // Test with overflow checking enabled (should fail)
+        let mul_expr =
+            BinaryExpr::new_with_overflow_check(left, Operator::Multiply, right)
+                .with_fail_on_overflow(true);
+        let result = mul_expr.evaluate(&batch);
+
+        assert!(
+            result.is_err(),
+            "Multiplication overflow checking should catch overflow and return error"
         );
     }
 }
