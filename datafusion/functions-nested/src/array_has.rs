@@ -661,9 +661,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{
-            create_array, Array, ArrayRef, AsArray, BooleanArray, Int32Array, ListArray,
-        },
+        array::{create_array, Array, ArrayRef, AsArray, Int32Array, ListArray},
         buffer::OffsetBuffer,
         datatypes::{DataType, Field},
     };
