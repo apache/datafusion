@@ -412,7 +412,6 @@ mod fast_arithmetic {
         }
     }
 
-
     // Smart optimization functions for detecting overflow risk
     fn should_use_fast_path_add(lhs: &dyn Datum, rhs: &dyn Datum) -> bool {
         let (left_array, _) = lhs.get();
@@ -439,7 +438,6 @@ mod fast_arithmetic {
         }
         false // Conservative fallback
     }
-
 
     /// Check if we should use fast path for subtraction
     fn should_use_fast_path_sub(lhs: &dyn Datum, rhs: &dyn Datum) -> bool {
@@ -563,7 +561,6 @@ mod fast_arithmetic {
         }
         true
     }
-
 
     /// Enhanced sampling to check if subtraction is safe for Int32
     /// Uses sign-aware analysis for subtraction-specific overflow patterns
@@ -6964,7 +6961,11 @@ mod tests {
         // Value that will overflow when multiplied by large number
         let test_value = i64::MAX / 100 + 1;
         let array = Arc::new(Int64Array::from(vec![test_value]));
-        let batch = RecordBatch::try_new(Arc::<arrow::datatypes::Schema>::clone(&schema), vec![array]).unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::<Schema>::clone(&schema),
+            vec![array],
+        )
+        .unwrap();
 
         // Create multiplication expression: a * 200 (should overflow)
         let left = col("a", &schema).unwrap();
