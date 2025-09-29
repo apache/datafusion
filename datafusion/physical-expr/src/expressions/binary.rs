@@ -61,9 +61,7 @@ mod fast_arithmetic {
     use arrow::array::ArrayRef;
     use arrow::array::Datum;
     use arrow::array::{Array, AsArray, PrimitiveArray};
-    use arrow::compute::kernels::numeric::{
-        add, add_wrapping, mul, sub, sub_wrapping,
-    };
+    use arrow::compute::kernels::numeric::{add, add_wrapping, mul, sub, sub_wrapping};
     use arrow::datatypes::{DataType, Int32Type, Int64Type};
     use arrow::error::ArrowError;
 
