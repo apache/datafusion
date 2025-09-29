@@ -187,7 +187,6 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
 
         // take only first n values from the original builder
         new_builder.truncate(n);
-        new_builder.finish();
 
         Arc::new(BooleanArray::new(new_builder.finish(), first_n_nulls))
     }
