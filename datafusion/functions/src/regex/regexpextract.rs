@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::regex::{compile_and_cache_regex, compile_regex};
-use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
+use arrow::array::{
+    Array, ArrayRef, AsArray, Datum, GenericStringArray, Int64Array, StringArrayType,
+    StringViewArray,
+};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
@@ -24,7 +27,8 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::izip;
@@ -292,6 +296,8 @@ where
 
     let mut regex_cache = HashMap::new();
 
+    let datatype = values.data_type();
+
     match (is_regex_scalar, is_idx_scalar, is_flags_scalar) {
         (true, true, true) => {
             let regex = match regex_scalar {
@@ -303,12 +309,12 @@ where
 
             let pattern = compile_regex(regex, flags_scalar)?;
 
-            Ok(Arc::new(
+            collect_to_array(
+                datatype,
                 values
                     .iter()
-                    .map(|value| count_matches(value, &pattern, idx_scalar))
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+                    .map(|value| extract_match(value, &pattern, idx_scalar)),
+            )
         }
         (true, true, false) => {
             let regex = match regex_scalar {
@@ -327,17 +333,14 @@ where
                 )));
             }
 
-            Ok(Arc::new(
-                values
-                    .iter()
-                    .zip(flags_array.iter())
-                    .map(|(value, flags)| {
-                        let pattern =
-                            compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                        count_matches(value, pattern, idx_scalar)
-                    })
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+            collect_to_array(
+                datatype,
+                values.iter().zip(flags_array.iter()).map(|(value, flags)| {
+                    let pattern =
+                        compile_and_cache_regex(regex, flags, &mut regex_cache)?;
+                    extract_match(value, pattern, idx_scalar)
+                }),
+            )
         }
         (true, false, true) => {
             let regex = match regex_scalar {
@@ -349,13 +352,13 @@ where
 
             let pattern = compile_regex(regex, flags_scalar)?;
 
-            Ok(Arc::new(
+            collect_to_array(
+                datatype,
                 values
                     .iter()
                     .zip(idx_array.iter())
-                    .map(|(value, start)| count_matches(value, &pattern, start))
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+                    .map(|(value, idx)| extract_match(value, &pattern, idx)),
+            )
         }
         (true, false, false) => {
             let regex = match regex_scalar {
@@ -374,20 +377,17 @@ where
                 )));
             }
 
-            Ok(Arc::new(
-                izip!(
-                    values.iter(),
-                    idx_array.iter(),
-                    flags_array.iter()
-                )
-                .map(|(value, start, flags)| {
-                    let pattern =
-                        compile_and_cache_regex(regex, flags, &mut regex_cache)?;
+            collect_to_array(
+                datatype,
+                izip!(values.iter(), idx_array.iter(), flags_array.iter()).map(
+                    |(value, idx, flags)| {
+                        let pattern =
+                            compile_and_cache_regex(regex, flags, &mut regex_cache)?;
 
-                    count_matches(value, pattern, start)
-                })
-                .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+                        extract_match(value, pattern, idx)
+                    },
+                ),
+            )
         }
         (false, true, true) => {
             if values.len() != regex_array.len() {
@@ -398,25 +398,19 @@ where
                 )));
             }
 
-            Ok(Arc::new(
-                values
-                    .iter()
-                    .zip(regex_array.iter())
-                    .map(|(value, regex)| {
-                        let regex = match regex {
-                            None | Some("") => return Ok(0),
-                            Some(regex) => regex,
-                        };
+            collect_to_array(
+                datatype,
+                values.iter().zip(regex_array.iter()).map(|(value, regex)| {
+                    let regex = match regex {
+                        None | Some("") => return Ok(""),
+                        Some(regex) => regex,
+                    };
 
-                        let pattern = compile_and_cache_regex(
-                            regex,
-                            flags_scalar,
-                            &mut regex_cache,
-                        )?;
-                        count_matches(value, pattern, idx_scalar)
-                    })
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+                    let pattern =
+                        compile_and_cache_regex(regex, flags_scalar, &mut regex_cache)?;
+                    extract_match(value, pattern, idx_scalar)
+                }),
+            )
         }
         (false, true, false) => {
             if values.len() != regex_array.len() {
@@ -436,21 +430,22 @@ where
                 )));
             }
 
-            Ok(Arc::new(
-                izip!(values.iter(), regex_array.iter(), flags_array.iter())
-                    .map(|(value, regex, flags)| {
+            collect_to_array(
+                datatype,
+                izip!(values.iter(), regex_array.iter(), flags_array.iter()).map(
+                    |(value, regex, flags)| {
                         let regex = match regex {
-                            None | Some("") => return Ok(0),
+                            None | Some("") => return Ok(""),
                             Some(regex) => regex,
                         };
 
                         let pattern =
                             compile_and_cache_regex(regex, flags, &mut regex_cache)?;
 
-                        count_matches(value, pattern, idx_scalar)
-                    })
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+                        extract_match(value, pattern, idx_scalar)
+                    },
+                ),
+            )
         }
         (false, false, true) => {
             if values.len() != regex_array.len() {
@@ -469,11 +464,12 @@ where
                 )));
             }
 
-            Ok(Arc::new(
-                izip!(values.iter(), regex_array.iter(), idx_array.iter())
-                    .map(|(value, regex, start)| {
+            collect_to_array(
+                datatype,
+                izip!(values.iter(), regex_array.iter(), idx_array.iter()).map(
+                    |(value, regex, start)| {
                         let regex = match regex {
-                            None | Some("") => return Ok(0),
+                            None | Some("") => return Ok(""),
                             Some(regex) => regex,
                         };
 
@@ -482,10 +478,10 @@ where
                             flags_scalar,
                             &mut regex_cache,
                         )?;
-                        count_matches(value, pattern, start)
-                    })
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+                        extract_match(value, pattern, start)
+                    },
+                ),
+            )
         }
         (false, false, false) => {
             if values.len() != regex_array.len() {
@@ -513,51 +509,79 @@ where
                 )));
             }
 
-            Ok(Arc::new(
+            collect_to_array(
+                datatype,
                 izip!(
                     values.iter(),
                     regex_array.iter(),
                     idx_array.iter(),
                     flags_array.iter()
                 )
-                .map(|(value, regex, start, flags)| {
+                .map(|(value, regex, idx, flags)| {
                     let regex = match regex {
-                        None | Some("") => return Ok(0),
+                        None | Some("") => return Ok(""),
                         Some(regex) => regex,
                     };
 
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                    count_matches(value, pattern, start)
-                })
-                .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+                    extract_match(value, pattern, idx)
+                }),
+            )
         }
     }
 }
 
-fn count_matches(
-    value: Option<&str>,
+fn extract_match<'v>(
+    value: Option<&'v str>,
     pattern: &Regex,
-    start: Option<i64>,
-) -> Result<i64, ArrowError> {
+    idx: Option<i64>,
+) -> Result<&'v str, ArrowError> {
     let value = match value {
-        None | Some("") => return Ok(0),
+        None | Some("") => return Ok(""),
         Some(value) => value,
     };
 
-    if let Some(start) = start {
-        if start < 1 {
-            return Err(ArrowError::ComputeError(
-                "regexp_extract() requires start to be 1 based".to_string(),
-            ));
-        }
+    let idx = match idx {
+        None => return Ok(""),
+        Some(idx) => idx,
+    };
 
-        let find_slice = value.chars().skip(start as usize - 1).collect::<String>();
-        let count = pattern.find_iter(find_slice.as_str()).count();
-        Ok(count as i64)
-    } else {
-        let count = pattern.find_iter(value).count();
-        Ok(count as i64)
+    if idx < 1 {
+        return Err(ArrowError::ComputeError(
+            "regexp_extract() requires idx to be 1 based".to_string(),
+        ));
+    }
+
+    let capture = extract_match_inner(value, pattern, idx);
+    Ok(capture.unwrap_or(""))
+}
+
+fn extract_match_inner<'v>(value: &'v str, pattern: &Regex, idx: i64) -> Option<&'v str> {
+    Some(pattern.captures(value)?.get(idx as usize)?.as_str())
+}
+
+fn collect_to_array<'a>(
+    datatype: &DataType,
+    result_iter: impl Iterator<Item = Result<&'a str, ArrowError>>,
+) -> Result<ArrayRef, ArrowError> {
+    let result_iter = result_iter.map(|i| Some(i).transpose());
+    match datatype {
+        Utf8 => {
+            let result =
+                result_iter.collect::<Result<GenericStringArray<i32>, ArrowError>>()?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        LargeUtf8 => {
+            let result =
+                result_iter.collect::<Result<GenericStringArray<i64>, ArrowError>>()?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        Utf8View => {
+            let result = result_iter.collect::<Result<StringViewArray, ArrowError>>()?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        other => exec_err!("Unsupported data type {other:?} for function regex_replace")
+            .map_err(Into::into),
     }
 }

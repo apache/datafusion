@@ -23,11 +23,11 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 pub mod regexpcount;
+pub mod regexpextract;
 pub mod regexpinstr;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
-pub mod regexpextract;
 
 // create UDFs
 make_udf_function!(regexpcount::RegexpCountFunc, regexp_count);
