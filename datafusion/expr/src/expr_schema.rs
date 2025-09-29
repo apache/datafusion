@@ -28,6 +28,7 @@ use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
     Result, Spans, TableReference,
@@ -827,10 +828,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        and, binary_expr, col, is_not_null, is_null, lit, not, or,
-        out_ref_col_with_metadata, when,
-    };
+    use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
     use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
 
@@ -883,146 +881,88 @@ mod tests {
         assert!(expr.nullable(&get_schema(false)).unwrap());
     }
 
-    fn check_nullability(
-        expr: Expr,
-        nullable: bool,
-        get_schema: fn(bool) -> MockExprSchema,
-    ) -> Result<()> {
+    fn assert_nullability(expr: &Expr, schema: &dyn ExprSchema, nullable: bool) {
         assert_eq!(
-            expr.nullable(&get_schema(true))?,
+            expr.nullable(schema).unwrap(),
             nullable,
-            "Nullability of '{expr}' should be {nullable} when column is nullable"
+            "Nullability of '{expr}' should be {nullable}"
         );
-        assert!(
-            !expr.nullable(&get_schema(false))?,
-            "Nullability of '{expr}' should be false when column is not nullable"
-        );
-        Ok(())
+    }
+
+    fn assert_not_nullable(expr: &Expr, schema: &dyn ExprSchema) {
+        assert_nullability(expr, schema, false);
+    }
+
+    fn assert_nullable(expr: &Expr, schema: &dyn ExprSchema) {
+        assert_nullability(expr, schema, true);
     }
 
     #[test]
     fn test_case_expression_nullability() -> Result<()> {
-        let get_schema = |nullable| {
-            MockExprSchema::new()
-                .with_data_type(DataType::Int32)
-                .with_nullable(nullable)
-        };
+        let nullable_schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_nullable(true);
 
-        check_nullability(
-            when(is_not_null(col("foo")), col("foo")).otherwise(lit(0))?,
-            false,
-            get_schema,
-        )?;
+        let not_nullable_schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_nullable(false);
 
-        check_nullability(
-            when(not(is_null(col("foo"))), col("foo")).otherwise(lit(0))?,
-            false,
-            get_schema,
-        )?;
+        // CASE WHEN x IS NOT NULL THEN x ELSE 0
+        let e1 = when(col("x").is_not_null(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e1, &nullable_schema);
+        assert_not_nullable(&e1, &not_nullable_schema);
 
-        check_nullability(
-            when(binary_expr(col("foo"), Operator::Eq, lit(5)), col("foo"))
-                .otherwise(lit(0))?,
-            true,
-            get_schema,
-        )?;
+        // CASE WHEN NOT x IS NULL THEN x ELSE 0
+        let e2 = when(not(col("x").is_null()), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e2, &nullable_schema);
+        assert_not_nullable(&e2, &not_nullable_schema);
 
-        check_nullability(
-            when(
-                and(
-                    is_not_null(col("foo")),
-                    binary_expr(col("foo"), Operator::Eq, lit(5)),
-                ),
-                col("foo"),
-            )
-            .otherwise(lit(0))?,
-            false,
-            get_schema,
-        )?;
+        // CASE WHEN X = 5 THEN x ELSE 0
+        let e3 = when(col("x").eq(lit(5)), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e3, &nullable_schema);
+        assert_not_nullable(&e3, &not_nullable_schema);
 
-        check_nullability(
-            when(
-                and(
-                    binary_expr(col("foo"), Operator::Eq, lit(5)),
-                    is_not_null(col("foo")),
-                ),
-                col("foo"),
-            )
-            .otherwise(lit(0))?,
-            false,
-            get_schema,
-        )?;
+        // CASE WHEN x IS NOT NULL AND x = 5 THEN x ELSE 0
+        let e4 = when(and(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e4, &nullable_schema);
+        assert_not_nullable(&e4, &not_nullable_schema);
 
-        check_nullability(
-            when(
-                or(
-                    is_not_null(col("foo")),
-                    binary_expr(col("foo"), Operator::Eq, lit(5)),
-                ),
-                col("foo"),
-            )
-            .otherwise(lit(0))?,
-            true,
-            get_schema,
-        )?;
+        // CASE WHEN x = 5 AND x IS NOT NULL THEN x ELSE 0
+        let e5 = when(and(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e5, &nullable_schema);
+        assert_not_nullable(&e5, &not_nullable_schema);
 
-        check_nullability(
-            when(
-                or(
-                    binary_expr(col("foo"), Operator::Eq, lit(5)),
-                    is_not_null(col("foo")),
-                ),
-                col("foo"),
-            )
-            .otherwise(lit(0))?,
-            true,
-            get_schema,
-        )?;
+        // CASE WHEN x IS NOT NULL OR x = 5 THEN x ELSE 0
+        let e6 = when(or(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
+            .otherwise(lit(0))?;
+        assert_nullable(&e6, &nullable_schema);
+        assert_not_nullable(&e6, &not_nullable_schema);
 
-        check_nullability(
-            when(
-                or(
-                    is_not_null(col("foo")),
-                    binary_expr(col("foo"), Operator::Eq, lit(5)),
-                ),
-                col("foo"),
-            )
-            .otherwise(lit(0))?,
-            true,
-            get_schema,
-        )?;
+        // CASE WHEN x = 5 OR x IS NOT NULL THEN x ELSE 0
+        let e7 = when(or(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_nullable(&e7, &nullable_schema);
+        assert_not_nullable(&e7, &not_nullable_schema);
 
-        check_nullability(
-            when(
-                or(
-                    binary_expr(col("foo"), Operator::Eq, lit(5)),
-                    is_not_null(col("foo")),
-                ),
-                col("foo"),
-            )
-            .otherwise(lit(0))?,
-            true,
-            get_schema,
-        )?;
+        // CASE WHEN (x = 5 AND x IS NOT NULL) OR (x = bar AND x IS NOT NULL) THEN x ELSE 0
+        let e8 = when(
+            or(
+                and(col("x").eq(lit(5)), col("x").is_not_null()),
+                and(col("x").eq(col("bar")), col("x").is_not_null()),
+            ),
+            col("x"),
+        )
+        .otherwise(lit(0))?;
+        assert_not_nullable(&e8, &nullable_schema);
+        assert_not_nullable(&e8, &not_nullable_schema);
 
-        check_nullability(
-            when(
-                or(
-                    and(
-                        binary_expr(col("foo"), Operator::Eq, lit(5)),
-                        is_not_null(col("foo")),
-                    ),
-                    and(
-                        binary_expr(col("foo"), Operator::Eq, col("bar")),
-                        is_not_null(col("foo")),
-                    ),
-                ),
-                col("foo"),
-            )
-            .otherwise(lit(0))?,
-            false,
-            get_schema,
-        )?;
+        // CASE WHEN x = 5 OR x IS NULL THEN x ELSE 0
+        let e9 = when(or(col("x").eq(lit(5)), col("x").is_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_nullable(&e9, &nullable_schema);
+        assert_not_nullable(&e9, &not_nullable_schema);
 
         Ok(())
     }
