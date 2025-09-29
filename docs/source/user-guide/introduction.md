@@ -137,10 +137,10 @@ Here are some less active projects that used DataFusion:
 
 - [bdt](https://github.com/datafusion-contrib/bdt) Boring Data Tool
 - [Cloudfuse Buzz]
-- [Flock]
-- [Tensorbase]
 - [Dask SQL] Distributed SQL query engine in Python
 - [Exon] Analysis toolkit for life-science applications
+- [Flock]
+- [Tensorbase]
 
 [ballista]: https://github.com/apache/datafusion-ballista
 [auron]: https://github.com/apache/auron
@@ -166,7 +166,8 @@ Here are some less active projects that used DataFusion:
 [spice.ai]: https://github.com/spiceai/spiceai
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
-[vegafusion]: https://vegafusion.io/ "if you know of another project, please submit a PR to add a link!"
+[vegafusion]: https://vegafusion.io/
+[vortex]: https://vortex.dev/ "if you know of another project, please submit a PR to add a link!"
 
 ## Integrations and Extensions
 
