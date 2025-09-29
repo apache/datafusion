@@ -19,10 +19,55 @@
 
 # Upgrade Guides
 
-## DataFusion `50.0.0`
+## DataFusion `51.0.0`
 
-**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
+
+### `MSRV` updated to 1.87.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+
+[`1.87.0`]: https://releases.rs/docs/1.87.0/
+
+### `datafusion-proto` use `TaskContext` rather than `SessionContext` in physical plan serde methods
+
+There have been changes in the public API methods of `datafusion-proto` which handle physical plan serde.
+
+Methods like `physical_plan_from_bytes`, `parse_physical_expr` and similar, expect `TaskContext` instead of `SessionContext`
+
+```diff
+- let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
++ let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+```
+
+as `TaskContext` contains `RuntimeEnv` methods such as `try_into_physical_plan` will not have explicit `RuntimeEnv` parameter.
+
+```diff
+let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+-   .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
++.  .try_into_physical_plan(&ctx.task_ctx(), &composed_codec)
+```
+
+`PhysicalExtensionCodec::try_decode()` expects `TaskContext` instead of `FunctionRegistry`:
+
+```diff
+pub trait PhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+-        registry: &dyn FunctionRegistry,
++        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+```
+
+See [issue #17601] for more details.
+
+[issue #17601]: https://github.com/apache/datafusion/issues/17601
+
+## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
 

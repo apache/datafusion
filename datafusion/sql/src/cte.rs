@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use arrow::datatypes::Schema;
 use datafusion_common::{
     not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
@@ -135,10 +134,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // ---------- Step 2: Create a temporary relation ------------------
         // Step 2.1: Create a table source for the temporary relation
-        let work_table_source = self.context_provider.create_cte_work_table(
-            &cte_name,
-            Arc::new(Schema::from(static_plan.schema().as_ref())),
-        )?;
+        let work_table_source = self
+            .context_provider
+            .create_cte_work_table(&cte_name, Arc::clone(static_plan.schema().inner()))?;
 
         // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term

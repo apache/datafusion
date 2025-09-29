@@ -96,46 +96,50 @@ Here are some active projects using DataFusion:
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
 - [ArkFlow](https://github.com/arkflow-rs/arkflow) High-performance Rust stream processing engine
-- [Auron](https://github.com/apache/auron) The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing
-- [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
-- [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
+- [Auron] The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing
+- [Ballista] Distributed SQL Query Engine
+- [CnosDB] Open Source Distributed Time Series Database
 - [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
-- [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust) Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
-- [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
+- [Cube Store] Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
+- [Dask SQL] Distributed SQL query engine in Python
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
-- [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
+- [dbt Fusion engine](https://github.com/dbt-labs/dbt-fusion) The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.
+- [delta-rs] Native Rust implementation of Delta Lake
 - [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [Feldera](https://github.com/feldera/feldera) Fast query engine for incremental computation
 - [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
-- [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
-- [HoraeDB](https://github.com/apache/incubator-horaedb) Distributed Time-Series Database
+- [GreptimeDB] Open Source & Cloud Native Distributed Time Series Database
+- [HoraeDB] Distributed Time-Series Database
 - [Iceberg-rust](https://github.com/apache/iceberg-rust) Rust implementation of Apache Iceberg
-- [InfluxDB](https://github.com/influxdata/influxdb) Time Series Database
-- [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
+- [InfluxDB] Time Series Database
+- [Kamu] Planet-scale streaming data pipeline
 - [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
-- [OpenObserve](https://github.com/openobserve/openobserve) Distributed cloud native observability platform
+- [OpenObserve] Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
-- [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
+- [Parseable] Log storage and observability platform
 - [Polygon.io](https://polygon.io/) Stock Market API
-- [qv](https://github.com/timvw/qv) Quickly view your data
+- [qv] Quickly view your data
+- [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
-- [ROAPI](https://github.com/roapi/roapi) Create full-fledged APIs for slowly moving datasets without writing a single line of code
+- [ROAPI] Create full-fledged APIs for slowly moving datasets without writing a single line of code
 - [Sail](https://github.com/lakehq/sail) Unifying stream, batch and AI workloads with Apache Spark compatibility
-- [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
+- [Seafowl] CDN-friendly analytical database
+- [SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
-- [Spice.ai](https://github.com/spiceai/spiceai) Building blocks for data-driven AI applications
-- [Synnada](https://synnada.ai/) Streaming-first framework for data products
-- [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
+- [Spice.ai] Building blocks for data-driven AI applications
+- [Synnada] Streaming-first framework for data products
+- [VegaFusion] Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [Telemetry](https://telemetry.sh/) Structured logging made easy
+- [Xorq](https://github.com/xorq-labs/xorq/) Xorq is a multi-engine batch transformation framework built on Ibis, DataFusion and Arrow
 
 Here are some less active projects that used DataFusion:
 
 - [bdt](https://github.com/datafusion-contrib/bdt) Boring Data Tool
-- [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
-- [Flock](https://github.com/flock-lab/flock)
-- [Tensorbase](https://github.com/tensorbase/tensorbase)
+- [Cloudfuse Buzz]
+- [Flock]
+- [Tensorbase]
 
 [ballista]: https://github.com/apache/datafusion-ballista
 [auron]: https://github.com/apache/auron
@@ -147,7 +151,7 @@ Here are some less active projects that used DataFusion:
 [delta-rs]: https://github.com/delta-io/delta-rs
 [flock]: https://github.com/flock-lab/flock
 [kamu]: https://github.com/kamu-data/kamu-cli
-[greptime db]: https://github.com/GreptimeTeam/greptimedb
+[greptimedb]: https://github.com/GreptimeTeam/greptimedb
 [horaedb]: https://github.com/apache/incubator-horaedb
 [influxdb]: https://github.com/influxdata/influxdb
 [openobserve]: https://github.com/openobserve/openobserve
