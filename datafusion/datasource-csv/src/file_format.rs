@@ -600,6 +600,9 @@ fn build_schema_helper(names: Vec<String>, types: Vec<HashSet<DataType>>) -> Sch
             data_type_possibilities.remove(&DataType::Null);
 
             match data_type_possibilities.len() {
+                // Return Null for columns with only nulls / empty files
+                // This allows schema merging to work when reading folders 
+                // such files along with normal files.
                 0 => Field::new(field_name, DataType::Null, true),
                 1 => Field::new(
                     field_name,
