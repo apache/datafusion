@@ -61,7 +61,7 @@ mod fast_arithmetic {
     use arrow::array::ArrayRef;
     use arrow::array::Datum;
     use arrow::array::{Array, AsArray, PrimitiveArray};
-    use arrow::compute::kernels::numeric::{add, add_wrapping, mul, sub, sub_wrapping};
+    use arrow::compute::kernels::numeric::{add, add_wrapping, sub, sub_wrapping};
     use arrow::datatypes::{DataType, Int32Type, Int64Type};
     use arrow::error::ArrowError;
 
@@ -155,11 +155,13 @@ mod fast_arithmetic {
             // Use SIMD for bulk overflow detection when available
             #[cfg(target_feature = "sse2")]
             {
-                return simd_check_add_overflow_sse2_i64(left, right);
+                simd_check_add_overflow_sse2_i64(left, right)
             }
-
-            // Fallback to optimized scalar implementation
-            scalar_detect_add_overflow_i64(left, right)
+            #[cfg(not(target_feature = "sse2"))]
+            {
+                // Fallback to optimized scalar implementation
+                scalar_detect_add_overflow_i64(left, right)
+            }
         }
 
         /// Vectorized overflow checking for i64 subtraction using SIMD
@@ -167,10 +169,12 @@ mod fast_arithmetic {
         pub fn simd_detect_sub_overflow_i64(left: &[i64], right: &[i64]) -> bool {
             #[cfg(target_feature = "sse2")]
             {
-                return simd_check_sub_overflow_sse2_i64(left, right);
+                simd_check_sub_overflow_sse2_i64(left, right)
             }
-
-            scalar_detect_sub_overflow_i64(left, right)
+            #[cfg(not(target_feature = "sse2"))]
+            {
+                scalar_detect_sub_overflow_i64(left, right)
+            }
         }
 
         /// Vectorized overflow checking for i64 multiplication using SIMD
@@ -368,9 +372,7 @@ mod fast_arithmetic {
     const SAFE_I32_ADD_THRESHOLD: i32 = i32::MAX / 4; // 536,870,911
     const SAFE_I64_ADD_THRESHOLD: i64 = i64::MAX / 4; // 2,305,843,009,213,693,951
 
-    // Multiplication thresholds (conservative - high overflow risk)
-    const SAFE_I32_MUL_THRESHOLD: i32 = 46340; // sqrt(2^31-1) ≈ 46340
-    const SAFE_I64_MUL_THRESHOLD: i64 = 3037000499; // sqrt(2^63-1) ≈ 3037000499
+    // Multiplication thresholds (conservative - high overflow risk) - removed unused constants
 
     // Subtraction thresholds (moderate - medium overflow risk)
     const SAFE_I32_SUB_THRESHOLD: i32 = i32::MAX / 4; // Same as addition for magnitude
@@ -410,14 +412,6 @@ mod fast_arithmetic {
         }
     }
 
-    /// Simple checked multiplication that fails on overflow
-    pub fn mul_checked(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
-        let (left_array, _) = lhs.get();
-        let (right_array, _) = rhs.get();
-
-        // Use the standard checked multiplication from Arrow
-        mul(&left_array, &right_array)
-    }
 
     // Smart optimization functions for detecting overflow risk
     fn should_use_fast_path_add(lhs: &dyn Datum, rhs: &dyn Datum) -> bool {
@@ -446,32 +440,6 @@ mod fast_arithmetic {
         false // Conservative fallback
     }
 
-    /// Check if we should use fast path for multiplication
-    fn should_use_fast_path_mul(lhs: &dyn Datum, rhs: &dyn Datum) -> bool {
-        let (left_array, _) = lhs.get();
-        let (right_array, _) = rhs.get();
-
-        match (left_array.data_type(), right_array.data_type()) {
-            (DataType::Int32, DataType::Int32) => {
-                if let (Some(left_array), Some(right_array)) = (
-                    left_array.as_primitive_opt::<Int32Type>(),
-                    right_array.as_primitive_opt::<Int32Type>(),
-                ) {
-                    return sample_safe_for_mul_i32(left_array, right_array);
-                }
-            }
-            (DataType::Int64, DataType::Int64) => {
-                if let (Some(left_array), Some(right_array)) = (
-                    left_array.as_primitive_opt::<Int64Type>(),
-                    right_array.as_primitive_opt::<Int64Type>(),
-                ) {
-                    return sample_safe_for_mul_i64(left_array, right_array);
-                }
-            }
-            _ => {}
-        }
-        false
-    }
 
     /// Check if we should use fast path for subtraction
     fn should_use_fast_path_sub(lhs: &dyn Datum, rhs: &dyn Datum) -> bool {
@@ -596,99 +564,6 @@ mod fast_arithmetic {
         true
     }
 
-    /// Enhanced sampling to check if multiplication is safe for Int32
-    /// Uses conservative thresholds due to high overflow risk in multiplication
-    fn sample_safe_for_mul_i32(
-        left: &PrimitiveArray<Int32Type>,
-        right: &PrimitiveArray<Int32Type>,
-    ) -> bool {
-        let len = std::cmp::min(left.len(), right.len());
-        if len == 0 {
-            return true;
-        }
-
-        // Use stratified sampling for multiplication (high risk operation)
-        let sample_size = std::cmp::min(8, len);
-        let indices = if len <= 8 {
-            (0..len).collect::<Vec<_>>()
-        } else {
-            let mut indices = Vec::new();
-            for i in 0..std::cmp::min(3, len) {
-                indices.push(i);
-            }
-            if len > 6 {
-                let mid = len / 2;
-                for i in (mid - 1)..=std::cmp::min(mid + 1, len - 1) {
-                    indices.push(i);
-                }
-            }
-            for i in std::cmp::max(len.saturating_sub(3), 3)..len {
-                indices.push(i);
-            }
-            indices.into_iter().take(sample_size).collect()
-        };
-
-        for &i in &indices {
-            if left.is_valid(i) && right.is_valid(i) {
-                let a = left.value(i);
-                let b = right.value(i);
-                // Use conservative multiplication threshold
-                if a.saturating_abs() > SAFE_I32_MUL_THRESHOLD
-                    || b.saturating_abs() > SAFE_I32_MUL_THRESHOLD
-                {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    /// Enhanced sampling to check if multiplication is safe for Int64
-    /// Uses conservative thresholds due to high overflow risk in multiplication
-    fn sample_safe_for_mul_i64(
-        left: &PrimitiveArray<Int64Type>,
-        right: &PrimitiveArray<Int64Type>,
-    ) -> bool {
-        let len = std::cmp::min(left.len(), right.len());
-        if len == 0 {
-            return true;
-        }
-
-        // Use stratified sampling for multiplication (high risk operation)
-        let sample_size = std::cmp::min(8, len);
-        let indices = if len <= 8 {
-            (0..len).collect::<Vec<_>>()
-        } else {
-            let mut indices = Vec::new();
-            for i in 0..std::cmp::min(3, len) {
-                indices.push(i);
-            }
-            if len > 6 {
-                let mid = len / 2;
-                for i in (mid - 1)..=std::cmp::min(mid + 1, len - 1) {
-                    indices.push(i);
-                }
-            }
-            for i in std::cmp::max(len.saturating_sub(3), 3)..len {
-                indices.push(i);
-            }
-            indices.into_iter().take(sample_size).collect()
-        };
-
-        for &i in &indices {
-            if left.is_valid(i) && right.is_valid(i) {
-                let a = left.value(i);
-                let b = right.value(i);
-                // Use conservative multiplication threshold
-                if a.saturating_abs() > SAFE_I64_MUL_THRESHOLD
-                    || b.saturating_abs() > SAFE_I64_MUL_THRESHOLD
-                {
-                    return false;
-                }
-            }
-        }
-        true
-    }
 
     /// Enhanced sampling to check if subtraction is safe for Int32
     /// Uses sign-aware analysis for subtraction-specific overflow patterns
@@ -7089,7 +6964,7 @@ mod tests {
         // Value that will overflow when multiplied by large number
         let test_value = i64::MAX / 100 + 1;
         let array = Arc::new(Int64Array::from(vec![test_value]));
-        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let batch = RecordBatch::try_new(Arc::<arrow::datatypes::Schema>::clone(&schema), vec![array]).unwrap();
 
         // Create multiplication expression: a * 200 (should overflow)
         let left = col("a", &schema).unwrap();
