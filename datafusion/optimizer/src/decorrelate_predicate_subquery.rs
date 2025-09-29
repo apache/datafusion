@@ -375,6 +375,7 @@ fn build_join(
     if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         let right_schema = sub_query_alias.schema();
 
+        // Gather all columns needed for the join filter + predicates
         let mut needed = std::collections::HashSet::new();
         expr_to_columns(&join_filter, &mut needed)?;
         if let Some(ref in_pred) = in_predicate_opt {

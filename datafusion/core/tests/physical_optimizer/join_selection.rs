@@ -371,7 +371,7 @@ async fn test_join_with_swap_semi() {
 
 #[tokio::test]
 async fn test_join_with_swap_mark() {
-    let join_types = [JoinType::LeftMark];
+    let join_types = [JoinType::LeftMark, JoinType::RightMark];
     for join_type in join_types {
         let (big, small) = create_big_and_small();
 
