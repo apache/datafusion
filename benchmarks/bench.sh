@@ -310,6 +310,7 @@ main() {
                 hj)
                     # hj uses range() function, no data generation needed
                     echo "HJ benchmark does not require data generation"
+                    ;;
                 compile_profile)
                     data_tpch "1"
                     ;;
@@ -492,6 +493,7 @@ main() {
                     ;;
                 hj)
                     run_hj
+                    ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
                     ;;
