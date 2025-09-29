@@ -327,6 +327,16 @@ impl<'a> BinaryTypeCoercer<'a> {
 
 // TODO Move the rest inside of BinaryTypeCoercer
 
+fn is_decimal(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Decimal32(..)
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Decimal256(..)
+    )
+}
+
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
 fn math_decimal_coercion(
     lhs_type: &DataType,
@@ -358,10 +368,11 @@ fn math_decimal_coercion(
             Some((lhs_type.clone(), rhs_type.clone()))
         }
         // Cross-variant decimal coercion - choose larger variant with appropriate precision/scale
-        (Decimal32(_, _), Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _))
-        | (Decimal64(_, _), Decimal32(_, _) | Decimal128(_, _) | Decimal256(_, _))
-        | (Decimal128(_, _), Decimal32(_, _) | Decimal64(_, _) | Decimal256(_, _))
-        | (Decimal256(_, _), Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _)) => {
+        (lhs, rhs)
+            if is_decimal(lhs)
+                && is_decimal(rhs)
+                && std::mem::discriminant(lhs) != std::mem::discriminant(rhs) =>
+        {
             let coerced_type = get_wider_decimal_type_cross_variant(lhs_type, rhs_type)?;
             Some((coerced_type.clone(), coerced_type))
         }
@@ -1022,6 +1033,11 @@ fn get_wider_decimal_type_cross_variant(
     let s = s1.max(s2);
     let range = (p1 as i8 - s1).max(p2 as i8 - s2);
     let required_precision = (range + s) as u8;
+
+    // We currently don't handle cases where the required precision overflows
+    if required_precision > DECIMAL256_MAX_PRECISION {
+        return None;
+    }
 
     // Choose the larger variant between the two input types
     match (lhs_type, rhs_type) {

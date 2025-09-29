@@ -1999,6 +1999,7 @@ fn is_join_arrays_equal(
             DataType::Decimal32(..) => compare_value!(Decimal32Array),
             DataType::Decimal64(..) => compare_value!(Decimal64Array),
             DataType::Decimal128(..) => compare_value!(Decimal128Array),
+            DataType::Decimal256(..) => compare_value!(Decimal256Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
                 TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
