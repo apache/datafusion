@@ -45,7 +45,7 @@ macro_rules! cast_scalar_f64 {
     ($value:expr ) => {
         match &$value {
             ScalarValue::Float64(Some(v)) => *v,
-            v => panic!("invalid type {:?}", v),
+            v => panic!("invalid type {}", v),
         }
     };
 }
@@ -56,7 +56,7 @@ macro_rules! cast_scalar_u64 {
     ($value:expr ) => {
         match &$value {
             ScalarValue::UInt64(Some(v)) => *v,
-            v => panic!("invalid type {:?}", v),
+            v => panic!("invalid type {}", v),
         }
     };
 }
