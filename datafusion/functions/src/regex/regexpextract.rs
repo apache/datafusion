@@ -17,10 +17,10 @@
 
 use crate::regex::{compile_and_cache_regex, compile_regex};
 use arrow::array::{
-    Array, ArrayRef, AsArray, Datum, GenericStringArray, Int64Array, StringArrayType,
-    StringViewArray,
+    Array, ArrayRef, AsArray, Datum, GenericStringArray, Int32Array, Int64Array,
+    StringArrayType, StringViewArray,
 };
-use arrow::datatypes::{DataType, Int64Type};
+use arrow::datatypes::{DataType, Int32Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
@@ -203,7 +203,7 @@ pub fn regexp_extract(
             values.as_string::<i32>(),
             regex_array.as_string::<i32>(),
             is_regex_scalar,
-            idx_array.as_primitive::<Int64Type>(),
+            idx_array.as_primitive::<Int32Type>(),
             is_idx_scalar,
             None,
             is_flags_scalar,
@@ -212,7 +212,7 @@ pub fn regexp_extract(
             values.as_string::<i32>(),
             regex_array.as_string::<i32>(),
             is_regex_scalar,
-            idx_array.as_primitive::<Int64Type>(),
+            idx_array.as_primitive::<Int32Type>(),
             is_idx_scalar,
             Some(flags_array.as_string::<i32>()),
             is_flags_scalar,
@@ -221,7 +221,7 @@ pub fn regexp_extract(
             values.as_string::<i64>(),
             regex_array.as_string::<i64>(),
             is_regex_scalar,
-            idx_array.as_primitive::<Int64Type>(),
+            idx_array.as_primitive::<Int32Type>(),
             is_idx_scalar,
             None,
             is_flags_scalar,
@@ -230,7 +230,7 @@ pub fn regexp_extract(
             values.as_string::<i64>(),
             regex_array.as_string::<i64>(),
             is_regex_scalar,
-            idx_array.as_primitive::<Int64Type>(),
+            idx_array.as_primitive::<Int32Type>(),
             is_idx_scalar,
             Some(flags_array.as_string::<i64>()),
             is_flags_scalar,
@@ -239,7 +239,7 @@ pub fn regexp_extract(
             values.as_string_view(),
             regex_array.as_string_view(),
             is_regex_scalar,
-            idx_array.as_primitive::<Int64Type>(),
+            idx_array.as_primitive::<Int32Type>(),
             is_idx_scalar,
             None,
             is_flags_scalar,
@@ -248,7 +248,7 @@ pub fn regexp_extract(
             values.as_string_view(),
             regex_array.as_string_view(),
             is_regex_scalar,
-            idx_array.as_primitive::<Int64Type>(),
+            idx_array.as_primitive::<Int32Type>(),
             is_idx_scalar,
             Some(flags_array.as_string_view()),
             is_flags_scalar,
@@ -263,7 +263,7 @@ pub fn regexp_extract_inner<'a, S>(
     values: S,
     regex_array: S,
     is_regex_scalar: bool,
-    idx_array: &Int64Array,
+    idx_array: &Int32Array,
     is_idx_scalar: bool,
     flags_array: Option<S>,
     is_flags_scalar: bool,
@@ -535,7 +535,7 @@ where
 fn extract_match<'v>(
     value: Option<&'v str>,
     pattern: &Regex,
-    idx: Option<i64>,
+    idx: Option<i32>,
 ) -> Result<&'v str, ArrowError> {
     let value = match value {
         None | Some("") => return Ok(""),
@@ -557,7 +557,7 @@ fn extract_match<'v>(
     Ok(capture.unwrap_or(""))
 }
 
-fn extract_match_inner<'v>(value: &'v str, pattern: &Regex, idx: i64) -> Option<&'v str> {
+fn extract_match_inner<'v>(value: &'v str, pattern: &Regex, idx: i32) -> Option<&'v str> {
     Some(pattern.captures(value)?.get(idx as usize)?.as_str())
 }
 
@@ -583,5 +583,84 @@ fn collect_to_array<'a>(
         }
         other => exec_err!("Unsupported data type {other:?} for function regex_replace")
             .map_err(Into::into),
+    }
+}
+
+mod tests {
+    use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::ScalarFunctionArgs;
+
+    use super::*;
+
+    #[test]
+    fn test_case_sensitive_regexp_extract_scalar() {
+        let values = ["aaaac", "ac", "abc", "abcccc", "abbc"];
+        let regex = "(a+)(b)?(c)";
+        let idx = ScalarValue::Int32(Some(2));
+        let expected: Vec<String> = vec![
+            "".to_string(),
+            "".to_string(),
+            "b".to_string(),
+            "b".to_string(),
+            "".to_string(),
+        ];
+
+        values.iter().enumerate().for_each(|(pos, &v)| {
+            // utf8
+            let v_sv = ScalarValue::Utf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
+            let expected = expected.get(pos).cloned();
+            let re = regexp_extract_with_scalar_values(&[v_sv, regex_sv, idx.clone()]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(v))) => {
+                    assert_eq!(v, expected, "regexp_extract scalar test failed");
+                }
+                o => panic!("Unexpected result: {o:?}"),
+            }
+
+            // largeutf8
+            let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
+            let re = regexp_extract_with_scalar_values(&[v_sv, regex_sv, idx.clone()]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(v))) => {
+                    assert_eq!(v, expected, "regexp_extract scalar test failed");
+                }
+                o => panic!("Unexpected result: {o:?}"),
+            }
+
+            // utf8view
+            let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
+            let re = regexp_extract_with_scalar_values(&[v_sv, regex_sv, idx.clone()]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(v))) => {
+                    assert_eq!(v, expected, "regexp_extract scalar test failed");
+                }
+                o => panic!("Unexpected result: {o:?}"),
+            }
+        });
+    }
+
+    fn regexp_extract_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
+        let args_values = args
+            .iter()
+            .map(|sv| ColumnarValue::Scalar(sv.clone()))
+            .collect();
+
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, a)| Field::new(format!("arg_{idx}"), a.data_type(), true).into())
+            .collect::<Vec<_>>();
+
+        RegexpExtractFunc::new().invoke_with_args(ScalarFunctionArgs {
+            args: args_values,
+            arg_fields,
+            number_rows: args.len(),
+            return_field: Field::new("f", args[0].data_type(), true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        })
     }
 }
