@@ -6961,11 +6961,8 @@ mod tests {
         // Value that will overflow when multiplied by large number
         let test_value = i64::MAX / 100 + 1;
         let array = Arc::new(Int64Array::from(vec![test_value]));
-        let batch = RecordBatch::try_new(
-            Arc::<Schema>::clone(&schema),
-            vec![array],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(Arc::<Schema>::clone(&schema), vec![array]).unwrap();
 
         // Create multiplication expression: a * 200 (should overflow)
         let left = col("a", &schema).unwrap();
