@@ -870,16 +870,12 @@ fn plan_contains_non_cte_subquery(plan: &LogicalPlan, cte_name: &str) -> bool {
 }
 
 fn expr_contains_subquery(expr: &Expr) -> bool {
-    let mut contains = false;
-    expr.apply(|e| match e {
-        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => {
-            contains = true;
-            Ok(TreeNodeRecursion::Stop)
-        }
-        _ => Ok(TreeNodeRecursion::Continue),
+    expr.exists(|e| match e {
+        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => Ok(true),
+        _ => Ok(false),
     })
-    .expect("expression traversal never fails");
-    contains
+    // Safe unwrap since we are doing a simple boolean check
+    .unwrap()
 }
 
 #[cfg(test)]
