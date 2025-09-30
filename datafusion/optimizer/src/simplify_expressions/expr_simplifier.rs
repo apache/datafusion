@@ -1443,9 +1443,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 expr: None,
                 mut when_then_expr,
                 mut else_expr,
-                // if let guard is not stabilized so we can't use it yet: https://github.com/rust-lang/rust/issues/51114
-                // Once it's supported we can avoid searching through when_then_expr twice in the below .any() and .position() calls
-                // }) if let Some(i) = when_then_expr.iter().position(|(when, _)| is_true(when.as_ref())) => {
             }) if when_then_expr
                 .iter()
                 .any(|(when, _)| is_true(when.as_ref()) || is_false(when.as_ref())) =>
