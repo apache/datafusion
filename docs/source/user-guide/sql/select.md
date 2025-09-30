@@ -349,6 +349,7 @@ DataFusion currently supports the following pipe operators:
 - [UNION](#pipe_union)
 - [INTERSECT](#pipe_intersect)
 - [EXCEPT](#pipe_except)
+- [AGGREGATE](#pipe_aggregate)
 
 (pipe_where)=
 
