@@ -208,7 +208,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         queries: Vec<Query>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // Process each query
         for query in queries {
             let right_plan = self.query_to_plan(query, planner_context)?;
             plan = self.set_operation_to_plan(
@@ -306,7 +305,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         group_by_expr: Vec<ExprWithAliasAndOrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // Convert aggregate expressions directly
         let aggr_exprs: Vec<Expr> = full_table_exprs
             .into_iter()
             .map(|expr_with_alias_and_order_by| {
@@ -314,7 +312,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let sql_expr = expr_with_alias.expr;
                 let alias = expr_with_alias.alias;
 
-                // Convert SQL expression to DataFusion expression
                 let df_expr =
                     self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
 
@@ -334,7 +331,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Convert group by expressions directly
         let group_by_exprs: Vec<Expr> = group_by_expr
             .into_iter()
             .map(|expr_with_alias_and_order_by| {
@@ -342,11 +338,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let sql_expr = expr_with_alias.expr;
                 let alias = expr_with_alias.alias;
 
-                // Convert SQL expression to DataFusion expression
                 let df_expr =
                     self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
 
-                // Apply alias if present (though group by aliases are less common)
+                // Apply alias if present
                 match alias {
                     Some(alias_ident) => {
                         // If the expression is already an alias, replace the alias name
@@ -362,7 +357,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Create the aggregate logical plan
         LogicalPlanBuilder::from(plan)
             .aggregate(group_by_exprs, aggr_exprs)?
             .build()
