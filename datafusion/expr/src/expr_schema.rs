@@ -28,7 +28,10 @@ use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference};
+use datafusion_common::{
+    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
+    Result, ScalarValue, Spans, TableReference,
+};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -278,31 +281,43 @@ impl ExprSchemable for Expr {
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // This expression is nullable if any of the then expressions are nullable
-                let then_nullable = case
+                let any_nullable_thens = !case
                     .when_then_expr
                     .iter()
                     .filter_map(|(w, t)| {
                         match t.nullable(input_schema) {
-                            // Branches with a then expressions that is not nullable can be skipped
+                            // Branches with a then expression that is not nullable can be skipped
                             Ok(false) => None,
                             // Pass error determining nullability on verbatim
-                            err @ Err(_) => Some(err),
+                            Err(e) => Some(Err(e)),
                             // For branches with a nullable then expressions try to determine
                             // using limited const evaluation if the branch will be taken when
                             // the then expression evaluates to null.
-                            Ok(true) => match const_result_when_value_is_null(w, t, input_schema) {
-                                // Const evaluation was inconclusive or determined the branch would
-                                // be taken
-                                None | Some(true) => Some(Ok(true)),
-                                // Const evaluation proves the branch will never be taken.
-                                // The most common pattern for this is
-                                // `WHEN x IS NOT NULL THEN x`.
-                                Some(false) => None,
-                            },
+                            Ok(true) => {
+                                let const_result = WhenThenConstEvaluator {
+                                    then_expr: t,
+                                    input_schema,
+                                }
+                                .const_eval_predicate(w);
+
+                                match const_result {
+                                    // Const evaluation was inconclusive or determined the branch
+                                    // would be taken
+                                    None | Some(TriStateBool::True) => Some(Ok(())),
+                                    // Const evaluation proves the branch will never be taken.
+                                    // The most common pattern for this is
+                                    // `WHEN x IS NOT NULL THEN x`.
+                                    Some(TriStateBool::False)
+                                    | Some(TriStateBool::Uncertain) => None,
+                                }
+                            }
                         }
                     })
-                    .collect::<Result<Vec<_>>>()?;
-                if !then_nullable.is_empty() {
+                    .collect::<Result<Vec<_>>>()?
+                    .is_empty();
+
+                if any_nullable_thens {
+                    // There is at least one reachable nullable then
                     Ok(true)
                 } else if let Some(e) = &case.else_expr {
                     e.nullable(input_schema)
@@ -664,61 +679,223 @@ impl ExprSchemable for Expr {
     }
 }
 
-/// Determines if the given `predicate` can be const evaluated if `value` were to evaluate to `NULL`.
-/// Returns a `Some` value containing the const result if so; otherwise returns `None`.
-fn const_result_when_value_is_null(predicate: &Expr, value: &Expr, input_schema: &dyn ExprSchema) -> Option<bool> {
-    match predicate {
-        Expr::IsNotNull(e) => {
-            // If `e` is null, then `e IS NOT NULL` is false
-            // If `e` is not null, then `e IS NOT NULL` is true
-            is_null(e, value, input_schema).map(|is_null| !is_null)
-        }
-        Expr::IsNull(e) => {
-            // If `e` is null, then `e IS NULL` is true
-            // If `e` is not null, then `e IS NULL` is false
-            is_null(e, value, input_schema)
-        }
-        Expr::Not(e) => const_result_when_value_is_null(e, value, input_schema).map(|b| !b),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::And => {
-                let l = const_result_when_value_is_null(left, value, input_schema);
-                let r = const_result_when_value_is_null(right, value, input_schema);
-                match (l, r) {
-                    (Some(l), Some(r)) => Some(l && r),
-                    (Some(l), None) => Some(l),
-                    (None, Some(r)) => Some(r),
-                    _ => None,
-                }
-            }
-            Operator::Or => {
-                let l = const_result_when_value_is_null(left, value, input_schema);
-                let r = const_result_when_value_is_null(right, value, input_schema);
-                match (l, r) {
-                    (Some(l), Some(r)) => Some(l || r),
-                    _ => None,
-                }
-            }
-            _ => None,
-        },
-        _ => None,
-    }
+enum TriStateBool {
+    True,
+    False,
+    Uncertain,
 }
 
-fn is_null(expr: &Expr, value: &Expr, input_schema: &dyn ExprSchema) -> Option<bool> {
-    // We're assuming `value` is null
-    if expr.eq(value) {
-        return Some(true);
+struct WhenThenConstEvaluator<'a> {
+    then_expr: &'a Expr,
+    input_schema: &'a dyn ExprSchema,
+}
+
+impl WhenThenConstEvaluator<'_> {
+    /// Attempts to const evaluate the given predicate.
+    /// Returns a `Some` value containing the const result if so; otherwise returns `None`.
+    fn const_eval_predicate(&self, predicate: &Expr) -> Option<TriStateBool> {
+        match predicate {
+            // Literal null is equivalent to boolean uncertain
+            Expr::Literal(ScalarValue::Null, _) => Some(TriStateBool::Uncertain),
+            Expr::IsNotNull(e) => {
+                if let Ok(false) = e.nullable(self.input_schema) {
+                    // If `e` is not nullable, then `e IS NOT NULL` is always true
+                    return Some(TriStateBool::True);
+                }
+
+                match e.get_type(self.input_schema) {
+                    Ok(DataType::Boolean) => match self.const_eval_predicate(e) {
+                        Some(TriStateBool::True) | Some(TriStateBool::False) => {
+                            Some(TriStateBool::True)
+                        }
+                        Some(TriStateBool::Uncertain) => Some(TriStateBool::False),
+                        None => None,
+                    },
+                    Ok(_) => match self.is_null(e) {
+                        Some(true) => Some(TriStateBool::False),
+                        Some(false) => Some(TriStateBool::True),
+                        None => None,
+                    },
+                    Err(_) => None,
+                }
+            }
+            Expr::IsNull(e) => {
+                if let Ok(false) = e.nullable(self.input_schema) {
+                    // If `e` is not nullable, then `e IS NULL` is always false
+                    return Some(TriStateBool::False);
+                }
+
+                match e.get_type(self.input_schema) {
+                    Ok(DataType::Boolean) => match self.const_eval_predicate(e) {
+                        Some(TriStateBool::True) | Some(TriStateBool::False) => {
+                            Some(TriStateBool::False)
+                        }
+                        Some(TriStateBool::Uncertain) => Some(TriStateBool::True),
+                        None => None,
+                    },
+                    Ok(_) => match self.is_null(e) {
+                        Some(true) => Some(TriStateBool::True),
+                        Some(false) => Some(TriStateBool::False),
+                        None => None,
+                    },
+                    Err(_) => None,
+                }
+            }
+            Expr::IsTrue(e) => match self.const_eval_predicate(e) {
+                Some(TriStateBool::True) => Some(TriStateBool::True),
+                Some(_) => Some(TriStateBool::False),
+                _ => None,
+            },
+            Expr::IsNotTrue(e) => match self.const_eval_predicate(e) {
+                Some(TriStateBool::True) => Some(TriStateBool::False),
+                Some(_) => Some(TriStateBool::True),
+                _ => None,
+            },
+            Expr::IsFalse(e) => match self.const_eval_predicate(e) {
+                Some(TriStateBool::False) => Some(TriStateBool::True),
+                Some(_) => Some(TriStateBool::False),
+                _ => None,
+            },
+            Expr::IsNotFalse(e) => match self.const_eval_predicate(e) {
+                Some(TriStateBool::False) => Some(TriStateBool::False),
+                Some(_) => Some(TriStateBool::True),
+                _ => None,
+            },
+            Expr::IsUnknown(e) => match self.const_eval_predicate(e) {
+                Some(TriStateBool::Uncertain) => Some(TriStateBool::True),
+                Some(_) => Some(TriStateBool::False),
+                _ => None,
+            },
+            Expr::IsNotUnknown(e) => match self.const_eval_predicate(e) {
+                Some(TriStateBool::Uncertain) => Some(TriStateBool::False),
+                Some(_) => Some(TriStateBool::True),
+                _ => None,
+            },
+            Expr::Like(Like { expr, pattern, .. }) => {
+                match (self.is_null(expr), self.is_null(pattern)) {
+                    (Some(true), _) | (_, Some(true)) => Some(TriStateBool::Uncertain),
+                    _ => None,
+                }
+            }
+            Expr::SimilarTo(Like { expr, pattern, .. }) => {
+                match (self.is_null(expr), self.is_null(pattern)) {
+                    (Some(true), _) | (_, Some(true)) => Some(TriStateBool::Uncertain),
+                    _ => None,
+                }
+            }
+            Expr::Between(Between {
+                expr, low, high, ..
+            }) => match (self.is_null(expr), self.is_null(low), self.is_null(high)) {
+                (Some(true), _, _) | (_, Some(true), _) | (_, _, Some(true)) => {
+                    Some(TriStateBool::Uncertain)
+                }
+                _ => None,
+            },
+            Expr::Not(e) => match self.const_eval_predicate(e) {
+                Some(TriStateBool::True) => Some(TriStateBool::False),
+                Some(TriStateBool::False) => Some(TriStateBool::True),
+                Some(TriStateBool::Uncertain) => Some(TriStateBool::Uncertain),
+                None => None,
+            },
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
+                Operator::And => {
+                    match (
+                        self.const_eval_predicate(left),
+                        self.const_eval_predicate(right),
+                    ) {
+                        (Some(TriStateBool::False), _)
+                        | (_, Some(TriStateBool::False)) => Some(TriStateBool::False),
+                        (Some(TriStateBool::True), Some(TriStateBool::True)) => {
+                            Some(TriStateBool::True)
+                        }
+                        (Some(TriStateBool::Uncertain), Some(_))
+                        | (Some(_), Some(TriStateBool::Uncertain)) => {
+                            Some(TriStateBool::Uncertain)
+                        }
+                        _ => None,
+                    }
+                }
+                Operator::Or => {
+                    match (
+                        self.const_eval_predicate(left),
+                        self.const_eval_predicate(right),
+                    ) {
+                        (Some(TriStateBool::True), _) | (_, Some(TriStateBool::True)) => {
+                            Some(TriStateBool::True)
+                        }
+                        (Some(TriStateBool::False), Some(TriStateBool::False)) => {
+                            Some(TriStateBool::False)
+                        }
+                        (Some(TriStateBool::Uncertain), Some(_))
+                        | (Some(_), Some(TriStateBool::Uncertain)) => {
+                            Some(TriStateBool::Uncertain)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => match (self.is_null(left), self.is_null(right)) {
+                    (Some(true), _) | (_, Some(true)) => Some(TriStateBool::Uncertain),
+                    _ => None,
+                },
+            },
+            e => match self.is_null(e) {
+                Some(true) => Some(TriStateBool::Uncertain),
+                _ => None,
+            },
+        }
     }
 
-    match expr {
-        // Literal null is obviously null
-        Expr::Literal(ScalarValue::Null, _) => Some(true),
-        // We're assuming `value` is null
-        _ => match expr.nullable(input_schema) {
-            // If `expr` is not nullable, we can be certain `expr` is not null
-            Ok(false) => Some(false),
-            // Otherwise inconclusive
-            _ => None,
+    /// Determines if the given expression is null.
+    ///
+    /// This function returns:
+    /// - `Some(true)` is `expr` is certainly null
+    /// - `Some(false)` is `expr` can certainly not be null
+    /// - `None` if the result is inconclusive
+    fn is_null(&self, expr: &Expr) -> Option<bool> {
+        match expr {
+            // Literal null is obviously null
+            Expr::Literal(ScalarValue::Null, _) => Some(true),
+            Expr::Negative(e) => self.is_null(e),
+            Expr::Like(Like { expr, pattern, .. }) => {
+                match (self.is_null(expr), self.is_null(pattern)) {
+                    (Some(true), _) | (_, Some(true)) => Some(true),
+                    _ => None,
+                }
+            }
+            Expr::SimilarTo(Like { expr, pattern, .. }) => {
+                match (self.is_null(expr), self.is_null(pattern)) {
+                    (Some(true), _) | (_, Some(true)) => Some(true),
+                    _ => None,
+                }
+            }
+            Expr::Not(e) => self.is_null(e),
+            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
+                match (self.is_null(left), self.is_null(right)) {
+                    (Some(true), _) | (_, Some(true)) => Some(true),
+                    _ => None,
+                }
+            }
+            Expr::Between(Between {
+                expr, low, high, ..
+            }) => match (self.is_null(expr), self.is_null(low), self.is_null(high)) {
+                (Some(true), _, _) | (_, Some(true), _) | (_, _, Some(true)) => {
+                    Some(true)
+                }
+                _ => None,
+            },
+            e => {
+                if e.eq(self.then_expr) {
+                    // Evaluation occurs under the assumption that `then_expr` evaluates to null
+                    Some(true)
+                } else {
+                    match expr.nullable(self.input_schema) {
+                        // If `expr` is not nullable, we can be certain `expr` is not null
+                        Ok(false) => Some(false),
+                        // Otherwise inconclusive
+                        _ => None,
+                    }
+                }
+            }
         }
     }
 }
@@ -933,46 +1110,46 @@ mod tests {
             .with_nullable(false);
 
         // CASE WHEN x IS NOT NULL THEN x ELSE 0
-        let e1 = when(col("x").is_not_null(), col("x")).otherwise(lit(0))?;
-        assert_not_nullable(&e1, &nullable_schema);
-        assert_not_nullable(&e1, &not_nullable_schema);
+        let e = when(col("x").is_not_null(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         // CASE WHEN NOT x IS NULL THEN x ELSE 0
-        let e2 = when(not(col("x").is_null()), col("x")).otherwise(lit(0))?;
-        assert_not_nullable(&e2, &nullable_schema);
-        assert_not_nullable(&e2, &not_nullable_schema);
+        let e = when(not(col("x").is_null()), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         // CASE WHEN X = 5 THEN x ELSE 0
-        let e3 = when(col("x").eq(lit(5)), col("x")).otherwise(lit(0))?;
-        assert_nullable(&e3, &nullable_schema);
-        assert_not_nullable(&e3, &not_nullable_schema);
+        let e = when(col("x").eq(lit(5)), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         // CASE WHEN x IS NOT NULL AND x = 5 THEN x ELSE 0
-        let e4 = when(and(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
+        let e = when(and(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
             .otherwise(lit(0))?;
-        assert_not_nullable(&e4, &nullable_schema);
-        assert_not_nullable(&e4, &not_nullable_schema);
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         // CASE WHEN x = 5 AND x IS NOT NULL THEN x ELSE 0
-        let e5 = when(and(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
+        let e = when(and(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
             .otherwise(lit(0))?;
-        assert_not_nullable(&e5, &nullable_schema);
-        assert_not_nullable(&e5, &not_nullable_schema);
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         // CASE WHEN x IS NOT NULL OR x = 5 THEN x ELSE 0
-        let e6 = when(or(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
+        let e = when(or(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
             .otherwise(lit(0))?;
-        assert_nullable(&e6, &nullable_schema);
-        assert_not_nullable(&e6, &not_nullable_schema);
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         // CASE WHEN x = 5 OR x IS NOT NULL THEN x ELSE 0
-        let e7 = when(or(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
+        let e = when(or(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
             .otherwise(lit(0))?;
-        assert_nullable(&e7, &nullable_schema);
-        assert_not_nullable(&e7, &not_nullable_schema);
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         // CASE WHEN (x = 5 AND x IS NOT NULL) OR (x = bar AND x IS NOT NULL) THEN x ELSE 0
-        let e8 = when(
+        let e = when(
             or(
                 and(col("x").eq(lit(5)), col("x").is_not_null()),
                 and(col("x").eq(col("bar")), col("x").is_not_null()),
@@ -980,14 +1157,49 @@ mod tests {
             col("x"),
         )
         .otherwise(lit(0))?;
-        assert_not_nullable(&e8, &nullable_schema);
-        assert_not_nullable(&e8, &not_nullable_schema);
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         // CASE WHEN x = 5 OR x IS NULL THEN x ELSE 0
-        let e9 = when(or(col("x").eq(lit(5)), col("x").is_null()), col("x"))
+        let e = when(or(col("x").eq(lit(5)), col("x").is_null()), col("x"))
             .otherwise(lit(0))?;
-        assert_nullable(&e9, &nullable_schema);
-        assert_not_nullable(&e9, &not_nullable_schema);
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS TRUE THEN x ELSE 0
+        let e = when(col("x").is_true(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT TRUE THEN x ELSE 0
+        let e = when(col("x").is_not_true(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS FALSE THEN x ELSE 0
+        let e = when(col("x").is_false(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT FALSE THEN x ELSE 0
+        let e = when(col("x").is_not_false(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS UNKNOWN THEN x ELSE 0
+        let e = when(col("x").is_unknown(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT UNKNOWN THEN x ELSE 0
+        let e = when(col("x").is_not_unknown(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x LIKE 'x' THEN x ELSE 0
+        let e = when(col("x").like(lit("x")), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
 
         Ok(())
     }
