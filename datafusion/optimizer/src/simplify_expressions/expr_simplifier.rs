@@ -1441,36 +1441,29 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // CASE WHEN X THEN A WHEN false THEN B END --> CASE WHEN X THEN A ELSE B END
             Expr::Case(Case {
                 expr: None,
-                mut when_then_expr,
+                when_then_expr,
                 mut else_expr,
             }) if when_then_expr
                 .iter()
                 .any(|(when, _)| is_true(when.as_ref()) || is_false(when.as_ref())) =>
             {
-                let mut remove_indices = Vec::with_capacity(when_then_expr.len());
                 let out_type = info.get_data_type(&when_then_expr[0].1)?;
-                for (i, (when, _)) in when_then_expr.iter().enumerate() {
+                let mut new_when_then_expr = Vec::with_capacity(when_then_expr.len());
+
+                for (when, then) in when_then_expr.into_iter() {
                     if is_true(when.as_ref()) {
-                        let (_, then_) = when_then_expr.swap_remove(i);
-
+                        // Skip adding the rest of the when-then expressions after WHEN true
                         // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
-                        when_then_expr.truncate(i);
-                        else_expr = Some(then_);
+                        else_expr = Some(then);
                         break;
+                    } else if !is_false(when.as_ref()) {
+                        new_when_then_expr.push((when, then));
                     }
-                    // CASE WHEN false THEN A
-                    if is_false(when.as_ref()) {
-                        remove_indices.push(i);
-                    }
+                    // else: skip WHEN false cases
                 }
 
-                // Remove any CASE false statements
-                for i in remove_indices.iter().rev() {
-                    when_then_expr.remove(*i);
-                }
-
-                // Remove CASE statement altogether if there are no when-then expressions left
-                if when_then_expr.is_empty() {
+                // Exclude CASE statement altogether if there are no when-then expressions left
+                if new_when_then_expr.is_empty() {
                     // CASE WHEN false THEN A ELSE B END --> B
                     if let Some(else_expr) = else_expr {
                         return Ok(Transformed::yes(*else_expr));
@@ -1484,7 +1477,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
 
                 Transformed::yes(Expr::Case(Case {
                     expr: None,
-                    when_then_expr,
+                    when_then_expr: new_when_then_expr,
                     else_expr,
                 }))
             }
