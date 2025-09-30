@@ -1548,7 +1548,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             PlanCreateExternalTable {
                 schema: df_schema,
                 name,
-                location,
+                locations: location.split(",").map(|x| x.to_string()).collect(),
                 file_type,
                 table_partition_cols,
                 if_not_exists,

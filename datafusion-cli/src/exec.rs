@@ -39,6 +39,7 @@ use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
+use futures::future::join_all;
 use futures::StreamExt;
 use log::warn;
 use object_store::Error::Generic;
@@ -415,14 +416,18 @@ async fn create_plan(
     if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
         // To support custom formats, treat error as None
         let format = config_file_type_from_str(&cmd.file_type);
-        register_object_store_and_config_extensions(
-            ctx,
-            &cmd.location,
-            &cmd.options,
-            format,
-            resolve_region,
-        )
-        .await?;
+        let register_futures = cmd.locations.iter().map(|location| {
+            register_object_store_and_config_extensions(
+                ctx,
+                location,
+                &cmd.options,
+                format.clone(),
+                resolve_region,
+            )
+        });
+        for result in join_all(register_futures).await {
+            result?;
+        }
     }
 
     if let LogicalPlan::Copy(copy_to) = &mut plan {
@@ -524,14 +529,16 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             let format = config_file_type_from_str(&cmd.file_type);
-            register_object_store_and_config_extensions(
-                &ctx,
-                &cmd.location,
-                &cmd.options,
-                format,
-                false,
-            )
-            .await?;
+            for location in &cmd.locations {
+                register_object_store_and_config_extensions(
+                    &ctx,
+                    &location,
+                    &cmd.options,
+                    format.clone(),
+                    false,
+                )
+                .await?;
+            }
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
