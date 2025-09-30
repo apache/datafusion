@@ -347,10 +347,10 @@ fn optimize_projections(
             // Only allow subqueries that reference the current CTE; nested subqueries are not yet
             // supported for projection pushdown for simplicity.
             // TODO: be able to do projection pushdown on recursive CTEs with subqueries
-            if plan_contains_non_cte_subquery(
+            if plan_contains_other_subqueries(
                 recursive.static_term.as_ref(),
                 &recursive.name,
-            ) || plan_contains_non_cte_subquery(
+            ) || plan_contains_other_subqueries(
                 recursive.recursive_term.as_ref(),
                 &recursive.name,
             ) {
@@ -842,7 +842,12 @@ pub fn is_projection_unnecessary(
     ))
 }
 
-fn plan_contains_non_cte_subquery(plan: &LogicalPlan, cte_name: &str) -> bool {
+/// Returns true if the plan subtree contains any subqueries that are not the
+/// CTE reference itself. This treats any non-CTE [`LogicalPlan::SubqueryAlias`]
+/// node (including aliased relations) as a blocker, along with expression-level
+/// subqueries like scalar, EXISTS, or IN. These cases prevent projection
+/// pushdown for now because we cannot safely reason about their column usage.
+fn plan_contains_other_subqueries(plan: &LogicalPlan, cte_name: &str) -> bool {
     if let LogicalPlan::SubqueryAlias(alias) = plan {
         if alias.alias.table() != cte_name {
             return true;
@@ -865,7 +870,7 @@ fn plan_contains_non_cte_subquery(plan: &LogicalPlan, cte_name: &str) -> bool {
 
     plan.inputs()
         .into_iter()
-        .any(|child| plan_contains_non_cte_subquery(child, cte_name))
+        .any(|child| plan_contains_other_subqueries(child, cte_name))
 }
 
 fn expr_contains_subquery(expr: &Expr) -> bool {
