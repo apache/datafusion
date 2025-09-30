@@ -1439,31 +1439,71 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             Expr::Case(Case {
                 expr: None,
                 mut when_then_expr,
-                else_expr: _,
+                mut else_expr,
                 // if let guard is not stabilized so we can't use it yet: https://github.com/rust-lang/rust/issues/51114
                 // Once it's supported we can avoid searching through when_then_expr twice in the below .any() and .position() calls
                 // }) if let Some(i) = when_then_expr.iter().position(|(when, _)| is_true(when.as_ref())) => {
             }) if when_then_expr
                 .iter()
-                .any(|(when, _)| is_true(when.as_ref())) =>
+                .any(|(when, _)| is_true(when.as_ref()) || is_false(when.as_ref())) =>
             {
-                let i = when_then_expr
-                    .iter()
-                    .position(|(when, _)| is_true(when.as_ref()))
-                    .unwrap();
-                let (_, then_) = when_then_expr.swap_remove(i);
-                // CASE WHEN true THEN A ... END --> A
-                if i == 0 {
-                    return Ok(Transformed::yes(*then_));
+                let mut remove_indices = Vec::with_capacity(when_then_expr.len());
+                let out_type = info.get_data_type(&when_then_expr[0].1)?;
+                for (i, (when, _)) in when_then_expr.iter().enumerate() {
+                    if is_true(when.as_ref()) {
+                        let (_, then_) = when_then_expr.swap_remove(i);
+
+                        // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
+                        when_then_expr.truncate(i);
+                        else_expr = Some(then_);
+                        break;
+                    }
+                    // CASE WHEN false THEN A
+                    if is_false(when.as_ref()) {
+                        remove_indices.push(i);
+                    }
                 }
 
-                // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
-                when_then_expr.truncate(i);
+                // Remove any CASE false statements
+                for i in remove_indices.iter().rev() {
+                    when_then_expr.remove(*i);
+                }
+
+                // Remove CASE statement altogether if there are no when-then expressions left
+                if when_then_expr.is_empty() {
+                    if let Some(else_expr) = else_expr {
+                        return Ok(Transformed::yes(*else_expr));
+                    // CASE WHEN false THEN A END --> NULL
+                    } else {
+                        let null =
+                            Expr::Literal(ScalarValue::try_new_null(&out_type)?, None);
+                        return Ok(Transformed::yes(null));
+                    }
+                }
+
                 Transformed::yes(Expr::Case(Case {
                     expr: None,
                     when_then_expr,
-                    else_expr: Some(then_),
+                    else_expr,
                 }))
+
+                // let i = when_then_expr
+                //     .iter()
+                //     .position(|(when, _)| is_true(when.as_ref()))
+                //     .unwrap();
+                // let (_, then_) = when_then_expr.swap_remove(i);
+                // // CASE WHEN true THEN A ... END --> A
+                // if i == 0 {
+                //     return Ok(Transformed::yes(*then_));
+                // }
+
+                // // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
+                // when_then_expr.truncate(i);
+                // Transformed::yes(Expr::Case(Case {
+                //     expr: None,
+                //     when_then_expr,
+                //     else_expr: Some(then_),
+                // }))
             }
 
             // CASE
@@ -3952,6 +3992,46 @@ mod tests {
             Some(Box::new(col("c"))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_expr_case_when_any_false() {
+        // CASE WHEN false THEN 'a' END --> NULL
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(false)), Box::new(lit("a")))],
+                None,
+            ))),
+            Expr::Literal(ScalarValue::Utf8(None), None)
+        );
+
+        // CASE WHEN false THEN 2 ELSE 1 END --> 1
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(false)), Box::new(lit(2)))],
+                Some(Box::new(lit(1))),
+            ))),
+            lit(1),
+        );
+
+        // CASE WHEN c1 < 10 THEN 'b' WHEN false then c3 ELSE c4 END --> CASE WHEN c1 < 10 THEN b ELSE c4 END
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("c1").lt(lit(10))), Box::new(lit("b"))),
+                    (Box::new(lit(false)), Box::new(col("c3"))),
+                ],
+                Some(Box::new(col("c4"))),
+            ))),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c1").lt(lit(10))), Box::new(lit("b")))],
+                Some(Box::new(col("c4"))),
+            ))
+        )
     }
 
     fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
