@@ -1490,24 +1490,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     when_then_expr,
                     else_expr,
                 }))
-
-                // let i = when_then_expr
-                //     .iter()
-                //     .position(|(when, _)| is_true(when.as_ref()))
-                //     .unwrap();
-                // let (_, then_) = when_then_expr.swap_remove(i);
-                // // CASE WHEN true THEN A ... END --> A
-                // if i == 0 {
-                //     return Ok(Transformed::yes(*then_));
-                // }
-
-                // // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
-                // when_then_expr.truncate(i);
-                // Transformed::yes(Expr::Case(Case {
-                //     expr: None,
-                //     when_then_expr,
-                //     else_expr: Some(then_),
-                // }))
             }
 
             // CASE
