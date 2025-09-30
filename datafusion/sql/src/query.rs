@@ -315,17 +315,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let df_expr =
                     self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
 
-                // Apply alias if present, but handle the case where the expression might already be aliased
                 match alias {
-                    Some(alias_ident) => {
-                        // If the expression is already an alias, replace the alias name
-                        match df_expr {
-                            Expr::Alias(alias_expr) => {
-                                Ok(alias_expr.expr.alias(alias_ident.value))
-                            }
-                            _ => Ok(df_expr.alias(alias_ident.value)),
-                        }
-                    }
+                    Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
                     None => Ok(df_expr),
                 }
             })
@@ -341,17 +332,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let df_expr =
                     self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
 
-                // Apply alias if present
                 match alias {
-                    Some(alias_ident) => {
-                        // If the expression is already an alias, replace the alias name
-                        match df_expr {
-                            Expr::Alias(alias_expr) => {
-                                Ok(alias_expr.expr.alias(alias_ident.value))
-                            }
-                            _ => Ok(df_expr.alias(alias_ident.value)),
-                        }
-                    }
+                    Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
                     None => Ok(df_expr),
                 }
             })
