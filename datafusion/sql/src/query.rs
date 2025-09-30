@@ -305,38 +305,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         group_by_expr: Vec<ExprWithAliasAndOrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let aggr_exprs: Vec<Expr> = full_table_exprs
-            .into_iter()
-            .map(|expr_with_alias_and_order_by| {
+        let plan_schema = plan.schema();
+        let process_expr =
+            |expr_with_alias_and_order_by: ExprWithAliasAndOrderBy,
+             planner_context: &mut PlannerContext| {
                 let expr_with_alias = expr_with_alias_and_order_by.expr;
                 let sql_expr = expr_with_alias.expr;
                 let alias = expr_with_alias.alias;
 
-                let df_expr =
-                    self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
+                let df_expr = self.sql_to_expr(sql_expr, plan_schema, planner_context)?;
 
                 match alias {
                     Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
                     None => Ok(df_expr),
                 }
-            })
+            };
+
+        let aggr_exprs: Vec<Expr> = full_table_exprs
+            .into_iter()
+            .map(|e| process_expr(e, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
         let group_by_exprs: Vec<Expr> = group_by_expr
             .into_iter()
-            .map(|expr_with_alias_and_order_by| {
-                let expr_with_alias = expr_with_alias_and_order_by.expr;
-                let sql_expr = expr_with_alias.expr;
-                let alias = expr_with_alias.alias;
-
-                let df_expr =
-                    self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
-
-                match alias {
-                    Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
-                    None => Ok(df_expr),
-                }
-            })
+            .map(|e| process_expr(e, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
         LogicalPlanBuilder::from(plan)
