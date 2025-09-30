@@ -20,7 +20,8 @@
 use std::vec;
 
 use arrow::datatypes::{
-    DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
+    DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -302,12 +303,14 @@ pub(crate) fn make_decimal_type(
         plan_err!(
             "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 76`, and `scale <= precision`."
         )
-    } else if precision > DECIMAL128_MAX_PRECISION
-        && precision <= DECIMAL256_MAX_PRECISION
-    {
-        Ok(DataType::Decimal256(precision, scale))
-    } else {
+    } else if precision <= DECIMAL32_MAX_PRECISION {
+        Ok(DataType::Decimal32(precision, scale))
+    } else if precision <= DECIMAL64_MAX_PRECISION {
+        Ok(DataType::Decimal64(precision, scale))
+    } else if precision <= DECIMAL128_MAX_PRECISION {
         Ok(DataType::Decimal128(precision, scale))
+    } else {
+        Ok(DataType::Decimal256(precision, scale))
     }
 }
 

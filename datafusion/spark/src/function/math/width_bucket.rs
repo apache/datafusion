@@ -96,7 +96,14 @@ impl ScalarUDFImpl for SparkWidthBucket {
         let is_num = |t: &DataType| {
             matches!(
                 t,
-                Int8 | Int16 | Int32 | Int64 | Float32 | Float64 | Decimal128(_, _)
+                Int8 | Int16
+                    | Int32
+                    | Int64
+                    | Float32
+                    | Float64
+                    | Decimal32(_, _)
+                    | Decimal64(_, _)
+                    | Decimal128(_, _)
             )
         };
 

@@ -477,7 +477,7 @@ drop table test_non_nullable_float
 
 statement ok
 CREATE TABLE test_nullable_decimal(
-    c1 DECIMAL(10, 2),    /* Decimal128 */
+    c1 DECIMAL(20, 2),    /* Decimal128 */
     c2 DECIMAL(38, 10),   /* Decimal128 with max precision */ 
     c3 DECIMAL(40, 2),    /* Decimal256 */
     c4 DECIMAL(76, 10)    /* Decimal256 with max precision */ 
@@ -540,7 +540,7 @@ SELECT
     arrow_typeof(abs(c4))
 FROM test_nullable_decimal limit 1
 ----
-Decimal128(10, 2) Decimal128(38, 10) Decimal256(40, 2) Decimal256(76, 10)
+Decimal128(20, 2) Decimal128(38, 10) Decimal256(40, 2) Decimal256(76, 10)
 
 # abs: decimals
 query RRRR rowsort
@@ -556,7 +556,7 @@ drop table test_nullable_decimal
 
 
 statement ok
-CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL); 
+CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(19,2) NOT NULL); 
 
 query I
 INSERT INTO test_non_nullable_decimal VALUES(1)

@@ -2767,18 +2767,18 @@ query TT
 explain select * from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t2 t2 on t1.c3 = t2.c3
 ----
 logical_plan
-01)Right Join: CAST(t1.c3 AS Decimal128(10, 2)) = t2.c3
+01)Right Join: CAST(t1.c3 AS Decimal64(10, 2)) = t2.c3
 02)--SubqueryAlias: t1
 03)----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
 04)--SubqueryAlias: t2
 05)----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]
-02)--SortMergeJoin: join_type=Right, on=[(CAST(t1.c3 AS Decimal128(10, 2))@4, c3@2)]
-03)----SortExec: expr=[CAST(t1.c3 AS Decimal128(10, 2))@4 ASC], preserve_partitioning=[true]
+02)--SortMergeJoin: join_type=Right, on=[(CAST(t1.c3 AS Decimal64(10, 2))@4, c3@2)]
+03)----SortExec: expr=[CAST(t1.c3 AS Decimal64(10, 2))@4 ASC], preserve_partitioning=[true]
 04)------CoalesceBatchesExec: target_batch_size=2
-05)--------RepartitionExec: partitioning=Hash([CAST(t1.c3 AS Decimal128(10, 2))@4], 2), input_partitions=2
-06)----------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]
+05)--------RepartitionExec: partitioning=Hash([CAST(t1.c3 AS Decimal64(10, 2))@4], 2), input_partitions=2
+06)----------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal64(10, 2)) as CAST(t1.c3 AS Decimal64(10, 2))]
 07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 09)----SortExec: expr=[c3@2 ASC], preserve_partitioning=[true]

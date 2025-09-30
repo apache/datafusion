@@ -19,14 +19,14 @@ query TR
 select arrow_typeof(cast(1.23 as decimal(10,4))),
        cast(1.23 as decimal(10,4));
 ----
-Decimal128(10, 4) 1.23
+Decimal64(10, 4) 1.23
 
 
 query TR
 select arrow_typeof(cast(cast(1.23 as decimal(10,3)) as decimal(10,4))),
        cast(cast(1.23 as decimal(10,3)) as decimal(10,4));
 ----
-Decimal128(10, 4) 1.23
+Decimal64(10, 4) 1.23
 
 
 query TR
@@ -37,7 +37,7 @@ Decimal128(24, 2) 1.23
 
 statement ok
 CREATE EXTERNAL TABLE decimal_simple (
-c1 DECIMAL(10,6) NOT NULL,
+c1 DECIMAL(20,6) NOT NULL,
 c2 DOUBLE NOT NULL,
 c3 BIGINT NOT NULL,
 c4 BOOLEAN NOT NULL,
@@ -51,7 +51,7 @@ OPTIONS ('format.has_header' 'true');
 query TT
 select arrow_typeof(c1), arrow_typeof(c5) from decimal_simple where c1 > c5 limit 1;
 ----
-Decimal128(10, 6) Decimal128(12, 7)
+Decimal128(20, 6) Decimal64(12, 7)
 
 
 query R rowsort
@@ -99,13 +99,13 @@ select * from decimal_simple where c1 > c5;
 query TR
 select arrow_typeof(min(c1)), min(c1) from decimal_simple where c4=false;
 ----
-Decimal128(10, 6) 0.00002
+Decimal128(20, 6) 0.00002
 
 
 query TR
 select arrow_typeof(max(c1)), max(c1) from decimal_simple where c4=false;
 ----
-Decimal128(10, 6) 0.00005
+Decimal128(20, 6) 0.00005
 
 
 # inferred precision is 10+10
@@ -113,7 +113,7 @@ Decimal128(10, 6) 0.00005
 query TR
 select arrow_typeof(sum(c1)), sum(c1) from decimal_simple;
 ----
-Decimal128(20, 6) 0.00055
+Decimal128(30, 6) 0.00055
 
 
 # inferred precision is original precision + 4
@@ -121,13 +121,13 @@ Decimal128(20, 6) 0.00055
 query TR
 select arrow_typeof(avg(c1)), avg(c1) from decimal_simple;
 ----
-Decimal128(14, 10) 0.0000366666
+Decimal128(24, 10) 0.0000366666
 
 
 query TR
 select arrow_typeof(median(c1)), median(c1) from decimal_simple;
 ----
-Decimal128(10, 6) 0.00004
+Decimal128(20, 6) 0.00004
 
 
 query RRIBR rowsort
@@ -235,7 +235,7 @@ select c1+1 from decimal_simple;
 query T
 select arrow_typeof(c1+c5) from decimal_simple limit 1;
 ----
-Decimal128(13, 7)
+Decimal128(22, 7)
 
 
 query R rowsort
@@ -287,7 +287,7 @@ select c1-1 from decimal_simple;
 query T
 select arrow_typeof(c1-c5) from decimal_simple limit 1;
 ----
-Decimal128(13, 7)
+Decimal128(22, 7)
 
 
 query R rowsort
@@ -313,7 +313,7 @@ select c1-c5 from decimal_simple;
 query T
 select arrow_typeof(c1*20) from decimal_simple limit 1;
 ----
-Decimal128(31, 6)
+Decimal128(38, 6)
 
 
 query R rowsort
@@ -339,7 +339,7 @@ select c1*20 from decimal_simple;
 query T
 select arrow_typeof(c1*c5) from decimal_simple limit 1;
 ----
-Decimal128(23, 13)
+Decimal128(38, 14)
 
 
 query R rowsort
@@ -365,7 +365,7 @@ select c1*c5 from decimal_simple;
 query T
 select arrow_typeof(c1/cast(0.00001 as decimal(5,5))) from decimal_simple limit 1;
 ----
-Decimal128(19, 10)
+Decimal128(30, 10)
 
 
 query R rowsort
@@ -391,33 +391,33 @@ select c1/cast(0.00001 as decimal(5,5)) from decimal_simple;
 query T
 select arrow_typeof(c1/c5) from decimal_simple limit 1;
 ----
-Decimal128(21, 10)
+Decimal128(32, 11)
 
 
 query R rowsort
 select c1/c5 from decimal_simple;
 ----
 0.5
-0.641025641
-0.7142857142
-0.7352941176
+0.64102564102
+0.71428571428
+0.73529411764
 0.8
-0.8571428571
-0.909090909
-0.909090909
+0.85714285714
+0.90909090909
+0.90909090909
 0.9375
-0.9615384615
+0.96153846153
 1
 1
-1.0526315789
-1.5151515151
-2.7272727272
+1.05263157894
+1.51515151515
+2.72727272727
 
 
 query T
 select arrow_typeof(c5%cast(0.00001 as decimal(5,5))) from decimal_simple limit 1;
 ----
-Decimal128(7, 7)
+Decimal64(12, 7)
 
 
 query R rowsort
@@ -443,7 +443,7 @@ select c5%cast(0.00001 as decimal(5,5)) from decimal_simple;
 query T
 select arrow_typeof(c1%c5) from decimal_simple limit 1;
 ----
-Decimal128(11, 7)
+Decimal128(21, 7)
 
 
 query R rowsort
@@ -469,7 +469,7 @@ select c1%c5 from decimal_simple;
 query T
 select arrow_typeof(abs(c1)) from decimal_simple limit 1;
 ----
-Decimal128(10, 6)
+Decimal128(20, 6)
 
 
 query R rowsort
@@ -578,7 +578,7 @@ select count(*),c1,c4 from decimal_simple group by c1,c4 order by c1,c4;
 query TR
 select arrow_typeof(cast(400420638.54 as decimal(12,2))), cast(400420638.54 as decimal(12,2));
 ----
-Decimal128(12, 2) 400420638.54
+Decimal64(12, 2) 400420638.54
 
 
 query TR
