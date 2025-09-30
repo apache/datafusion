@@ -285,12 +285,27 @@ impl ExprSchemable for Expr {
                 let then_nullable = case
                     .when_then_expr
                     .iter()
-                    .filter(|(w, t)| {
-                        // Disregard branches where we can determine statically that the predicate
-                        // is always false when the then expression would evaluate to null
-                        const_result_when_value_is_null(w, t).unwrap_or(true)
+                    .filter_map(|(w, t)| {
+                        let then_is_nullable = t.nullable(input_schema);
+                        match then_is_nullable {
+                            // Branches with a then expressions that is not nullable can be skipped
+                            Ok(false) => None,
+                            // Pass error determining nullability on verbatim
+                            err @ Err(_) => Some(err),
+                            // For branches with a nullable then expressions try to determine
+                            // statically if the predicate prevents null from being returned.
+                            Ok(true) => match const_result_when_value_is_null(w, t) {
+                                // Static analysis did not provide an answer; assume nullable
+                                None => Some(Ok(true)),
+
+                                Some(true) => Some(Ok(true)),
+                                // We can prove that the predicate will always be false if the
+                                // then branch were to evaluate to null. The most common pattern for
+                                // this is `WHEN x IS NOT NULL THEN x`. If x
+                                Some(false) => None,
+                            },
+                        }
                     })
-                    .map(|(_, t)| t.nullable(input_schema))
                     .collect::<Result<Vec<_>>>()?;
                 if then_nullable.contains(&true) {
                     Ok(true)
