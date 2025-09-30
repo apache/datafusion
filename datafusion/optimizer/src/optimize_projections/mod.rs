@@ -343,19 +343,18 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(_) => {
-            // Only allow subqueries that reference the current CTE.
-            // https://github.com/apache/datafusion/pull/16696#discussion_r2246415968
-            if let LogicalPlan::RecursiveQuery(recursive) = &plan {
-                if plan_contains_non_cte_subquery(
-                    recursive.static_term.as_ref(),
-                    &recursive.name,
-                ) || plan_contains_non_cte_subquery(
-                    recursive.recursive_term.as_ref(),
-                    &recursive.name,
-                ) {
-                    return Ok(Transformed::no(plan));
-                }
+        LogicalPlan::RecursiveQuery(recursive) => {
+            // Only allow subqueries that reference the current CTE; nested subqueries are not yet
+            // supported for projection pushdown for simplicity.
+            // TODO: be able to do projection pushdown on recursive CTEs with subqueries
+            if plan_contains_non_cte_subquery(
+                recursive.static_term.as_ref(),
+                &recursive.name,
+            ) || plan_contains_non_cte_subquery(
+                recursive.recursive_term.as_ref(),
+                &recursive.name,
+            ) {
+                return Ok(Transformed::no(plan));
             }
 
             plan.inputs()
