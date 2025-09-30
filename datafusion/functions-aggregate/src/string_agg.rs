@@ -325,22 +325,20 @@ impl SimpleStringAggAccumulator {
     where
         I: Iterator<Item = Option<&'a str>>,
     {
-        for value in iter {
-            if let Some(value) = value {
-                if self.has_value {
-                    self.in_progress_string.push_str(&self.delimiter);
-                }
-
-                self.in_progress_string.push_str(value);
-                self.has_value = true;
+        for value in iter.flatten() {
+            if self.has_value {
+                self.in_progress_string.push_str(&self.delimiter);
             }
+
+            self.in_progress_string.push_str(value);
+            self.has_value = true;
         }
     }
 }
 
 impl Accumulator for SimpleStringAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let string_arr = values.get(0).ok_or_else(|| {
+        let string_arr = values.first().ok_or_else(|| {
             internal_datafusion_err!(
                 "Planner should ensure its first arg is Utf8/Utf8View"
             )
