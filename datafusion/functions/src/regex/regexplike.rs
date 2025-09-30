@@ -27,11 +27,14 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    binary_expr, cast, Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr_common::operator::Operator;
+use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -151,6 +154,53 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         } else {
             result.map(ColumnarValue::Array)
         }
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        // Try to simplify regexp_like to ~ or ~* if possible since the implementation of those operators
+        // is more optimised.
+        let Some((st, op, re)) = (match args.as_slice() {
+            [string, regexp] => {
+                Some((string.clone(), Operator::RegexMatch, regexp.clone()))
+            }
+            [string, regexp, Expr::Literal(ScalarValue::Utf8(Some(flags)), _)] => {
+                match flags.as_str() {
+                    "i" => Some((string.clone(), Operator::RegexIMatch, regexp.clone())),
+                    "" => Some((string.clone(), Operator::RegexMatch, regexp.clone())),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }) else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+
+        let st_type = info.get_data_type(&st)?;
+        let re_type = info.get_data_type(&re)?;
+        let binary_type_coercer = BinaryTypeCoercer::new(&st_type, &op, &re_type);
+        let Ok((coerced_st_type, coerced_re_type)) =
+            binary_type_coercer.get_input_types()
+        else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+
+        Ok(ExprSimplifyResult::Simplified(binary_expr(
+            if st_type != coerced_st_type {
+                cast(st, coerced_st_type)
+            } else {
+                st
+            },
+            op,
+            if re_type != coerced_re_type {
+                cast(re, coerced_re_type)
+            } else {
+                re
+            },
+        )))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
