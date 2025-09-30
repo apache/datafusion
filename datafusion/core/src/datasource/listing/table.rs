@@ -1201,7 +1201,6 @@ impl TableProvider for ListingTable {
         // If the filters can be resolved using only partition cols, there is no need to
         // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
         let (partition_filters, filters): (Vec<_>, Vec<_>) =
-            // TODO avoid .cloned() here by accepting &[&Expr] or equivalent downstream
             filters.iter().cloned().partition(|filter| {
                 can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });

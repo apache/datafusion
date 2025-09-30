@@ -530,14 +530,14 @@ fn push_down_join(
     parent_predicate: Option<&Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
     // Split the parent predicate into individual conjunctive parts.
-    let predicates =
-        parent_predicate.map_or_else(Vec::new, |pred| split_conjunction(pred));
+    let predicates = parent_predicate
+        .map_or_else(Vec::new, |pred| split_conjunction_owned(pred.clone()));
 
     // Extract conjunctions from the JOIN's ON filter, if present.
     let on_filters = join
         .filter
         .as_ref()
-        .map_or_else(Vec::new, |filter| split_conjunction(filter));
+        .map_or_else(Vec::new, |filter| split_conjunction_owned(filter.clone()));
 
     // Are there any new join predicates that can be inferred from the filter expressions?
     let inferred_join_predicates =
@@ -550,8 +550,6 @@ fn push_down_join(
         return Ok(Transformed::no(LogicalPlan::Join(join)));
     }
 
-    let predicates = predicates.into_iter().cloned().collect();
-    let on_filters = on_filters.into_iter().cloned().collect();
     push_down_all_join(predicates, inferred_join_predicates, join, on_filters)
 }
 
@@ -565,10 +563,10 @@ fn push_down_join(
 /// * `on_filters` filters from the join ON clause that have not already been
 ///   identified as join predicates
 ///
-fn infer_join_predicates<E: AsRef<Expr>>(
+fn infer_join_predicates(
     join: &Join,
-    predicates: &[E],
-    on_filters: &[E],
+    predicates: &[Expr],
+    on_filters: &[Expr],
 ) -> Result<Vec<Expr>> {
     // Only allow both side key is column.
     let join_col_keys = join
@@ -652,12 +650,12 @@ impl InferredPredicates {
 ///
 /// * `inferred_predicates` the inferred results
 ///
-fn infer_join_predicates_from_predicates<E: AsRef<Expr>>(
+fn infer_join_predicates_from_predicates(
     join_col_keys: &[(&Column, &Column)],
-    predicates: &[E],
+    predicates: &[Expr],
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
-    infer_join_predicates_impl::<true, true, E>(
+    infer_join_predicates_impl::<true, true>(
         join_col_keys,
         predicates,
         inferred_predicates,
@@ -676,28 +674,28 @@ fn infer_join_predicates_from_predicates<E: AsRef<Expr>>(
 ///
 /// * `inferred_predicates` the inferred results
 ///
-fn infer_join_predicates_from_on_filters<E: AsRef<Expr>>(
+fn infer_join_predicates_from_on_filters(
     join_col_keys: &[(&Column, &Column)],
     join_type: JoinType,
-    on_filters: &[E],
+    on_filters: &[Expr],
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     match join_type {
         JoinType::Full | JoinType::LeftAnti | JoinType::RightAnti => Ok(()),
-        JoinType::Inner => infer_join_predicates_impl::<true, true, E>(
+        JoinType::Inner => infer_join_predicates_impl::<true, true>(
             join_col_keys,
             on_filters,
             inferred_predicates,
         ),
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftMark => {
-            infer_join_predicates_impl::<true, false, E>(
+            infer_join_predicates_impl::<true, false>(
                 join_col_keys,
                 on_filters,
                 inferred_predicates,
             )
         }
         JoinType::Right | JoinType::RightSemi | JoinType::RightMark => {
-            infer_join_predicates_impl::<false, true, E>(
+            infer_join_predicates_impl::<false, true>(
                 join_col_keys,
                 on_filters,
                 inferred_predicates,
@@ -725,14 +723,12 @@ fn infer_join_predicates_from_on_filters<E: AsRef<Expr>>(
 fn infer_join_predicates_impl<
     const ENABLE_LEFT_TO_RIGHT: bool,
     const ENABLE_RIGHT_TO_LEFT: bool,
-    E: AsRef<Expr>,
 >(
     join_col_keys: &[(&Column, &Column)],
-    input_predicates: &[E],
+    input_predicates: &[Expr],
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
     for predicate in input_predicates {
-        let predicate = predicate.as_ref();
         let mut join_cols_to_replace = HashMap::new();
 
         for &col in &predicate.column_refs() {
