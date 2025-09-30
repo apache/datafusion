@@ -1323,7 +1323,7 @@ async fn join_right_mark() -> Result<()> {
     );
     let right = build_table(
         ("a2", &vec![10, 20, 30, 40]),
-        ("b1", &vec![4, 4, 5, 6]), // 5 is double on the right
+        ("b1", &vec![4, 4, 5, 6]), // 5 is double on the left
         ("c2", &vec![60, 70, 80, 90]),
     );
     let on = vec![(
