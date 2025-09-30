@@ -46,7 +46,17 @@ avro = ["datafusion/avro", "datafusion-common/avro"]
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
-datafusion = { workspace = true, default-features = true }
+datafusion = { workspace = true, default-features = false, features = [
+    "array_expressions",
+    "nested_expressions",
+    "datetime_expressions",
+    "encoding_expressions",
+    "regex_expressions",
+    "string_expressions",
+    "unicode_expressions",
+    "crypto_expressions",
+    "parquet",
+] }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-proto-common = { workspace = true }
