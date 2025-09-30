@@ -904,10 +904,11 @@ pub fn dict_from_values<K: ArrowDictionaryKeyType>(
         .map(|index| {
             if values_array.is_valid(index) {
                 let native_index = K::Native::from_usize(index).ok_or_else(|| {
-                    _internal_datafusion_err!(
-                        "Can not create index of type {} from value {index}",
-                        K::DATA_TYPE
-                    )
+                    DataFusionError::Internal(format!(
+                        "Can not create index of type {} from value {}",
+                        K::DATA_TYPE,
+                        index
+                    ))
                 })?;
                 Ok(Some(native_index))
             } else {
@@ -2202,16 +2203,6 @@ impl ScalarValue {
         }
 
         let array: ArrayRef = match &data_type {
-            DataType::Decimal32(_precision, _scale) => {
-                return _not_impl_err!(
-                    "Decimal32 not supported in ScalarValue::iter_to_array"
-                );
-            }
-            DataType::Decimal64(_precision, _scale) => {
-                return _not_impl_err!(
-                    "Decimal64 not supported in ScalarValue::iter_to_array"
-                );
-            }
             DataType::Decimal128(precision, scale) => {
                 let decimal_array =
                     ScalarValue::iter_to_decimal_array(scalars, *precision, *scale)?;

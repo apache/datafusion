@@ -319,9 +319,14 @@ async fn write_parquet_file(
     row_groups: Vec<Vec<String>>,
 ) -> Bytes {
     let mut buf = BytesMut::new().writer();
-    let props = WriterProperties::builder()
-        .set_statistics_enabled(EnabledStatistics::Chunk) // row group level
-        .set_statistics_truncate_length(truncation_length);
+    let mut props = WriterProperties::builder();
+    if let Some(truncation_length) = truncation_length {
+        props = {
+            #[allow(deprecated)]
+            props.set_max_statistics_size(truncation_length)
+        }
+    }
+    props = props.set_statistics_enabled(EnabledStatistics::Chunk); // row group level
     let props = props.build();
     {
         let mut writer =

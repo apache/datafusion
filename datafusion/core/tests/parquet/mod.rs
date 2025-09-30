@@ -110,11 +110,11 @@ struct ContextWithParquet {
 
 /// The output of running one of the test cases
 struct TestOutput {
-    /// The input query SQL
+    /// The input string
     sql: String,
     /// Execution metrics for the Parquet Scan
     parquet_metrics: MetricsSet,
-    /// number of actual rows in results
+    /// number of rows in results
     result_rows: usize,
     /// the contents of the input, as a string
     pretty_input: String,

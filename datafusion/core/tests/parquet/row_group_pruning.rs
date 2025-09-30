@@ -34,7 +34,7 @@ struct RowGroupPruningTest {
     expected_files_pruned_by_statistics: Option<usize>,
     expected_row_group_matched_by_bloom_filter: Option<usize>,
     expected_row_group_pruned_by_bloom_filter: Option<usize>,
-    expected_rows: usize,
+    expected_results: usize,
 }
 impl RowGroupPruningTest {
     // Start building the test configuration
@@ -48,7 +48,7 @@ impl RowGroupPruningTest {
             expected_files_pruned_by_statistics: None,
             expected_row_group_matched_by_bloom_filter: None,
             expected_row_group_pruned_by_bloom_filter: None,
-            expected_rows: 0,
+            expected_results: 0,
         }
     }
 
@@ -99,9 +99,9 @@ impl RowGroupPruningTest {
         self
     }
 
-    /// Set the number of expected rows from the output of this test
+    // Set the expected rows for the test
     fn with_expected_rows(mut self, rows: usize) -> Self {
-        self.expected_rows = rows;
+        self.expected_results = rows;
         self
     }
 
@@ -145,10 +145,8 @@ impl RowGroupPruningTest {
         );
         assert_eq!(
             output.result_rows,
-            self.expected_rows,
-            "Expected {} rows, got {}: {}",
-            output.result_rows,
-            self.expected_rows,
+            self.expected_results,
+            "mismatched expected rows: {}",
             output.description(),
         );
     }
