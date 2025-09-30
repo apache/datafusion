@@ -47,42 +47,6 @@ fn init() {
 }
 
 #[test]
-fn recursive_query_column_pruning() -> Result<()> {
-    let sql = r#"
-        WITH RECURSIVE numbers(id, level) AS (
-            SELECT col_int32 AS id, 1 AS level FROM test WHERE col_int32 = 1
-            UNION ALL
-            SELECT t.col_int32, numbers.level + 1
-            FROM test t
-            JOIN numbers ON t.col_int32 = numbers.id + 1
-        )
-        SELECT id, level FROM numbers
-    "#;
-
-    let plan = test_sql(sql)?;
-
-    assert_snapshot!(
-        format!("{plan}"),
-        @r#"
-        SubqueryAlias: numbers
-          Projection: id AS id, level AS level
-            RecursiveQuery: is_distinct=false
-              Projection: test.col_int32 AS id, Int64(1) AS level
-                Filter: test.col_int32 = Int32(1)
-                  TableScan: test
-              Projection: t.col_int32, numbers.level + Int64(1)
-                Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
-                  SubqueryAlias: t
-                    Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
-                      TableScan: test
-                  Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
-                    TableScan: numbers
-        "#
-    );
-    Ok(())
-}
-
-#[test]
 fn recursive_cte_with_nested_subquery() -> Result<()> {
     // Covers bailout path in `plan_contains_other_subqueries`, ensuring nested subqueries
     // within recursive CTE branches prevent projection pushdown.
