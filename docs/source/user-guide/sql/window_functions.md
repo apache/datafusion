@@ -145,6 +145,17 @@ where **offset** is an non-negative integer.
 
 RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).
 
+## Filter clause for aggregate window functions
+
+Aggregate window functions support the SQL `FILTER (WHERE ...)` clause to include only rows that satisfy the predicate from the window frame in the aggregation.
+
+```sql
+sum(salary) FILTER (WHERE salary > 0)
+  OVER (PARTITION BY depname ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+```
+
+If no rows in the frame satisfy the filter for a given output row, `COUNT` yields `0` while `SUM`/`AVG`/`MIN`/`MAX` yield `NULL`.
+
 ## Aggregate functions
 
 All [aggregate functions](aggregate_functions.md) can be used as window functions.

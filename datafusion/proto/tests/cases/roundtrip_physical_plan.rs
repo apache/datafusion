@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::fmt::{Display, Formatter};
-use std::ops::Deref;
 
 use std::sync::Arc;
 use std::vec;
@@ -53,7 +52,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::execution::FunctionRegistry;
+use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
@@ -80,7 +79,7 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
@@ -138,9 +137,8 @@ fn roundtrip_test_and_return(
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
             .expect("to proto");
-    let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(ctx, runtime.deref(), codec)
+        .try_into_physical_plan(&ctx.task_ctx(), codec)
         .expect("from proto");
 
     pretty_assertions::assert_eq!(
@@ -211,7 +209,10 @@ fn roundtrip_date_time_interval() -> Result<()> {
     let date_time_interval_expr =
         binary(date_expr, Operator::Plus, literal_expr, &schema)?;
     let plan = Arc::new(ProjectionExec::try_new(
-        vec![(date_time_interval_expr, "result".to_string())],
+        vec![ProjectionExpr {
+            expr: date_time_interval_expr,
+            alias: "result".to_string(),
+        }],
         input,
     )?);
     roundtrip_test(plan)
@@ -388,6 +389,7 @@ fn roundtrip_window() -> Result<()> {
         &[],
         &[],
         Arc::new(WindowFrame::new(None)),
+        None,
     ));
 
     let window_frame = WindowFrame::new_bounds(
@@ -399,7 +401,7 @@ fn roundtrip_window() -> Result<()> {
     let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
     let sum_expr = AggregateExprBuilder::new(sum_udaf(), args)
         .schema(Arc::clone(&schema))
-        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING")
+        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEDING")
         .build()
         .map(Arc::new)?;
 
@@ -408,6 +410,7 @@ fn roundtrip_window() -> Result<()> {
         &[],
         &[],
         Arc::new(window_frame),
+        None,
     ));
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
@@ -436,6 +439,7 @@ fn roundtrip_window_distinct() -> Result<()> {
         &[col("b", &schema)?],            // partition by b
         &[],                              // no order by
         Arc::new(WindowFrame::new(None)), // unbounded frame
+        None,
     ));
 
     // Create a distinct sum window expression with bounded frame (becomes SlidingAggregateWindowExpr)
@@ -459,6 +463,7 @@ fn roundtrip_window_distinct() -> Result<()> {
         &[],                     // no partition by
         &[],                     // no order by
         Arc::new(bounded_frame), // bounded frame
+        None,
     ));
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
@@ -490,6 +495,7 @@ fn test_distinct_window_serialization_end_to_end() -> Result<()> {
         &[col("b", &schema)?],
         &[],
         Arc::new(WindowFrame::new(None)),
+        None,
     ));
 
     // Test 2: DISTINCT SUM (without ignore nulls)
@@ -512,6 +518,7 @@ fn test_distinct_window_serialization_end_to_end() -> Result<()> {
         &[],
         &[],
         Arc::new(bounded_frame),
+        None,
     ));
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
@@ -527,7 +534,7 @@ fn test_distinct_window_serialization_end_to_end() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate() -> Result<()> {
+fn roundtrip_aggregate() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -575,7 +582,7 @@ fn rountrip_aggregate() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_limit() -> Result<()> {
+fn roundtrip_aggregate_with_limit() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -605,7 +612,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
+fn roundtrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -634,7 +641,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_sort() -> Result<()> {
+fn roundtrip_aggregate_with_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -1000,7 +1007,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             self: Arc<Self>,
             _children: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
-            todo!()
+            Ok(self)
         }
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1015,7 +1022,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             _buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
-            _registry: &dyn FunctionRegistry,
+            _ctx: &TaskContext,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unreachable!()
         }
@@ -1100,8 +1107,13 @@ fn roundtrip_scalar_udf() -> Result<()> {
         Arc::new(ConfigOptions::default()),
     );
 
-    let project =
-        ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
+    let project = ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: Arc::new(expr),
+            alias: "a".to_string(),
+        }],
+        input,
+    )?;
 
     let ctx = SessionContext::new();
 
@@ -1118,7 +1130,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("No extension codec provided")
     }
@@ -1250,6 +1262,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
             &[col("author", &schema)?],
             &[],
             Arc::new(WindowFrame::new(None)),
+            None,
         ))],
         filter,
         true,
@@ -1359,6 +1372,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
             &[col("author", &schema)?],
             &[],
             Arc::new(WindowFrame::new(None)),
+            None,
         ))],
         filter,
         true,
@@ -1401,7 +1415,10 @@ fn roundtrip_like() -> Result<()> {
         &schema,
     )?;
     let plan = Arc::new(ProjectionExec::try_new(
-        vec![(like_expr, "result".to_string())],
+        vec![ProjectionExpr {
+            expr: like_expr,
+            alias: "result".to_string(),
+        }],
         input,
     )?);
     roundtrip_test(plan)
@@ -1630,8 +1647,8 @@ fn roundtrip_union() -> Result<()> {
     let left = EmptyExec::new(Arc::new(schema_left));
     let right = EmptyExec::new(Arc::new(schema_right));
     let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
-    let union = UnionExec::new(inputs);
-    roundtrip_test(Arc::new(union))
+    let union = UnionExec::try_new(inputs)?;
+    roundtrip_test(union)
 }
 
 #[test]
@@ -1717,11 +1734,8 @@ async fn roundtrip_coalesce() -> Result<()> {
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored = node.try_into_physical_plan(
-        &ctx,
-        ctx.runtime_env().as_ref(),
-        &DefaultPhysicalExtensionCodec {},
-    )?;
+    let restored =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     assert_eq!(
         plan.schema(),
@@ -1756,11 +1770,8 @@ async fn roundtrip_generate_series() -> Result<()> {
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored = node.try_into_physical_plan(
-        &ctx,
-        ctx.runtime_env().as_ref(),
-        &DefaultPhysicalExtensionCodec {},
-    )?;
+    let restored =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     assert_eq!(
         plan.schema(),
@@ -1882,11 +1893,7 @@ async fn roundtrip_physical_plan_node() {
             .unwrap();
 
     let plan = node
-        .try_into_physical_plan(
-            &ctx,
-            &ctx.runtime_env(),
-            &DefaultPhysicalExtensionCodec {},
-        )
+        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
@@ -1966,7 +1973,7 @@ async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
 
             // deserialize the physical plan
             let _deserialized_plan =
-                proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
+                proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
         }
     }
 
@@ -2085,8 +2092,7 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
     // This will fail with the bug, but should succeed when fixed
-    let _deserialized_plan =
-        proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
+    let _deserialized_plan = proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
     Ok(())
 }
 
@@ -2114,11 +2120,8 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let unoptimized = node.try_into_physical_plan(
-        &ctx,
-        ctx.runtime_env().as_ref(),
-        &DefaultPhysicalExtensionCodec {},
-    )?;
+    let unoptimized =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     let physical_planner =
         datafusion::physical_planner::DefaultPhysicalPlanner::default();
@@ -2206,6 +2209,16 @@ async fn roundtrip_logical_plan_sort_merge_join() -> Result<()> {
 
     let query = "SELECT t1.* FROM t0 join t1 on t0.a = t1.a";
     let plan = ctx.sql(query).await?.create_physical_plan().await?;
+    roundtrip_test(plan)
+}
 
+#[tokio::test]
+async fn roundtrip_memory_source() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .sql("select * from values ('Tom', 18)")
+        .await?
+        .create_physical_plan()
+        .await?;
     roundtrip_test(plan)
 }

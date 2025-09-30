@@ -546,7 +546,7 @@ async fn test_external_sort_zero_merge_reservation() {
 // Tests for disk limit (`max_temp_directory_size` in `DiskManager`)
 // ------------------------------------------------------------------
 
-// Create a new `SessionContext` with speicified disk limit, memory pool limit, and spill compression codec
+// Create a new `SessionContext` with specified disk limit, memory pool limit, and spill compression codec
 async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
@@ -806,7 +806,7 @@ impl TestCase {
 
     /// Specify an expected plan to review
     pub fn with_expected_plan(mut self, expected_plan: &[&str]) -> Self {
-        self.expected_plan = expected_plan.iter().map(|s| s.to_string()).collect();
+        self.expected_plan = expected_plan.iter().map(|s| (*s).to_string()).collect();
         self
     }
 

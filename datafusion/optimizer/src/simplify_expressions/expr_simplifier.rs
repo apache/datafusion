@@ -1399,6 +1399,73 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // Rules for Case
             //
 
+            // Inline a comparison to a literal with the case statement into the `THEN` clauses.
+            // which can enable further simplifications
+            // CASE WHEN X THEN "a" WHEN Y THEN "b" ... END = "a" --> CASE WHEN X THEN "a" = "a" WHEN Y THEN "b" = "a" END
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: op @ (Eq | NotEq),
+                right,
+            }) if is_case_with_literal_outputs(&left) && is_lit(&right) => {
+                let case = into_case(*left)?;
+                Transformed::yes(Expr::Case(Case {
+                    expr: None,
+                    when_then_expr: case
+                        .when_then_expr
+                        .into_iter()
+                        .map(|(when, then)| {
+                            (
+                                when,
+                                Box::new(Expr::BinaryExpr(BinaryExpr {
+                                    left: then,
+                                    op,
+                                    right: right.clone(),
+                                })),
+                            )
+                        })
+                        .collect(),
+                    else_expr: case.else_expr.map(|els| {
+                        Box::new(Expr::BinaryExpr(BinaryExpr {
+                            left: els,
+                            op,
+                            right,
+                        }))
+                    }),
+                }))
+            }
+
+            // CASE WHEN true THEN A ... END --> A
+            // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
+            Expr::Case(Case {
+                expr: None,
+                mut when_then_expr,
+                else_expr: _,
+                // if let guard is not stabilized so we can't use it yet: https://github.com/rust-lang/rust/issues/51114
+                // Once it's supported we can avoid searching through when_then_expr twice in the below .any() and .position() calls
+                // }) if let Some(i) = when_then_expr.iter().position(|(when, _)| is_true(when.as_ref())) => {
+            }) if when_then_expr
+                .iter()
+                .any(|(when, _)| is_true(when.as_ref())) =>
+            {
+                let i = when_then_expr
+                    .iter()
+                    .position(|(when, _)| is_true(when.as_ref()))
+                    .unwrap();
+                let (_, then_) = when_then_expr.swap_remove(i);
+                // CASE WHEN true THEN A ... END --> A
+                if i == 0 {
+                    return Ok(Transformed::yes(*then_));
+                }
+
+                // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
+                when_then_expr.truncate(i);
+                Transformed::yes(Expr::Case(Case {
+                    expr: None,
+                    when_then_expr,
+                    else_expr: Some(then_),
+                }))
+            }
+
             // CASE
             //   WHEN X THEN A
             //   WHEN Y THEN B
@@ -1415,7 +1482,11 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 when_then_expr,
                 else_expr,
             }) if !when_then_expr.is_empty()
-                && when_then_expr.len() < 3 // The rewrite is O(n²) so limit to small number
+                // The rewrite is O(n²) in general so limit to small number of when-thens that can be true
+                && (when_then_expr.len() < 3 // small number of input whens
+                    // or all thens are literal bools and a small number of them are true
+                    || (when_then_expr.iter().all(|(_, then)| is_bool_lit(then))
+                        && when_then_expr.iter().filter(|(_, then)| is_true(then)).count() < 3))
                 && info.is_boolean_type(&when_then_expr[0].1)? =>
             {
                 // String disjunction of all the when predicates encountered so far. Not nullable.
@@ -1438,6 +1509,55 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
 
                 // Do a first pass at simplification
                 out_expr.rewrite(self)?
+            }
+            // CASE
+            //   WHEN X THEN true
+            //   WHEN Y THEN true
+            //   WHEN Z THEN false
+            //   ...
+            //   ELSE true
+            // END
+            //
+            // --->
+            //
+            // NOT(CASE
+            //   WHEN X THEN false
+            //   WHEN Y THEN false
+            //   WHEN Z THEN true
+            //   ...
+            //   ELSE false
+            // END)
+            //
+            // Note: the rationale for this rewrite is that the case can then be further
+            // simplified into a small number of ANDs and ORs
+            Expr::Case(Case {
+                expr: None,
+                when_then_expr,
+                else_expr,
+            }) if !when_then_expr.is_empty()
+                && when_then_expr
+                    .iter()
+                    .all(|(_, then)| is_bool_lit(then)) // all thens are literal bools
+                // This simplification is only helpful if we end up with a small number of true thens
+                && when_then_expr
+                    .iter()
+                    .filter(|(_, then)| is_false(then))
+                    .count()
+                    < 3
+                && else_expr.as_deref().is_none_or(is_bool_lit) =>
+            {
+                Transformed::yes(
+                    Expr::Case(Case {
+                        expr: None,
+                        when_then_expr: when_then_expr
+                            .into_iter()
+                            .map(|(when, then)| (when, Box::new(Expr::Not(then))))
+                            .collect(),
+                        else_expr: else_expr
+                            .map(|else_expr| Box::new(Expr::Not(else_expr))),
+                    })
+                    .not(),
+                )
             }
             Expr::ScalarFunction(ScalarFunction { func: udf, args }) => {
                 match udf.simplify(args, info)? {
@@ -1811,7 +1931,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                 // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                                 let Some(value) = try_cast_literal_to_type(&right_lit_value, &expr_type) else {
                                     internal_err!(
-                                        "Can't cast the list expr {:?} to type {:?}",
+                                        "Can't cast the list expr {:?} to type {}",
                                         right_lit_value, &expr_type
                                     )?
                                 };
@@ -3434,6 +3554,142 @@ mod tests {
     }
 
     #[test]
+    fn simplify_literal_case_equality() {
+        // CASE WHEN c2 != false THEN "ok" ELSE "not_ok"
+        let simple_case = Expr::Case(Case::new(
+            None,
+            vec![(
+                Box::new(col("c2_non_null").not_eq(lit(false))),
+                Box::new(lit("ok")),
+            )],
+            Some(Box::new(lit("not_ok"))),
+        ));
+
+        // CASE WHEN c2 != false THEN "ok" ELSE "not_ok" == "ok"
+        // -->
+        // CASE WHEN c2 != false THEN "ok" == "ok" ELSE "not_ok" == "ok"
+        // -->
+        // CASE WHEN c2 != false THEN true ELSE false
+        // -->
+        // c2
+        assert_eq!(
+            simplify(binary_expr(simple_case.clone(), Operator::Eq, lit("ok"),)),
+            col("c2_non_null"),
+        );
+
+        // CASE WHEN c2 != false THEN "ok" ELSE "not_ok" != "ok"
+        // -->
+        // NOT(CASE WHEN c2 != false THEN "ok" == "ok" ELSE "not_ok" == "ok")
+        // -->
+        // NOT(CASE WHEN c2 != false THEN true ELSE false)
+        // -->
+        // NOT(c2)
+        assert_eq!(
+            simplify(binary_expr(simple_case, Operator::NotEq, lit("ok"),)),
+            not(col("c2_non_null")),
+        );
+
+        let complex_case = Expr::Case(Case::new(
+            None,
+            vec![
+                (
+                    Box::new(col("c1").eq(lit("inboxed"))),
+                    Box::new(lit("pending")),
+                ),
+                (
+                    Box::new(col("c1").eq(lit("scheduled"))),
+                    Box::new(lit("pending")),
+                ),
+                (
+                    Box::new(col("c1").eq(lit("completed"))),
+                    Box::new(lit("completed")),
+                ),
+                (
+                    Box::new(col("c1").eq(lit("paused"))),
+                    Box::new(lit("paused")),
+                ),
+                (Box::new(col("c2")), Box::new(lit("running"))),
+                (
+                    Box::new(col("c1").eq(lit("invoked")).and(col("c3").gt(lit(0)))),
+                    Box::new(lit("backing-off")),
+                ),
+            ],
+            Some(Box::new(lit("ready"))),
+        ));
+
+        assert_eq!(
+            simplify(binary_expr(
+                complex_case.clone(),
+                Operator::Eq,
+                lit("completed"),
+            )),
+            not_distinct_from(col("c1").eq(lit("completed")), lit(true)).and(
+                distinct_from(col("c1").eq(lit("inboxed")), lit(true))
+                    .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
+            )
+        );
+
+        assert_eq!(
+            simplify(binary_expr(
+                complex_case.clone(),
+                Operator::NotEq,
+                lit("completed"),
+            )),
+            distinct_from(col("c1").eq(lit("completed")), lit(true))
+                .or(not_distinct_from(col("c1").eq(lit("inboxed")), lit(true))
+                    .or(not_distinct_from(col("c1").eq(lit("scheduled")), lit(true))))
+        );
+
+        assert_eq!(
+            simplify(binary_expr(
+                complex_case.clone(),
+                Operator::Eq,
+                lit("running"),
+            )),
+            not_distinct_from(col("c2"), lit(true)).and(
+                distinct_from(col("c1").eq(lit("inboxed")), lit(true))
+                    .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
+                    .and(distinct_from(col("c1").eq(lit("completed")), lit(true)))
+                    .and(distinct_from(col("c1").eq(lit("paused")), lit(true)))
+            )
+        );
+
+        assert_eq!(
+            simplify(binary_expr(
+                complex_case.clone(),
+                Operator::Eq,
+                lit("ready"),
+            )),
+            distinct_from(col("c1").eq(lit("inboxed")), lit(true))
+                .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
+                .and(distinct_from(col("c1").eq(lit("completed")), lit(true)))
+                .and(distinct_from(col("c1").eq(lit("paused")), lit(true)))
+                .and(distinct_from(col("c2"), lit(true)))
+                .and(distinct_from(
+                    col("c1").eq(lit("invoked")).and(col("c3").gt(lit(0))),
+                    lit(true)
+                ))
+        );
+
+        assert_eq!(
+            simplify(binary_expr(
+                complex_case.clone(),
+                Operator::NotEq,
+                lit("ready"),
+            )),
+            not_distinct_from(col("c1").eq(lit("inboxed")), lit(true))
+                .or(not_distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
+                .or(not_distinct_from(col("c1").eq(lit("completed")), lit(true)))
+                .or(not_distinct_from(col("c1").eq(lit("paused")), lit(true)))
+                .or(not_distinct_from(col("c2"), lit(true)))
+                .or(not_distinct_from(
+                    col("c1").eq(lit("invoked")).and(col("c3").gt(lit(0))),
+                    lit(true)
+                ))
+        );
+    }
+
+    #[test]
     fn simplify_expr_case_when_then_else() {
         // CASE WHEN c2 != false THEN "ok" == "not_ok" ELSE c2 == true
         // -->
@@ -3550,6 +3806,152 @@ mod tests {
             )))),
             not_distinct_from(col("c3").gt(lit(0_i64)), lit(true))
         );
+    }
+
+    #[test]
+    fn simplify_expr_case_when_first_true() {
+        // CASE WHEN true THEN 1 ELSE x END --> 1
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(lit(1)),)],
+                Some(Box::new(col("x"))),
+            ))),
+            lit(1)
+        );
+
+        // CASE WHEN true THEN col("a") ELSE col("b") END --> col("a")
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(col("a")),)],
+                Some(Box::new(col("b"))),
+            ))),
+            col("a")
+        );
+
+        // CASE WHEN true THEN col("a") WHEN col("x") > 5 THEN col("b") ELSE col("c") END --> col("a")
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(lit(true)), Box::new(col("a"))),
+                    (Box::new(col("x").gt(lit(5))), Box::new(col("b"))),
+                ],
+                Some(Box::new(col("c"))),
+            ))),
+            col("a")
+        );
+
+        // CASE WHEN true THEN col("a") END --> col("a") (no else clause)
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(col("a")),)],
+                None,
+            ))),
+            col("a")
+        );
+
+        // Negative test: CASE WHEN a THEN 1 ELSE 2 END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("a")), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
+
+        // Negative test: CASE WHEN false THEN 1 ELSE 2 END should not use this rule
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(lit(false)), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_ne!(simplify(expr), lit(1));
+
+        // Negative test: CASE WHEN col("x") > 5 THEN 1 ELSE 2 END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("x").gt(lit(5))), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_expr_case_when_any_true() {
+        // CASE WHEN x > 0 THEN a WHEN true THEN b ELSE c END --> CASE WHEN x > 0 THEN a ELSE b END
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(lit(true)), Box::new(col("b"))),
+                ],
+                Some(Box::new(col("c"))),
+            ))),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("x").gt(lit(0))), Box::new(col("a")))],
+                Some(Box::new(col("b"))),
+            ))
+        );
+
+        // CASE WHEN x > 0 THEN a WHEN y < 0 THEN b WHEN true THEN c WHEN z = 0 THEN d ELSE e END
+        // --> CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                    (Box::new(lit(true)), Box::new(col("c"))),
+                    (Box::new(col("z").eq(lit(0))), Box::new(col("d"))),
+                ],
+                Some(Box::new(col("e"))),
+            ))),
+            Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                ],
+                Some(Box::new(col("c"))),
+            ))
+        );
+
+        // CASE WHEN x > 0 THEN a WHEN y < 0 THEN b WHEN true THEN c END (no else)
+        // --> CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END
+        assert_eq!(
+            simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                    (Box::new(lit(true)), Box::new(col("c"))),
+                ],
+                None,
+            ))),
+            Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                ],
+                Some(Box::new(col("c"))),
+            ))
+        );
+
+        // Negative test: CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![
+                (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
+                (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+            ],
+            Some(Box::new(col("c"))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {

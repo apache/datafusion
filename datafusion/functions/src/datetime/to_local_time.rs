@@ -385,6 +385,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 
         let first_arg = arg_types[0].clone();
         match &first_arg {
+            DataType::Null => Ok(vec![Timestamp(Nanosecond, None)]),
             Timestamp(Nanosecond, timezone) => {
                 Ok(vec![Timestamp(Nanosecond, timezone.clone())])
             }

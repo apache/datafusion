@@ -26,7 +26,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{ArrowNativeType, Field};
 use arrow::datatypes::{
-    DataType::{FixedSizeList, LargeList, List},
+    DataType::{LargeList, List},
     FieldRef,
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
@@ -125,7 +125,7 @@ impl ScalarUDFImpl for ArrayResize {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::clone(field))),
+            List(field) => Ok(List(Arc::clone(field))),
             LargeList(field) => Ok(LargeList(Arc::clone(field))),
             DataType::Null => {
                 Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true))))
@@ -191,7 +191,7 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&arg[0])?;
             general_list_resize::<i64>(array, new_len, field, new_element)
         }
-        array_type => exec_err!("array_resize does not support type '{array_type:?}'."),
+        array_type => exec_err!("array_resize does not support type '{array_type}'."),
     }
 }
 

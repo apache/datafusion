@@ -434,13 +434,14 @@ impl PartialEq for dyn WindowUDFImpl {
     }
 }
 
-// TODO (https://github.com/apache/datafusion/issues/17064) PartialOrd is not consistent with PartialEq for `dyn WindowUDFImpl` and it should be
 impl PartialOrd for dyn WindowUDFImpl {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name().partial_cmp(other.name()) {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -522,37 +523,6 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
-}
-
-// Window UDF doc sections for use in public documentation
-pub mod window_doc_sections {
-    use datafusion_doc::DocSection;
-
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_AGGREGATE,
-            DOC_SECTION_RANKING,
-            DOC_SECTION_ANALYTICAL,
-        ]
-    }
-
-    pub const DOC_SECTION_AGGREGATE: DocSection = DocSection {
-        include: true,
-        label: "Aggregate Functions",
-        description: Some("All aggregate functions can be used as window functions."),
-    };
-
-    pub const DOC_SECTION_RANKING: DocSection = DocSection {
-        include: true,
-        label: "Ranking Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_ANALYTICAL: DocSection = DocSection {
-        include: true,
-        label: "Analytical Functions",
-        description: None,
-    };
 }
 
 #[cfg(test)]

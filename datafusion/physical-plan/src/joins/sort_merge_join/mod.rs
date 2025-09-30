@@ -22,3 +22,6 @@ pub use exec::SortMergeJoinExec;
 mod exec;
 mod metrics;
 mod stream;
+
+#[cfg(test)]
+mod tests;

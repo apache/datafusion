@@ -18,11 +18,11 @@
 [package]
 name = "datafusion-datasource"
 description = "datafusion-datasource"
+readme = "README.md"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
-readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -31,7 +31,6 @@ version.workspace = true
 all-features = true
 
 [features]
-parquet = ["dep:parquet", "tempfile"]
 compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
 
@@ -63,7 +62,6 @@ glob = "0.3.0"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
-parquet = { workspace = true, optional = true }
 rand = { workspace = true }
 tempfile = { workspace = true, optional = true }
 tokio = { workspace = true }
