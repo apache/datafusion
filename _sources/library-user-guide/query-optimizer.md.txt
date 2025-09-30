@@ -34,6 +34,7 @@ The following code demonstrates the basic flow of creating the optimizer with a 
 and applying it to a logical plan to produce an optimized logical plan.
 
 ```rust
+
 use std::sync::Arc;
 use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
 use datafusion::optimizer::{OptimizerRule, OptimizerContext, Optimizer};
@@ -79,6 +80,11 @@ the optimizer can simply return it as is.
 All rules must implement the `OptimizerRule` trait.
 
 ```rust
+# use datafusion::common::tree_node::Transformed;
+# use datafusion::common::Result;
+# use datafusion::logical_expr::LogicalPlan;
+# use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+#
 
 #[derive(Default, Debug)]
 struct MyOptimizerRule {}
@@ -103,6 +109,28 @@ impl OptimizerRule for MyOptimizerRule {
 The optimizer can be created with a custom set of rules.
 
 ```rust
+# use std::sync::Arc;
+# use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
+# use datafusion::optimizer::{OptimizerRule, OptimizerConfig, OptimizerContext, Optimizer};
+# use datafusion::common::tree_node::Transformed;
+# use datafusion::common::Result;
+#
+# #[derive(Default, Debug)]
+# struct MyOptimizerRule {}
+#
+# impl OptimizerRule for MyOptimizerRule {
+#     fn name(&self) -> &str {
+#         "my_optimizer_rule"
+#     }
+#
+#     fn rewrite(
+#         &self,
+#         plan: LogicalPlan,
+#         _config: &dyn OptimizerConfig,
+#     ) -> Result<Transformed<LogicalPlan>> {
+#         unimplemented!()
+#     }
+# }
 
 let optimizer = Optimizer::with_rules(vec![
     Arc::new(MyOptimizerRule {})
@@ -185,6 +213,8 @@ and [#3555](https://github.com/apache/datafusion/issues/3555) occur where the ex
 There are currently two ways to create a name for an expression in the logical plan.
 
 ```rust
+# use datafusion::common::Result;
+# struct Expr;
 
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
@@ -216,6 +246,9 @@ The [TreeNode API] provides a convenient way to recursively walk an expression o
 For example, to find all subquery references in a logical plan, the following code can be used:
 
 ```rust
+# use datafusion::prelude::*;
+# use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
 // Return all subquery references in an expression
 fn extract_subquery_filters(expression: &Expr) -> Result<Vec<&Expr>> {
     let mut extracted = vec![];
@@ -232,6 +265,10 @@ fn extract_subquery_filters(expression: &Expr) -> Result<Vec<&Expr>> {
 Likewise you can use the [TreeNode API] to rewrite a `LogicalPlan` or `ExecutionPlan`
 
 ```rust
+# use datafusion::prelude::*;
+# use datafusion::logical_expr::{LogicalPlan, Join};
+# use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
 // Return all joins in a logical plan
 fn find_joins(overall_plan: &LogicalPlan) -> Result<Vec<&Join>> {
     let mut extracted = vec![];
@@ -263,6 +300,11 @@ col >= x AND col <= y
 you can use the following code:
 
 ```rust
+# use datafusion::prelude::*;
+# use datafusion::logical_expr::{Between};
+# use datafusion::logical_expr::expr_fn::*;
+# use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
 // Recursively rewrite all BETWEEN expressions
 // returns Transformed::yes if any changes were made
 fn rewrite_between(expr: Expr) -> Result<Transformed<Expr>> {
@@ -421,6 +463,15 @@ to infer the selectivity of the expression and the space of possible values it c
 take.
 
 ```rust
+# use std::sync::Arc;
+# use datafusion::prelude::*;
+# use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
+# use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+# use datafusion::common::stats::Precision;
+#
+# use datafusion::common::{ColumnStatistics, DFSchema};
+# use datafusion::common::{ScalarValue, ToDFSchema};
+# use datafusion::error::Result;
 fn analyze_filter_example() -> Result<()> {
     // Create a schema with an 'age' column
     let age = Field::new("age", DataType::Int64, false);

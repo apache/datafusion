@@ -115,6 +115,7 @@ returns a `ColumnarValue` instead of a `ArrayRef`.
 To upgrade, change the return type of your implementation
 
 ```rust
+# /* comment to avoid running
 impl AsyncScalarUDFImpl for AskLLM {
     async fn invoke_async_with_args(
         &self,
@@ -125,11 +126,13 @@ impl AsyncScalarUDFImpl for AskLLM {
       return array_ref; // old code
     }
 }
+# */
 ```
 
 To return a `ColumnarValue`
 
 ```rust
+# /* comment to avoid running
 impl AsyncScalarUDFImpl for AskLLM {
     async fn invoke_async_with_args(
         &self,
@@ -140,6 +143,7 @@ impl AsyncScalarUDFImpl for AskLLM {
       return ColumnarValue::from(array_ref); // new code
     }
 }
+# */
 ```
 
 See [#16896](https://github.com/apache/datafusion/issues/16896) for more details.
@@ -150,15 +154,13 @@ See [#16896](https://github.com/apache/datafusion/issues/16896) for more details
 
 **Before:**
 
-```rust
-,ignore
+```rust,ignore
 pub type ProjectionExpr = (Arc<dyn PhysicalExpr>, String);
 ```
 
 **After:**
 
-```rust
-,ignore
+```rust,ignore
 #[derive(Debug, Clone)]
 pub struct ProjectionExpr {
     pub expr: Arc<dyn PhysicalExpr>,
@@ -191,13 +193,17 @@ automatically dereference the `Arc` when needed. However, in some cases you may
 have to change your code to explicitly call `as_ref()` for example, from
 
 ```rust
+# /* comment to avoid running
 let optimizer_config: &ConfigOptions = state.options();
+#  */
 ```
 
 To
 
 ```rust
+# /* comment to avoid running
 let optimizer_config: &ConfigOptions = state.options().as_ref();
+#  */
 ```
 
 See PR [#16970](https://github.com/apache/datafusion/pull/16970)
@@ -212,6 +218,7 @@ parameter.
 You can change your code like this
 
 ```rust
+# /* comment to avoid running
 impl AsyncScalarUDFImpl for AskLLM {
     async fn invoke_async_with_args(
         &self,
@@ -222,11 +229,13 @@ impl AsyncScalarUDFImpl for AskLLM {
     }
     ...
 }
+# */
 ```
 
 To this:
 
 ```rust
+# /* comment to avoid running
 
 impl AsyncScalarUDFImpl for AskLLM {
     async fn invoke_async_with_args(
@@ -238,6 +247,7 @@ impl AsyncScalarUDFImpl for AskLLM {
     }
     ...
 }
+# */
 ```
 
 ### Schema Rewriter Module Moved to New Crate
@@ -289,6 +299,7 @@ See [#16996] for details.
 To help with protobuf serialization, the `as_any()` method has been added to the `LazyBatchGenerator` trait. This means you will need to add `as_any()` to your implementation of `LazyBatchGenerator`:
 
 ```rust
+# /* comment to avoid running
 
 impl LazyBatchGenerator for MyBatchGenerator {
     fn as_any(&self) -> &dyn Any {
@@ -298,6 +309,7 @@ impl LazyBatchGenerator for MyBatchGenerator {
     ...
 }
 
+# */
 ```
 
 See [#17200](https://github.com/apache/datafusion/pull/17200) for details.
@@ -315,15 +327,13 @@ The `FileOpenFuture` type alias has been updated to use `DataFusionError` instea
 
 **Before:**
 
-```rust
-,ignore
+```rust,ignore
 pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
 ```
 
 **After:**
 
-```rust
-,ignore
+```rust,ignore
 pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch>>>>;
 ```
 
@@ -353,8 +363,7 @@ See [#17407] for details.
 
 We added a method to `PhysicalExpr` to mark a `PhysicalExpr` as volatile:
 
-```rust
-,ignore
+```rust,ignore
 impl PhysicalExpr for MyRandomExpr {
   fn is_volatile_node(&self) -> bool {
     true
@@ -393,21 +402,25 @@ This is a breaking change. Code that constructs or matches on these variants wil
 For example, to create a `SchemaError`, instead of:
 
 ```rust
+# /* comment to avoid running
 use datafusion_common::{DataFusionError, SchemaError};
 DataFusionError::SchemaError(
   SchemaError::DuplicateUnqualifiedField { name: "foo".to_string() },
   Box::new(None)
 )
+# */
 ```
 
 You now need to `Box` the inner error:
 
 ```rust
+# /* comment to avoid running
 use datafusion_common::{DataFusionError, SchemaError};
 DataFusionError::SchemaError(
   Box::new(SchemaError::DuplicateUnqualifiedField { name: "foo".to_string() }),
   Box::new(None)
 )
+# */
 ```
 
 [#16652]: https://github.com/apache/datafusion/issues/16652
@@ -422,13 +435,17 @@ is more efficient.
 To create `FieldMetadata` from a `Field`:
 
 ```rust
+# /* comment to avoid running
  let metadata = FieldMetadata::from(&field);
+# */
 ```
 
 To add metadata to a `Field`, use the `add_to_field` method:
 
 ```rust
+# /* comment to avoid running
 let updated_field = metadata.add_to_field(field);
+# */
 ```
 
 See [#16317] for details.
@@ -448,12 +465,14 @@ DataFusion 49.0.0 adds support for compressing spill files when data is written 
 **Usage:**
 
 ```rust
+# /* comment to avoid running
 use datafusion::prelude::*;
 use datafusion_common::config::SpillCompression;
 
 let config = SessionConfig::default()
     .with_spill_compression(SpillCompression::Zstd);
 let ctx = SessionContext::new_with_config(config);
+# */
 ```
 
 Or via SQL:
@@ -493,12 +512,14 @@ To unify **all** SQL string types (`CHAR`, `VARCHAR`, `TEXT`, `STRING`) to Arrow
 #### Examples
 
 ```rust
+# /* comment to avoid running
 // Disable Utf8View mapping for all SQL string types
 let opts = datafusion::sql::planner::ParserOptions::new()
     .with_map_string_types_to_utf8view(false);
 
 // Verify the setting is applied
 assert!(!opts.map_string_types_to_utf8view);
+# */
 ```
 
 ---
@@ -536,22 +557,26 @@ options for Parquet files. The `ParquetEncryptionOptions` implements `Default`
 so you can upgrade your existing code like this:
 
 ```rust
+# /* comment to avoid running
 TableParquetOptions {
   global,
   column_specific_options,
   key_value_metadata,
 }
+# */
 ```
 
 To this:
 
 ```rust
+# /* comment to avoid running
 TableParquetOptions {
   global,
   column_specific_options,
   key_value_metadata,
   crypto: Default::default(), // New crypto field
 }
+# */
 ```
 
 ## DataFusion `48.0.1`
@@ -566,9 +591,11 @@ This change also restores the default behavior of `ListingTable` to its previous
 you can maintain the current behavior by overriding the default value in your code.
 
 ```rust
+# /* comment to avoid running
 ListingOptions::new(Arc::new(ParquetFormat::default()))
     .with_collect_stat(false)
     // other options
+# */
 ```
 
 ## DataFusion `48.0.0`
@@ -581,21 +608,25 @@ carrying through Arrow field metadata to support extension types and other uses.
 This means code such as
 
 ```rust
+# /* comment to avoid running
 match expr {
 ...
   Expr::Literal(scalar) => ...
 ...
 }
+#  */
 ```
 
 Should be updated to:
 
 ```rust
+# /* comment to avoid running
 match expr {
 ...
   Expr::Literal(scalar, _metadata) => ...
 ...
 }
+#  */
 ```
 
 Likewise constructing `Expr::Literal` requires metadata as well. The [`lit`] function
@@ -614,6 +645,7 @@ This is a breaking change, so you will need to update your code if you match
 on `Expr::WindowFunction` directly. For example, if you have code like this:
 
 ```rust
+# /* comment to avoid running
 match expr {
   Expr::WindowFunction(WindowFunction {
     params:
@@ -629,11 +661,13 @@ match expr {
     // other expr
   }
 }
+# */
 ```
 
 You will need to change it to:
 
 ```rust
+# /* comment to avoid running
 match expr {
   Expr::WindowFunction(window_fun) => {
     let WindowFunction {
@@ -650,6 +684,7 @@ match expr {
     // other expr
   }
 }
+#  */
 ```
 
 [details on #16207]: https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103
@@ -711,9 +746,11 @@ and relied on the default value of `collect_stat` being `true`, you will need to
 explicitly set it to `true` in your code.
 
 ```rust
+# /* comment to avoid running
 ListingOptions::new(Arc::new(ParquetFormat::default()))
     .with_collect_stat(true)
     // other options
+# */
 ```
 
 ### Processing `FieldRef` instead of `DataType` for user defined functions
@@ -808,6 +845,7 @@ Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been c
 This requires converting from `usize` to `u64` occasionally as well as changes to `ObjectStore` implementations such as
 
 ```rust
+# /* comment to avoid running
 impl Objectstore {
     ...
     // The range is now a u64 instead of usize
@@ -821,6 +859,7 @@ impl Objectstore {
         self.inner.list(prefix)
     }
 }
+# */
 ```
 
 The `ParquetObjectReader` has been updated to no longer require the object size
@@ -831,16 +870,20 @@ The `ParquetObjectReader` has been updated to no longer require the object size
 Pattern in DataFusion `46.0.0`:
 
 ```rust
+# /* comment to avoid running
 let meta: ObjectMeta = ...;
 let reader = ParquetObjectReader::new(store, meta);
+# */
 ```
 
 Pattern in DataFusion `47.0.0`:
 
 ```rust
+# /* comment to avoid running
 let meta: ObjectMeta = ...;
 let reader = ParquetObjectReader::new(store, location)
   .with_file_size(meta.size);
+# */
 ```
 
 ### `DisplayFormatType::TreeRender`
@@ -874,20 +917,24 @@ DataFusion 47.0.0 this has been changed to use `FileScanConfigBuilder`. See
 Pattern in DataFusion `46.0.0`:
 
 ```rust
+# /* comment to avoid running
 let plan = FileScanConfig::new(url, schema, Arc::new(file_source))
   .with_statistics(stats)
   ...
   .build()
+# */
 ```
 
 Pattern in DataFusion `47.0.0`:
 
 ```rust
+# /* comment to avoid running
 let config = FileScanConfigBuilder::new(url, schema, Arc::new(file_source))
   .with_statistics(stats)
   ...
   .build();
 let scan = DataSourceExec::from_data_source(config);
+# */
 ```
 
 ## DataFusion `46.0.0`
@@ -910,6 +957,7 @@ below. See [PR 14876] for an example.
 Given existing code like this:
 
 ```rust
+# /* comment to avoid running
 impl ScalarUDFImpl for SparkConcat {
 ...
     fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
@@ -923,11 +971,13 @@ impl ScalarUDFImpl for SparkConcat {
         }
     }
 }
+# */
 ```
 
 To
 
 ```rust
+# /* comment to avoid running
 impl ScalarUDFImpl for SparkConcat {
     ...
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -942,6 +992,7 @@ impl ScalarUDFImpl for SparkConcat {
         }
     }
 }
+ # */
 ```
 
 [`scalarudfimpl::invoke()`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke
@@ -972,15 +1023,18 @@ Here is more information about
 Code that looks for `ParquetExec` like this will no longer work:
 
 ```rust
+# /* comment to avoid running
     if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
         // Do something with ParquetExec here
     }
+# */
 ```
 
 Instead, with `DataSourceExec`, the same information is now on `FileScanConfig` and
 `ParquetSource`. The equivalent code is
 
 ```rust
+# /* comment to avoid running
 if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
   if let Some(scan_config) = datasource_exec.data_source().as_any().downcast_ref::<FileScanConfig>() {
     // FileGroups, and other information is on the FileScanConfig
@@ -990,6 +1044,7 @@ if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
       // Information on PruningPredicates and parquet options are here
     }
 }
+# */
 ```
 
 ### Cookbook: Changes to `ParquetExecBuilder`
@@ -998,6 +1053,7 @@ Likewise code that builds `ParquetExec` using the `ParquetExecBuilder` such as
 the following must be changed:
 
 ```rust
+# /* comment to avoid running
 let mut exec_plan_builder = ParquetExecBuilder::new(
     FileScanConfig::new(self.log_store.object_store_url(), file_schema)
         .with_projection(self.projection.cloned())
@@ -1013,11 +1069,13 @@ if let Some(predicate) = logical_filter {
         exec_plan_builder = exec_plan_builder.with_predicate(predicate);
     }
 };
+# */
 ```
 
 New code should use `FileScanConfig` to build the appropriate `DataSourceExec`:
 
 ```rust
+# /* comment to avoid running
 let mut file_source = ParquetSource::new(parquet_options)
     .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
 
@@ -1040,6 +1098,7 @@ let file_scan_config = FileScanConfig::new(
 
 // Build the actual scan like this
 parquet_scan: file_scan_config.build(),
+# */
 ```
 
 ### `datafusion-cli` no longer automatically unescapes strings
@@ -1091,6 +1150,8 @@ Each of the old variants can be converted to the new format as follows:
 `TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElement)`:
 
 ```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
     arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Element],
@@ -1101,6 +1162,8 @@ TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
 `TypeSignature::ArraySignature(ArrayFunctionSignature::ElementAndArray)`:
 
 ```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
     arguments: vec![ArrayFunctionArgument::Element, ArrayFunctionArgument::Array],
@@ -1111,6 +1174,8 @@ TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
 `TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndIndex)`:
 
 ```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
     arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Index],
@@ -1121,6 +1186,8 @@ TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
 `TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElementAndOptionalIndex)`:
 
 ```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::OneOf(vec![
     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
@@ -1141,6 +1208,8 @@ TypeSignature::OneOf(vec![
 `TypeSignature::ArraySignature(ArrayFunctionSignature::Array)`:
 
 ```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
     arguments: vec![ArrayFunctionArgument::Array],

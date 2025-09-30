@@ -58,6 +58,14 @@ pub struct MemorySchemaProvider {
 Then we implement the `SchemaProvider` trait for `MemorySchemaProvider`.
 
 ```rust
+# use std::sync::Arc;
+# use dashmap::DashMap;
+# use datafusion::catalog::TableProvider;
+#
+# #[derive(Debug)]
+# pub struct MemorySchemaProvider {
+#     tables: DashMap<String, Arc<dyn TableProvider>>,
+# }
 
 use std::any::Any;
 use datafusion::catalog::SchemaProvider;
@@ -107,6 +115,58 @@ impl SchemaProvider for MemorySchemaProvider {
 Without getting into a `CatalogProvider` implementation, we can create a `MemorySchemaProvider` and register `TableProvider`s with it.
 
 ```rust
+# use std::sync::Arc;
+# use dashmap::DashMap;
+# use datafusion::catalog::TableProvider;
+#
+# #[derive(Debug)]
+# pub struct MemorySchemaProvider {
+#     tables: DashMap<String, Arc<dyn TableProvider>>,
+# }
+#
+# use std::any::Any;
+# use datafusion::catalog::SchemaProvider;
+# use async_trait::async_trait;
+# use datafusion::common::{Result, exec_err};
+#
+# #[async_trait]
+# impl SchemaProvider for MemorySchemaProvider {
+#     fn as_any(&self) -> &dyn Any {
+#         self
+#     }
+#
+#     fn table_names(&self) -> Vec<String> {
+#         self.tables
+#             .iter()
+#             .map(|table| table.key().clone())
+#             .collect()
+#     }
+#
+#     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+#         Ok(self.tables.get(name).map(|table| table.value().clone()))
+#     }
+#
+#     fn register_table(
+#         &self,
+#         name: String,
+#         table: Arc<dyn TableProvider>,
+#     ) -> Result<Option<Arc<dyn TableProvider>>> {
+#         if self.table_exist(name.as_str()) {
+#             return exec_err!(
+#                 "The table {name} already exists"
+#             );
+#         }
+#         Ok(self.tables.insert(name, table))
+#     }
+#
+#     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+#         Ok(self.tables.remove(name).map(|(_, table)| table))
+#     }
+#
+#     fn table_exist(&self, name: &str) -> bool {
+#         self.tables.contains_key(name)
+#     }
+# }
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -143,12 +203,25 @@ It's often useful to fetch metadata about which tables are in a schema, from a r
 The trait is roughly the same except for the `table` method, and the addition of the `#[async_trait]` attribute.
 
 ```rust
+# use async_trait::async_trait;
+# use std::sync::Arc;
+# use datafusion::catalog::{TableProvider, SchemaProvider};
+# use datafusion::common::Result;
+#
+# type OriginSchema = arrow::datatypes::Schema;
+#
+# #[derive(Debug)]
+# struct Schema(OriginSchema);
 
 #[async_trait]
 impl SchemaProvider for Schema {
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+#       todo!();
     }
 
+#    fn as_any(&self) -> &(dyn std::any::Any + 'static) { todo!() }
+#    fn table_names(&self) -> Vec<std::string::String> { todo!() }
+#    fn table_exist(&self, _: &str) -> bool { todo!() }
 }
 ```
 
@@ -211,6 +284,7 @@ Again, this is fairly straightforward, as there's an underlying data structure t
 ## Implementing `MemoryCatalogProviderList`
 
 ```rust
+
 use std::any::Any;
 use std::sync::Arc;
 use dashmap::DashMap;

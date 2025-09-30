@@ -83,6 +83,12 @@ EXECUTE greater_than(20);
 **Rust Example**
 
 ```rust
+# use datafusion::prelude::*;
+# #[tokio::main]
+# async fn main() -> datafusion::error::Result<()> {
+#    let ctx = SessionContext::new();
+#    ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+#
     // Create the prepared statement `greater_than`
     let prepare_sql = "PREPARE greater_than AS SELECT * FROM example WHERE a > $1";
     ctx.sql(prepare_sql).await?;
@@ -90,6 +96,9 @@ EXECUTE greater_than(20);
     // Execute the prepared statement `greater_than`
     let execute_sql = "EXECUTE greater_than(20)";
     let df = ctx.sql(execute_sql).await?;
+#
+#    Ok(())
+# }
 ```
 
 ## Positional Arguments
@@ -113,6 +122,11 @@ EXECUTE greater_than(20, 23.3);
 **Rust Example**
 
 ```rust
+# use datafusion::prelude::*;
+# #[tokio::main]
+# async fn main() -> datafusion::error::Result<()> {
+#    let ctx = SessionContext::new();
+#    ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
   // Create the prepared statement `greater_than`
   let prepare_sql = "PREPARE greater_than(INT, DOUBLE) AS SELECT * FROM example WHERE a > $1 AND b > $2";
   ctx.sql(prepare_sql).await?;
@@ -120,4 +134,6 @@ EXECUTE greater_than(20, 23.3);
   // Execute the prepared statement `greater_than`
   let execute_sql = "EXECUTE greater_than(20, 23.3)";
   let df = ctx.sql(execute_sql).await?;
+#    Ok(())
+# }
 ```
