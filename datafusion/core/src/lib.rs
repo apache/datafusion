@@ -734,6 +734,8 @@
 pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 extern crate core;
+
+#[cfg(feature = "sql")]
 extern crate sqlparser;
 
 pub mod dataframe;
@@ -750,6 +752,9 @@ pub use object_store;
 
 #[cfg(feature = "parquet")]
 pub use parquet;
+
+#[cfg(feature = "avro")]
+pub use datafusion_datasource_avro::apache_avro;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
@@ -820,6 +825,7 @@ pub use datafusion_common::assert_batches_eq;
 pub use datafusion_common::assert_batches_sorted_eq;
 
 /// re-export of [`datafusion_sql`] crate
+#[cfg(feature = "sql")]
 pub mod sql {
     pub use datafusion_sql::*;
 }

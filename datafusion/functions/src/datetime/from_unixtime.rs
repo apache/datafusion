@@ -133,7 +133,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
 
         if args[0].data_type() != Int64 {
             return exec_err!(
-                "Unsupported data type {:?} for function from_unixtime",
+                "Unsupported data type {} for function from_unixtime",
                 args[0].data_type()
             );
         }
@@ -145,7 +145,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
                     .cast_to(&Timestamp(Second, Some(Arc::from(tz.to_string()))), None),
                 _ => {
                     exec_err!(
-                        "Unsupported data type {:?} for function from_unixtime",
+                        "Unsupported data type {} for function from_unixtime",
                         args[1].data_type()
                     )
                 }

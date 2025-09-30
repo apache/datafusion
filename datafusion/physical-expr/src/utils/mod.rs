@@ -238,22 +238,23 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     columns
 }
 
-/// Re-assign column indices referenced in predicate according to given schema.
-/// This may be helpful when dealing with projections.
-pub fn reassign_predicate_columns(
-    pred: Arc<dyn PhysicalExpr>,
+/// Re-assign indices of [`Column`]s within the given [`PhysicalExpr`] according to
+/// the provided [`Schema`].
+///
+/// This can be useful when attempting to map an expression onto a different schema.
+///
+/// # Errors
+///
+/// This function will return an error if any column in the expression cannot be found
+/// in the provided schema.
+pub fn reassign_expr_columns(
+    expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
-    ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform_down(|expr| {
-        let expr_any = expr.as_any();
+    expr.transform_down(|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            let index = schema.index_of(column.name())?;
 
-        if let Some(column) = expr_any.downcast_ref::<Column>() {
-            let index = match schema.index_of(column.name()) {
-                Ok(idx) => idx,
-                Err(_) if ignore_not_found => usize::MAX,
-                Err(e) => return Err(e.into()),
-            };
             return Ok(Transformed::yes(Arc::new(Column::new(
                 column.name(),
                 index,
@@ -506,7 +507,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_reassign_predicate_columns_in_list() {
+    fn test_reassign_expr_columns_in_list() {
         let int_field = Field::new("should_not_matter", DataType::Int64, true);
         let dict_field = Field::new(
             "id",
@@ -526,7 +527,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let actual = reassign_predicate_columns(pred, &schema_small, false).unwrap();
+        let actual = reassign_expr_columns(pred, &schema_small).unwrap();
 
         let expected = in_list(
             Arc::new(Column::new_with_schema("id", &schema_small).unwrap()),

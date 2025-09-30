@@ -142,7 +142,7 @@ pub fn try_cast(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
-        not_impl_err!("Unsupported TRY_CAST from {expr_type:?} to {cast_type:?}")
+        not_impl_err!("Unsupported TRY_CAST from {expr_type} to {cast_type}")
     }
 }
 

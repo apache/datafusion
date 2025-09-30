@@ -19,7 +19,8 @@ use crate::logical_plan::producer::{to_substrait_type, SubstraitProducer};
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DECIMAL_128_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
@@ -29,7 +30,7 @@ use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
     Decimal, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, List,
-    LiteralType, Map, PrecisionTimestamp, Struct,
+    LiteralType, Map, PrecisionTime, PrecisionTimestamp, Struct,
 };
 use substrait::proto::expression::{Literal, RexType};
 use substrait::proto::{r#type, Expression};
@@ -280,6 +281,34 @@ pub(crate) fn to_substrait_literal(
             };
             (map, DEFAULT_CONTAINER_TYPE_VARIATION_REF)
         }
+        ScalarValue::Time32Second(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 0,
+                value: *t as i64,
+            }),
+            TIME_32_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Time32Millisecond(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 3,
+                value: *t as i64,
+            }),
+            TIME_32_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Time64Microsecond(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 6,
+                value: *t,
+            }),
+            TIME_64_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Time64Nanosecond(Some(t)) => (
+            LiteralType::PrecisionTime(PrecisionTime {
+                precision: 9,
+                value: *t,
+            }),
+            TIME_64_TYPE_VARIATION_REF,
+        ),
         ScalarValue::Struct(s) => (
             LiteralType::Struct(Struct {
                 fields: s
@@ -397,6 +426,18 @@ mod tests {
             round_trip_literal(ScalarValue::TimestampMicrosecond(ts, tz.clone()))?;
             round_trip_literal(ScalarValue::TimestampNanosecond(ts, tz))?;
         }
+
+        // Test Time32 literals
+        round_trip_literal(ScalarValue::Time32Second(Some(45296)))?;
+        round_trip_literal(ScalarValue::Time32Second(None))?;
+        round_trip_literal(ScalarValue::Time32Millisecond(Some(45296789)))?;
+        round_trip_literal(ScalarValue::Time32Millisecond(None))?;
+
+        // Test Time64 literals
+        round_trip_literal(ScalarValue::Time64Microsecond(Some(45296789123)))?;
+        round_trip_literal(ScalarValue::Time64Microsecond(None))?;
+        round_trip_literal(ScalarValue::Time64Nanosecond(Some(45296789123000)))?;
+        round_trip_literal(ScalarValue::Time64Nanosecond(None))?;
 
         round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],

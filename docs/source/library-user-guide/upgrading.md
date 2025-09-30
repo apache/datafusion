@@ -19,10 +19,66 @@
 
 # Upgrade Guides
 
+## DataFusion `51.0.0`
+
+**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
+
+### `MSRV` updated to 1.87.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+
+[`1.87.0`]: https://releases.rs/docs/1.87.0/
+
+### `datafusion-proto` use `TaskContext` rather than `SessionContext` in physical plan serde methods
+
+There have been changes in the public API methods of `datafusion-proto` which handle physical plan serde.
+
+Methods like `physical_plan_from_bytes`, `parse_physical_expr` and similar, expect `TaskContext` instead of `SessionContext`
+
+```diff
+- let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
++ let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+```
+
+as `TaskContext` contains `RuntimeEnv` methods such as `try_into_physical_plan` will not have explicit `RuntimeEnv` parameter.
+
+```diff
+let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+-   .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
++.  .try_into_physical_plan(&ctx.task_ctx(), &composed_codec)
+```
+
+`PhysicalExtensionCodec::try_decode()` expects `TaskContext` instead of `FunctionRegistry`:
+
+```diff
+pub trait PhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+-        registry: &dyn FunctionRegistry,
++        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+```
+
+See [issue #17601] for more details.
+
+[issue #17601]: https://github.com/apache/datafusion/issues/17601
+
 ## DataFusion `50.0.0`
 
-**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+### ListingTable automatically detects Hive Partitioned tables
+
+DataFusion 50.0.0 automatically infers Hive partitions when using the `ListingTableFactory` and `CREATE EXTERNAL TABLE`. Previously,
+when creating a `ListingTable`, datasets that use Hive partitioning (e.g.
+`/table_root/column1=value1/column2=value2/data.parquet`) would not have the Hive columns reflected in
+the table's schema or data. The previous behavior can be
+restored by setting the `datafusion.execution.listing_table_factory_infer_partitions` configuration option to `false`.
+See [issue #17049] for more details.
+
+[issue #17049]: https://github.com/apache/datafusion/issues/17049
 
 ### `MSRV` updated to 1.86.0
 
@@ -284,6 +340,24 @@ pub type FileOpenFuture = BoxFuture<'static, Result<BoxStream<'static, Result<Re
 If you have custom implementations of `FileOpener` or work directly with `FileOpenFuture`, you'll need to update your error handling to use `DataFusionError` instead of `ArrowError`. The `FileStreamState` enum's `Open` variant has also been updated accordingly. See [#17397] for more details.
 
 [#17397]: https://github.com/apache/datafusion/pull/17397
+
+### FFI user defined aggregate function signature change
+
+The Foreign Function Interface (FFI) signature for user defined aggregate functions
+has been updated to call `return_field` instead of `return_type` on the underlying
+aggregate function. This is to support metadata handling with these aggregate functions.
+This change should be transparent to most users. If you have written unit tests to call
+`return_type` directly, you may need to change them to calling `return_field` instead.
+
+This update is a breaking change to the FFI API. The current best practice when using the
+FFI crate is to ensure that all libraries that are interacting are using the same
+underlying Rust version. Issue [#17374] has been opened to discuss stabilization of
+this interface so that these libraries can be used across different DataFusion versions.
+
+See [#17407] for details.
+
+[#17407]: https://github.com/apache/datafusion/pull/17407
+[#17374]: https://github.com/apache/datafusion/issues/17374
 
 ### Added `PhysicalExpr::is_volatile_node`
 
