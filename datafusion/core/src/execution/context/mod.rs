@@ -74,6 +74,8 @@ pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+#[cfg(feature = "sql")]
+use datafusion_expr::planner::RelationPlanner;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
@@ -1333,6 +1335,18 @@ impl SessionContext {
     /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
     pub fn register_udwf(&self, f: WindowUDF) {
         self.state.write().register_udwf(Arc::new(f)).ok();
+    }
+
+    #[cfg(feature = "sql")]
+    /// Registers a [`RelationPlanner`] to customize SQL table-factor planning.
+    ///
+    /// Planners are invoked in reverse registration order, allowing newer
+    /// planners to take precedence over existing ones.
+    pub fn register_relation_planner(
+        &self,
+        planner: Arc<dyn RelationPlanner>,
+    ) -> Result<()> {
+        self.state.write().register_relation_planner(planner)
     }
 
     /// Deregisters a UDF within this context.
