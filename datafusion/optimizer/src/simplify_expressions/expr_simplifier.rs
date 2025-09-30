@@ -1436,6 +1436,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
 
             // CASE WHEN true THEN A ... END --> A
             // CASE WHEN X THEN A WHEN TRUE THEN B ... END --> CASE WHEN X THEN A ELSE B END
+            // CASE WHEN false THEN A END --> NULL
+            // CASE WHEN false THEN A ELSE B END --> B
+            // CASE WHEN X THEN A WHEN false THEN B END --> CASE WHEN X THEN A ELSE B END
             Expr::Case(Case {
                 expr: None,
                 mut when_then_expr,
@@ -1471,6 +1474,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
 
                 // Remove CASE statement altogether if there are no when-then expressions left
                 if when_then_expr.is_empty() {
+                    // CASE WHEN false THEN A ELSE B END --> B
                     if let Some(else_expr) = else_expr {
                         return Ok(Transformed::yes(*else_expr));
                     // CASE WHEN false THEN A END --> NULL
@@ -4031,7 +4035,15 @@ mod tests {
                 vec![(Box::new(col("c3").lt(lit(10))), Box::new(lit("b")))],
                 Some(Box::new(col("c4"))),
             ))
-        )
+        );
+
+        // Negative test: CASE WHEN c4 = false THEN 1 ELSE 2 END should not be simplified
+        let expr = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("c2").eq(lit(false))), Box::new(lit(1)))],
+            Some(Box::new(lit(2))),
+        ));
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
