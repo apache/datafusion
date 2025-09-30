@@ -202,26 +202,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Handle Union/Intersect/Except pipe operators
     fn pipe_operator_set(
         &self,
-        plan: LogicalPlan,
+        mut plan: LogicalPlan,
         set_operator: SetOperator,
         set_quantifier: SetQuantifier,
         queries: Vec<Query>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let mut result_plan = plan;
-
         // Process each query
         for query in queries {
             let right_plan = self.query_to_plan(query, planner_context)?;
-            result_plan = self.set_operation_to_plan(
+            plan = self.set_operation_to_plan(
                 set_operator,
-                result_plan,
+                plan,
                 right_plan,
                 set_quantifier,
             )?;
         }
 
-        Ok(result_plan)
+        Ok(plan)
     }
 
     /// Wrap a plan in a limit
