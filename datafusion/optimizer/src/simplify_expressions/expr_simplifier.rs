@@ -4019,10 +4019,10 @@ mod tests {
             ))
         );
 
-        // Negative test: CASE WHEN c4 = false THEN 1 ELSE 2 END should not be simplified
+        // Negative test: CASE WHEN c3 = 4 THEN 1 ELSE 2 END should not be simplified
         let expr = Expr::Case(Case::new(
             None,
-            vec![(Box::new(col("c2").eq(lit(false))), Box::new(lit(1)))],
+            vec![(Box::new(col("c3").eq(lit(4))), Box::new(lit(1)))],
             Some(Box::new(lit(2))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
