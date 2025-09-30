@@ -3850,53 +3850,53 @@ mod tests {
 
     #[test]
     fn simplify_expr_case_when_first_true() {
-        // CASE WHEN true THEN 1 ELSE x END --> 1
+        // CASE WHEN true THEN 1 ELSE c1 END --> 1
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
                 vec![(Box::new(lit(true)), Box::new(lit(1)),)],
-                Some(Box::new(col("x"))),
+                Some(Box::new(col("c1"))),
             ))),
             lit(1)
         );
 
-        // CASE WHEN true THEN col("a") ELSE col("b") END --> col("a")
+        // CASE WHEN true THEN col('a') ELSE col('b') END --> col('a')
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
-                vec![(Box::new(lit(true)), Box::new(col("a")),)],
-                Some(Box::new(col("b"))),
+                vec![(Box::new(lit(true)), Box::new(lit("a")),)],
+                Some(Box::new(lit("b"))),
             ))),
-            col("a")
+            lit("a")
         );
 
-        // CASE WHEN true THEN col("a") WHEN col("x") > 5 THEN col("b") ELSE col("c") END --> col("a")
+        // CASE WHEN true THEN col('a') WHEN col('x') > 5 THEN col('b') ELSE col('c') END --> col('a')
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(lit(true)), Box::new(col("a"))),
-                    (Box::new(col("x").gt(lit(5))), Box::new(col("b"))),
+                    (Box::new(lit(true)), Box::new(lit("a"))),
+                    (Box::new(lit("x").gt(lit(5))), Box::new(lit("b"))),
                 ],
-                Some(Box::new(col("c"))),
+                Some(Box::new(lit("c"))),
             ))),
-            col("a")
+            lit("a")
         );
 
-        // CASE WHEN true THEN col("a") END --> col("a") (no else clause)
+        // CASE WHEN true THEN col('a') END --> col('a') (no else clause)
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
-                vec![(Box::new(lit(true)), Box::new(col("a")),)],
+                vec![(Box::new(lit(true)), Box::new(lit("a")),)],
                 None,
             ))),
-            col("a")
+            lit("a")
         );
 
-        // Negative test: CASE WHEN a THEN 1 ELSE 2 END should not be simplified
+        // Negative test: CASE WHEN c2 THEN 1 ELSE 2 END should not be simplified
         let expr = Expr::Case(Case::new(
             None,
-            vec![(Box::new(col("a")), Box::new(lit(1)))],
+            vec![(Box::new(col("c2")), Box::new(lit(1)))],
             Some(Box::new(lit(2))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
@@ -3909,10 +3909,10 @@ mod tests {
         ));
         assert_ne!(simplify(expr), lit(1));
 
-        // Negative test: CASE WHEN col("x") > 5 THEN 1 ELSE 2 END should not be simplified
+        // Negative test: CASE WHEN col('c1') > 5 THEN 1 ELSE 2 END should not be simplified
         let expr = Expr::Case(Case::new(
             None,
-            vec![(Box::new(col("x").gt(lit(5))), Box::new(lit(1)))],
+            vec![(Box::new(col("c1").gt(lit(5))), Box::new(lit(1)))],
             Some(Box::new(lit(2))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
@@ -3920,76 +3920,76 @@ mod tests {
 
     #[test]
     fn simplify_expr_case_when_any_true() {
-        // CASE WHEN x > 0 THEN a WHEN true THEN b ELSE c END --> CASE WHEN x > 0 THEN a ELSE b END
+        // CASE WHEN c3 > 0 THEN 'a' WHEN true THEN 'b' ELSE 'c' END --> CASE WHEN c3 > 0 THEN 'a' ELSE 'b' END
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
-                    (Box::new(lit(true)), Box::new(col("b"))),
+                    (Box::new(col("c3").gt(lit(0))), Box::new(lit("a"))),
+                    (Box::new(lit(true)), Box::new(lit("b"))),
                 ],
-                Some(Box::new(col("c"))),
+                Some(Box::new(lit("c"))),
             ))),
             Expr::Case(Case::new(
                 None,
-                vec![(Box::new(col("x").gt(lit(0))), Box::new(col("a")))],
-                Some(Box::new(col("b"))),
+                vec![(Box::new(col("c3").gt(lit(0))), Box::new(lit("a")))],
+                Some(Box::new(lit("b"))),
             ))
         );
 
-        // CASE WHEN x > 0 THEN a WHEN y < 0 THEN b WHEN true THEN c WHEN z = 0 THEN d ELSE e END
-        // --> CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END
+        // CASE WHEN c3 > 0 THEN 'a' WHEN c4 < 0 THEN 'b' WHEN true THEN 'c' WHEN c3 = 0 THEN 'd' ELSE 'e' END
+        // --> CASE WHEN c3 > 0 THEN 'a' WHEN c4 < 0 THEN 'b' ELSE 'c' END
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
-                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
-                    (Box::new(lit(true)), Box::new(col("c"))),
-                    (Box::new(col("z").eq(lit(0))), Box::new(col("d"))),
+                    (Box::new(col("c3").gt(lit(0))), Box::new(lit("a"))),
+                    (Box::new(col("c4").lt(lit(0))), Box::new(lit("b"))),
+                    (Box::new(lit(true)), Box::new(lit("c"))),
+                    (Box::new(col("c3").eq(lit(0))), Box::new(lit("d"))),
                 ],
-                Some(Box::new(col("e"))),
+                Some(Box::new(lit("e"))),
             ))),
             Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
-                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                    (Box::new(col("c3").gt(lit(0))), Box::new(lit("a"))),
+                    (Box::new(col("c4").lt(lit(0))), Box::new(lit("b"))),
                 ],
-                Some(Box::new(col("c"))),
+                Some(Box::new(lit("c"))),
             ))
         );
 
-        // CASE WHEN x > 0 THEN a WHEN y < 0 THEN b WHEN true THEN c END (no else)
-        // --> CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END
+        // CASE WHEN c3 > 0 THEN 1 WHEN c4 < 0 THEN 2 WHEN true THEN 3 END (no else)
+        // --> CASE WHEN c3 > 0 THEN 1 WHEN c4 < 0 THEN 2 ELSE 3 END
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
-                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
-                    (Box::new(lit(true)), Box::new(col("c"))),
+                    (Box::new(col("c3").gt(lit(0))), Box::new(lit(1))),
+                    (Box::new(col("c4").lt(lit(0))), Box::new(lit(2))),
+                    (Box::new(lit(true)), Box::new(lit(3))),
                 ],
                 None,
             ))),
             Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
-                    (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                    (Box::new(col("c3").gt(lit(0))), Box::new(lit(1))),
+                    (Box::new(col("c4").lt(lit(0))), Box::new(lit(2))),
                 ],
-                Some(Box::new(col("c"))),
+                Some(Box::new(lit(3))),
             ))
         );
 
-        // Negative test: CASE WHEN x > 0 THEN a WHEN y < 0 THEN b ELSE c END should not be simplified
+        // Negative test: CASE WHEN c3 > 0 THEN c3 WHEN c4 < 0 THEN 2 ELSE 3 END should not be simplified
         let expr = Expr::Case(Case::new(
             None,
             vec![
-                (Box::new(col("x").gt(lit(0))), Box::new(col("a"))),
-                (Box::new(col("y").lt(lit(0))), Box::new(col("b"))),
+                (Box::new(col("c3").gt(lit(0))), Box::new(col("c3"))),
+                (Box::new(col("c4").lt(lit(0))), Box::new(lit(2))),
             ],
-            Some(Box::new(col("c"))),
+            Some(Box::new(lit(3))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
     }
@@ -4016,19 +4016,19 @@ mod tests {
             lit(1),
         );
 
-        // CASE WHEN c1 < 10 THEN 'b' WHEN false then c3 ELSE c4 END --> CASE WHEN c1 < 10 THEN b ELSE c4 END
+        // CASE WHEN c3 < 10 THEN 'b' WHEN false then c3 ELSE c4 END --> CASE WHEN c3 < 10 THEN b ELSE c4 END
         assert_eq!(
             simplify(Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(col("c1").lt(lit(10))), Box::new(lit("b"))),
+                    (Box::new(col("c3").lt(lit(10))), Box::new(lit("b"))),
                     (Box::new(lit(false)), Box::new(col("c3"))),
                 ],
                 Some(Box::new(col("c4"))),
             ))),
             Expr::Case(Case::new(
                 None,
-                vec![(Box::new(col("c1").lt(lit(10))), Box::new(lit("b")))],
+                vec![(Box::new(col("c3").lt(lit(10))), Box::new(lit("b")))],
                 Some(Box::new(col("c4"))),
             ))
         )
