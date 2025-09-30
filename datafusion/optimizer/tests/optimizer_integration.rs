@@ -571,7 +571,11 @@ fn recursive_cte_with_unused_columns() -> Result<()> {
 }
 
 #[test]
-fn recursive_cte_true_projection_pushdown() -> Result<()> {
+/// Asserts the minimal plan shape once projection pushdown succeeds for a recursive CTE.
+/// Unlike the previous two tests that retain extra columns in either the base or recursive
+/// branches, this baseline shows the optimizer trimming everything down to the single
+/// column required by the final projection.
+fn recursive_cte_projection_pushdown_baseline() -> Result<()> {
     // Test case that truly demonstrates projection pushdown working:
     // The base case only selects needed columns
     let sql = "WITH RECURSIVE countdown AS (\
