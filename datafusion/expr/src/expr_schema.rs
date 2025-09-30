@@ -28,11 +28,7 @@ use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, Spans, TableReference,
-};
+use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -281,33 +277,32 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
-                // This expression is nullable if any of the input expressions are nullable
+                // This expression is nullable if any of the then expressions are nullable
                 let then_nullable = case
                     .when_then_expr
                     .iter()
                     .filter_map(|(w, t)| {
-                        let then_is_nullable = t.nullable(input_schema);
-                        match then_is_nullable {
+                        match t.nullable(input_schema) {
                             // Branches with a then expressions that is not nullable can be skipped
                             Ok(false) => None,
                             // Pass error determining nullability on verbatim
                             err @ Err(_) => Some(err),
                             // For branches with a nullable then expressions try to determine
-                            // statically if the predicate prevents null from being returned.
-                            Ok(true) => match const_result_when_value_is_null(w, t) {
-                                // Static analysis did not provide an answer; assume nullable
-                                None => Some(Ok(true)),
-
-                                Some(true) => Some(Ok(true)),
-                                // We can prove that the predicate will always be false if the
-                                // then branch were to evaluate to null. The most common pattern for
-                                // this is `WHEN x IS NOT NULL THEN x`. If x
+                            // using limited const evaluation if the branch will be taken when
+                            // the then expression evaluates to null.
+                            Ok(true) => match const_result_when_value_is_null(w, t, input_schema) {
+                                // Const evaluation was inconclusive or determined the branch would
+                                // be taken
+                                None | Some(true) => Some(Ok(true)),
+                                // Const evaluation proves the branch will never be taken.
+                                // The most common pattern for this is
+                                // `WHEN x IS NOT NULL THEN x`.
                                 Some(false) => None,
                             },
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if then_nullable.contains(&true) {
+                if !then_nullable.is_empty() {
                     Ok(true)
                 } else if let Some(e) = &case.else_expr {
                     e.nullable(input_schema)
@@ -671,27 +666,23 @@ impl ExprSchemable for Expr {
 
 /// Determines if the given `predicate` can be const evaluated if `value` were to evaluate to `NULL`.
 /// Returns a `Some` value containing the const result if so; otherwise returns `None`.
-fn const_result_when_value_is_null(predicate: &Expr, value: &Expr) -> Option<bool> {
+fn const_result_when_value_is_null(predicate: &Expr, value: &Expr, input_schema: &dyn ExprSchema) -> Option<bool> {
     match predicate {
         Expr::IsNotNull(e) => {
-            if e.as_ref().eq(value) {
-                Some(false)
-            } else {
-                None
-            }
+            // If `e` is null, then `e IS NOT NULL` is false
+            // If `e` is not null, then `e IS NOT NULL` is true
+            is_null(e, value, input_schema).map(|is_null| !is_null)
         }
         Expr::IsNull(e) => {
-            if e.as_ref().eq(value) {
-                Some(true)
-            } else {
-                None
-            }
+            // If `e` is null, then `e IS NULL` is true
+            // If `e` is not null, then `e IS NULL` is false
+            is_null(e, value, input_schema)
         }
-        Expr::Not(e) => const_result_when_value_is_null(e, value).map(|b| !b),
+        Expr::Not(e) => const_result_when_value_is_null(e, value, input_schema).map(|b| !b),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::And => {
-                let l = const_result_when_value_is_null(left, value);
-                let r = const_result_when_value_is_null(right, value);
+                let l = const_result_when_value_is_null(left, value, input_schema);
+                let r = const_result_when_value_is_null(right, value, input_schema);
                 match (l, r) {
                     (Some(l), Some(r)) => Some(l && r),
                     (Some(l), None) => Some(l),
@@ -700,8 +691,8 @@ fn const_result_when_value_is_null(predicate: &Expr, value: &Expr) -> Option<boo
                 }
             }
             Operator::Or => {
-                let l = const_result_when_value_is_null(left, value);
-                let r = const_result_when_value_is_null(right, value);
+                let l = const_result_when_value_is_null(left, value, input_schema);
+                let r = const_result_when_value_is_null(right, value, input_schema);
                 match (l, r) {
                     (Some(l), Some(r)) => Some(l || r),
                     _ => None,
@@ -710,6 +701,25 @@ fn const_result_when_value_is_null(predicate: &Expr, value: &Expr) -> Option<boo
             _ => None,
         },
         _ => None,
+    }
+}
+
+fn is_null(expr: &Expr, value: &Expr, input_schema: &dyn ExprSchema) -> Option<bool> {
+    // We're assuming `value` is null
+    if expr.eq(value) {
+        return Some(true);
+    }
+
+    match expr {
+        // Literal null is obviously null
+        Expr::Literal(ScalarValue::Null, _) => Some(true),
+        // We're assuming `value` is null
+        _ => match expr.nullable(input_schema) {
+            // If `expr` is not nullable, we can be certain `expr` is not null
+            Ok(false) => Some(false),
+            // Otherwise inconclusive
+            _ => None,
+        }
     }
 }
 
@@ -896,11 +906,11 @@ mod tests {
         assert!(expr.nullable(&get_schema(false)).unwrap());
     }
 
-    fn assert_nullability(expr: &Expr, schema: &dyn ExprSchema, nullable: bool) {
+    fn assert_nullability(expr: &Expr, schema: &dyn ExprSchema, expected: bool) {
         assert_eq!(
             expr.nullable(schema).unwrap(),
-            nullable,
-            "Nullability of '{expr}' should be {nullable}"
+            expected,
+            "Nullability of '{expr}' should be {expected}"
         );
     }
 
