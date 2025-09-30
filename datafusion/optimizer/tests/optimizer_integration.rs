@@ -83,6 +83,48 @@ fn recursive_query_column_pruning() -> Result<()> {
 }
 
 #[test]
+fn recursive_cte_with_nested_subquery() -> Result<()> {
+    // Covers bailout path in `plan_contains_other_subqueries`, ensuring nested subqueries
+    // within recursive CTE branches prevent projection pushdown.
+    let sql = r#"
+        WITH RECURSIVE numbers(id, level) AS (
+            SELECT sub.id, sub.level FROM (
+                SELECT col_int32 AS id, 1 AS level FROM test
+            ) sub
+            UNION ALL
+            SELECT t.col_int32, numbers.level + 1
+            FROM test t
+            JOIN numbers ON t.col_int32 = numbers.id + 1
+        )
+        SELECT id, level FROM numbers
+    "#;
+
+    let plan = test_sql(sql)?;
+
+    assert_snapshot!(
+        format!("{plan}"),
+        @r#"
+        SubqueryAlias: numbers
+          Projection: sub.id AS id, sub.level AS level
+            RecursiveQuery: is_distinct=false
+              Projection: sub.id, sub.level
+                SubqueryAlias: sub
+                  Projection: test.col_int32 AS id, Int64(1) AS level
+                    TableScan: test
+              Projection: t.col_int32, numbers.level + Int64(1)
+                Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
+                  SubqueryAlias: t
+                    Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
+                      TableScan: test
+                  Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
+                    TableScan: numbers
+        "#
+    );
+
+    Ok(())
+}
+
+#[test]
 fn case_when() -> Result<()> {
     let sql = "SELECT CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
