@@ -21,7 +21,7 @@
 # DataFusion CI does
 #
 # Note: The installed checking tools (e.g., taplo) are not guaranteed to match
-# teh CI versions for simplicity, there might be some minor differences. Check
+# the CI versions for simplicity, there might be some minor differences. Check
 # `.github/workflows` for the CI versions.
 
 # For `.toml` format checking
