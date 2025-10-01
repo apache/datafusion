@@ -50,7 +50,7 @@ pub mod expr_fn {
     ));
     export_functions!((
         elt,
-        "Returns the n-th input, e.g., returns input2 when n is 2. The function returns NULL if the index exceeds the length of the array and spark.sql.ansi.enabled is set to false.",
+        "Returns the n-th input, e.g., returns input2 when n is 2. The function returns NULL if the index exceeds the length of the array.",
         select_col arg1 arg2 argn
     ));
     export_functions!((

@@ -95,11 +95,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     let mut cols: Vec<Arc<StringArray>> = Vec::with_capacity(k);
     for a in args.iter().skip(1) {
         let casted = cast(a, &Utf8)?;
-        let sa = casted
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| internal_datafusion_err!("downcast Utf8 failed"))?
-            .clone();
+        let sa = casted.as_string::<i32>().clone();
         cols.push(Arc::new(sa));
     }
 
@@ -247,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn elt_utf8_returns_utf8view() -> Result<()> {
+    fn elt_utf8_returns_utf8() -> Result<()> {
         let idx = Arc::new(Int32Array::from(vec![Some(1)]));
         let v1 = Arc::new(StringArray::from(vec![Some("scala")]));
         let v2 = Arc::new(StringArray::from(vec![Some("java")]));
