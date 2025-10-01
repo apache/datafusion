@@ -102,8 +102,8 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         );
     }
 
-    let k: usize = args.len() - 1;
-    let mut cols: Vec<Arc<StringArray>> = Vec::with_capacity(k);
+    let num_values: usize = args.len() - 1;
+    let mut cols: Vec<Arc<StringArray>> = Vec::with_capacity(num_values);
     for a in args.iter().skip(1) {
         let casted = cast(a, &Utf8)?;
         let sa = casted.as_string::<i32>().clone();
@@ -123,14 +123,14 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             None
         };
 
-        let Some(n) = n_opt else {
+        let Some(index) = n_opt else {
             builder.append_null();
             continue;
         };
 
         let ansi_enable: bool = false;
 
-        if n < 1 || (n as usize) > k {
+        if index < 1 || (index as usize) > num_values {
             if !ansi_enable {
                 builder.append_null();
                 continue;
@@ -139,8 +139,8 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             }
         }
 
-        let j = (n as usize) - 1;
-        let col = &cols[j];
+        let value_idx = (index as usize) - 1;
+        let col = &cols[value_idx];
 
         if col.is_null(i) {
             builder.append_null();
