@@ -1748,6 +1748,7 @@ mod tests {
                         Operator::Plus,
                         physical_lit(1),
                         &schema,
+                        &ExecutionProps::new(),
                     )
                     .unwrap(),
                     options: SortOptions {
