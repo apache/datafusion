@@ -121,6 +121,7 @@ Here are some active projects using DataFusion:
 - [Polygon.io](https://polygon.io/) Stock Market API
 - [qv] Quickly view your data
 - [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
+- [rerun.io](https://rerun.io/) Visualize and query robotics logs and transform them into training data.
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI] Create full-fledged APIs for slowly moving datasets without writing a single line of code
 - [Sail](https://github.com/lakehq/sail) Unifying stream, batch and AI workloads with Apache Spark compatibility
