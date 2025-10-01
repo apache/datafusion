@@ -32,6 +32,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::type_coercion::is_signed_numeric;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;
 
@@ -93,16 +94,11 @@ impl ScalarUDFImpl for SparkWidthBucket {
 
         let (v, lo, hi, n) = (&types[0], &types[1], &types[2], &types[3]);
 
-        let is_num = |t: &DataType| {
-            matches!(
-                t,
-                Int8 | Int16 | Int32 | Int64 | Float32 | Float64 | Decimal128(_, _)
-            )
-        };
-
         match (v, lo, hi, n) {
             (a, b, c, &(Int8 | Int16 | Int32 | Int64))
-                if is_num(a) && is_num(b) && is_num(c) =>
+                if is_signed_numeric(a)
+                    && is_signed_numeric(b)
+                    && is_signed_numeric(c) =>
             {
                 Ok(vec![Float64, Float64, Float64, Int32])
             }
