@@ -1362,6 +1362,12 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(0.0))),
             DataType::Float32 => ScalarValue::Float32(Some(0.0)),
             DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            DataType::Decimal32(precision, scale) => {
+                ScalarValue::Decimal32(Some(0), *precision, *scale)
+            }
+            DataType::Decimal64(precision, scale) => {
+                ScalarValue::Decimal64(Some(0), *precision, *scale)
+            }
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::Decimal128(Some(0), *precision, *scale)
             }
@@ -2545,7 +2551,7 @@ impl ScalarValue {
                 Arc::new(array)
             }
             // explicitly enumerate unsupported types so newly added
-            // types must be aknowledged, Time32 and Time64 types are
+            // types must be acknowledged, Time32 and Time64 types are
             // not supported if the TimeUnit is not valid (Time32 can
             // only be used with Second and Millisecond, Time64 only
             // with Microsecond and Nanosecond)

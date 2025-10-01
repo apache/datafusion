@@ -805,7 +805,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
 
     // exclude the first function argument(= column) in ordered set aggregate function,
     // because it is duplicated with the WITHIN GROUP clause in schema name.
-    let args = if func.is_ordered_set_aggregate() {
+    let args = if func.is_ordered_set_aggregate() && !order_by.is_empty() {
         &args[1..]
     } else {
         &args[..]
