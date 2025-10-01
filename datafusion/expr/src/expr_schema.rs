@@ -679,10 +679,29 @@ impl ExprSchemable for Expr {
     }
 }
 
+/// Represents the possible values for SQL's three valued logic.
+/// `Option<bool>` is not used for this since `None` is used to represent
+/// inconclusive answers already.
 enum TriStateBool {
     True,
     False,
     Uncertain,
+}
+
+impl TryFrom<&ScalarValue> for TriStateBool {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ScalarValue) -> std::result::Result<Self, Self::Error> {
+        match value {
+            ScalarValue::Null => Ok(TriStateBool::Uncertain),
+            ScalarValue::Boolean(b) => Ok(match b {
+                None => TriStateBool::Uncertain,
+                Some(true) => TriStateBool::True,
+                Some(false) => TriStateBool::False,
+            }),
+            _ => Self::try_from(&value.cast_to(&DataType::Boolean)?)
+        }
+    }
 }
 
 struct WhenThenConstEvaluator<'a> {
@@ -696,7 +715,7 @@ impl WhenThenConstEvaluator<'_> {
     fn const_eval_predicate(&self, predicate: &Expr) -> Option<TriStateBool> {
         match predicate {
             // Literal null is equivalent to boolean uncertain
-            Expr::Literal(ScalarValue::Null, _) => Some(TriStateBool::Uncertain),
+            Expr::Literal(scalar, _) => TriStateBool::try_from(scalar).ok(),
             Expr::IsNotNull(e) => {
                 if let Ok(false) = e.nullable(self.input_schema) {
                     // If `e` is not nullable, then `e IS NOT NULL` is always true
@@ -845,7 +864,7 @@ impl WhenThenConstEvaluator<'_> {
         }
     }
 
-    /// Determines if the given expression is null.
+    /// Determines if the given expression evaluates to null.
     ///
     /// This function returns:
     /// - `Some(true)` is `expr` is certainly null
@@ -1199,6 +1218,16 @@ mod tests {
         // CASE WHEN x LIKE 'x' THEN x ELSE 0
         let e = when(col("x").like(lit("x")), col("x")).otherwise(lit(0))?;
         assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN 0 THEN x ELSE 0
+        let e = when(lit(0), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN 1 THEN x ELSE 0
+        let e = when(lit(1), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
         assert_not_nullable(&e, &not_nullable_schema);
 
         Ok(())
