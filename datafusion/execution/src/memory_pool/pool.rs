@@ -463,6 +463,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                     // wrap OOM message in top consumers
                     DataFusionError::ResourcesExhausted(
                         provide_top_memory_consumers_to_error_msg(
+                            &reservation.consumer().name,
                             e,
                             self.report_top(self.top.into()),
                         ),
@@ -490,10 +491,11 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 }
 
 fn provide_top_memory_consumers_to_error_msg(
+    consumer_name: &str,
     error_msg: String,
     top_consumers: String,
 ) -> String {
-    format!("Additional allocation failed with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}")
+    format!("Additional allocation failed for {consumer_name} with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}")
 }
 
 #[cfg(test)]
