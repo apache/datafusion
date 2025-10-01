@@ -24,6 +24,7 @@ REM Command file for Sphinx documentation
 if "%SPHINXBUILD%" == "" (
 	set SPHINXBUILD=sphinx-build
 )
+set SPHINXOPTS=-W
 set SOURCEDIR=source
 set BUILDDIR=build
 

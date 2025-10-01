@@ -33,7 +33,10 @@ jobs:
     name: Check License Header
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
-      - uses: korandoru/hawkeye@c3d9887d4b48e5b6c77306934606a4ff4623a2d3  # v6.2.0
+      - name: Install HawkEye
+        run: cargo install hawkeye --version 6.2.0 --locked --profile dev
+      - name: Run license header check
+        run: ci/scripts/license_header.sh
 
   prettier:
     name: Use prettier to check formatting of documents

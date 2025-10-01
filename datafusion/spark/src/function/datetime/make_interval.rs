@@ -195,7 +195,7 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
     Ok(Arc::new(builder.finish()))
 }
 
-pub fn make_interval_month_day_nano(
+fn make_interval_month_day_nano(
     year: i32,
     month: i32,
     week: i32,

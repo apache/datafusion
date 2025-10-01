@@ -5160,6 +5160,36 @@ LEFT ANTI JOIN t2 ON k1 = k2
 WHERE k1 < 0
 ----
 
+# Mark testing
+statement ok
+CREATE OR REPLACE TABLE t1(b INT, c INT, d INT);
+
+statement ok
+INSERT INTO t1 VALUES
+  (10, 5, 3),   
+  ( 1, 7, 8),  
+  ( 2, 9, 7),   
+  ( 3, 8,10),   
+  ( 5, 6, 6),   
+  ( 0, 4, 9),   
+  ( 4, 8, 7),   
+  (100,6, 5);  
+
+query I rowsort
+SELECT c
+  FROM t1
+ WHERE c > d
+    OR EXISTS(SELECT 1 FROM t1 AS x WHERE x.b<t1.b)
+    OR (c <= d-2 OR c >= d+2)
+----
+4
+5
+6
+6
+7
+8
+8
+9
 
 statement ok
 DROP TABLE t1;
