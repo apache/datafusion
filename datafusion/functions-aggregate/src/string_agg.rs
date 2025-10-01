@@ -308,7 +308,7 @@ fn filter_index<T: Clone>(values: &[T], index: usize) -> Vec<T> {
 #[derive(Debug)]
 pub(crate) struct SimpleStringAggAccumulator {
     delimiter: String,
-    // Updating during `update_batch()`. e.g. "foo,bar"
+    /// Updated during `update_batch()`. e.g. "foo,bar"
     accumulated_string: String,
     has_value: bool,
 }
