@@ -22,13 +22,12 @@ use arrow::array::{
     Array, ArrayRef, AsArray, PrimitiveArray, StringArray, StringBuilder,
 };
 use arrow::compute::cast;
-use arrow::datatypes::DataType::Utf8;
+use arrow::datatypes::DataType::{Int64, Utf8};
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
-use datafusion_common::{
-    internal_datafusion_err, plan_datafusion_err, DataFusionError, Result,
+use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_expr::Volatility::Immutable;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -45,7 +44,7 @@ impl Default for SparkElt {
 impl SparkElt {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -69,6 +68,22 @@ impl ScalarUDFImpl for SparkElt {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(elt, vec![])(&args.args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let length = arg_types.len();
+        if length < 2 {
+            return exec_err!("elt expects at least 2 arguments: index, value1");
+        }
+
+        let mut coerced = Vec::with_capacity(arg_types.len());
+        coerced.push(Int64);
+
+        for _ in 1..length {
+            coerced.push(Utf8);
+        }
+
+        Ok(coerced)
     }
 }
 
