@@ -349,12 +349,12 @@ query <type_string> <sort_mode>
 - `test_name`: Uniquely identify the test name (DataFusion only)
 - `type_string`: A short string that specifies the number of result columns and the expected datatype of each result
   column. There is one character in the <type_string> for each result column. The characters codes are:
-  - 'B' - **B**oolean,
-  - 'D' - **D**atetime,
-  - 'I' - **I**nteger,
-  - 'P' - timestam**P**,
+  - 'B' - Boolean,
+  - 'D' - Datetime,
+  - 'I' - Integer,
+  - 'P' - timestamP,
   - 'R' - floating-point results,
-  - 'T' - **T**ext,
+  - 'T' - Text,
   - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
   - floating point values are rounded to the scale of "12",
