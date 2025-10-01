@@ -582,20 +582,28 @@ impl CsvFormat {
             }
         }
 
-        let schema = build_schema_helper(column_names, &column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities);
         Ok((schema, total_records_read))
     }
 }
 
-fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schema {
+fn build_schema_helper(names: Vec<String>, types: Vec<HashSet<DataType>>) -> Schema {
     let fields = names
         .into_iter()
         .zip(types)
-        .map(|(field_name, data_type_possibilities)| {
+        .map(|(field_name, mut data_type_possibilities)| {
             // ripped from arrow::csv::reader::infer_reader_schema_with_csv_options
             // determine data type based on possible types
             // if there are incompatible types, use DataType::Utf8
+
+            // ignore nulls, to avoid conflicting datatypes (e.g. [nulls, int]) being inferred as Utf8.
+            data_type_possibilities.remove(&DataType::Null);
+
             match data_type_possibilities.len() {
+                // Return Null for columns with only nulls / empty files
+                // This allows schema merging to work when reading folders
+                // such files along with normal files.
+                0 => Field::new(field_name, DataType::Null, true),
                 1 => Field::new(
                     field_name,
                     data_type_possibilities.iter().next().unwrap().clone(),
