@@ -30,9 +30,9 @@ use super::invariants::{
     InvariantLevel,
 };
 use super::DdlStatement;
-use crate::builder::{change_redundant_column, unnest_with_options};
+use crate::builder::{unique_field_aliases, unnest_with_options};
 use crate::expr::{
-    intersect_metadata_for_union, Placeholder, Sort as SortExpr, WindowFunction,
+    intersect_metadata_for_union, Alias, Placeholder, Sort as SortExpr, WindowFunction,
     WindowFunctionParams,
 };
 use crate::expr_rewriter::{
@@ -2223,13 +2223,45 @@ impl SubqueryAlias {
         alias: impl Into<TableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
-        let fields = change_redundant_column(plan.schema().fields());
-        let meta_data = plan.schema().as_ref().metadata().clone();
-        let schema: Schema =
-            DFSchema::from_unqualified_fields(fields.into(), meta_data)?.into();
-        // Since schema is the same, other than qualifier, we can use existing
-        // functional dependencies:
+
+        // Since SubqueryAlias will replace all field qualification for the output schema of `plan`,
+        // no field must share the same column name as this would lead to ambiguity when referencing
+        // columns in parent logical nodes.
+
+        // Compute unique aliases, if any, for each column of the input's schema.
+        let aliases = unique_field_aliases(plan.schema().fields());
+        let is_projection_needed = aliases.iter().any(Option::is_some);
+
+        // Insert a projection node, if needed, to make sure aliases are applied.
+        let plan = if is_projection_needed {
+            let projection_expressions = aliases
+                .iter()
+                .zip(plan.schema().iter())
+                .map(|(alias, (qualifier, field))| {
+                    let column =
+                        Expr::Column(Column::new(qualifier.cloned(), field.name()));
+                    match alias {
+                        None => column,
+                        Some(alias) => {
+                            Expr::Alias(Alias::new(column, qualifier.cloned(), alias))
+                        }
+                    }
+                })
+                .collect();
+            let projection = Projection::try_new(projection_expressions, plan)?;
+            Arc::new(LogicalPlan::Projection(projection))
+        } else {
+            plan
+        };
+
+        // Requalify fields with the new `alias`.
+        let fields = plan.schema().fields().clone();
+        let meta_data = plan.schema().metadata().clone();
         let func_dependencies = plan.schema().functional_dependencies().clone();
+
+        let schema = DFSchema::from_unqualified_fields(fields, meta_data)?;
+        let schema = Schema::from(schema);
+
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
                 .with_functional_dependencies(func_dependencies)?,
