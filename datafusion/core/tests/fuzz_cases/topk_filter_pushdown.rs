@@ -232,10 +232,10 @@ impl RunQueryResult {
     }
 }
 
-/// Iterate over each line in the plan and check that one of them has `DataSourceExec` and `DynamicFilterPhysicalExpr` in the same line.
+/// Iterate over each line in the plan and check that one of them has `DataSourceExec` and `DynamicFilter` in the same line.
 fn has_dynamic_filter_expr_pushdown(plan: &str) -> bool {
     for line in plan.lines() {
-        if line.contains("DataSourceExec") && line.contains("DynamicFilterPhysicalExpr") {
+        if line.contains("DataSourceExec") && line.contains("DynamicFilter") {
             return true;
         }
     }
@@ -297,7 +297,7 @@ async fn test_fuzz_topk_filter_pushdown() {
                         order_vec.push(ordering);
                     }
                     None => {
-                        orders.insert(order_column.to_string(), vec![ordering]);
+                        orders.insert((*order_column).to_string(), vec![ordering]);
                     }
                 }
             }

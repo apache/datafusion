@@ -79,17 +79,17 @@ const DATETIME_PATTERNS: [&str; 8] = [
 ];
 
 fn pick_date_pattern(rng: &mut ThreadRng) -> String {
-    DATE_PATTERNS
+    (*DATE_PATTERNS
         .choose(rng)
-        .expect("Empty list of date patterns")
-        .to_string()
+        .expect("Empty list of date patterns"))
+    .to_string()
 }
 
 fn pick_date_time_pattern(rng: &mut ThreadRng) -> String {
-    DATETIME_PATTERNS
+    (*DATETIME_PATTERNS
         .choose(rng)
-        .expect("Empty list of date time patterns")
-        .to_string()
+        .expect("Empty list of date time patterns"))
+    .to_string()
 }
 
 fn pick_date_and_date_time_mixed_pattern(rng: &mut ThreadRng) -> String {

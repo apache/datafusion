@@ -1304,7 +1304,7 @@ fn test_pretty_roundtrip() -> Result<()> {
         let expr =
             sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
         let round_trip_sql = unparser.expr_to_sql(&expr)?.to_string();
-        assert_eq!(pretty.to_string(), round_trip_sql);
+        assert_eq!((*pretty).to_string(), round_trip_sql);
 
         // verify that the pretty string parses to the same underlying Expr
         let pretty_sql_expr = Parser::new(&GenericDialect {})
