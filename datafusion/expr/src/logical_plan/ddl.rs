@@ -469,7 +469,7 @@ impl PartialOrd for DropCatalogSchema {
 /// to avoid a dependency on sqlparser in the core crate.
 ///
 ///
-/// [FunctionFactory]: https://docs.rs/datafusion/latest/datafusion/execution/context/trait.FunctionFactory.html
+/// [`FunctionFactory`]: https://docs.rs/datafusion/latest/datafusion/execution/context/trait.FunctionFactory.html
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CreateFunction {
     pub or_replace: bool,

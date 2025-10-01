@@ -1812,7 +1812,7 @@ pub trait QueryPlanner: Debug {
 /// # Examples of syntax that can be supported
 ///
 /// ```sql
-/// FUNCTION f1(BIGINT)
+/// CREATE FUNCTION f1(BIGINT)
 ///   RETURNS BIGINT
 ///   RETURN $1 + 1;
 /// ```
