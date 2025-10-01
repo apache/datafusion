@@ -303,6 +303,8 @@ fn filter_index<T: Clone>(values: &[T], index: usize) -> Vec<T> {
 
 /// StringAgg accumulator for the simple case (no order or distinct specified)
 /// This accumulator is more efficient than `StringAggAccumulator`
+/// because it accumulates the string directly,
+/// whereas `StringAggAccumulator` uses `ArrayAggAccumulator`.
 #[derive(Debug)]
 pub(crate) struct SimpleStringAggAccumulator {
     delimiter: String,
