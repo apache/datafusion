@@ -17,8 +17,10 @@
 
 //! Live metrics polling from physical plans
 
-use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
 use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
+use datafusion::physical_plan::{
+    visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor,
+};
 use std::sync::Arc;
 
 /// Polls live metrics from a physical plan
@@ -69,13 +71,10 @@ impl MetricsVisitor {
 impl ExecutionPlanVisitor for MetricsVisitor {
     type Error = datafusion::error::DataFusionError;
 
-    fn pre_visit(
-        &mut self,
-        plan: &dyn ExecutionPlan,
-    ) -> Result<bool, Self::Error> {
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         let metrics_set = plan.metrics();
         self.accumulate_metrics(&metrics_set);
-        
+
         // Continue visiting children
         Ok(true)
     }
@@ -87,8 +86,8 @@ impl MetricsVisitor {
         if let Some(metrics) = metrics_set {
             for metric in metrics.iter() {
                 // Get metric name from the metric itself
-                let name = "";  // Simplified for now
-                self.process_metric(name, &metric.value());
+                let name = ""; // Simplified for now
+                self.process_metric(name, metric.value());
             }
         }
     }
@@ -117,7 +116,9 @@ impl MetricsVisitor {
                     if let Some(count) = self.extract_count_value(value) {
                         self.metrics.bytes_scanned += count;
                     }
-                } else if name.contains("rows") && (name.contains("output") || name.contains("produce")) {
+                } else if name.contains("rows")
+                    && (name.contains("output") || name.contains("produce"))
+                {
                     if let Some(count) = self.extract_count_value(value) {
                         self.metrics.rows_processed += count;
                     }
@@ -141,21 +142,19 @@ impl MetricsVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::physical_plan::empty::EmptyExec;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_plan::empty::EmptyExec;
 
-    #[test] 
+    #[test]
     fn test_metrics_poller() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-        ]));
-        
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
         let empty_exec = EmptyExec::new(schema);
         let plan: Arc<dyn ExecutionPlan> = Arc::new(empty_exec);
-        
+
         let mut poller = MetricsPoller::new(&plan);
         let metrics = poller.poll();
-        
+
         // EmptyExec should have zero metrics initially
         assert_eq!(metrics.bytes_scanned, 0);
         assert_eq!(metrics.rows_processed, 0);

@@ -268,7 +268,10 @@ impl StatementExecutor {
 
         // Start progress reporter if enabled
         let progress_reporter = if print_options.progress.should_show_progress() {
-            Some(ProgressReporter::start(&physical_plan, print_options.progress.clone()).await?)
+            Some(
+                ProgressReporter::start(&physical_plan, print_options.progress.clone())
+                    .await?,
+            )
         } else {
             None
         };
@@ -290,12 +293,12 @@ impl StatementExecutor {
             let result = print_options
                 .print_stream(stream, now, &options.format)
                 .await;
-            
+
             // Stop progress reporter before returning
             if let Some(reporter) = &progress_reporter {
                 reporter.stop().await;
             }
-            
+
             result?;
         } else {
             // Bounded stream; collected results size is limited by the maxrows option

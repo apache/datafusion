@@ -18,7 +18,9 @@
 //! Plan introspection for extracting total size estimates
 
 use datafusion::common::Statistics;
-use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
+use datafusion::physical_plan::{
+    visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor,
+};
 use std::sync::Arc;
 
 /// Extracts total size estimates from a physical plan
@@ -81,13 +83,10 @@ impl TotalsVisitor {
 impl ExecutionPlanVisitor for TotalsVisitor {
     type Error = datafusion::error::DataFusionError;
 
-    fn pre_visit(
-        &mut self,
-        plan: &dyn ExecutionPlan,
-    ) -> Result<bool, Self::Error> {
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         // Focus on leaf nodes that actually read data
         if self.is_data_source(plan) {
-            if let Ok(stats) = plan.statistics() {
+            if let Ok(stats) = plan.partition_statistics(None) {
                 self.accumulate_statistics(&stats);
             }
         }
@@ -101,10 +100,10 @@ impl TotalsVisitor {
     /// Check if this plan node is a data source (leaf node that reads data)
     fn is_data_source(&self, plan: &dyn ExecutionPlan) -> bool {
         let name = plan.name();
-        
+
         // Common data source execution plans
-        name.contains("ParquetExec") 
-            || name.contains("CsvExec") 
+        name.contains("ParquetExec")
+            || name.contains("CsvExec")
             || name.contains("JsonExec")
             || name.contains("AvroExec")
             || name.contains("DataSourceExec")
@@ -133,21 +132,19 @@ impl TotalsVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::physical_plan::empty::EmptyExec;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_plan::empty::EmptyExec;
 
     #[test]
     fn test_plan_introspector() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-        ]));
-        
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
         let empty_exec = EmptyExec::new(schema);
         let plan: Arc<dyn ExecutionPlan> = Arc::new(empty_exec);
-        
+
         let introspector = PlanIntrospector::new(&plan);
         let totals = introspector.get_totals();
-        
+
         // EmptyExec should have zero totals
         assert_eq!(totals.total_bytes, 0);
         assert_eq!(totals.total_rows, 0);

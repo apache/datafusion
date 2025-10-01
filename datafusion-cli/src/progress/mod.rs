@@ -30,15 +30,13 @@ pub use config::{ProgressConfig, ProgressEstimator, ProgressMode, ProgressStyle}
 
 use datafusion::error::Result;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common_runtime::SpawnedTask;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 
 /// Main progress reporter that coordinates metrics collection, ETA estimation, and display
 pub struct ProgressReporter {
-    handle: JoinHandle<()>,
-    shutdown_tx: oneshot::Sender<()>,
+    _handle: SpawnedTask<()>,
 }
 
 impl ProgressReporter {
@@ -47,24 +45,21 @@ impl ProgressReporter {
         physical_plan: &Arc<dyn ExecutionPlan>,
         config: ProgressConfig,
     ) -> Result<Self> {
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        
         // Clone the plan for the background task
         let plan = Arc::clone(physical_plan);
-        
-        let handle = tokio::spawn(async move {
+
+        let _handle = SpawnedTask::spawn(async move {
             let reporter = ProgressReporterInner::new(plan, config);
-            reporter.run(shutdown_rx).await;
+            reporter.run().await;
         });
 
-        Ok(Self { handle, shutdown_tx })
+        Ok(Self { _handle })
     }
 
     /// Stop the progress reporter
+    /// Note: The task is automatically aborted when this struct is dropped
     pub async fn stop(&self) {
-        // This implementation is simplified - in practice we'd need proper synchronization
-        // For now, we just abort the task
-        self.handle.abort();
+        // Task will be aborted automatically when this struct is dropped
     }
 }
 
@@ -79,7 +74,7 @@ impl ProgressReporterInner {
         Self { plan, config }
     }
 
-    async fn run(self, mut shutdown_rx: oneshot::Receiver<()>) {
+    async fn run(self) {
         // Early exit if progress is disabled
         if !self.config.should_show_progress() {
             return;
@@ -87,7 +82,7 @@ impl ProgressReporterInner {
 
         let introspector = plan_introspect::PlanIntrospector::new(&self.plan);
         let totals = introspector.get_totals();
-        
+
         let mut poller = metrics_poll::MetricsPoller::new(&self.plan);
         let mut estimator = estimator::ProgressEstimator::new(self.config.estimator);
         let mut display = display::ProgressDisplay::new(self.config.style);
@@ -96,19 +91,15 @@ impl ProgressReporterInner {
         let mut ticker = tokio::time::interval(interval);
 
         loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    let metrics = poller.poll();
-                    let progress = self.calculate_progress(&totals, &metrics);
-                    
-                    let eta = estimator.update(progress.clone());
-                    display.update(&progress, eta);
-                }
-                _ = &mut shutdown_rx => {
-                    display.finish();
-                    break;
-                }
-            }
+            ticker.tick().await;
+            let metrics = poller.poll();
+            let progress = self.calculate_progress(&totals, &metrics);
+
+            let eta = estimator.update(progress.clone());
+            display.update(&progress, eta);
+
+            // In a real implementation, we'd check for completion or cancellation
+            // For now, this runs indefinitely until the task is dropped
         }
     }
 
@@ -117,18 +108,27 @@ impl ProgressReporterInner {
         totals: &plan_introspect::PlanTotals,
         metrics: &metrics_poll::LiveMetrics,
     ) -> ProgressInfo {
-        let (current, total, unit) = if totals.total_bytes > 0 && metrics.bytes_scanned > 0 {
-            (metrics.bytes_scanned, totals.total_bytes, ProgressUnit::Bytes)
-        } else if totals.total_rows > 0 && metrics.rows_processed > 0 {
-            (metrics.rows_processed, totals.total_rows, ProgressUnit::Rows)
-        } else {
-            return ProgressInfo {
-                current: metrics.rows_processed,
-                total: None,
-                unit: ProgressUnit::Rows,
-                percent: None,
+        let (current, total, unit) =
+            if totals.total_bytes > 0 && metrics.bytes_scanned > 0 {
+                (
+                    metrics.bytes_scanned,
+                    totals.total_bytes,
+                    ProgressUnit::Bytes,
+                )
+            } else if totals.total_rows > 0 && metrics.rows_processed > 0 {
+                (
+                    metrics.rows_processed,
+                    totals.total_rows,
+                    ProgressUnit::Rows,
+                )
+            } else {
+                return ProgressInfo {
+                    current: metrics.rows_processed,
+                    total: None,
+                    unit: ProgressUnit::Rows,
+                    percent: None,
+                };
             };
-        };
 
         let percent = if total > 0 {
             Some(((current as f64 / total as f64) * 100.0).min(100.0))
@@ -192,14 +192,14 @@ fn format_bytes(bytes: usize) -> String {
 fn format_number(num: usize) -> String {
     let s = num.to_string();
     let mut result = String::new();
-    
+
     for (i, c) in s.chars().rev().enumerate() {
         if i > 0 && i % 3 == 0 {
             result.insert(0, ',');
         }
         result.insert(0, c);
     }
-    
+
     result
 }
 

@@ -153,7 +153,11 @@ struct Args {
     #[clap(long, value_enum, default_value_t = ProgressStyle::Bar, help = "Progress bar style")]
     progress_style: ProgressStyle,
 
-    #[clap(long, default_value = "200", help = "Progress update interval in milliseconds")]
+    #[clap(
+        long,
+        default_value = "200",
+        help = "Progress update interval in milliseconds"
+    )]
     progress_interval: u64,
 
     #[clap(long, value_enum, default_value_t = ProgressEstimator::Kalman, help = "ETA estimation algorithm")]
