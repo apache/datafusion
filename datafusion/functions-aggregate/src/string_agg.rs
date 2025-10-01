@@ -307,7 +307,7 @@ fn filter_index<T: Clone>(values: &[T], index: usize) -> Vec<T> {
 pub(crate) struct SimpleStringAggAccumulator {
     delimiter: String,
     // Updating during `update_batch()`. e.g. "foo,bar"
-    in_progress_string: String,
+    accumulated_string: String,
     has_value: bool,
 }
 
@@ -315,7 +315,7 @@ impl SimpleStringAggAccumulator {
     pub fn new(delimiter: &str) -> Self {
         Self {
             delimiter: delimiter.to_string(),
-            in_progress_string: "".to_string(),
+            accumulated_string: "".to_string(),
             has_value: false,
         }
     }
@@ -327,10 +327,10 @@ impl SimpleStringAggAccumulator {
     {
         for value in iter.flatten() {
             if self.has_value {
-                self.in_progress_string.push_str(&self.delimiter);
+                self.accumulated_string.push_str(&self.delimiter);
             }
 
-            self.in_progress_string.push_str(value);
+            self.accumulated_string.push_str(value);
             self.has_value = true;
         }
     }
@@ -369,7 +369,7 @@ impl Accumulator for SimpleStringAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let result = if self.has_value {
-            ScalarValue::LargeUtf8(Some(std::mem::take(&mut self.in_progress_string)))
+            ScalarValue::LargeUtf8(Some(std::mem::take(&mut self.accumulated_string)))
         } else {
             ScalarValue::LargeUtf8(None)
         };
@@ -379,12 +379,12 @@ impl Accumulator for SimpleStringAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.delimiter.capacity() + self.in_progress_string.capacity()
+        size_of_val(self) + self.delimiter.capacity() + self.accumulated_string.capacity()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let result = if self.has_value {
-            ScalarValue::LargeUtf8(Some(std::mem::take(&mut self.in_progress_string)))
+            ScalarValue::LargeUtf8(Some(std::mem::take(&mut self.accumulated_string)))
         } else {
             ScalarValue::LargeUtf8(None)
         };
