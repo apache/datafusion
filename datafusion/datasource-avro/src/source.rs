@@ -20,9 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::avro_to_arrow::Reader as AvroReader;
-
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow_avro::reader::{Reader, ReaderBuilder};
+use arrow_avro::schema::AvroSchema;
 use datafusion_common::error::Result;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
@@ -51,13 +51,14 @@ impl AvroSource {
         Self::default()
     }
 
-    fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
-        AvroReader::try_new(
-            reader,
-            Arc::clone(self.schema.as_ref().expect("Schema must set before open")),
-            self.batch_size.expect("Batch size must set before open"),
-            self.projection.clone(),
-        )
+    fn open<R: std::io::Read>(&self, reader: R) -> Result<Reader<R>> {
+        let schema: &Schema = self.schema.as_ref().expect("Schema must set before open");
+        let avro_schema = AvroSchema::try_from(schema)?;
+        ReaderBuilder::new()
+            .with_reader_schema(avro_schema)
+            .with_batch_size(self.batch_size.expect("Batch size must set before open"))
+            .build(reader)
+            .map_err(Into::into)
     }
 }
 

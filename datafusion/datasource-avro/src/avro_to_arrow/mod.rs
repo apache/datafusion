@@ -19,21 +19,20 @@
 //!
 //! [Avro]: https://avro.apache.org/docs/1.2.0/
 
-mod arrow_array_reader;
-mod reader;
-mod schema;
+// mod arrow_array_reader;
+// mod reader;
+// mod schema;
 
 use arrow::datatypes::Schema;
-pub use reader::{Reader, ReaderBuilder};
+use arrow_avro::reader::ReaderBuilder;
 
-pub use schema::to_arrow_schema;
+// pub use schema::to_arrow_schema;
 use std::io::Read;
 
 /// Read Avro schema given a reader
 pub fn read_avro_schema_from_reader<R: Read>(
     reader: &mut R,
 ) -> datafusion_common::Result<Schema> {
-    let avro_reader = apache_avro::Reader::new(reader)?;
-    let schema = avro_reader.writer_schema();
-    to_arrow_schema(schema)
+    let avro_reader = ReaderBuilder::new().build(reader)?;
+    Ok(avro_reader.schema().as_ref().clone())
 }

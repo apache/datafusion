@@ -89,7 +89,7 @@ version = "50.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-apache-avro = { version = "0.20", default-features = false }
+#apache-avro = { version = "0.20", default-features = false }
 arrow = { version = "56.2.0", features = [
     "prettyprint",
     "chrono-tz",
@@ -103,6 +103,7 @@ arrow-ipc = { version = "56.2.0", default-features = false, features = [
 ] }
 arrow-ord = { version = "56.2.0", default-features = false }
 arrow-schema = { version = "56.2.0", default-features = false }
+arrow-avro = { version = "56.2.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.10"
@@ -195,6 +196,12 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(tarpaulin_include)",
 ] }
 unused_qualifications = "deny"
+
+
+# TEMPORARY: override arrow-avro for testing
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "b444ea7127ebc8136564bc9af036353d0c90991b" }
+arrow-avro = { git = "https://github.com/apache/arrow-rs.git", rev = "b444ea7127ebc8136564bc9af036353d0c90991b" }
 
 # --------------------
 # Compilation Profiles
