@@ -181,6 +181,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
         // TODO Extend FFI to get the registry and codex
         let default_ctx = SessionContext::new();
+        let task_context = default_ctx.task_ctx();
         let codex = DefaultPhysicalExtensionCodec {};
 
         let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
@@ -190,7 +191,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let sort_exprs = parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
-            &default_ctx,
+            &task_context,
             &schema,
             &codex,
         )?;
@@ -202,7 +203,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let partitioning = parse_protobuf_partitioning(
             Some(&proto_output_partitioning),
-            &default_ctx,
+            &task_context,
             &schema,
             &codex,
         )?

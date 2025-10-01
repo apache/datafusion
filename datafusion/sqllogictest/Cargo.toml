@@ -53,8 +53,8 @@ itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
 postgres-protocol = { version = "0.6.7", optional = true }
-postgres-types = { version = "0.2.8", features = ["derive", "with-chrono-0_4"], optional = true }
-rust_decimal = { version = "1.37.2", features = ["tokio-pg"] }
+postgres-types = { version = "0.2.10", features = ["derive", "with-chrono-0_4"], optional = true }
+rust_decimal = { version = "1.38.0", features = ["tokio-pg"] }
 # When updating the following dependency verify that sqlite test file regeneration works correctly
 # by running the regenerate_sqlite_files.sh script.
 sqllogictest = "0.28.4"
@@ -62,9 +62,9 @@ sqlparser = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true, optional = true }
 testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }
-thiserror = "2.0.16"
+thiserror = "2.0.17"
 tokio = { workspace = true }
-tokio-postgres = { version = "0.7.12", optional = true }
+tokio-postgres = { version = "0.7.14", optional = true }
 
 [features]
 avro = ["datafusion/avro"]

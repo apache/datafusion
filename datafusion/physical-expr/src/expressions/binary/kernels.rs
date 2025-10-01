@@ -71,7 +71,7 @@ macro_rules! create_dyn_kernel {
                     call_bitwise_kernel!(left, right, $KERNEL, UInt64Array)
                 }
                 other => plan_err!(
-                    "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+                    "Data type {} not supported for binary operation '{}' on dyn arrays",
                     other,
                     stringify!($KERNEL)
                 ),
@@ -117,7 +117,7 @@ macro_rules! create_dyn_scalar_kernel {
                 DataType::UInt32 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt32Array, u32),
                 DataType::UInt64 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt64Array, u64),
                 other => plan_err!(
-                    "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+                    "Data type {} not supported for binary operation '{}' on dyn arrays",
                     other,
                     stringify!($KERNEL)
                 ),

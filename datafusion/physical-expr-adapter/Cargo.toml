@@ -25,5 +25,3 @@ datafusion-physical-expr-common = { workspace = true }
 itertools = { workspace = true }
 
 [dev-dependencies]
-insta = { workspace = true }
-rstest = { workspace = true }

@@ -98,11 +98,9 @@ fn init_once() {
 fn spawn_test_process(test: &str) {
     init_once();
 
-    let test_path = format!(
-        "memory_limit::memory_limit_validation::sort_mem_validation::{}",
-        test
-    );
-    info!("Running test: {}", test_path);
+    let test_path =
+        format!("memory_limit::memory_limit_validation::sort_mem_validation::{test}");
+    info!("Running test: {test_path}");
 
     // Run the test command
     let output = Command::new("cargo")

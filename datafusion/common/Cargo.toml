@@ -49,6 +49,7 @@ pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
 parquet = ["dep:parquet"]
+sql = ["sqlparser"]
 
 [dependencies]
 ahash = { workspace = true }
@@ -65,14 +66,14 @@ half = { workspace = true }
 hashbrown = { workspace = true }
 hex = { workspace = true, optional = true }
 indexmap = { workspace = true }
-libc = "0.2.175"
+libc = "0.2.176"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
 pyo3 = { version = "0.25", optional = true }
 recursive = { workspace = true, optional = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 tokio = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
@@ -82,3 +83,4 @@ web-time = "1.1.0"
 chrono = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
+sqlparser = { workspace = true }

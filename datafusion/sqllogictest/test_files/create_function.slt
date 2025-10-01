@@ -21,11 +21,6 @@
 ## Note that DataFusion provides a pluggable system for creating functions
 ## but has no built in support for doing so.
 
-# Use PostgresSQL dialect (until we upgrade to sqlparser 0.44, where CREATE FUNCTION)
-# is supported in the Generic dialect (the default)
-statement ok
-set datafusion.sql_parser.dialect = 'Postgres';
-
 # Create function will fail unless a user supplied function factory is supplied
 statement error DataFusion error: Invalid or Unsupported Configuration: Function factory has not been configured
 CREATE FUNCTION foo (DOUBLE) RETURNS DOUBLE RETURN $1 + $2;
