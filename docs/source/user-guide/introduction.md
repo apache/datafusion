@@ -86,7 +86,7 @@ Here are some example systems built using DataFusion:
 By using DataFusion, projects are freed to focus on their specific
 features, and avoid reimplementing general (but still necessary)
 features such as an expression representation, standard optimizations,
-parellelized streaming execution plans, file format support, etc.
+parallelized streaming execution plans, file format support, etc.
 
 ## Known Users
 
