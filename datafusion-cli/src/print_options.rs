@@ -21,6 +21,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 
 use crate::print_format::PrintFormat;
+use crate::progress::ProgressConfig;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -73,6 +74,7 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
+    pub progress: ProgressConfig,
 }
 
 // Returns the query execution details formatted
