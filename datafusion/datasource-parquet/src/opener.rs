@@ -51,10 +51,11 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
+use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -98,6 +99,7 @@ pub(super) struct ParquetOpener {
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional parquet FileDecryptionProperties
+    #[cfg(feature = "parquet_encryption")]
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Rewrite expressions in the context of the file schema
     pub(crate) expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
@@ -105,6 +107,9 @@ pub(super) struct ParquetOpener {
     #[cfg(feature = "parquet_encryption")]
     pub encryption_factory:
         Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
+    /// Maximum size of the predicate cache, in bytes. If none, uses
+    /// the arrow-rs default.
+    pub max_predicate_cache_size: Option<usize>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -151,9 +156,12 @@ impl FileOpener for ParquetOpener {
         let mut predicate_file_schema = Arc::clone(&self.logical_file_schema);
 
         let enable_page_index = self.enable_page_index;
+        #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
+        let max_predicate_cache_size = self.max_predicate_cache_size;
 
         Ok(Box::pin(async move {
+            #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
                 .get_file_decryption_properties(&file_location)
                 .await?;
@@ -401,27 +409,64 @@ impl FileOpener for ParquetOpener {
                 builder = builder.with_limit(limit)
             }
 
+            if let Some(max_predicate_cache_size) = max_predicate_cache_size {
+                builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
+            }
+
+            // metrics from the arrow reader itself
+            let arrow_reader_metrics = ArrowReaderMetrics::enabled();
+
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
                 .with_row_groups(row_group_indexes)
+                .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
-            let stream = stream
-                .map_err(DataFusionError::from)
-                .map(move |b| b.and_then(|b| schema_mapping.map_batch(b)));
+            let files_ranges_pruned_statistics =
+                file_metrics.files_ranges_pruned_statistics.clone();
+            let predicate_cache_inner_records =
+                file_metrics.predicate_cache_inner_records.clone();
+            let predicate_cache_records = file_metrics.predicate_cache_records.clone();
+
+            let stream = stream.map_err(DataFusionError::from).map(move |b| {
+                b.and_then(|b| {
+                    copy_arrow_reader_metrics(
+                        &arrow_reader_metrics,
+                        &predicate_cache_inner_records,
+                        &predicate_cache_records,
+                    );
+                    schema_mapping.map_batch(b)
+                })
+            });
 
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
                     stream,
                     file_pruner,
-                    file_metrics.files_ranges_pruned_statistics.clone(),
+                    files_ranges_pruned_statistics,
                 )
                 .boxed())
             } else {
                 Ok(stream.boxed())
             }
         }))
+    }
+}
+
+/// Copies metrics from ArrowReaderMetrics (the metrics collected by the
+/// arrow-rs parquet reader) to the parquet file metrics for DataFusion
+fn copy_arrow_reader_metrics(
+    arrow_reader_metrics: &ArrowReaderMetrics,
+    predicate_cache_inner_records: &Count,
+    predicate_cache_records: &Count,
+) {
+    if let Some(v) = arrow_reader_metrics.records_read_from_inner() {
+        predicate_cache_inner_records.add(v);
+    }
+
+    if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
+        predicate_cache_records.add(v);
     }
 }
 
@@ -502,6 +547,7 @@ where
 }
 
 #[derive(Default)]
+#[cfg_attr(not(feature = "parquet_encryption"), allow(dead_code))]
 struct EncryptionContext {
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -544,6 +590,7 @@ impl EncryptionContext {
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[allow(dead_code)]
 impl EncryptionContext {
     async fn get_file_decryption_properties(
         &self,
@@ -563,6 +610,7 @@ impl ParquetOpener {
     }
 
     #[cfg(not(feature = "parquet_encryption"))]
+    #[allow(dead_code)]
     fn get_encryption_context(&self) -> EncryptionContext {
         EncryptionContext::default()
     }
@@ -652,8 +700,8 @@ async fn load_page_index<T: AsyncFileReader>(
     if missing_column_index || missing_offset_index {
         let m = Arc::try_unwrap(Arc::clone(parquet_metadata))
             .unwrap_or_else(|e| e.as_ref().clone());
-        let mut reader =
-            ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
+        let mut reader = ParquetMetaDataReader::new_with_metadata(m)
+            .with_page_index_policy(PageIndexPolicy::Optional);
         reader.load_page_index(input).await?;
         let new_parquet_metadata = reader.finish()?;
         let new_arrow_reader =
@@ -819,10 +867,12 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
 
@@ -907,10 +957,12 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
 
@@ -1011,10 +1063,12 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
         let make_meta = || FileMeta {
@@ -1125,10 +1179,12 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: false, // note that this is false!
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
 
@@ -1240,10 +1296,12 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
         };
 
@@ -1422,10 +1480,12 @@ mod test {
             schema_adapter_factory: Arc::new(CustomSchemaAdapterFactory),
             enable_row_group_stats_pruning: false,
             coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
             expr_adapter_factory: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
+            max_predicate_cache_size: None,
         };
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);

@@ -18,11 +18,11 @@
 [package]
 name = "datafusion-session"
 description = "datafusion-session"
+readme = "README.md"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
-readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -31,22 +31,12 @@ version.workspace = true
 all-features = true
 
 [dependencies]
-arrow = { workspace = true }
 async-trait = { workspace = true }
-dashmap = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-datafusion-sql = { workspace = true }
-futures = { workspace = true }
-itertools = { workspace = true }
-log = { workspace = true }
-object_store = { workspace = true }
 parking_lot = { workspace = true }
-tokio = { workspace = true }
 
 [lints]
 workspace = true

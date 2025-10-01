@@ -20,6 +20,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{assert_contains, ParamValues, ScalarValue};
 use datafusion_expr::{LogicalPlan, Prepare, Statement};
 use insta::assert_snapshot;
+use itertools::Itertools as _;
 use std::collections::HashMap;
 
 pub struct ParameterTest<'a> {
@@ -36,7 +37,7 @@ impl ParameterTest<'_> {
         let expected_types: HashMap<String, Option<DataType>> = self
             .expected_types
             .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
             .collect();
 
         assert_eq!(actual_types, expected_types);
@@ -54,7 +55,7 @@ fn generate_prepare_stmt_and_data_types(sql: &str) -> (LogicalPlan, String) {
     let plan = logical_plan(sql).unwrap();
     let data_types = match &plan {
         LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. })) => {
-            format!("{data_types:?}")
+            data_types.iter().join(", ").to_string()
         }
         _ => panic!("Expected a Prepare statement"),
     };
@@ -160,7 +161,7 @@ fn test_prepare_statement_to_plan_no_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"[Int32]"#);
+    assert_snapshot!(dt, @r#"Int32"#);
 
     ///////////////////
     // replace params with values
@@ -188,7 +189,7 @@ fn test_prepare_statement_to_plan_no_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"[]"#);
+    assert_snapshot!(dt, @r#""#);
 
     ///////////////////
     // replace params with values
@@ -269,7 +270,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"[Int32]"#);
+    assert_snapshot!(dt, @r#"Int32"#);
 
     ///////////////////
     // replace params with values
@@ -294,7 +295,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"[Int32]"#);
+    assert_snapshot!(dt, @r#"Int32"#);
 
     ///////////////////
     // replace params with values
@@ -319,7 +320,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"[Int32, Float64]"#);
+    assert_snapshot!(dt, @r#"Int32, Float64"#);
 
     ///////////////////
     // replace params with values
@@ -686,7 +687,7 @@ fn test_prepare_statement_to_plan_one_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"[Int32]"#);
+    assert_snapshot!(dt, @r#"Int32"#);
 
     ///////////////////
     // replace params with values
@@ -719,7 +720,7 @@ fn test_prepare_statement_to_plan_data_type() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"[Float64]"#);
+    assert_snapshot!(dt, @r#"Float64"#);
 
     ///////////////////
     // replace params with values still succeed and use Float64
@@ -752,7 +753,7 @@ fn test_prepare_statement_to_plan_multi_params() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"[Int32, Utf8View, Float64, Int32, Float64, Utf8View]"#);
+    assert_snapshot!(dt, @r#"Int32, Utf8View, Float64, Int32, Float64, Utf8View"#);
 
     ///////////////////
     // replace params with values
@@ -797,7 +798,7 @@ fn test_prepare_statement_to_plan_having() {
               TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"[Int32, Float64, Float64, Float64]"#);
+    assert_snapshot!(dt, @r#"Int32, Float64, Float64, Float64"#);
 
     ///////////////////
     // replace params with values
@@ -836,7 +837,7 @@ fn test_prepare_statement_to_plan_limit() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"[Int64, Int64]"#);
+    assert_snapshot!(dt, @r#"Int64, Int64"#);
 
     // replace params with values
     let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];

@@ -76,7 +76,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.86.0"
+rust-version = "1.87.0"
 # Define DataFusion version
 version = "50.0.0"
 
@@ -90,19 +90,19 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.20", default-features = false }
-arrow = { version = "56.0.0", features = [
+arrow = { version = "56.2.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "56.0.0", default-features = false }
-arrow-flight = { version = "56.0.0", features = [
+arrow-buffer = { version = "56.2.0", default-features = false }
+arrow-flight = { version = "56.2.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "56.0.0", default-features = false, features = [
+arrow-ipc = { version = "56.2.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "56.0.0", default-features = false }
-arrow-schema = { version = "56.0.0", default-features = false }
+arrow-ord = { version = "56.2.0", default-features = false }
+arrow-schema = { version = "56.2.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.10"
@@ -121,14 +121,14 @@ datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "50.
 datafusion-datasource-json = { path = "datafusion/datasource-json", version = "50.0.0", default-features = false }
 datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "50.0.0", default-features = false }
 datafusion-doc = { path = "datafusion/doc", version = "50.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "50.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "50.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "50.0.0", default-features = false }
+datafusion-expr = { path = "datafusion/expr", version = "50.0.0", default-features = false }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "50.0.0" }
 datafusion-ffi = { path = "datafusion/ffi", version = "50.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "50.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "50.0.0" }
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "50.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "50.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "50.0.0", default-features = false }
 datafusion-functions-table = { path = "datafusion/functions-table", version = "50.0.0" }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "50.0.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "50.0.0" }
@@ -152,16 +152,15 @@ futures = "0.3"
 half = { version = "2.6.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
-indexmap = "2.11.1"
+indexmap = "2.11.4"
 itertools = "0.14"
 log = "^0.4"
-object_store = { version = "0.12.3", default-features = false }
+object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "56.0.0", default-features = false, features = [
+parquet = { version = "56.2.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
-    "encryption",
 ] }
 pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"
@@ -180,13 +179,56 @@ testcontainers-modules = { version = "0.12" }
 tokio = { version = "1.47", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
 
+[workspace.lints.clippy]
+# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
+large_futures = "warn"
+used_underscore_binding = "warn"
+or_fun_call = "warn"
+unnecessary_lazy_evaluations = "warn"
+uninlined_format_args = "warn"
+inefficient_to_string = "warn"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
+    "cfg(tarpaulin)",
+    "cfg(tarpaulin_include)",
+] }
+unused_qualifications = "deny"
+
+# --------------------
+# Compilation Profiles
+# --------------------
+#  A Cargo profile is a preset for the compiler/linker knobs that trade off:
+# - Build time: how quickly code compiles and links
+# - Runtime performance: how fast the resulting binaries execute
+# - Binary size: how large the executables end up
+# - Debuggability: how much debug information is preserved for debugging and profiling
+#
+# Profiles available:
+# - dev: default debug build; fastest to compile, slowest to run, full debug info
+#     for everyday development.
+#     Run: cargo run
+# - release: optimized build; slowest to compile, fastest to run, smallest
+#     binaries for public releases.
+#     Run: cargo run --release
+# - release-nonlto: skips LTO, so it builds quicker while staying close to
+#     release performance. It is useful when developing performance optimizations.
+#     Run: cargo run --profile release-nonlto
+# - profiling: inherits release optimizations but retains debug info to support
+#     profiling tools and flamegraphs.
+#     Run: cargo run --profile profiling
+# - ci: derived from `dev` but disables incremental builds and strips dependency
+#     symbols to keep CI artifacts small and reproducible.
+#     Run: cargo run --profile ci
+#
+# If you want to optimize compilation, the `compile_profile` benchmark can be useful.
+# See `benchmarks/README.md` for more details.
 [profile.release]
 codegen-units = 1
 lto = true
 strip = true      # Eliminate debug information to minimize binary size
 
-# the release profile takes a long time to build so we can use this profile during development to save time
-# cargo build --profile release-nonlto
 [profile.release-nonlto]
 codegen-units = 16
 debug-assertions = false
@@ -199,35 +241,20 @@ rpath = false
 strip = false            # Retain debug info for flamegraphs
 
 [profile.ci]
+debug = false
 inherits = "dev"
 incremental = false
 
-# ci turns off debug info, etc. for dependencies to allow for smaller binaries making caching more effective
+# This rule applies to every package except workspace members (dependencies
+# such as `arrow` and `tokio`). It disables debug info and related features on
+# dependencies so their binaries stay smaller, improving cache reuse.
 [profile.ci.package."*"]
 debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
 
-# release inherited profile keeping debug information and symbols
-# for mem/cpu profiling
 [profile.profiling]
 inherits = "release"
 debug = true
 strip = false
-
-[workspace.lints.clippy]
-# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
-large_futures = "warn"
-used_underscore_binding = "warn"
-or_fun_call = "warn"
-unnecessary_lazy_evaluations = "warn"
-uninlined_format_args = "warn"
-
-[workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
-    "cfg(tarpaulin)",
-    "cfg(tarpaulin_include)",
-] }
-unused_qualifications = "deny"

@@ -236,7 +236,7 @@ pub fn hash_join_exec(
         join_type,
         None,
         PartitionMode::Partitioned,
-        NullEquality::NullEqualsNull,
+        NullEquality::NullEqualsNothing,
     )?))
 }
 
@@ -263,7 +263,7 @@ pub fn bounded_window_exec_with_partition(
         partition_by,
         &sort_exprs,
         Arc::new(WindowFrame::new(Some(false))),
-        schema.as_ref(),
+        schema,
         false,
         false,
         None,
@@ -304,7 +304,7 @@ pub fn sort_preserving_merge_exec_with_fetch(
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(UnionExec::new(input))
+    UnionExec::try_new(input).unwrap()
 }
 
 pub fn local_limit_exec(

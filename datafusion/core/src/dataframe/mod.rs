@@ -43,7 +43,7 @@ use crate::physical_plan::{
 use crate::prelude::SessionContext;
 use std::any::Any;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
@@ -52,7 +52,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
+    DataFusionError, ParamValues, ScalarValue, SchemaError, TableReference,
+    UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -70,7 +71,6 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_sql::TableReference;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -267,6 +267,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn parse_sql_expr(&self, sql: &str) -> Result<Expr> {
         let df_schema = self.schema();
 
@@ -333,6 +334,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn select_exprs(self, exprs: &[&str]) -> Result<DataFrame> {
         let expr_list = exprs
             .iter()
@@ -2021,31 +2023,38 @@ impl DataFrame {
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
         let window_func_exprs = find_window_exprs([&expr]);
 
-        let (window_fn_str, plan) = if window_func_exprs.is_empty() {
-            (None, self.plan)
+        let original_names: HashSet<String> = self
+            .plan
+            .schema()
+            .iter()
+            .map(|(_, f)| f.name().clone())
+            .collect();
+
+        // Maybe build window plan
+        let plan = if window_func_exprs.is_empty() {
+            self.plan
         } else {
-            (
-                Some(window_func_exprs[0].to_string()),
-                LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?,
-            )
+            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
 
-        let mut col_exists = false;
         let new_column = expr.alias(name);
+        let mut col_exists = false;
+
         let mut fields: Vec<(Expr, bool)> = plan
             .schema()
             .iter()
             .filter_map(|(qualifier, field)| {
+                // Skip new fields introduced by window_plan
+                if !original_names.contains(field.name()) {
+                    return None;
+                }
+
                 if field.name() == name {
                     col_exists = true;
                     Some((new_column.clone(), true))
                 } else {
                     let e = col(Column::from((qualifier, field)));
-                    window_fn_str
-                        .as_ref()
-                        .filter(|s| *s == &e.to_string())
-                        .is_none()
-                        .then_some((e, self.projection_requires_validation))
+                    Some((e, self.projection_requires_validation))
                 }
             })
             .collect();
@@ -2438,8 +2447,7 @@ impl TableProvider for DataFrameTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        let schema: Schema = self.plan.schema().as_ref().into();
-        Arc::new(schema)
+        Arc::clone(self.plan.schema().inner())
     }
 
     fn table_type(&self) -> TableType {

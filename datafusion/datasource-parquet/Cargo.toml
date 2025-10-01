@@ -18,11 +18,11 @@
 [package]
 name = "datafusion-datasource-parquet"
 description = "datafusion-datasource-parquet"
+readme = "README.md"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
-readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -34,28 +34,24 @@ all-features = true
 arrow = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store", "parquet"] }
 datafusion-common-runtime = { workspace = true }
-datafusion-datasource = { workspace = true, features = ["parquet"] }
+datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
-datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-pruning = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
-hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true }
-rand = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
@@ -73,5 +69,4 @@ parquet_encryption = [
     "parquet/encryption",
     "datafusion-common/parquet_encryption",
     "datafusion-execution/parquet_encryption",
-    "dep:hex",
 ]

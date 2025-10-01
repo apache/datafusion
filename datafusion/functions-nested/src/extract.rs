@@ -337,7 +337,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                         ],
-                        array_coercion: None,
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: vec![
@@ -346,7 +346,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                         ],
-                        array_coercion: None,
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
                     }),
                 ],
                 Volatility::Immutable,
@@ -451,7 +451,7 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_array_slice::<i64>(array, from_array, to_array, stride)
         }
-        _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
+        _ => exec_err!("array_slice does not support type: {}", array_data_type),
     }
 }
 
@@ -672,15 +672,7 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::Array {
-                        arguments: vec![ArrayFunctionArgument::Array],
-                        array_coercion: Some(ListCoercion::FixedSizedListToList),
-                    },
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -730,10 +722,7 @@ fn array_pop_front_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_front_list::<i64>(array)
         }
-        _ => exec_err!(
-            "array_pop_front does not support type: {:?}",
-            array_data_type
-        ),
+        _ => exec_err!("array_pop_front does not support type: {}", array_data_type),
     }
 }
 
@@ -779,15 +768,7 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::Array {
-                        arguments: vec![ArrayFunctionArgument::Array],
-                        array_coercion: Some(ListCoercion::FixedSizedListToList),
-                    },
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_pop_back")],
         }
     }
@@ -839,7 +820,7 @@ fn array_pop_back_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_pop_back_list::<i64>(array)
         }
         _ => exec_err!(
-            "array_pop_back does not support type: {:?}",
+            "array_pop_back does not support type: {}",
             array.data_type()
         ),
     }
@@ -942,7 +923,7 @@ fn array_any_value_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&array)?;
             general_array_any_value::<i64>(array)
         }
-        data_type => exec_err!("array_any_value does not support type: {:?}", data_type),
+        data_type => exec_err!("array_any_value does not support type: {data_type}"),
     }
 }
 

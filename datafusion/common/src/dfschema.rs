@@ -101,7 +101,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// let df_schema = DFSchema::from_unqualified_fields(vec![
 ///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
 /// ].into(),HashMap::new()).unwrap();
-/// let schema = Schema::from(df_schema);
+/// let schema: &Schema = df_schema.as_arrow();
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -594,7 +594,7 @@ impl DFSchema {
         &self,
         arrow_schema: &Schema,
     ) -> Result<()> {
-        let self_arrow_schema: Schema = self.into();
+        let self_arrow_schema = self.as_arrow();
         self_arrow_schema
             .fields()
             .iter()
@@ -669,8 +669,8 @@ impl DFSchema {
                         ))
                     {
                         _plan_err!(
-                            "Schema mismatch: Expected field '{}' with type {:?}, \
-                            but got '{}' with type {:?}.",
+                            "Schema mismatch: Expected field '{}' with type {}, \
+                            but got '{}' with type {}.",
                             f1.name(),
                             f1.data_type(),
                             f2.name(),
@@ -747,7 +747,8 @@ impl DFSchema {
     }
 
     /// Returns true of two [`DataType`]s are semantically equal (same
-    /// name and type), ignoring both metadata and nullability, and decimal precision/scale.
+    /// name and type), ignoring both metadata and nullability, decimal precision/scale,
+    /// and timezone time units/timezones.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
     pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
@@ -799,12 +800,24 @@ impl DFSchema {
                         .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_semantically_equal(f1, f2))
             }
             (
+                DataType::Decimal32(_l_precision, _l_scale),
+                DataType::Decimal32(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Decimal64(_l_precision, _l_scale),
+                DataType::Decimal64(_r_precision, _r_scale),
+            ) => true,
+            (
                 DataType::Decimal128(_l_precision, _l_scale),
                 DataType::Decimal128(_r_precision, _r_scale),
             ) => true,
             (
                 DataType::Decimal256(_l_precision, _l_scale),
                 DataType::Decimal256(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Timestamp(_l_time_unit, _l_timezone),
+                DataType::Timestamp(_r_time_unit, _r_timezone),
             ) => true,
             _ => dt1 == dt2,
         }
@@ -1056,6 +1069,12 @@ fn format_simple_data_type(data_type: &DataType) -> String {
         DataType::Dictionary(_, value_type) => {
             format_simple_data_type(value_type.as_ref())
         }
+        DataType::Decimal32(precision, scale) => {
+            format!("decimal32({precision}, {scale})")
+        }
+        DataType::Decimal64(precision, scale) => {
+            format!("decimal64({precision}, {scale})")
+        }
         DataType::Decimal128(precision, scale) => {
             format!("decimal128({precision}, {scale})")
         }
@@ -1063,23 +1082,7 @@ fn format_simple_data_type(data_type: &DataType) -> String {
             format!("decimal256({precision}, {scale})")
         }
         DataType::Null => "null".to_string(),
-        _ => format!("{data_type:?}").to_lowercase(),
-    }
-}
-
-impl From<DFSchema> for Schema {
-    /// Convert DFSchema into a Schema
-    fn from(df_schema: DFSchema) -> Self {
-        let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
-    }
-}
-
-impl From<&DFSchema> for Schema {
-    /// Convert DFSchema reference into a Schema
-    fn from(df_schema: &DFSchema) -> Self {
-        let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
+        _ => format!("{data_type}").to_lowercase(),
     }
 }
 
@@ -1115,14 +1118,12 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        dfschema.check_names()?;
+        // Without checking names, because schema here may have duplicate field names.
+        // For example, Partial AggregateMode will generate duplicate field names from
+        // state_fields.
+        // See <https://github.com/apache/datafusion/issues/17715>
+        // dfschema.check_names()?;
         Ok(dfschema)
-    }
-}
-
-impl From<DFSchema> for SchemaRef {
-    fn from(df_schema: DFSchema) -> Self {
-        SchemaRef::new(df_schema.into())
     }
 }
 
@@ -1308,8 +1309,8 @@ impl SchemaExt for Schema {
                 .try_for_each(|(f1, f2)| {
                     if f1.name() != f2.name() || (!DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) && !can_cast_types(f2.data_type(), f1.data_type())) {
                         _plan_err!(
-                            "Inserting query schema mismatch: Expected table field '{}' with type {:?}, \
-                            but got '{}' with type {:?}.",
+                            "Inserting query schema mismatch: Expected table field '{}' with type {}, \
+                            but got '{}' with type {}.",
                             f1.name(),
                             f1.data_type(),
                             f2.name(),
@@ -1415,7 +1416,7 @@ mod tests {
     #[test]
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let arrow_schema: Schema = schema.into();
+        let arrow_schema = schema.as_arrow();
         let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
         Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }";
         assert_eq!(expected, arrow_schema.to_string());
@@ -1792,6 +1793,36 @@ mod tests {
         assert!(!DFSchema::datatype_is_semantically_equal(
             &DataType::Int8,
             &DataType::Int16
+        ));
+
+        // Succeeds if decimal precision and scale are different
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal32(1, 2),
+            &DataType::Decimal32(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal64(1, 2),
+            &DataType::Decimal64(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal128(1, 2),
+            &DataType::Decimal128(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal256(1, 2),
+            &DataType::Decimal256(2, 1),
+        ));
+
+        // Any two timestamp types should match
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                Some("UTC".into())
+            ),
+            &DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
         ));
 
         // Test lists
@@ -2377,6 +2408,8 @@ mod tests {
                     ),
                     false,
                 ),
+                Field::new("decimal32", DataType::Decimal32(9, 4), true),
+                Field::new("decimal64", DataType::Decimal64(9, 4), true),
                 Field::new("decimal128", DataType::Decimal128(18, 4), true),
                 Field::new("decimal256", DataType::Decimal256(38, 10), false),
                 Field::new("date32", DataType::Date32, true),
@@ -2408,6 +2441,8 @@ mod tests {
          |-- fixed_size_binary: fixed_size_binary (nullable = true)
          |-- fixed_size_list: fixed size list (nullable = false)
          |    |-- item: int32 (nullable = true)
+         |-- decimal32: decimal32(9, 4) (nullable = true)
+         |-- decimal64: decimal64(9, 4) (nullable = true)
          |-- decimal128: decimal128(18, 4) (nullable = true)
          |-- decimal256: decimal256(38, 10) (nullable = false)
          |-- date32: date32 (nullable = true)

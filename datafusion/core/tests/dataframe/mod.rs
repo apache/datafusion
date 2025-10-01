@@ -27,21 +27,21 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, Float32Type, Int32Type, Schema, SchemaRef, UInt64Type, UnionFields,
-    UnionMode,
+    DataType, Field, Float32Type, Int32Type, Schema, UInt64Type, UnionFields, UnionMode,
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::{SortOptions, TimeUnit};
 use datafusion::{assert_batches_eq, dataframe};
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
-    array_agg, avg, count, count_distinct, max, median, min, sum,
+    array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
+    sum_distinct,
 };
 use datafusion_functions_nested::make_array::make_array_udf;
-use datafusion_functions_window::expr_fn::{first_value, row_number};
+use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
-use sqlparser::ast::NullTreatment;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -64,14 +64,16 @@ use datafusion::test_util::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
 use datafusion_common::{
-    assert_contains, Constraint, Constraints, DataFusionError, ParamValues, ScalarValue,
-    TableReference, UnnestOptions,
+    assert_contains, Constraint, Constraints, DFSchema, DataFusionError, ParamValues,
+    ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_expr::expr::{FieldMetadata, GroupingSet, Sort, WindowFunction};
+use datafusion_expr::expr::{
+    FieldMetadata, GroupingSet, NullTreatment, Sort, WindowFunction,
+};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
@@ -79,10 +81,19 @@ use datafusion_expr::{
     LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::{displayable, ExecutionPlanProperties};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::{displayable, ExecutionPlan, ExecutionPlanProperties};
+
+use datafusion::error::Result as DataFusionResult;
+use datafusion_functions_window::expr_fn::lag;
 
 // Get string representation of the plan
 async fn physical_plan_to_string(df: &DataFrame) -> String {
@@ -118,8 +129,7 @@ pub fn table_with_constraints() -> Arc<dyn TableProvider> {
 }
 
 async fn assert_logical_expr_schema_eq_physical_expr_schema(df: DataFrame) -> Result<()> {
-    let logical_expr_dfschema = df.schema();
-    let logical_expr_schema = SchemaRef::from(logical_expr_dfschema.to_owned());
+    let logical_expr_schema = Arc::clone(df.schema().inner());
     let batches = df.collect().await?;
     let physical_expr_schema = batches[0].schema();
     assert_eq!(logical_expr_schema, physical_expr_schema);
@@ -148,6 +158,46 @@ async fn test_array_agg_ord_schema() -> Result<()> {
 
     let result = ctx.sql(query).await?;
     assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+    Ok(())
+}
+
+type WindowFnCase = (fn() -> Expr, &'static str);
+
+#[tokio::test]
+async fn with_column_window_functions() -> DataFusionResult<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // Define test cases: (expr builder, alias name)
+    let test_cases: Vec<WindowFnCase> = vec![
+        (|| lag(col("a"), Some(1), None), "lag_val"),
+        (|| lead(col("a"), Some(1), None), "lead_val"),
+        (row_number, "row_num"),
+    ];
+
+    for (make_expr, alias) in test_cases {
+        let df = ctx.table("t").await?;
+        let expr = make_expr();
+        let df_with = df.with_column(alias, expr)?;
+        let df_schema = df_with.schema().clone();
+
+        assert!(
+            df_schema.has_column_with_unqualified_name(alias),
+            "Schema does not contain expected column {alias}",
+        );
+
+        assert_eq!(2, df_schema.columns().len());
+    }
+
     Ok(())
 }
 
@@ -496,32 +546,35 @@ async fn drop_with_periods() -> Result<()> {
 #[tokio::test]
 async fn aggregate() -> Result<()> {
     // build plan using DataFrame API
-    let df = test_table().await?;
+    // union so some of the distincts have a clearly distinct result
+    let df = test_table().await?.union(test_table().await?)?;
     let group_expr = vec![col("c1")];
     let aggr_expr = vec![
-        min(col("c12")),
-        max(col("c12")),
-        avg(col("c12")),
-        sum(col("c12")),
-        count(col("c12")),
-        count_distinct(col("c12")),
+        min(col("c4")).alias("min(c4)"),
+        max(col("c4")).alias("max(c4)"),
+        avg(col("c4")).alias("avg(c4)"),
+        avg_distinct(col("c4")).alias("avg_distinct(c4)"),
+        sum(col("c4")).alias("sum(c4)"),
+        sum_distinct(col("c4")).alias("sum_distinct(c4)"),
+        count(col("c4")).alias("count(c4)"),
+        count_distinct(col("c4")).alias("count_distinct(c4)"),
     ];
 
     let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
 
     assert_snapshot!(
         batches_to_sort_string(&df),
-        @r###"
-    +----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+
-    | c1 | min(aggregate_test_100.c12) | max(aggregate_test_100.c12) | avg(aggregate_test_100.c12) | sum(aggregate_test_100.c12) | count(aggregate_test_100.c12) | count(DISTINCT aggregate_test_100.c12) |
-    +----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+
-    | a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |
-    | b  | 0.04893135681998029         | 0.9185813970744787          | 0.41040709263815384         | 7.797734760124923           | 19                            | 19                                     |
-    | c  | 0.0494924465469434          | 0.991517828651004           | 0.6600456536439784          | 13.860958726523545          | 21                            | 21                                     |
-    | d  | 0.061029375346466685        | 0.9748360509016578          | 0.48855379387549824         | 8.793968289758968           | 18                            | 18                                     |
-    | e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |
-    +----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+
-    "###
+        @r"
+    +----+---------+---------+---------------------+---------------------+---------+------------------+-----------+--------------------+
+    | c1 | min(c4) | max(c4) | avg(c4)             | avg_distinct(c4)    | sum(c4) | sum_distinct(c4) | count(c4) | count_distinct(c4) |
+    +----+---------+---------+---------------------+---------------------+---------+------------------+-----------+--------------------+
+    | a  | -28462  | 32064   | 306.04761904761904  | 306.04761904761904  | 12854   | 6427             | 42        | 21                 |
+    | b  | -28070  | 25286   | 7732.315789473684   | 7732.315789473684   | 293828  | 146914           | 38        | 19                 |
+    | c  | -30508  | 29106   | -1320.5238095238096 | -1320.5238095238096 | -55462  | -27731           | 42        | 21                 |
+    | d  | -24558  | 31106   | 10890.111111111111  | 10890.111111111111  | 392044  | 196022           | 36        | 18                 |
+    | e  | -31500  | 32514   | -4268.333333333333  | -4268.333333333333  | -179270 | -89635           | 42        | 21                 |
+    +----+---------+---------+---------------------+---------------------+---------+------------------+-----------+--------------------+
+    "
     );
 
     Ok(())
@@ -536,7 +589,9 @@ async fn aggregate_assert_no_empty_batches() -> Result<()> {
         min(col("c12")),
         max(col("c12")),
         avg(col("c12")),
+        avg_distinct(col("c12")),
         sum(col("c12")),
+        sum_distinct(col("c12")),
         count(col("c12")),
         count_distinct(col("c12")),
         median(col("c12")),
@@ -612,12 +667,12 @@ async fn test_aggregate_with_pk2() -> Result<()> {
     let df = df.filter(predicate)?;
     assert_snapshot!(
         physical_plan_to_string(&df).await,
-        @r###"
-    CoalesceBatchesExec: target_batch_size=8192
-      FilterExec: id@0 = 1 AND name@1 = a
-        AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+        @r"
+    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[], ordering_mode=Sorted
+      CoalesceBatchesExec: target_batch_size=8192
+        FilterExec: id@0 = 1 AND name@1 = a
           DataSourceExec: partitions=1, partition_sizes=[1]
-    "###
+    "
     );
 
     // Since id and name are functionally dependant, we can use name among expression
@@ -661,12 +716,12 @@ async fn test_aggregate_with_pk3() -> Result<()> {
     let df = df.select(vec![col("id"), col("name")])?;
     assert_snapshot!(
         physical_plan_to_string(&df).await,
-        @r###"
-    CoalesceBatchesExec: target_batch_size=8192
-      FilterExec: id@0 = 1
-        AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+        @r"
+    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[], ordering_mode=PartiallySorted([0])
+      CoalesceBatchesExec: target_batch_size=8192
+        FilterExec: id@0 = 1
           DataSourceExec: partitions=1, partition_sizes=[1]
-    "###
+    "
     );
 
     // Since id and name are functionally dependant, we can use name among expression
@@ -712,12 +767,12 @@ async fn test_aggregate_with_pk4() -> Result<()> {
     // columns are not used.
     assert_snapshot!(
         physical_plan_to_string(&df).await,
-        @r###"
-    CoalesceBatchesExec: target_batch_size=8192
-      FilterExec: id@0 = 1
-        AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]
+        @r"
+    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+      CoalesceBatchesExec: target_batch_size=8192
+        FilterExec: id@0 = 1
           DataSourceExec: partitions=1, partition_sizes=[1]
-    "###
+    "
     );
 
     let df_results = df.collect().await?;
@@ -6320,5 +6375,107 @@ async fn test_copy_to_preserves_order() -> Result<()> {
       DataSourceExec: partitions=1, partition_sizes=[1]
     "###
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Simple schema with just the fields we need
+    let file_schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            true,
+        ),
+        Field::new("ticker", DataType::Utf8, true),
+        Field::new("value", DataType::Float64, true),
+        Field::new("date", DataType::Utf8, false),
+    ]));
+
+    let df_schema = DFSchema::try_from(file_schema.clone())?;
+
+    let timestamp = col("timestamp");
+    let value = col("value");
+    let ticker = col("ticker");
+    let date = col("date");
+
+    let mock_exec = Arc::new(EmptyExec::new(file_schema.clone()));
+
+    // Build first_value aggregate
+    let first_value = Arc::new(
+        AggregateExprBuilder::new(
+            datafusion_functions_aggregate::first_last::first_value_udaf(),
+            vec![ctx.create_physical_expr(value.clone(), &df_schema)?],
+        )
+        .alias("first_value(value)")
+        .order_by(vec![PhysicalSortExpr::new(
+            ctx.create_physical_expr(timestamp.clone(), &df_schema)?,
+            SortOptions::new(false, false),
+        )])
+        .schema(file_schema.clone())
+        .build()
+        .expect("Failed to build first_value"),
+    );
+
+    // Build last_value aggregate
+    let last_value = Arc::new(
+        AggregateExprBuilder::new(
+            datafusion_functions_aggregate::first_last::last_value_udaf(),
+            vec![ctx.create_physical_expr(value.clone(), &df_schema)?],
+        )
+        .alias("last_value(value)")
+        .order_by(vec![PhysicalSortExpr::new(
+            ctx.create_physical_expr(timestamp.clone(), &df_schema)?,
+            SortOptions::new(false, false),
+        )])
+        .schema(file_schema.clone())
+        .build()
+        .expect("Failed to build last_value"),
+    );
+
+    let partial_agg = AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![
+            (
+                ctx.create_physical_expr(date.clone(), &df_schema)?,
+                "date".to_string(),
+            ),
+            (
+                ctx.create_physical_expr(ticker.clone(), &df_schema)?,
+                "ticker".to_string(),
+            ),
+        ]),
+        vec![first_value, last_value],
+        vec![None, None],
+        mock_exec,
+        file_schema,
+    )
+    .expect("Failed to build partial agg");
+
+    // Assert that the schema field names match the expected names
+    let expected_field_names = vec![
+        "date",
+        "ticker",
+        "first_value(value)[first_value]",
+        "timestamp@0",
+        "is_set",
+        "last_value(value)[last_value]",
+        "timestamp@0",
+        "is_set",
+    ];
+
+    let binding = partial_agg.schema();
+    let actual_field_names: Vec<_> = binding.fields().iter().map(|f| f.name()).collect();
+    assert_eq!(actual_field_names, expected_field_names);
+
+    // Ensure that DFSchema::try_from does not fail
+    let partial_agg_exec_schema = DFSchema::try_from(partial_agg.schema());
+    assert!(
+        partial_agg_exec_schema.is_ok(),
+        "Expected get AggregateExec schema to succeed with duplicate state fields"
+    );
+
     Ok(())
 }
