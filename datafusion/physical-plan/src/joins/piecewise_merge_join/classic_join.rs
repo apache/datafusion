@@ -612,8 +612,9 @@ fn resolve_classic_join(
                                     join_schema,
                                 )?;
 
-                                batch_process_state
-                                    .set_process_rest(Some(buffer_idx + process_batch_size));
+                                batch_process_state.set_process_rest(Some(
+                                    buffer_idx + process_batch_size,
+                                ));
                                 batch_process_state.continue_process = true;
                                 // Update the start index so it repeats the process
                                 batch_process_state.set_stream_idx(row_idx);
@@ -653,8 +654,9 @@ fn resolve_classic_join(
                                     batch_size - batch_process_state.num_rows;
                                 let stream_repeated =
                                     vec![row_idx as u32; process_batch_size];
-                                batch_process_state
-                                    .set_process_rest(Some(buffer_idx + process_batch_size));
+                                batch_process_state.set_process_rest(Some(
+                                    buffer_idx + process_batch_size,
+                                ));
                                 batch_process_state.set_rows(
                                     batch_process_state.num_rows + process_batch_size,
                                 );

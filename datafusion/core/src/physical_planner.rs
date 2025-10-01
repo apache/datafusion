@@ -1269,7 +1269,10 @@ impl DefaultPhysicalPlanner {
                                 | JoinType::LeftMark
                                 | JoinType::RightMark
                         )
-                        && session_state.config_options().optimizer.allow_piecewise_merge_join
+                        && session_state
+                            .config_options()
+                            .optimizer
+                            .allow_piecewise_merge_join
                     {
                         let Expr::BinaryExpr(be) = &range_filters[0] else {
                             return plan_err!(
