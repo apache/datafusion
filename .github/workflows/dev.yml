@@ -67,7 +67,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Install typos-cli
-      # This CI job is bound by installation time, use `--profile dev` to speed it up
-        run: cargo install typos-cli --locked --version 1.37.0 --profile dev
+        run: cargo install typos-cli --locked --version 1.37.0
       - name: Run typos check
         run: ci/scripts/typos_check.sh
