@@ -23,8 +23,8 @@ use arrow::array::{
 };
 use arrow::compute::cast;
 use arrow::datatypes::DataType::{Int64, Utf8};
-use arrow::datatypes::{DataType, Int32Type, Int64Type};
-use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
+use arrow::datatypes::{DataType, Int64Type};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -73,7 +73,9 @@ impl ScalarUDFImpl for SparkElt {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let length = arg_types.len();
         if length < 2 {
-            return exec_err!("elt expects at least 2 arguments: index, value1");
+            plan_datafusion_err!(
+                "ELT function expects at least 2 arguments: index, value1"
+            );
         }
 
         let mut coerced = Vec::with_capacity(arg_types.len());
@@ -88,20 +90,14 @@ impl ScalarUDFImpl for SparkElt {
 }
 
 fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
-    if args.len() < 2 {
-        plan_datafusion_err!("ELT function expects at least 2 arguments: index, value1");
-    }
-
     let n_rows = args[0].len();
 
-    let idx_i32: Option<&PrimitiveArray<Int32Type>> =
-        args[0].as_primitive_opt::<Int32Type>();
     let idx_i64: Option<&PrimitiveArray<Int64Type>> =
         args[0].as_primitive_opt::<Int64Type>();
 
-    if idx_i32.is_none() && idx_i64.is_none() {
+    if idx_i64.is_none() {
         plan_datafusion_err!(
-            "ELT function: first argument must be Int32 or Int64 (got {:?})",
+            "ELT function: first argument must be Int64 (got {:?})",
             args[0].data_type()
         );
     }
@@ -117,19 +113,14 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     let mut builder = StringBuilder::new();
 
     for i in 0..n_rows {
-        let n_opt: Option<i64> = if let Some(idx) = idx_i32 {
-            if idx.is_null(i) {
-                None
-            } else {
-                Some(idx.value(i) as i64)
-            }
-        } else {
-            let idx = idx_i64.unwrap();
+        let n_opt: Option<i64> = if let Some(idx) = idx_i64 {
             if idx.is_null(i) {
                 None
             } else {
                 Some(idx.value(i))
             }
+        } else {
+            None
         };
 
         let Some(n) = n_opt else {
@@ -174,7 +165,7 @@ mod tests {
 
     #[test]
     fn elt_utf8_basic() -> Result<()> {
-        let idx = Arc::new(Int32Array::from(vec![
+        let idx = Arc::new(Int64Array::from(vec![
             Some(1),
             Some(2),
             Some(3),
@@ -224,7 +215,7 @@ mod tests {
 
     #[test]
     fn elt_int64_basic() -> Result<()> {
-        let idx = Arc::new(Int32Array::from(vec![Some(2), Some(1), Some(2)]));
+        let idx = Arc::new(Int64Array::from(vec![Some(2), Some(1), Some(2)]));
         let v1 = Arc::new(Int64Array::from(vec![Some(10), Some(20), Some(30)]));
         let v2 = Arc::new(Int64Array::from(vec![Some(100), None, Some(300)]));
 
