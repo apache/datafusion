@@ -1818,10 +1818,17 @@ pub trait QueryPlanner: Debug {
 /// ```
 /// or
 /// ```sql
-/// CREATE FUNCTION iris(FLOAT[])
-///   RETURNS FLOAT[]
-///   LANGUAGE TORCH
-///   AS '/models/iris.pt'
+/// CREATE FUNCTION to_miles(DOUBLE)
+/// RETURNS DOUBLE
+/// LANGUAGE PYTHON
+/// AS '
+/// import pyarrow.compute as pc
+///
+/// conversation_rate_multiplier = 0.62137119
+///
+/// def to_miles(km_data):
+///     return pc.multiply(km_data, conversation_rate_multiplier)
+/// '
 /// ```
 
 #[async_trait]
