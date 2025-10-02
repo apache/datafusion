@@ -175,7 +175,7 @@ mod tests {
             Field::new("d", DataType::UInt32, false),
             Field::new("e", DataType::UInt32, true),
         ]);
-        table_scan(Some("test"), &schema, None)
+        table_scan(Some("test"), schema, None)
             .expect("creating scan")
             .build()
             .expect("building plan")
@@ -209,7 +209,7 @@ mod tests {
 
         let table_scan = table_scan_with_filters(
             Some("test"),
-            &schema,
+            schema,
             Some(vec![0]),
             vec![col("b").is_not_null()],
         )?
@@ -678,7 +678,7 @@ mod tests {
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
         ]);
-        let table_scan = table_scan(Some("test"), &schema, None)
+        let table_scan = table_scan(Some("test"), schema, None)
             .expect("creating scan")
             .build()
             .expect("building plan");
@@ -702,7 +702,7 @@ mod tests {
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
         ]);
-        let table_scan = table_scan(Some("test"), &schema, None)
+        let table_scan = table_scan(Some("test"), schema, None)
             .expect("creating scan")
             .build()
             .expect("building plan");
@@ -726,7 +726,7 @@ mod tests {
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
         ]);
-        let table_scan = table_scan(Some("test"), &schema, None)
+        let table_scan = table_scan(Some("test"), schema, None)
             .expect("creating scan")
             .build()
             .expect("building plan");
@@ -870,7 +870,7 @@ mod tests {
             Field::new("a", DataType::Utf8, true),
             Field::new("b", DataType::Utf8, false),
         ]);
-        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan = table_scan(Some("test"), schema, None)?.build()?;
 
         // Test `= ".*"` transforms to true (except for empty strings)
         let plan = LogicalPlanBuilder::from(table_scan.clone())

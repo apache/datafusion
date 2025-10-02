@@ -21,7 +21,7 @@ use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{assert_contains, Result};
-use datafusion_expr::{logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{logical_plan::table_scan, LogicalPlan};
 use std::sync::Arc;
 
 pub mod user_defined;
@@ -37,21 +37,12 @@ pub fn test_table_scan_fields() -> Vec<Field> {
 /// some tests share a common table with different names
 pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
     let schema = Schema::new(test_table_scan_fields());
-    table_scan(Some(name), &schema, None)?.build()
+    table_scan(Some(name), schema, None)?.build()
 }
 
 /// some tests share a common table
 pub fn test_table_scan() -> Result<LogicalPlan> {
     test_table_scan_with_name("test")
-}
-
-/// Scan an empty data source, mainly used in tests
-pub fn scan_empty(
-    name: Option<&str>,
-    table_schema: &Schema,
-    projection: Option<Vec<usize>>,
-) -> Result<LogicalPlanBuilder> {
-    table_scan(name, table_schema, projection)
 }
 
 pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
@@ -66,7 +57,7 @@ pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
 
 pub fn scan_tpch_table(table: &str) -> LogicalPlan {
     let schema = Arc::new(get_tpch_table_schema(table));
-    table_scan(Some(table), &schema, None)
+    table_scan(Some(table), schema, None)
         .unwrap()
         .build()
         .unwrap()

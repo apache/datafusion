@@ -1951,7 +1951,7 @@ mod tests {
 
     #[test]
     fn exists_uncorrelated_unnest() -> Result<()> {
-        let subquery_table_source = table_source(&Schema::new(vec![Field::new(
+        let subquery_table_source = table_source(Schema::new(vec![Field::new(
             "arr",
             DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             true,
@@ -1986,7 +1986,7 @@ mod tests {
     #[test]
     fn exists_correlated_unnest() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let subquery_table_source = table_source(&Schema::new(vec![Field::new(
+        let subquery_table_source = table_source(Schema::new(vec![Field::new(
             "a",
             DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
             true,
@@ -2025,9 +2025,10 @@ mod tests {
             Field::new("B", DataType::UInt32, false),
         ];
 
-        let schema = Schema::new(fields);
-        let table_scan_a = table_scan(Some("\"TEST_A\""), &schema, None)?.build()?;
-        let table_scan_b = table_scan(Some("\"TEST_B\""), &schema, None)?.build()?;
+        let schema = Arc::new(Schema::new(fields));
+        let table_scan_a =
+            table_scan(Some("\"TEST_A\""), Arc::clone(&schema), None)?.build()?;
+        let table_scan_b = table_scan(Some("\"TEST_B\""), schema, None)?.build()?;
 
         let subquery = LogicalPlanBuilder::from(table_scan_b)
             .filter(col("\"A\"").eq(out_ref_col(DataType::UInt32, "\"TEST_A\".\"A\"")))?
