@@ -40,10 +40,10 @@ pub mod optimizer;
 pub mod output_requirements;
 pub mod projection_pushdown;
 pub use datafusion_pruning as pruning;
+mod nl_join_projection_pushdown;
 pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
 pub mod utils;
-mod nl_join_projection_pushdown;
 
 pub use optimizer::PhysicalOptimizerRule;

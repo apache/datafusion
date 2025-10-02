@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use crate::PhysicalOptimizerRule;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::alias::AliasGenerator;
@@ -170,7 +187,7 @@ fn try_push_down_projection(
     config: &ConfigOptions,
     alias_generator: &AliasGenerator,
 ) -> Result<Transformed<(Arc<dyn ExecutionPlan>, JoinFilter)>> {
-    let expr = join_filter.expression().clone();
+    let expr = Arc::clone(join_filter.expression());
     let original_plan_schema = plan.schema();
     let mut rewriter = JoinFilterRewriter::new(
         join_side,
@@ -195,8 +212,8 @@ fn try_push_down_projection(
             .intermediate_column_indices
             .iter()
             .map(|ci| match ci.side {
-                JoinSide::Left => lhs_schema.fields[ci.index].clone(),
-                JoinSide::Right => rhs_schema.fields[ci.index].clone(),
+                JoinSide::Left => Arc::clone(&lhs_schema.fields[ci.index]),
+                JoinSide::Right => Arc::clone(&rhs_schema.fields[ci.index]),
                 JoinSide::None => unreachable!("Mark join not supported"),
             })
             .collect::<Fields>();
@@ -754,15 +771,15 @@ mod test {
             Arc::new(Column::new("a", 0)),
             Operator::Plus,
             lit(1),
-            &join_schema,
+            join_schema,
         )?;
         let right_expr = binary(
             Arc::new(Column::new("x", 1)),
             Operator::Plus,
             lit(1),
-            &join_schema,
+            join_schema,
         )?;
-        binary(left_expr, Operator::Gt, right_expr, &join_schema)
+        binary(left_expr, Operator::Gt, right_expr, join_schema)
     }
 
     fn a_plus_rand_greater_than_x(join_schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
@@ -779,7 +796,7 @@ mod test {
             join_schema,
         )?;
         let right_expr = Arc::new(Column::new("x", 1));
-        binary(left_expr, Operator::Gt, right_expr, &join_schema)
+        binary(left_expr, Operator::Gt, right_expr, join_schema)
     }
 
     fn a_greater_than_x(join_schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
@@ -787,7 +804,7 @@ mod test {
             Arc::new(Column::new("a", 0)),
             Operator::Gt,
             Arc::new(Column::new("x", 1)),
-            &join_schema,
+            join_schema,
         )
     }
 
@@ -798,14 +815,14 @@ mod test {
             Arc::new(Column::new("a", 0)),
             Operator::Plus,
             Arc::new(Column::new("b", 1)),
-            &join_schema,
+            join_schema,
         )?;
         let rhs = binary(
             Arc::new(Column::new("x", 2)),
             Operator::Plus,
             Arc::new(Column::new("z", 3)),
-            &join_schema,
+            join_schema,
         )?;
-        binary(lhs, Operator::Gt, rhs, &join_schema)
+        binary(lhs, Operator::Gt, rhs, join_schema)
     }
 }
