@@ -315,7 +315,7 @@ impl std::fmt::Display for InListExpr {
                 write!(f, "{} NOT IN ({:?})", self.expr, self.list)
             }
         } else if self.static_filter.is_some() {
-            write!(f, "Use {} IN (SET) ({:?})", self.expr, self.list)
+            write!(f, "{} IN (SET) ({:?})", self.expr, self.list)
         } else {
             write!(f, "{} IN ({:?})", self.expr, self.list)
         }
@@ -1453,7 +1453,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a IN (a, b)");
-        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
 
         // Test: a NOT IN ('a', 'b')
         let list = vec![lit("a"), lit("b")];
@@ -1469,7 +1469,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a IN (a, b, NULL)");
-        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(NULL), field: Field { name: \"lit\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(NULL), field: Field { name: \"lit\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
 
         // Test: a NOT IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
