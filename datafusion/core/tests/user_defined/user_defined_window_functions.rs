@@ -128,10 +128,12 @@ async fn test_deregister_udwf() -> Result<()> {
     OddCounter::register(&mut ctx, Arc::clone(&test_state));
 
     assert!(ctx.state().window_functions().contains_key("odd_counter"));
+    assert!(datafusion_execution::FunctionRegistry::udwfs(&ctx).contains("odd_counter"));
 
     ctx.deregister_udwf("odd_counter");
 
     assert!(!ctx.state().window_functions().contains_key("odd_counter"));
+    assert!(!datafusion_execution::FunctionRegistry::udwfs(&ctx).contains("odd_counter"));
 
     Ok(())
 }
