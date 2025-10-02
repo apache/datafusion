@@ -64,30 +64,6 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::expressions::{col, CastColumnExpr};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use std::sync::Arc;
-
-    #[test]
-    fn supports_cast_column_expr() {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let column = col("a", &schema).unwrap();
-        let input_field = Arc::new(schema.field(0).clone());
-        let target_field = Arc::new(Field::new("a_cast", DataType::Int64, true));
-        let expr = Arc::new(CastColumnExpr::new(
-            Arc::clone(&column),
-            input_field,
-            target_field,
-            None,
-        )) as Arc<dyn PhysicalExpr>;
-
-        assert!(check_support(&expr, &schema));
-    }
-}
-
 // This function returns the inverse operator of the given operator.
 pub fn get_inverse_op(op: Operator) -> Result<Operator> {
     match op {
@@ -215,5 +191,29 @@ fn interval_dt_to_duration_ms(dt: &IntervalDayTime) -> Result<i64> {
         internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::{col, CastColumnExpr};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use std::sync::Arc;
+
+    #[test]
+    fn supports_cast_column_expr() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let column = col("a", &schema).unwrap();
+        let input_field = Arc::new(schema.field(0).clone());
+        let target_field = Arc::new(Field::new("a_cast", DataType::Int64, true));
+        let expr = Arc::new(CastColumnExpr::new(
+            Arc::clone(&column),
+            input_field,
+            target_field,
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert!(check_support(&expr, &schema));
     }
 }
