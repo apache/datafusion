@@ -4,9 +4,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{JoinSide, JoinType, Result};
-use datafusion_expr_common::signature::Volatility;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -18,9 +16,9 @@ use std::sync::Arc;
 
 /// Tries to push down projections from join filters that only depend on one side of the join.
 ///
-/// This can be a crucial optimization for nested loop joins. By pushing these projections
-/// down, even functions that only depend on one side of the join must be done for all row
-/// combinations.
+/// This optimization is currently only applied to nested loop joins. By pushing these projections
+/// down, functions that only depend on one side of the join must be done for the cartesian product
+/// of the two sides.
 #[derive(Debug)]
 pub struct NestedLoopJoinProjectionPushDown;
 
@@ -234,6 +232,10 @@ fn ensure_batch_size(
 }
 
 /// Creates a new [JoinFilter] and tries to minimize the internal schema.
+///
+/// This could eliminate some columns that were only part of a computation that has been pushed
+/// down. As this computation is now materialized on one side of the join, the original input
+/// columns are not needed anymore.
 fn minimize_join_filter(
     expr: Arc<dyn PhysicalExpr>,
     old_column_indices: Vec<ColumnIndex>,
@@ -347,7 +349,7 @@ impl<'a> JoinFilterRewriter<'a> {
         // Recurse if there is a dependency to both sides or if the entire expression is volatile.
         let depends_on_other_side =
             self.depends_on_join_side(&expr, self.join_side.negate())?;
-        let is_volatile = is_volatile(expr.as_ref());
+        let is_volatile = is_volatile_expression_tree(expr.as_ref());
         if depends_on_other_side || is_volatile {
             return expr.map_children(|expr| self.rewrite(expr));
         }
@@ -429,31 +431,31 @@ impl<'a> JoinFilterRewriter<'a> {
     }
 }
 
-fn is_volatile(expr: &dyn PhysicalExpr) -> bool {
-    match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
-        None => expr
-            .children()
-            .iter()
-            .map(|expr| is_volatile(expr.as_ref()))
-            .reduce(|lhs, rhs| lhs || rhs)
-            .unwrap_or(false),
-        Some(expr) => expr.fun().signature().volatility == Volatility::Volatile,
+fn is_volatile_expression_tree(expr: &dyn PhysicalExpr) -> bool {
+    if expr.is_volatile_node() {
+        return true;
     }
+
+    expr.children()
+        .iter()
+        .map(|expr| is_volatile_expression_tree(expr.as_ref()))
+        .reduce(|lhs, rhs| lhs || rhs)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
-    use datafusion_expr::{ScalarUDF, ScalarUDFImpl};
     use datafusion_expr_common::operator::Operator;
+    use datafusion_functions::math::random;
     use datafusion_physical_expr::expressions::{binary, lit};
+    use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::displayable;
     use datafusion_physical_plan::empty::EmptyExec;
     use insta::assert_snapshot;
     use std::sync::Arc;
-    use datafusion_functions::math::random;
 
     #[tokio::test]
     async fn no_computation_does_not_project() -> Result<()> {
