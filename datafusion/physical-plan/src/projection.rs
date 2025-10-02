@@ -84,6 +84,7 @@ impl ProjectionExec {
     /// # use std::sync::Arc;
     /// # use arrow_schema::{Schema, Field, DataType};
     /// # use datafusion_expr::Operator;
+    /// # use datafusion_expr::execution_props::ExecutionProps;
     /// # use datafusion_physical_plan::ExecutionPlan;
     /// # use datafusion_physical_expr::expressions::{col, binary};
     /// # use datafusion_physical_plan::empty::EmptyExec;
@@ -104,7 +105,7 @@ impl ProjectionExec {
     /// // Create PhysicalExprs
     /// let a = col("a", &schema).unwrap();
     /// let b = col("b", &schema).unwrap();
-    /// let a_plus_b = binary(Arc::clone(&a), Operator::Plus, b, &schema).unwrap();
+    /// let a_plus_b = binary(Arc::clone(&a), Operator::Plus, b, &schema, &ExecutionProps::new()).unwrap();
     /// // create ProjectionExec
     /// let proj = ProjectionExec::try_new([
     ///     ProjectionExpr {
