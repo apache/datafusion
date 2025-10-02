@@ -24,8 +24,10 @@ use arrow::array::{
 };
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::type_coercion::aggregates::coerce_avg_type;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
@@ -133,6 +135,11 @@ impl AggregateUDFImpl for SparkAvg {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         avg_return_type(self.name(), &arg_types[0])
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [arg] = take_function_args(self.name(), arg_types)?;
+        coerce_avg_type(self.name(), std::slice::from_ref(arg))
     }
 }
 
