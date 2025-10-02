@@ -142,17 +142,25 @@ impl ScalarUDFImpl for ArrayHas {
                     ScalarValue::convert_array_to_scalar_vec(&array)
                 {
                     assert_eq!(scalar_values.len(), 1);
-                    let list = scalar_values
-                        .into_iter()
-                        .flatten()
-                        .map(|v| Expr::Literal(v, None))
-                        .collect();
+                    match &scalar_values[0] {
+                        // Haystack was a single list element as expected
+                        Some(list) => {
+                            let list = list
+                                .iter()
+                                .map(|v| Expr::Literal(v.clone(), None))
+                                .collect();
 
-                    return Ok(ExprSimplifyResult::Simplified(in_list(
-                        std::mem::take(needle),
-                        list,
-                        false,
-                    )));
+                            return Ok(ExprSimplifyResult::Simplified(in_list(
+                                std::mem::take(needle),
+                                list,
+                                false,
+                            )));
+                        }
+                        // Haystack was a singular null, should be handled elsewhere
+                        None => {
+                            return Ok(ExprSimplifyResult::Original(args));
+                        }
+                    };
                 }
             }
             Expr::ScalarFunction(ScalarFunction { func, args })
@@ -785,5 +793,26 @@ mod tests {
         assert!(output.is_null(0));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_simplify_array_has_with_null_haystack() {
+        let haystack = ListArray::new_null(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            1,
+        );
+        let haystack = lit(ScalarValue::List(Arc::new(haystack)));
+        let needle = col("c");
+
+        let props = ExecutionProps::new();
+        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+
+        let Ok(ExprSimplifyResult::Original(args)) =
+            ArrayHas::new().simplify(vec![haystack.clone(), needle.clone()], &context)
+        else {
+            panic!("Expected non-simplified expression");
+        };
+
+        assert_eq!(args, vec![haystack, col("c")]);
     }
 }
