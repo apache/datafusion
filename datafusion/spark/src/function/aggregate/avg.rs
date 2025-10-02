@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{
     builder::PrimitiveBuilder,
     cast::AsArray,
@@ -25,13 +25,14 @@ use arrow::array::{
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{not_impl_err, Result, ScalarValue};
-use datafusion_expr::{
-    type_coercion::aggregates::avg_return_type, Accumulator, AggregateUDFImpl, EmitTo,
-    GroupsAccumulator, ReversedUDAF, Signature};
-use arrow::array::ArrowNativeTypeOp;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
+use datafusion_expr::{
+    type_coercion::aggregates::avg_return_type, Accumulator, AggregateUDFImpl, EmitTo,
+    GroupsAccumulator, ReversedUDAF, Signature,
+};
+use std::{any::Any, sync::Arc};
 use DataType::*;
 
 /// AVG aggregate expression
@@ -107,10 +108,12 @@ impl AggregateUDFImpl for SparkAvg {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator based for the type
         match (&self.input_data_type, &self.result_data_type) {
-            (Float64, Float64) => Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
-                &self.input_data_type,
-                |sum: f64, count: i64| Ok(sum / count as f64),
-            ))),
+            (Float64, Float64) => {
+                Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
+                    &self.input_data_type,
+                    |sum: f64, count: i64| Ok(sum / count as f64),
+                )))
+            }
 
             _ => not_impl_err!(
                 "AvgGroupsAccumulator for ({} --> {})",
@@ -331,7 +334,6 @@ where
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<i64>()
-            + self.sums.capacity() * size_of::<T>()
+        self.counts.capacity() * size_of::<i64>() + self.sums.capacity() * size_of::<T>()
     }
 }

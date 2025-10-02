@@ -21,18 +21,18 @@ use std::sync::Arc;
 
 pub mod avg;
 pub mod expr_fn {
-use datafusion_functions::export_functions;
+    use datafusion_functions::export_functions;
 
     export_functions!((avg, "Returns the average value of a given column", arg1));
 }
 
 pub fn avg() -> Arc<AggregateUDF> {
-    Arc::new(AggregateUDF::new_from_impl(avg::SparkAvg::new("avg", DataType::Float64)))
+    Arc::new(AggregateUDF::new_from_impl(avg::SparkAvg::new(
+        "avg",
+        DataType::Float64,
+    )))
 }
 
-
-
 pub fn functions() -> Vec<Arc<AggregateUDF>> {
-    vec![avg(),
-    ]
+    vec![avg()]
 }
