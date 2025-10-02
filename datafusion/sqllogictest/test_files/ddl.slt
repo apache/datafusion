@@ -707,9 +707,9 @@ CREATE EXTERNAL TABLE empty STORED AS CSV LOCATION '../core/tests/data/empty.csv
 query TTI
 select column_name, data_type, ordinal_position from information_schema.columns where table_name='empty';;
 ----
-c1 Utf8 0
-c2 Utf8 1
-c3 Utf8 2
+c1 Null 0
+c2 Null 1
+c3 Null 2
 
 
 ## should allow any type of exprs as values

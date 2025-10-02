@@ -17,8 +17,8 @@
 
 //! This module contains implementations of operations (unary, binary etc.) for DataFusion expressions.
 
+use crate::expr::{Exists, Expr, InList, InSubquery, Like};
 use crate::expr_fn::binary_expr;
-use crate::{Expr, Like};
 use datafusion_expr_common::operator::Operator;
 use std::ops::{self, Not};
 
@@ -153,6 +153,19 @@ impl Not for Expr {
                 escape_char,
                 case_insensitive,
             )),
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => Expr::InList(InList::new(expr, list, !negated)),
+            Expr::Exists(Exists { subquery, negated }) => {
+                Expr::Exists(Exists::new(subquery, !negated))
+            }
+            Expr::InSubquery(InSubquery {
+                expr,
+                subquery,
+                negated,
+            }) => Expr::InSubquery(InSubquery::new(expr, subquery, !negated)),
             _ => Expr::Not(Box::new(self)),
         }
     }
