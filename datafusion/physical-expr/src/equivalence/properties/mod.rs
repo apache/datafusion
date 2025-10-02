@@ -33,7 +33,7 @@ use self::dependency::{
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
+use crate::expressions::{with_new_schema, CastColumnExpr, CastExpr, Column, Literal};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -844,6 +844,17 @@ impl EquivalenceProperties {
                             // expression matches:
                             if cast_expr.expr.eq(&sort_expr.expr)
                                 && cast_expr.is_bigger_cast(&expr_type)
+                            {
+                                result.push(PhysicalSortExpr::new(
+                                    r_expr,
+                                    sort_expr.options,
+                                ));
+                            }
+                        } else if let Some(cast_column) =
+                            r_expr.as_any().downcast_ref::<CastColumnExpr>()
+                        {
+                            if cast_column.expr().eq(&sort_expr.expr)
+                                && cast_column.is_widening_cast(&expr_type)
                             {
                                 result.push(PhysicalSortExpr::new(
                                     r_expr,

@@ -18,7 +18,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::expressions::Column;
+use crate::expressions::{CastColumnExpr, Column};
 use crate::PhysicalExpr;
 
 use arrow::datatypes::SchemaRef;
@@ -96,28 +96,56 @@ impl ProjectionMapping {
         let mut map = IndexMap::<_, ProjectionTargets>::new();
         for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
-            let source_expr = expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
-                Some(col) => {
-                    // Sometimes, an expression and its name in the input_schema
-                    // doesn't match. This can cause problems, so we make sure
-                    // that the expression name matches with the name in `input_schema`.
-                    // Conceptually, `source_expr` and `expression` should be the same.
-                    let idx = col.index();
-                    let matching_field = input_schema.field(idx);
-                    let matching_name = matching_field.name();
-                    if col.name() != matching_name {
-                        return internal_err!(
-                            "Input field name {} does not match with the projection expression {}",
-                            matching_name,
-                            col.name()
+            let source_expr = expr
+                .transform_down(|e| {
+                    if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                        // Sometimes, an expression and its name in the input_schema
+                        // doesn't match. This can cause problems, so we make sure
+                        // that the expression name matches with the name in `input_schema`.
+                        // Conceptually, `source_expr` and `expression` should be the same.
+                        let idx = col.index();
+                        let matching_field = input_schema.field(idx);
+                        let matching_name = matching_field.name();
+                        if col.name() != matching_name {
+                            return internal_err!(
+                                "Input field name {} does not match with the projection expression {}",
+                                matching_name,
+                                col.name()
+                            );
+                        }
+                        let matching_column = Column::new(matching_name, idx);
+                        Ok(Transformed::yes(Arc::new(matching_column)))
+                    } else if let Some(cast_column) =
+                        e.as_any().downcast_ref::<CastColumnExpr>()
+                    {
+                        let new_input_field = cast_column
+                            .expr()
+                            .as_any()
+                            .downcast_ref::<Column>()
+                            .and_then(|col| {
+                                input_schema
+                                    .fields()
+                                    .get(col.index())
+                                    .map(Arc::clone)
+                            })
+                            .unwrap_or_else(|| Arc::clone(cast_column.input_field()));
+
+                        if new_input_field.as_ref() == cast_column.input_field().as_ref() {
+                            return Ok(Transformed::no(e));
+                        }
+
+                        let new_expr = CastColumnExpr::new(
+                            Arc::clone(cast_column.expr()),
+                            new_input_field,
+                            Arc::clone(cast_column.target_field()),
+                            Some(cast_column.cast_options().clone()),
                         );
+                        Ok(Transformed::yes(Arc::new(new_expr)))
+                    } else {
+                        Ok(Transformed::no(e))
                     }
-                    let matching_column = Column::new(matching_name, idx);
-                    Ok(Transformed::yes(Arc::new(matching_column)))
-                }
-                None => Ok(Transformed::no(e)),
-            })
-            .data()?;
+                })
+                .data()?;
             map.entry(source_expr)
                 .or_default()
                 .push((target_expr, expr_idx));
@@ -253,7 +281,7 @@ mod tests {
     use super::*;
     use crate::equivalence::tests::output_schema;
     use crate::equivalence::{convert_to_orderings, EquivalenceProperties};
-    use crate::expressions::{col, BinaryExpr};
+    use crate::expressions::{col, BinaryExpr, CastColumnExpr};
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
@@ -278,6 +306,12 @@ mod tests {
         let col_d = &col("d", &schema)?;
         let col_e = &col("e", &schema)?;
         let col_ts = &col("ts", &schema)?;
+        let cast_column_expr = Arc::new(CastColumnExpr::new(
+            Arc::clone(col_a),
+            Arc::new(schema.field(0).clone()),
+            Arc::new(Field::new("a_cast", DataType::Int64, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
         let a_plus_b = Arc::new(BinaryExpr::new(
             Arc::clone(col_a),
             Operator::Plus,
@@ -713,6 +747,26 @@ mod tests {
                     vec![("c_new", option_asc), ("b_new", option_desc)],
                 ],
             ),
+            // ---------- TEST CASE 6 ------------
+            (
+                // orderings
+                vec![
+                    // [a ASC]
+                    vec![(col_a, option_asc)],
+                ],
+                // projection exprs
+                vec![
+                    (col_a, "a_new".to_string()),
+                    (&cast_column_expr, "a_cast".to_string()),
+                ],
+                // expected
+                vec![
+                    // [a_new ASC]
+                    vec![("a_new", option_asc)],
+                    // [a_cast ASC]
+                    vec![("a_cast", option_asc)],
+                ],
+            ),
         ];
 
         for (idx, (orderings, proj_exprs, expected)) in test_cases.into_iter().enumerate()
@@ -754,6 +808,34 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn projection_mapping_normalizes_cast_column_input_field() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let column = col("a", &schema)?;
+        let mismatched_input = Arc::new(Field::new("alias_a", DataType::Int32, true));
+        let target_field = Arc::new(Field::new("a", DataType::Int32, true));
+        let cast_column = Arc::new(CastColumnExpr::new(
+            Arc::clone(&column),
+            mismatched_input,
+            target_field,
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let mapping = ProjectionMapping::try_new(
+            vec![(cast_column, "a_alias".to_string())],
+            &schema,
+        )?;
+
+        let (source_expr, _) = mapping.iter().next().unwrap();
+        let cast_column = source_expr
+            .as_any()
+            .downcast_ref::<CastColumnExpr>()
+            .unwrap();
+        assert_eq!(cast_column.input_field().name(), "a");
+        assert_eq!(cast_column.input_field().data_type(), &DataType::Int32);
         Ok(())
     }
 
