@@ -729,6 +729,93 @@ async fn parquet_explain_analyze() {
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
+async fn parquet_recursive_projection_pushdown() {
+    use parquet::arrow::arrow_writer::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+
+    let temp_dir = TempDir::new().unwrap();
+    let parquet_path = temp_dir.path().join("hierarchy.parquet");
+
+    let ids = Int64Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    let parent_ids = Int64Array::from(vec![
+        Some(0),
+        Some(1),
+        Some(1),
+        Some(2),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+        Some(6),
+        Some(7),
+    ]);
+    let values = Int64Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("parent_id", DataType::Int64, true),
+        Field::new("value", DataType::Int64, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ids), Arc::new(parent_ids), Arc::new(values)],
+    )
+    .unwrap();
+
+    let file = File::create(&parquet_path).unwrap();
+    let props = WriterProperties::builder().build();
+    let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "hierarchy",
+        parquet_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let sql = r#"
+        EXPLAIN ANALYZE
+            WITH RECURSIVE number_series AS (
+                SELECT id, 1 as level
+                FROM hierarchy
+                WHERE id = 1
+
+                UNION ALL
+
+                SELECT ns.id + 1, ns.level + 1
+                FROM number_series ns
+                WHERE ns.id < 10
+            )
+            SELECT * FROM number_series ORDER BY id
+    "#;
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    let scan_line = formatted
+        .lines()
+        .find(|line| line.contains("DataSourceExec"))
+        .expect("DataSourceExec not found");
+
+    assert!(
+        scan_line.contains("projection=[id]"),
+        "expected scan to only project id column, found: {scan_line}"
+    );
+    assert!(
+        !scan_line.contains("parent_id") && !scan_line.contains("value"),
+        "unexpected columns projected in scan: {scan_line}"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn parquet_explain_analyze_verbose() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
