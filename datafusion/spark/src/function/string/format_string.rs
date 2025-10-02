@@ -582,7 +582,6 @@ impl TryFrom<char> for TimeFormat {
 }
 
 impl ConversionType {
-
     pub fn validate(&self, arg_type: DataType) -> Result<()> {
         match self {
             ConversionType::BooleanLower | ConversionType::BooleanUpper => {
@@ -1423,11 +1422,7 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_hex_float(
-        &self,
-        writer: &mut String,
-        value: f64,
-    ) -> Result<()> {
+    fn format_hex_float(&self, writer: &mut String, value: f64) -> Result<()> {
         // Handle special cases first
         let (sign, raw_exponent, mantissa) = value.to_parts();
         let is_subnormal = raw_exponent == 0;
@@ -1439,8 +1434,10 @@ impl ConversionSpecifier {
 
         // Determine if we need to normalize subnormal numbers
         // Only normalize when precision is specified and less than full mantissa width
-        let mantissa_hex_digits = (f64::MANTISSA_BITS + 3) / 4; // 13 for f64
-        let should_normalize = is_subnormal && precision.is_some() && precision.unwrap() < mantissa_hex_digits as i32;
+        let mantissa_hex_digits = f64::MANTISSA_BITS.div_ceil(4); // 13 for f64
+        let should_normalize = is_subnormal
+            && precision.is_some()
+            && precision.unwrap() < mantissa_hex_digits as i32;
 
         let (value, raw_exponent, mantissa) = if should_normalize {
             let value = value * f64::SCALEUP;
@@ -1528,16 +1525,21 @@ impl ConversionSpecifier {
 
                 if is_subnormal && !should_normalize {
                     // Original subnormal format: 0x0.xxxp-1022
-                    if let Some(_) = precision {
+                    if precision.is_some() {
                         // precision >= 13, show as subnormal
-                        let full_hex = format!("{:0width$x}", final_mantissa, width = mantissa_hex_digits as usize);
-                        write!(
-                            &mut temp,
-                            "{sign_char}0x0.{full_hex}p{exponent}"
-                        )?;
+                        let full_hex = format!(
+                            "{:0width$x}",
+                            final_mantissa,
+                            width = mantissa_hex_digits as usize
+                        );
+                        write!(&mut temp, "{sign_char}0x0.{full_hex}p{exponent}")?;
                     } else {
                         // No precision specified, show full subnormal
-                        let hex_digits = format!("{:0width$x}", final_mantissa, width = mantissa_hex_digits as usize);
+                        let hex_digits = format!(
+                            "{:0width$x}",
+                            final_mantissa,
+                            width = mantissa_hex_digits as usize
+                        );
                         write!(&mut temp, "{sign_char}0x0.{hex_digits}p{exponent}")?;
                     }
                 } else {
@@ -2264,8 +2266,7 @@ impl ConversionSpecifier {
     }
 }
 
-trait FloatFormatable: std::fmt::Display {
-
+trait FloatFormattable: std::fmt::Display {
     fn category(&self) -> FpCategory;
 
     fn spark_string(&self) -> String {
@@ -2284,8 +2285,7 @@ trait FloatFormatable: std::fmt::Display {
     fn negative(&self) -> bool;
 }
 
-impl FloatFormatable for f32 {
-
+impl FloatFormattable for f32 {
     fn category(&self) -> FpCategory {
         self.classify()
     }
@@ -2295,8 +2295,7 @@ impl FloatFormatable for f32 {
     }
 }
 
-impl FloatFormatable for f64 {
-
+impl FloatFormattable for f64 {
     fn category(&self) -> FpCategory {
         self.classify()
     }
@@ -2306,14 +2305,13 @@ impl FloatFormatable for f64 {
     }
 }
 
-trait FloatBits: FloatFormatable {
+trait FloatBits: FloatFormattable {
     const MANTISSA_BITS: u8;
     const EXPONENT_BIAS: u16;
     const SCALEUP_POWER: u8;
     const SCALEUP: Self;
 
     fn to_parts(&self) -> (bool, u16, u64);
-
 }
 
 impl FloatBits for f64 {
