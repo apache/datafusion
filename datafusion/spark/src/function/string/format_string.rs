@@ -79,29 +79,18 @@ impl ScalarUDFImpl for FormatStringFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.is_empty() {
-            return plan_err!("The format_string function expects at least one argument");
+        match arg_types[0] {
+            DataType::Null => Ok(DataType::Utf8),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(arg_types[0].clone()),
+            _ => plan_err!("The format_string function expects the first argument to be Utf8, LargeUtf8 or Utf8View")
         }
-        if arg_types[0] == DataType::Null {
-            return Ok(DataType::Utf8);
-        }
-        if !matches!(
-            arg_types[0],
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-        ) {
-            return plan_err!("The format_string function expects the first argument to be Utf8, LargeUtf8 or Utf8View");
-        }
-        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let len = args
-            .args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
+        let len = args.args.iter().find_map(|arg| match arg {
+            ColumnarValue::Scalar(_) => None,
+            ColumnarValue::Array(a) => Some(a.len()),
+        });
         let is_scalar = len.is_none();
         let data_types = args.args[1..]
             .iter()
@@ -112,6 +101,15 @@ impl ScalarUDFImpl for FormatStringFunc {
         match &args.args[0] {
             ColumnarValue::Scalar(ScalarValue::Null) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
+            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)))
+            }
+            ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(fmt)))
@@ -127,15 +125,16 @@ impl ScalarUDFImpl for FormatStringFunc {
                     result.push(formatted);
                 }
                 if is_scalar {
+                    let scalar_result = result.pop().unwrap();
                     match fmt_type {
                         DataType::Utf8 => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
-                            Some(result.first().unwrap().clone()),
+                            Some(scalar_result),
                         ))),
                         DataType::LargeUtf8 => Ok(ColumnarValue::Scalar(
-                            ScalarValue::LargeUtf8(Some(result.first().unwrap().clone())),
+                            ScalarValue::LargeUtf8(Some(scalar_result)),
                         )),
                         DataType::Utf8View => Ok(ColumnarValue::Scalar(
-                            ScalarValue::Utf8View(Some(result.first().unwrap().clone())),
+                            ScalarValue::Utf8View(Some(scalar_result)),
                         )),
                         _ => unreachable!(),
                     }
@@ -166,12 +165,7 @@ impl ScalarUDFImpl for FormatStringFunc {
                         Some(None) => {
                             result.push(None);
                         }
-                        _ => {
-                            return exec_err!(
-                                "Expected string type, got {:?}",
-                                fmt.data_type()
-                            )
-                        }
+                        _ => unreachable!(),
                     }
                 }
                 let array: ArrayRef = match fmt_type {
@@ -192,7 +186,7 @@ impl ScalarUDFImpl for FormatStringFunc {
 fn try_to_scalar(arg: ColumnarValue, index: usize) -> Result<ScalarValue> {
     match arg {
         ColumnarValue::Scalar(scalar) => Ok(scalar),
-        ColumnarValue::Array(array) => Ok(ScalarValue::try_from_array(&array, index)?),
+        ColumnarValue::Array(array) => ScalarValue::try_from_array(&array, index),
     }
 }
 
@@ -216,6 +210,70 @@ impl<'a> Formatter<'a> {
         Self { elements, arg_num }
     }
 
+    /// Parses a printf-style format string into a Formatter with validation.
+    ///
+    /// This method implements a comprehensive parser for Java `java.util.Formatter` syntax,
+    /// processing the format string character by character to identify and validate format
+    /// specifiers against the provided argument types.
+    ///
+    /// # Arguments
+    ///
+    /// * `fmt` - The format string containing literal text and format specifiers
+    /// * `arg_types` - Array of DataFusion DataTypes corresponding to the arguments
+    ///
+    /// # Parsing Process
+    ///
+    /// The parser operates in several phases:
+    ///
+    /// 1. **String Scanning**: Iterates through the format string looking for '%' characters
+    ///    that mark the beginning of format specifiers or special sequences.
+    ///
+    /// 2. **Special Sequence Handling**: Processes escape sequences:
+    ///    - `%%` becomes a literal '%' character
+    ///    - `%n` becomes a newline character
+    ///    - `%<` indicates reuse of the previous argument with a new format specifier
+    ///
+    /// 3. **Argument Index Resolution**: Determines which argument each format specifier refers to:
+    ///    - Sequential indexing: arguments are consumed in order (1, 2, 3, ...)
+    ///    - Positional indexing: explicit argument position using `%n$` syntax
+    ///    - Previous argument reuse: `%<` references the last used argument
+    ///
+    /// 4. **Format Specifier Parsing**: For each format specifier, extracts:
+    ///    - Flags (-, +, space, #, 0, ',', '(')
+    ///    - Width specification (minimum field width)
+    ///    - Precision specification (decimal places or maximum characters)
+    ///    - Conversion type (d, s, f, x, etc.)
+    ///
+    /// 5. **Type Validation**: Verifies that each format specifier's conversion type
+    ///    is compatible with the corresponding argument's DataType. For example:
+    ///    - Integer conversions (%d, %x, %o) require integer DataTypes
+    ///    - String conversions (%s, %S) accept any DataType
+    ///    - Float conversions (%f, %e, %g) require numeric DataTypes
+    ///
+    /// 6. **Element Construction**: Creates FormatElement instances for:
+    ///    - Verbatim text sections (copied directly to output)
+    ///    - Validated format specifiers with their parsed parameters
+    ///
+    /// # Internal State Management
+    ///
+    /// The parser maintains several state variables:
+    /// - `argument_index`: Tracks the current sequential argument position
+    /// - `prev`: Remembers the last used argument index for `%<` references
+    /// - `res`: Accumulates the parsed FormatElement instances
+    /// - `rem`: Points to the remaining unparsed portion of the format string
+    ///
+    /// # Validation and Error Handling
+    ///
+    /// The parser performs extensive validation including:
+    /// - Argument index bounds checking against the provided arg_types array
+    /// - Format specifier syntax validation
+    /// - Type compatibility verification between conversion types and DataTypes
+    /// - Detection of malformed numeric parameters and invalid flag combinations
+    ///
+    /// # Returns
+    ///
+    /// Returns a Formatter containing the parsed elements and the maximum argument
+    /// index encountered, enabling efficient argument validation during formatting.
     pub fn parse(fmt: &'a str, arg_types: &[DataType]) -> Result<Self> {
         // find the first %
         let mut res = Vec::new();
@@ -524,12 +582,6 @@ impl TryFrom<char> for TimeFormat {
 }
 
 impl ConversionType {
-    pub fn is_string(&self) -> bool {
-        matches!(
-            self,
-            ConversionType::StringLower | ConversionType::StringUpper
-        )
-    }
 
     pub fn validate(&self, arg_type: DataType) -> Result<()> {
         match self {
@@ -596,10 +648,77 @@ impl ConversionType {
         }
         Ok(())
     }
+
+    fn supports_integer(&self) -> bool {
+        matches!(
+            self,
+            ConversionType::DecInt
+                | ConversionType::HexIntLower
+                | ConversionType::HexIntUpper
+                | ConversionType::OctInt
+                | ConversionType::CharLower
+                | ConversionType::CharUpper
+                | ConversionType::StringLower
+                | ConversionType::StringUpper
+        )
+    }
+
+    fn supports_float(&self) -> bool {
+        matches!(
+            self,
+            ConversionType::DecFloatLower
+                | ConversionType::SciFloatLower
+                | ConversionType::SciFloatUpper
+                | ConversionType::CompactFloatLower
+                | ConversionType::CompactFloatUpper
+                | ConversionType::StringLower
+                | ConversionType::StringUpper
+                | ConversionType::HexFloatLower
+                | ConversionType::HexFloatUpper
+        )
+    }
+
+    fn supports_decimal(&self) -> bool {
+        matches!(
+            self,
+            ConversionType::DecFloatLower
+                | ConversionType::SciFloatLower
+                | ConversionType::SciFloatUpper
+                | ConversionType::CompactFloatLower
+                | ConversionType::CompactFloatUpper
+                | ConversionType::StringLower
+                | ConversionType::StringUpper
+        )
+    }
+
+    fn supports_time(&self) -> bool {
+        matches!(
+            self,
+            ConversionType::TimeLower(_)
+                | ConversionType::TimeUpper(_)
+                | ConversionType::StringLower
+                | ConversionType::StringUpper
+        )
+    }
+
+    fn is_upper(&self) -> bool {
+        matches!(
+            self,
+            ConversionType::BooleanUpper
+                | ConversionType::HexHashUpper
+                | ConversionType::HexIntUpper
+                | ConversionType::SciFloatUpper
+                | ConversionType::CompactFloatUpper
+                | ConversionType::HexFloatUpper
+                | ConversionType::TimeUpper(_)
+                | ConversionType::CharUpper
+                | ConversionType::StringUpper
+        )
+    }
 }
 
 fn take_conversion_specifier(
-    s: &str,
+    mut s: &str,
     argument_index: usize,
     arg_type: DataType,
 ) -> Result<(ConversionSpecifier, &str)> {
@@ -617,8 +736,6 @@ fn take_conversion_specifier(
         // ignore length modifier
         conversion_type: ConversionType::DecInt,
     };
-
-    let mut s = s;
 
     // parse flags
     loop {
@@ -744,390 +861,278 @@ impl ConversionSpecifier {
                 ConversionType::StringLower | ConversionType::StringUpper => {
                     self.format_string(string, &value.unwrap_or(false).to_string())
                 }
+
                 _ => self.format_boolean(string, value),
             },
-            ScalarValue::Int8(value) => match self.conversion_type {
-                ConversionType::DecInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_signed(string, value as i64)
+            ScalarValue::Int8(value) => match (self.conversion_type, value) {
+                (ConversionType::DecInt, Some(value)) => {
+                    self.format_signed(string, *value as i64)
                 }
-                ConversionType::HexIntLower
-                | ConversionType::HexIntUpper
-                | ConversionType::OctInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_unsigned(string, (value as u8) as u64)
+                (
+                    ConversionType::HexIntLower
+                    | ConversionType::HexIntUpper
+                    | ConversionType::OctInt,
+                    Some(value),
+                ) => self.format_unsigned(string, (*value as u8) as u64),
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
+                    self.format_char(string, *value as u8 as char)
                 }
-                ConversionType::CharLower | ConversionType::CharUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_char(string, value as u8 as char)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_integer() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for int8",
+                        "Invalid conversion type: {:?} for Int8",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::Int16(value) => match self.conversion_type {
-                ConversionType::DecInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_signed(string, value as i64)
+            ScalarValue::Int16(value) => match (self.conversion_type, value) {
+                (ConversionType::DecInt, Some(value)) => {
+                    self.format_signed(string, *value as i64)
                 }
-                ConversionType::CharLower | ConversionType::CharUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
                     self.format_char(
                         string,
-                        char::from_u32((value as u16) as u32).unwrap(),
+                        char::from_u32((*value as u16) as u32).unwrap(),
                     )
                 }
-                ConversionType::HexIntLower
-                | ConversionType::HexIntUpper
-                | ConversionType::OctInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_unsigned(string, (value as u16) as u64)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+                (
+                    ConversionType::HexIntLower
+                    | ConversionType::HexIntUpper
+                    | ConversionType::OctInt,
+                    Some(value),
+                ) => self.format_unsigned(string, (*value as u16) as u64),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_integer() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for int16",
+                        "Invalid conversion type: {:?} for Int16",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::Int32(value) => match self.conversion_type {
-                ConversionType::DecInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_signed(string, value as i64)
+            ScalarValue::Int32(value) => match (self.conversion_type, value) {
+                (ConversionType::DecInt, Some(value)) => {
+                    self.format_signed(string, *value as i64)
                 }
-                ConversionType::HexIntLower
-                | ConversionType::HexIntUpper
-                | ConversionType::OctInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_unsigned(string, (value as u32) as u64)
+                (
+                    ConversionType::HexIntLower
+                    | ConversionType::HexIntUpper
+                    | ConversionType::OctInt,
+                    Some(value),
+                ) => self.format_unsigned(string, (*value as u32) as u64),
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
+                    self.format_char(string, char::from_u32(*value as u32).unwrap())
                 }
-                ConversionType::CharLower | ConversionType::CharUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_char(string, char::from_u32(value as u32).unwrap())
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_integer() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for int32",
+                        "Invalid conversion type: {:?} for Int32",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::Int64(value) => match self.conversion_type {
-                ConversionType::DecInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_signed(string, value)
+            ScalarValue::Int64(value) => match (self.conversion_type, value) {
+                (ConversionType::DecInt, Some(value)) => {
+                    self.format_signed(string, *value)
                 }
-                ConversionType::HexIntLower
-                | ConversionType::HexIntUpper
-                | ConversionType::OctInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_unsigned(string, value as u64)
-                }
-                ConversionType::CharLower | ConversionType::CharUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
+                (
+                    ConversionType::HexIntLower
+                    | ConversionType::HexIntUpper
+                    | ConversionType::OctInt,
+                    Some(value),
+                ) => self.format_unsigned(string, *value as u64),
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
                     self.format_char(
                         string,
-                        char::from_u32((value as u64) as u32).unwrap(),
+                        char::from_u32((*value as u64) as u32).unwrap(),
                     )
                 }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_integer() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for int64",
+                        "Invalid conversion type: {:?} for Int64",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::UInt8(value) => match self.conversion_type {
-                ConversionType::DecInt
-                | ConversionType::HexIntLower
-                | ConversionType::HexIntUpper
-                | ConversionType::OctInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_unsigned(string, value as u64)
+            ScalarValue::UInt8(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::DecInt
+                    | ConversionType::HexIntLower
+                    | ConversionType::HexIntUpper
+                    | ConversionType::OctInt,
+                    Some(value),
+                ) => self.format_unsigned(string, *value as u64),
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
+                    self.format_char(string, *value as char)
                 }
-                ConversionType::CharLower | ConversionType::CharUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_char(string, value as char)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_integer() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for uint8",
+                        "Invalid conversion type: {:?} for UInt8",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::UInt16(value) => match self.conversion_type {
-                ConversionType::DecInt
-                | ConversionType::HexIntLower
-                | ConversionType::HexIntUpper
-                | ConversionType::OctInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_unsigned(string, value as u64)
+            ScalarValue::UInt16(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::DecInt
+                    | ConversionType::HexIntLower
+                    | ConversionType::HexIntUpper
+                    | ConversionType::OctInt,
+                    Some(value),
+                ) => self.format_unsigned(string, *value as u64),
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
+                    self.format_char(string, char::from_u32(*value as u32).unwrap())
                 }
-                ConversionType::CharLower | ConversionType::CharUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_char(string, char::from_u32(value as u32).unwrap())
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_integer() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for uint16",
+                        "Invalid conversion type: {:?} for UInt16",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::UInt32(value) => match self.conversion_type {
-                ConversionType::DecInt
-                | ConversionType::HexIntLower
-                | ConversionType::HexIntUpper
-                | ConversionType::OctInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_unsigned(string, value as u64)
+            ScalarValue::UInt32(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::DecInt
+                    | ConversionType::HexIntLower
+                    | ConversionType::HexIntUpper
+                    | ConversionType::OctInt,
+                    Some(value),
+                ) => self.format_unsigned(string, *value as u64),
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
+                    self.format_char(string, char::from_u32(*value).unwrap())
                 }
-                ConversionType::CharLower | ConversionType::CharUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_char(string, char::from_u32(value).unwrap())
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_integer() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for uint32",
+                        "Invalid conversion type: {:?} for UInt32",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::UInt64(value) => match self.conversion_type {
-                ConversionType::DecInt
-                | ConversionType::HexIntLower
-                | ConversionType::HexIntUpper
-                | ConversionType::OctInt => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_unsigned(string, value)
+            ScalarValue::UInt64(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::DecInt
+                    | ConversionType::HexIntLower
+                    | ConversionType::HexIntUpper
+                    | ConversionType::OctInt,
+                    Some(value),
+                ) => self.format_unsigned(string, *value),
+                (ConversionType::CharLower | ConversionType::CharUpper, Some(value)) => {
+                    self.format_char(string, char::from_u32(*value as u32).unwrap())
                 }
-                ConversionType::CharLower | ConversionType::CharUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_char(string, char::from_u32(value as u32).unwrap())
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_integer() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for uint64",
+                        "Invalid conversion type: {:?} for UInt64",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::Float16(value) => match self.conversion_type {
-                ConversionType::DecFloatLower
-                | ConversionType::SciFloatLower
-                | ConversionType::SciFloatUpper
-                | ConversionType::CompactFloatLower
-                | ConversionType::CompactFloatUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected float value, got {:?}",
-                        value
-                    ))?;
-                    self.format_float(string, value.to_f64())
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_f32().spark_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-
-                ConversionType::HexFloatLower | ConversionType::HexFloatUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_hex_float(string, value.to_f32())
-                }
+            ScalarValue::Float16(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::DecFloatLower
+                    | ConversionType::SciFloatLower
+                    | ConversionType::SciFloatUpper
+                    | ConversionType::CompactFloatLower
+                    | ConversionType::CompactFloatUpper,
+                    Some(value),
+                ) => self.format_float(string, value.to_f64().unwrap()),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_f32().unwrap().spark_string()),
+                (
+                    ConversionType::HexFloatLower | ConversionType::HexFloatUpper,
+                    Some(value),
+                ) => self.format_hex_float(string, value.to_f64().unwrap()),
+                (t, None) if t.supports_float() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for float16",
+                        "Invalid conversion type: {:?} for Float16",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::Float32(value) => match self.conversion_type {
-                ConversionType::DecFloatLower
-                | ConversionType::SciFloatLower
-                | ConversionType::SciFloatUpper
-                | ConversionType::CompactFloatLower
-                | ConversionType::CompactFloatUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected float value, got {:?}",
-                        value
-                    ))?;
-                    self.format_float(string, value as f64)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.spark_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                ConversionType::HexFloatLower | ConversionType::HexFloatUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_hex_float(string, value)
-                }
+            ScalarValue::Float32(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::DecFloatLower
+                    | ConversionType::SciFloatLower
+                    | ConversionType::SciFloatUpper
+                    | ConversionType::CompactFloatLower
+                    | ConversionType::CompactFloatUpper,
+                    Some(value),
+                ) => self.format_float(string, *value as f64),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.spark_string()),
+                (
+                    ConversionType::HexFloatLower | ConversionType::HexFloatUpper,
+                    Some(value),
+                ) => self.format_hex_float(string, *value as f64),
+                (t, None) if t.supports_float() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for float32",
+                        "Invalid conversion type: {:?} for Float32",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::Float64(value) => match self.conversion_type {
-                ConversionType::DecFloatLower
-                | ConversionType::SciFloatLower
-                | ConversionType::SciFloatUpper
-                | ConversionType::CompactFloatLower
-                | ConversionType::CompactFloatUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected float value, got {:?}",
-                        value
-                    ))?;
-                    self.format_float(string, value)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.spark_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                ConversionType::HexFloatLower | ConversionType::HexFloatUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected integer value, got {:?}",
-                        value
-                    ))?;
-                    self.format_hex_float(string, value)
-                }
+            ScalarValue::Float64(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::DecFloatLower
+                    | ConversionType::SciFloatLower
+                    | ConversionType::SciFloatUpper
+                    | ConversionType::CompactFloatLower
+                    | ConversionType::CompactFloatUpper,
+                    Some(value),
+                ) => self.format_float(string, *value),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.spark_string()),
+                (
+                    ConversionType::HexFloatLower | ConversionType::HexFloatUpper,
+                    Some(value),
+                ) => self.format_hex_float(string, *value),
+                (t, None) if t.supports_float() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for float64",
+                        "Invalid conversion type: {:?} for Float64",
                         self.conversion_type
                     )
                 }
@@ -1137,14 +1142,34 @@ impl ConversionSpecifier {
                     Some(value) => value.as_str(),
                     None => "null",
                 };
-                self.format_string(string, value)
+                if matches!(
+                    self.conversion_type,
+                    ConversionType::StringLower | ConversionType::StringUpper
+                ) {
+                    self.format_string(string, value)
+                } else {
+                    exec_err!(
+                        "Invalid conversion type: {:?} for Utf8",
+                        self.conversion_type
+                    )
+                }
             }
             ScalarValue::LargeUtf8(value) => {
                 let value: &str = match value {
                     Some(value) => value.as_str(),
                     None => "null",
                 };
-                self.format_string(string, value)
+                if matches!(
+                    self.conversion_type,
+                    ConversionType::StringLower | ConversionType::StringUpper
+                ) {
+                    self.format_string(string, value)
+                } else {
+                    exec_err!(
+                        "Invalid conversion type: {:?} for LargeUtf8",
+                        self.conversion_type
+                    )
+                }
             }
             ScalarValue::Utf8View(value) => {
                 let value: &str = match value {
@@ -1153,209 +1178,181 @@ impl ConversionSpecifier {
                 };
                 self.format_string(string, value)
             }
-            ScalarValue::Decimal128(value, _, scale) => match self.conversion_type {
-                ConversionType::DecFloatLower
-                | ConversionType::SciFloatLower
-                | ConversionType::SciFloatUpper
-                | ConversionType::CompactFloatLower
-                | ConversionType::CompactFloatUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected decimal value, got {:?}",
-                        value
-                    ))?;
-                    self.format_decimal(string, value.to_string(), *scale as i64)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for decimal128",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::Decimal256(value, _, scale) => match self.conversion_type {
-                ConversionType::DecFloatLower
-                | ConversionType::SciFloatLower
-                | ConversionType::SciFloatUpper
-                | ConversionType::CompactFloatLower
-                | ConversionType::CompactFloatUpper => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected decimal value, got {:?}",
-                        value
-                    ))?;
-                    self.format_decimal(string, value.to_string(), *scale as i64)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for decimal256",
-                        self.conversion_type
-                    )
-                }
-            },
-
-            ScalarValue::Time32Second(value) => match self.conversion_type {
-                ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected time value, got {:?}",
-                        value
-                    ))?;
-                    self.format_time(string, value as i64 * 1000000000, &None)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for time32second",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::Time32Millisecond(value) => match self.conversion_type {
-                ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected time value, got {:?}",
-                        value
-                    ))?;
-                    self.format_time(string, value as i64 * 1000000, &None)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for time32millisecond",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::Time64Microsecond(value) => match self.conversion_type {
-                ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected time value, got {:?}",
-                        value
-                    ))?;
-                    self.format_time(string, value * 1000, &None)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for time64microsecond",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::Time64Nanosecond(value) => match self.conversion_type {
-                ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected time value, got {:?}",
-                        value
-                    ))?;
-                    self.format_time(string, value, &None)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for time64nanosecond",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::TimestampSecond(value, zone) => match self.conversion_type {
-                ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected timestamp value, got {:?}",
-                        value
-                    ))?;
-                    self.format_time(string, value * 1000000000, zone)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for timestampsecond",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::TimestampMillisecond(value, zone) => {
-                match self.conversion_type {
-                    ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                        let value = value.ok_or(exec_datafusion_err!(
-                            "Expected timestamp value, got {:?}",
-                            value
-                        ))?;
-                        self.format_time(string, value * 1000000, zone)
+            ScalarValue::Decimal128(value, _, scale) => {
+                match (self.conversion_type, value) {
+                    (
+                        ConversionType::DecFloatLower
+                        | ConversionType::SciFloatLower
+                        | ConversionType::SciFloatUpper
+                        | ConversionType::CompactFloatLower
+                        | ConversionType::CompactFloatUpper,
+                        Some(value),
+                    ) => self.format_decimal(string, value.to_string(), *scale as i64),
+                    (
+                        ConversionType::StringLower | ConversionType::StringUpper,
+                        Some(value),
+                    ) => self.format_string(string, &value.to_string()),
+                    (t, None) if t.supports_decimal() => {
+                        self.format_string(string, "null")
                     }
-                    ConversionType::StringLower | ConversionType::StringUpper => self
-                        .format_string(
-                            string,
-                            &value
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|| "null".to_string()),
-                        ),
+
                     _ => {
                         exec_err!(
-                            "Invalid conversion type: {:?} for timestampmillisecond",
+                            "Invalid conversion type: {:?} for Decimal128",
+                            self.conversion_type
+                        )
+                    }
+                }
+            }
+            ScalarValue::Decimal256(value, _, scale) => {
+                match (self.conversion_type, value) {
+                    (
+                        ConversionType::DecFloatLower
+                        | ConversionType::SciFloatLower
+                        | ConversionType::SciFloatUpper
+                        | ConversionType::CompactFloatLower
+                        | ConversionType::CompactFloatUpper,
+                        Some(value),
+                    ) => self.format_decimal(string, value.to_string(), *scale as i64),
+                    (
+                        ConversionType::StringLower | ConversionType::StringUpper,
+                        Some(value),
+                    ) => self.format_string(string, &value.to_string()),
+                    (t, None) if t.supports_decimal() => {
+                        self.format_string(string, "null")
+                    }
+
+                    _ => {
+                        exec_err!(
+                            "Invalid conversion type: {:?} for Decimal256",
+                            self.conversion_type
+                        )
+                    }
+                }
+            }
+
+            ScalarValue::Time32Second(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                    Some(value),
+                ) => self.format_time(string, *value as i64 * 1000000000, &None),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_time() => self.format_string(string, "null"),
+                _ => {
+                    exec_err!(
+                        "Invalid conversion type: {:?} for Time32Second",
+                        self.conversion_type
+                    )
+                }
+            },
+            ScalarValue::Time32Millisecond(value) => {
+                match (self.conversion_type, value) {
+                    (
+                        ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                        Some(value),
+                    ) => self.format_time(string, *value as i64 * 1000000, &None),
+                    (
+                        ConversionType::StringLower | ConversionType::StringUpper,
+                        Some(value),
+                    ) => self.format_string(string, &value.to_string()),
+                    (t, None) if t.supports_time() => self.format_string(string, "null"),
+                    _ => {
+                        exec_err!(
+                            "Invalid conversion type: {:?} for Time32Millisecond",
+                            self.conversion_type
+                        )
+                    }
+                }
+            }
+            ScalarValue::Time64Microsecond(value) => {
+                match (self.conversion_type, value) {
+                    (
+                        ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                        Some(value),
+                    ) => self.format_time(string, *value * 1000, &None),
+                    (
+                        ConversionType::StringLower | ConversionType::StringUpper,
+                        Some(value),
+                    ) => self.format_string(string, &value.to_string()),
+                    (t, None) if t.supports_time() => self.format_string(string, "null"),
+                    _ => {
+                        exec_err!(
+                            "Invalid conversion type: {:?} for Time64Microsecond",
+                            self.conversion_type
+                        )
+                    }
+                }
+            }
+            ScalarValue::Time64Nanosecond(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                    Some(value),
+                ) => self.format_time(string, *value, &None),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_time() => self.format_string(string, "null"),
+                _ => {
+                    exec_err!(
+                        "Invalid conversion type: {:?} for Time64Nanosecond",
+                        self.conversion_type
+                    )
+                }
+            },
+            ScalarValue::TimestampSecond(value, zone) => {
+                match (self.conversion_type, value) {
+                    (
+                        ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                        Some(value),
+                    ) => self.format_time(string, value * 1000000000, zone),
+                    (
+                        ConversionType::StringLower | ConversionType::StringUpper,
+                        Some(value),
+                    ) => self.format_string(string, &value.to_string()),
+                    (t, None) if t.supports_time() => self.format_string(string, "null"),
+                    _ => {
+                        exec_err!(
+                            "Invalid conversion type: {:?} for TimestampSecond",
+                            self.conversion_type
+                        )
+                    }
+                }
+            }
+            ScalarValue::TimestampMillisecond(value, zone) => {
+                match (self.conversion_type, value) {
+                    (
+                        ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                        Some(value),
+                    ) => self.format_time(string, *value * 1000000, zone),
+                    (
+                        ConversionType::StringLower | ConversionType::StringUpper,
+                        Some(value),
+                    ) => self.format_string(string, &value.to_string()),
+
+                    (t, None) if t.supports_time() => self.format_string(string, "null"),
+                    _ => {
+                        exec_err!(
+                            "Invalid conversion type: {:?} for TimestampMillisecond",
                             self.conversion_type
                         )
                     }
                 }
             }
             ScalarValue::TimestampMicrosecond(value, zone) => {
-                match self.conversion_type {
-                    ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                        let value = value.ok_or(exec_datafusion_err!(
-                            "Expected timestamp value, got {:?}",
-                            value
-                        ))?;
-                        self.format_time(string, value * 1000, zone)
-                    }
-                    ConversionType::StringLower | ConversionType::StringUpper => self
-                        .format_string(
-                            string,
-                            &value
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|| "null".to_string()),
-                        ),
+                match (self.conversion_type, value) {
+                    (
+                        ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                        Some(value),
+                    ) => self.format_time(string, value * 1000, zone),
+                    (
+                        ConversionType::StringLower | ConversionType::StringUpper,
+                        Some(value),
+                    ) => self.format_string(string, &value.to_string()),
+                    (t, None) if t.supports_time() => self.format_string(string, "null"),
                     _ => {
                         exec_err!(
                             "Invalid conversion type: {:?} for timestampmicrosecond",
@@ -1364,68 +1361,56 @@ impl ConversionSpecifier {
                     }
                 }
             }
-            ScalarValue::TimestampNanosecond(value, zone) => match self.conversion_type {
-                ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected timestamp value, got {:?}",
-                        value
-                    ))?;
-                    self.format_time(string, value, zone)
+
+            ScalarValue::TimestampNanosecond(value, zone) => {
+                match (self.conversion_type, value) {
+                    (
+                        ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                        Some(value),
+                    ) => self.format_time(string, *value, zone),
+                    (
+                        ConversionType::StringLower | ConversionType::StringUpper,
+                        Some(value),
+                    ) => self.format_string(string, &value.to_string()),
+                    (t, None) if t.supports_time() => self.format_string(string, "null"),
+                    _ => {
+                        exec_err!(
+                            "Invalid conversion type: {:?} for TimestampNanosecond",
+                            self.conversion_type
+                        )
+                    }
                 }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+            }
+            ScalarValue::Date32(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                    Some(value),
+                ) => self.format_date(string, *value as i64),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_time() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for timestampnanosecond",
+                        "Invalid conversion type: {:?} for Date32",
                         self.conversion_type
                     )
                 }
             },
-            ScalarValue::Date32(value) => match self.conversion_type {
-                ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected date value, got {:?}",
-                        value
-                    ))?;
-                    self.format_date(string, value as i64)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
+            ScalarValue::Date64(value) => match (self.conversion_type, value) {
+                (
+                    ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
+                    Some(value),
+                ) => self.format_date(string, *value),
+                (
+                    ConversionType::StringLower | ConversionType::StringUpper,
+                    Some(value),
+                ) => self.format_string(string, &value.to_string()),
+                (t, None) if t.supports_time() => self.format_string(string, "null"),
                 _ => {
                     exec_err!(
-                        "Invalid conversion type: {:?} for date32",
-                        self.conversion_type
-                    )
-                }
-            },
-            ScalarValue::Date64(value) => match self.conversion_type {
-                ConversionType::TimeLower(_) | ConversionType::TimeUpper(_) => {
-                    let value = value.ok_or(exec_datafusion_err!(
-                        "Expected date value, got {:?}",
-                        value
-                    ))?;
-                    self.format_date(string, value)
-                }
-                ConversionType::StringLower | ConversionType::StringUpper => self
-                    .format_string(
-                        string,
-                        &value
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "null".to_string()),
-                    ),
-                _ => {
-                    exec_err!(
-                        "Invalid conversion type: {:?} for date64",
+                        "Invalid conversion type: {:?} for Date64",
                         self.conversion_type
                     )
                 }
@@ -1438,30 +1423,198 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_hex_float<F: FloatBits>(
+    fn format_hex_float(
         &self,
         writer: &mut String,
-        value: F,
+        value: f64,
     ) -> Result<()> {
-        let upper = self.conversion_type == ConversionType::HexFloatUpper;
-        match self.precision {
-            NumericParam::FromArgument => value
-                .format_hex(writer, None, upper)
-                .map_err(|e| exec_datafusion_err!("Failed to format hex float: {}", e)),
-            NumericParam::Literal(p) if p >= 13 => value
-                .format_hex(writer, None, upper)
-                .map_err(|e| exec_datafusion_err!("Failed to format hex float: {}", e)),
-            NumericParam::Literal(p) => value
-                .format_hex(writer, Some(p), upper)
-                .map_err(|e| exec_datafusion_err!("Failed to format hex float: {}", e)),
+        // Handle special cases first
+        let (sign, raw_exponent, mantissa) = value.to_parts();
+        let is_subnormal = raw_exponent == 0;
+
+        let precision = match self.precision {
+            NumericParam::FromArgument => None,
+            NumericParam::Literal(p) => Some(p),
+        };
+
+        // Determine if we need to normalize subnormal numbers
+        // Only normalize when precision is specified and less than full mantissa width
+        let mantissa_hex_digits = (f64::MANTISSA_BITS + 3) / 4; // 13 for f64
+        let should_normalize = is_subnormal && precision.is_some() && precision.unwrap() < mantissa_hex_digits as i32;
+
+        let (value, raw_exponent, mantissa) = if should_normalize {
+            let value = value * f64::SCALEUP;
+            let (_, raw_exponent, mantissa) = value.to_parts();
+            (value, raw_exponent, mantissa)
+        } else {
+            (value, raw_exponent, mantissa)
+        };
+
+        let mut temp = String::new();
+
+        let sign_char = if sign {
+            "-"
+        } else if self.force_sign {
+            "+"
+        } else if self.space_sign {
+            " "
+        } else {
+            ""
+        };
+        match value.category() {
+            FpCategory::Nan => {
+                write!(&mut temp, "NaN")?;
+            }
+            FpCategory::Infinite => {
+                write!(&mut temp, "{sign_char}Infinity")?;
+            }
+            FpCategory::Zero => {
+                write!(&mut temp, "{sign_char}0x0.0p0")?;
+            }
+            _ => {
+                let bias = i32::from(f64::EXPONENT_BIAS);
+                // Calculate actual exponent
+                // For subnormal numbers, the exponent is 1 - bias (not 0 - bias)
+                let exponent = if is_subnormal && !should_normalize {
+                    1 - bias
+                } else {
+                    raw_exponent as i32 - bias
+                };
+
+                // Handle precision for rounding
+                let final_mantissa = if let Some(p) = precision {
+                    if p == 0 {
+                        // For precision 0, we still need at least 1 hex digit
+                        // Round to the nearest integer mantissa value
+                        let shift_distance = f64::MANTISSA_BITS as i32 - 4; // Keep 1 hex digit (4 bits)
+                        let shifted = mantissa >> shift_distance;
+                        let rounding_bits = mantissa & ((1u64 << shift_distance) - 1);
+                        let round_bit = 1u64 << (shift_distance - 1);
+
+                        // Round to nearest, ties to even
+                        if rounding_bits > round_bit
+                            || (rounding_bits == round_bit && (shifted & 1) != 0)
+                        {
+                            (shifted + 1) << shift_distance
+                        } else {
+                            shifted << shift_distance
+                        }
+                    } else {
+                        // Apply rounding based on precision
+                        let precision_bits = p * 4; // Each hex digit is 4 bits
+                        let keep_bits = f64::MANTISSA_BITS as i32;
+                        let shift_distance = keep_bits - precision_bits;
+
+                        if shift_distance > 0 {
+                            let shifted = mantissa >> shift_distance;
+                            let rounding_bits = mantissa & ((1u64 << shift_distance) - 1);
+                            let round_bit = 1u64 << (shift_distance - 1);
+
+                            // Round to nearest, ties to even
+                            if rounding_bits > round_bit
+                                || (rounding_bits == round_bit && (shifted & 1) != 0)
+                            {
+                                (shifted + 1) << shift_distance
+                            } else {
+                                shifted << shift_distance
+                            }
+                        } else {
+                            mantissa
+                        }
+                    }
+                } else {
+                    mantissa
+                };
+
+                if is_subnormal && !should_normalize {
+                    // Original subnormal format: 0x0.xxxp-1022
+                    if let Some(_) = precision {
+                        // precision >= 13, show as subnormal
+                        let full_hex = format!("{:0width$x}", final_mantissa, width = mantissa_hex_digits as usize);
+                        write!(
+                            &mut temp,
+                            "{sign_char}0x0.{full_hex}p{exponent}"
+                        )?;
+                    } else {
+                        // No precision specified, show full subnormal
+                        let hex_digits = format!("{:0width$x}", final_mantissa, width = mantissa_hex_digits as usize);
+                        write!(&mut temp, "{sign_char}0x0.{hex_digits}p{exponent}")?;
+                    }
+                } else {
+                    // Normal format or normalized subnormal: 0x1.xxxpN
+                    if let Some(p) = precision {
+                        let p = if p == 0 { 1 } else { p };
+                        let hex_digits = format!("{final_mantissa:x}");
+                        let formatted_digits = if p as usize >= hex_digits.len() {
+                            // Pad with zeros to match precision
+                            format!("{:0<width$}", hex_digits, width = p as usize)
+                        } else {
+                            hex_digits[..p as usize].to_string()
+                        };
+                        write!(
+                            &mut temp,
+                            "{sign_char}0x1.{formatted_digits}p{exponent}"
+                        )?;
+                    } else {
+                        // Default: show all significant digits
+                        let mut hex_digits = format!("{final_mantissa:x}");
+                        hex_digits = trim_trailing_0s_hex(&hex_digits).to_owned();
+                        if hex_digits.is_empty() {
+                            write!(&mut temp, "{sign_char}0x1.0p{exponent}")?;
+                        } else {
+                            write!(&mut temp, "{sign_char}0x1.{hex_digits}p{exponent}")?;
+                        }
+                    }
+                }
+                if should_normalize {
+                    let (prefix, exp) = temp.split_once('p').unwrap();
+                    let iexp = exp.parse::<i32>().unwrap() - f64::SCALEUP_POWER as i32;
+                    temp = format!("{prefix}p{iexp}");
+                }
+            }
+        };
+
+        if self.conversion_type.is_upper() {
+            temp = temp.to_ascii_uppercase();
         }
+
+        let NumericParam::Literal(width) = self.width else {
+            writer.push_str(&temp);
+            return Ok(());
+        };
+        if self.left_adj {
+            writer.push_str(&temp);
+            for _ in temp.len()..width as usize {
+                writer.push(' ');
+            }
+        } else if self.zero_pad && value.is_finite() {
+            let delimiter = if self.conversion_type.is_upper() {
+                "0X"
+            } else {
+                "0x"
+            };
+            let (prefix, suffix) = temp.split_once(delimiter).unwrap();
+            writer.push_str(prefix);
+            writer.push_str(delimiter);
+            for _ in temp.len()..width as usize {
+                writer.push('0');
+            }
+            writer.push_str(suffix);
+        } else {
+            while temp.len() < width as usize {
+                temp = " ".to_owned() + &temp;
+            }
+            writer.push_str(&temp);
+        };
+        Ok(())
     }
 
     fn format_char(&self, writer: &mut String, value: char) -> Result<()> {
+        let upper = self.conversion_type.is_upper();
         match self.conversion_type {
             ConversionType::CharLower | ConversionType::CharUpper => {
                 let NumericParam::Literal(width) = self.width else {
-                    if self.conversion_type == ConversionType::CharUpper {
+                    if upper {
                         writer.push(value.to_ascii_uppercase());
                     } else {
                         writer.push(value);
@@ -1471,7 +1624,7 @@ impl ConversionSpecifier {
 
                 let start_len = writer.len();
                 if self.left_adj {
-                    if self.conversion_type == ConversionType::CharUpper {
+                    if upper {
                         writer.push(value.to_ascii_uppercase());
                     } else {
                         writer.push(value);
@@ -1483,7 +1636,7 @@ impl ConversionSpecifier {
                     while writer.len() - start_len + value.len_utf8() < width as usize {
                         writer.push(' ');
                     }
-                    if self.conversion_type == ConversionType::CharUpper {
+                    if upper {
                         writer.push(value.to_ascii_uppercase());
                     } else {
                         writer.push(value);
@@ -1530,7 +1683,7 @@ impl ConversionSpecifier {
         let mut prefix = String::new();
         let mut suffix = String::new();
         let mut number = String::new();
-        let mut upper = false;
+        let upper = self.conversion_type.is_upper();
 
         // set up the sign
         if value.is_sign_negative() {
@@ -1555,9 +1708,6 @@ impl ConversionSpecifier {
                 NumericParam::Literal(p) => p,
                 _ => 6,
             };
-            if precision <= 0 {
-                precision = 0;
-            }
             match self.conversion_type {
                 ConversionType::DecFloatLower => {
                     // default
@@ -1567,10 +1717,8 @@ impl ConversionSpecifier {
                 }
                 ConversionType::SciFloatUpper => {
                     use_scientific = true;
-                    upper = true;
                 }
                 ConversionType::CompactFloatLower | ConversionType::CompactFloatUpper => {
-                    upper = self.conversion_type == ConversionType::CompactFloatUpper;
                     strip_trailing_0s = true;
                     if precision == 0 {
                         precision = 1;
@@ -1729,7 +1877,7 @@ impl ConversionSpecifier {
                     let mut result = String::new();
                     let chars: Vec<char> = num_str.chars().collect();
                     for (i, c) in chars.iter().enumerate() {
-                        if i > 0 && (chars.len() - i) % 3 == 0 {
+                        if i > 0 && (chars.len() - i).is_multiple_of(3) {
                             result.push(',');
                         }
                         result.push(*c);
@@ -1833,16 +1981,11 @@ impl ConversionSpecifier {
     }
 
     fn format_string(&self, writer: &mut String, value: &str) -> Result<()> {
-        match self.conversion_type {
-            ConversionType::StringLower => self.format_str(writer, value),
-            ConversionType::StringUpper => {
-                let upper = value.to_ascii_uppercase();
-                self.format_str(writer, &upper)
-            }
-            _ => exec_err!(
-                "Invalid conversion type: {:?} for string",
-                self.conversion_type
-            ),
+        if self.conversion_type.is_upper() {
+            let upper = value.to_ascii_uppercase();
+            self.format_str(writer, &upper)
+        } else {
+            self.format_str(writer, value)
         }
     }
 
@@ -1853,6 +1996,7 @@ impl ConversionSpecifier {
         scale: i64,
     ) -> Result<()> {
         let mut prefix = String::new();
+        let upper = self.conversion_type.is_upper();
 
         // Parse as BigDecimal
         let decimal = value
@@ -1872,8 +2016,7 @@ impl ConversionSpecifier {
             prefix.push('+');
         }
 
-        let mut use_scientific = false;
-        let mut exp_symb = 'e';
+        let exp_symb = if upper { 'E' } else { 'e' };
         let mut strip_trailing_0s = false;
 
         // Get precision setting
@@ -1881,37 +2024,25 @@ impl ConversionSpecifier {
             NumericParam::Literal(p) => p,
             _ => 6,
         };
-        if precision <= 0 {
-            precision = 6; // Default precision
-        }
 
         let number = match self.conversion_type {
             ConversionType::DecFloatLower => {
                 // Format as fixed-point decimal
                 self.format_decimal_fixed(&abs_decimal, precision, strip_trailing_0s)?
             }
-            ConversionType::SciFloatLower => {
-                use_scientific = true;
-                self.format_decimal_scientific(
-                    &abs_decimal,
-                    precision,
-                    'e',
-                    strip_trailing_0s,
-                )?
-            }
-            ConversionType::SciFloatUpper => {
-                use_scientific = true;
-                self.format_decimal_scientific(
-                    &abs_decimal,
-                    precision,
-                    'E',
-                    strip_trailing_0s,
-                )?
-            }
+            ConversionType::SciFloatLower => self.format_decimal_scientific(
+                &abs_decimal,
+                precision,
+                'e',
+                strip_trailing_0s,
+            )?,
+            ConversionType::SciFloatUpper => self.format_decimal_scientific(
+                &abs_decimal,
+                precision,
+                'E',
+                strip_trailing_0s,
+            )?,
             ConversionType::CompactFloatLower | ConversionType::CompactFloatUpper => {
-                if self.conversion_type == ConversionType::CompactFloatUpper {
-                    exp_symb = 'E';
-                }
                 strip_trailing_0s = true;
                 if precision == 0 {
                     precision = 1;
@@ -1919,7 +2050,6 @@ impl ConversionSpecifier {
                 // Determine if we should use scientific notation
                 let log10_val = abs_decimal.to_f64().map(|f| f.log10()).unwrap_or(0.0);
                 if log10_val < -4.0 || log10_val >= precision as f64 {
-                    use_scientific = true;
                     self.format_decimal_scientific(
                         &abs_decimal,
                         precision - 1,
@@ -1955,7 +2085,7 @@ impl ConversionSpecifier {
                 full_num.push(' ');
             }
             writer.push_str(&full_num);
-        } else if self.zero_pad && !use_scientific {
+        } else if self.zero_pad {
             while prefix.len() + number.len() < width as usize {
                 prefix.push('0');
             }
@@ -2027,17 +2157,17 @@ impl ConversionSpecifier {
         timestamp_nanos: i64,
         timezone: &Option<Arc<str>>,
     ) -> Result<()> {
+        let upper = self.conversion_type.is_upper();
         match &self.conversion_type {
             ConversionType::TimeLower(time_format)
             | ConversionType::TimeUpper(time_format) => {
                 let formatted =
                     self.format_time_component(timestamp_nanos, *time_format, timezone)?;
-                let result =
-                    if matches!(self.conversion_type, ConversionType::TimeUpper(_)) {
-                        formatted.to_uppercase()
-                    } else {
-                        formatted
-                    };
+                let result = if upper {
+                    formatted.to_uppercase()
+                } else {
+                    formatted
+                };
                 write!(writer, "{result}")
                     .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
                 Ok(())
@@ -2134,23 +2264,15 @@ impl ConversionSpecifier {
     }
 }
 
-pub trait FloatBits: std::fmt::Display {
-    const EXPONENT_BITS: u8;
-    const MANTISSA_BITS: u8;
-    const EXPONENT_BIAS: u16;
-    const SIGNIFICAND_WIDTH: u8;
+trait FloatFormatable: std::fmt::Display {
 
-    fn to_parts(&self) -> (bool, u16, u64);
     fn category(&self) -> FpCategory;
-
-    fn is_finite(&self) -> bool;
-    fn is_zero(&self) -> bool;
 
     fn spark_string(&self) -> String {
         match self.category() {
             FpCategory::Nan => "NaN".to_string(),
             FpCategory::Infinite => {
-                if self.to_parts().0 {
+                if self.negative() {
                     "-Infinity".to_string()
                 } else {
                     "Infinity".to_string()
@@ -2159,178 +2281,46 @@ pub trait FloatBits: std::fmt::Display {
             _ => self.to_string(),
         }
     }
-
-    fn format_hex(
-        &self,
-        f: &mut String,
-        prec: Option<i32>,
-        upper: bool,
-    ) -> core::fmt::Result {
-        // Handle special cases first
-        let p_char = if upper { "P" } else { "p" };
-        let x_char = if upper { "X" } else { "x" };
-        match self.category() {
-            FpCategory::Nan => {
-                let ret = if upper { "NAN" } else { "NaN" };
-                return write!(f, "{ret}");
-            }
-            FpCategory::Infinite => {
-                let (sign, _, _) = self.to_parts();
-                let sign_char = if sign { "-" } else { "" };
-                let ret = if upper { "INFINITY" } else { "Infinity" };
-                return write!(f, "{sign_char}{ret}");
-            }
-            FpCategory::Zero => {
-                return write!(f, "0{x_char}0.0{p_char}0");
-            }
-            _ => {}
-        };
-
-        let (sign, raw_exponent, mantissa) = self.to_parts();
-        let bias = i32::from(Self::EXPONENT_BIAS);
-        let is_subnormal = raw_exponent == 0;
-
-        // Calculate actual exponent
-        let exponent = if is_subnormal {
-            1 - bias // For subnormal numbers, exponent is 1-bias
-        } else {
-            raw_exponent as i32 - bias
-        };
-
-        let sign_char = if sign { "-" } else { "" };
-
-        // Handle precision for rounding
-        let final_mantissa = if let Some(precision) = prec {
-            if precision == 0 {
-                0
-            } else if precision >= 13 {
-                // Full precision - no rounding needed
-                mantissa
-            } else {
-                // Apply rounding based on precision
-                let precision_bits = precision * 4; // Each hex digit is 4 bits
-                let keep_bits = Self::MANTISSA_BITS as i32;
-                let shift_distance = keep_bits - precision_bits;
-
-                if shift_distance > 0 {
-                    let shifted = mantissa >> shift_distance;
-                    let rounding_bits = mantissa & ((1u64 << shift_distance) - 1);
-                    let round_bit = 1u64 << (shift_distance - 1);
-
-                    // Round to nearest, ties to even
-                    if rounding_bits > round_bit
-                        || (rounding_bits == round_bit && (shifted & 1) != 0)
-                    {
-                        (shifted + 1) << shift_distance
-                    } else {
-                        shifted << shift_distance
-                    }
-                } else {
-                    mantissa
-                }
-            }
-        } else {
-            mantissa
-        };
-
-        if is_subnormal {
-            // Subnormal number: 0.xxxxx
-            if let Some(precision) = prec {
-                if precision == 0 {
-                    write!(f, "{sign_char}0x0.{p_char}{exponent}")
-                } else {
-                    let hex_digits = if upper {
-                        format!("{final_mantissa:X}")
-                    } else {
-                        format!("{final_mantissa:x}")
-                    };
-                    let truncated = if precision as usize >= hex_digits.len() {
-                        hex_digits
-                    } else {
-                        hex_digits[..precision as usize].to_string()
-                    };
-                    write!(f, "{sign_char}0{x_char}0.{truncated}{p_char}{exponent}")
-                }
-            } else {
-                // Default: show all significant digits for subnormal
-                let mut hex_digits = format!("{final_mantissa:x}")
-                    .trim_end_matches('0')
-                    .to_string();
-                if hex_digits.is_empty() {
-                    write!(f, "{sign_char}0{x_char}0.0{p_char}{exponent}")
-                } else {
-                    hex_digits = trim_trailing_0s_hex(&hex_digits).to_owned();
-                    write!(f, "{sign_char}0{x_char}0.{hex_digits}{p_char}{exponent}")
-                }
-            }
-        } else {
-            // Normal number: 1.xxxxx
-            if let Some(precision) = prec {
-                if precision == 0 {
-                    write!(f, "{sign_char}0{x_char}1.{p_char}{exponent}")
-                } else {
-                    let hex_digits = if upper {
-                        format!("{final_mantissa:X}")
-                    } else {
-                        format!("{final_mantissa:x}")
-                    };
-                    let truncated = if precision as usize >= hex_digits.len() {
-                        hex_digits
-                    } else {
-                        hex_digits[..precision as usize].to_string()
-                    };
-                    write!(f, "{sign_char}0{x_char}1.{truncated}{p_char}{exponent}")
-                }
-            } else {
-                // Default: show all significant digits
-                let mut hex_digits = if upper {
-                    format!("{final_mantissa:X}")
-                } else {
-                    format!("{final_mantissa:x}")
-                };
-                hex_digits = trim_trailing_0s_hex(&hex_digits).to_owned();
-                if hex_digits.is_empty() {
-                    write!(f, "{sign_char}0{x_char}1.0{p_char}{exponent}")
-                } else {
-                    write!(f, "{sign_char}0{x_char}1.{hex_digits}{p_char}{exponent}")
-                }
-            }
-        }
-    }
+    fn negative(&self) -> bool;
 }
 
-impl FloatBits for f32 {
-    const EXPONENT_BITS: u8 = 8;
-    const MANTISSA_BITS: u8 = 23;
-    const EXPONENT_BIAS: u16 = 127;
-    const SIGNIFICAND_WIDTH: u8 = 24;
-
-    fn to_parts(&self) -> (bool, u16, u64) {
-        let bits = self.to_bits();
-        let sign: bool = (bits >> 31) == 1;
-        let exponent = u8::try_from((bits >> 23) & 0xFF).unwrap();
-        let mantissa = bits & 0x7F_FFFF;
-        (sign, exponent as u16, mantissa as u64)
-    }
+impl FloatFormatable for f32 {
 
     fn category(&self) -> FpCategory {
         self.classify()
     }
 
-    fn is_finite(&self) -> bool {
-        f32::is_finite(*self)
-    }
-
-    fn is_zero(&self) -> bool {
-        *self == 0.0
+    fn negative(&self) -> bool {
+        self.is_sign_negative()
     }
 }
 
+impl FloatFormatable for f64 {
+
+    fn category(&self) -> FpCategory {
+        self.classify()
+    }
+
+    fn negative(&self) -> bool {
+        self.is_sign_negative()
+    }
+}
+
+trait FloatBits: FloatFormatable {
+    const MANTISSA_BITS: u8;
+    const EXPONENT_BIAS: u16;
+    const SCALEUP_POWER: u8;
+    const SCALEUP: Self;
+
+    fn to_parts(&self) -> (bool, u16, u64);
+
+}
+
 impl FloatBits for f64 {
-    const EXPONENT_BITS: u8 = 11;
     const MANTISSA_BITS: u8 = 52;
     const EXPONENT_BIAS: u16 = 1023;
-    const SIGNIFICAND_WIDTH: u8 = 53;
+    const SCALEUP_POWER: u8 = 54;
+    const SCALEUP: f64 = (1_i64 << Self::SCALEUP_POWER) as f64;
 
     fn to_parts(&self) -> (bool, u16, u64) {
         let bits = self.to_bits();
@@ -2338,18 +2328,6 @@ impl FloatBits for f64 {
         let exponent = ((bits >> 52) & 0x7FF) as u16;
         let mantissa = bits & 0x000F_FFFF_FFFF_FFFF;
         (sign, exponent, mantissa)
-    }
-
-    fn category(&self) -> FpCategory {
-        self.classify()
-    }
-
-    fn is_finite(&self) -> bool {
-        f64::is_finite(*self)
-    }
-
-    fn is_zero(&self) -> bool {
-        *self == 0.0
     }
 }
 
