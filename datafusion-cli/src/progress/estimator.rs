@@ -89,14 +89,40 @@ impl LinearEstimator {
 }
 
 /// Kalman filter ETA estimation for smoother predictions
+///
+/// This implementation uses a 2D state vector [progress_rate, acceleration] to model
+/// the progress dynamics over time. The Kalman filter provides optimal estimates
+/// in the presence of noise by maintaining:
+///
+/// 1. **State Vector**: [rate, acceleration] where:
+///    - `rate`: progress percentage per second
+///    - `acceleration`: change in rate per second
+///
+/// 2. **State Transition Model**:
+///    - rate(k+1) = rate(k) + acceleration(k) * dt
+///    - acceleration(k+1) = acceleration(k) + process_noise
+///
+/// 3. **Measurement Model**: We directly observe the progress rate
+///
+/// 4. **Noise Models**:
+///    - Process noise: Models uncertainty in how progress rate changes
+///    - Measurement noise: Models uncertainty in our rate observations
+///
+/// The filter continuously updates its estimates as new progress measurements
+/// arrive, providing smoother and more accurate ETA predictions than simple
+/// linear extrapolation.
 struct KalmanEstimator {
     // State: [progress_rate, acceleration]
     state: [f64; 2],
     // Covariance matrix (2x2, stored as [P00, P01, P10, P11])
     covariance: [f64; 4],
-    // Process noise
+    // Process noise - models uncertainty in progress dynamics
+    // Higher values = more responsive to changes, but less smooth
+    // Tuning: 0.01-1.0 range, 0.1 provides good balance
     process_noise: f64,
-    // Measurement noise
+    // Measurement noise - models uncertainty in rate measurements
+    // Higher values = less trust in new measurements, smoother estimates
+    // Tuning: 0.1-10.0 range, 1.0 provides good balance
     measurement_noise: f64,
     // Previous time for calculating dt
     last_time: Option<Duration>,
@@ -145,17 +171,31 @@ impl KalmanEstimator {
     }
 
     /// Kalman filter prediction step
+    ///
+    /// Predicts the next state based on the current state and time elapsed.
+    /// This implements the linear state transition model:
+    /// - rate(k+1) = rate(k) + acceleration(k) * dt
+    /// - acceleration(k+1) = acceleration(k) + process_noise
+    ///
+    /// The covariance matrix is updated to reflect increased uncertainty
+    /// due to process noise and time progression.
     fn predict(&mut self, dt: f64) {
         // State transition: progress_rate(k+1) = progress_rate(k) + acceleration(k) * dt
         //                  acceleration(k+1) = acceleration(k)
 
-        // Update state
+        // Update state vector using linear dynamics
         self.state[0] += self.state[1] * dt; // rate += acceleration * dt
-                                             // acceleration stays the same
+                                             // acceleration stays the same (constant acceleration model)
 
         // Update covariance with process noise
         // F = [[1, dt], [0, 1]] (state transition matrix)
-        // P = F * P * F^T + Q
+        // P = F * P * F^T + Q (covariance prediction)
+        //
+        // This expands to:
+        // P00_new = P00 + 2*dt*P01 + dt²*P11 + Q
+        // P01_new = P01 + dt*P11
+        // P10_new = P10 + dt*P11
+        // P11_new = P11 + Q
 
         let p00 = self.covariance[0];
         let p01 = self.covariance[1];
@@ -168,31 +208,46 @@ impl KalmanEstimator {
         self.covariance[3] = p11 + self.process_noise;
     }
 
-    /// Kalman filter update step  
+    /// Kalman filter update step
+    ///
+    /// Updates the state estimate based on a new measurement of progress rate.
+    /// This implements the standard Kalman filter measurement update equations:
+    ///
+    /// 1. **Innovation**: Difference between measured and predicted rate
+    /// 2. **Kalman Gain**: Optimal weighting between prediction and measurement
+    /// 3. **State Update**: Corrects state estimate using weighted innovation
+    /// 4. **Covariance Update**: Reduces uncertainty after incorporating measurement
+    ///
+    /// The measurement model assumes we directly observe the progress rate with
+    /// some noise (measurement_noise).
     fn kalman_update(&mut self, measured_rate: f64, dt: f64) {
-        // Prediction step
+        // First predict the state forward in time
         self.predict(dt);
 
-        // Measurement update
-        // H = [1, 0] (we measure the rate directly)
-        // y = measured_rate - predicted_rate (innovation)
+        // Measurement update equations
+        // H = [1, 0] (we measure the rate directly, not acceleration)
+        // y = z - H*x (innovation: difference between measurement and prediction)
         let innovation = measured_rate - self.state[0];
 
         // S = H * P * H^T + R (innovation covariance)
+        // Since H = [1, 0], this simplifies to P[0,0] + R
         let innovation_covariance = self.covariance[0] + self.measurement_noise;
 
+        // Avoid division by zero or very small numbers
         if innovation_covariance > 1e-9 {
-            // K = P * H^T * S^-1 (Kalman gain)
+            // K = P * H^T * S^-1 (Kalman gain vector)
+            // Since H = [1, 0], this simplifies to:
             let kalman_gain = [
-                self.covariance[0] / innovation_covariance,
-                self.covariance[2] / innovation_covariance,
+                self.covariance[0] / innovation_covariance, // Gain for rate
+                self.covariance[2] / innovation_covariance, // Gain for acceleration
             ];
 
-            // Update state: x = x + K * y
+            // Update state estimate: x = x + K * y
             self.state[0] += kalman_gain[0] * innovation;
             self.state[1] += kalman_gain[1] * innovation;
 
-            // Update covariance: P = (I - K * H) * P
+            // Update covariance matrix: P = (I - K * H) * P
+            // Since H = [1, 0], K*H = [K[0], 0] and (I - K*H) = [[1-K[0], 0], [-K[1], 1]]
             let p00 = self.covariance[0];
             let p01 = self.covariance[1];
             let p10 = self.covariance[2];
@@ -244,7 +299,7 @@ mod tests {
 
         // At 10% in 20 seconds, should estimate ~180 seconds remaining
         let eta_secs = eta.unwrap().as_secs();
-        assert!(eta_secs >= 170 && eta_secs <= 190);
+        assert!((170..=190).contains(&eta_secs));
     }
 
     #[test]

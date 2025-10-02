@@ -89,6 +89,7 @@ pub async fn main() {
         quiet: false,
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
         color: true,
+        progress: datafusion_cli::progress::ProgressConfig::default(),
     };
 
     exec_from_repl(&my_ctx, &mut print_options).await.unwrap();

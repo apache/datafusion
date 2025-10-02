@@ -86,7 +86,21 @@ impl MetricsVisitor {
         if let Some(metrics) = metrics_set {
             for metric in metrics.iter() {
                 // Get metric name from the metric itself
-                let name = ""; // Simplified for now
+                let name = match metric.value() {
+                    MetricValue::Count { name, .. } => name,
+                    MetricValue::Gauge { name, .. } => name,
+                    MetricValue::Time { name, .. } => name,
+                    MetricValue::Custom { name, .. } => name,
+                    // For predefined variants, use their standard names
+                    MetricValue::OutputRows(_) => "output_rows",
+                    MetricValue::ElapsedCompute(_) => "elapsed_compute",
+                    MetricValue::SpillCount(_) => "spill_count",
+                    MetricValue::SpilledBytes(_) => "spilled_bytes",
+                    MetricValue::SpilledRows(_) => "spilled_rows",
+                    MetricValue::CurrentMemoryUsage(_) => "memory_usage",
+                    MetricValue::StartTimestamp(_) => "start_timestamp",
+                    MetricValue::EndTimestamp(_) => "end_timestamp",
+                };
                 self.process_metric(name, metric.value());
             }
         }
@@ -129,11 +143,14 @@ impl MetricsVisitor {
 
     /// Extract a count value from a metric value
     fn extract_count_value(&self, value: &MetricValue) -> Option<usize> {
-        // This is a simplified extraction - in practice we'd need to handle
-        // different metric value types more robustly
         match value {
-            MetricValue::Count { name: _, count } => Some(count.value()),
-            MetricValue::Gauge { name: _, gauge } => Some(gauge.value()),
+            MetricValue::Count { count, .. } => Some(count.value()),
+            MetricValue::Gauge { gauge, .. } => Some(gauge.value()),
+            MetricValue::OutputRows(count) => Some(count.value()),
+            MetricValue::SpillCount(count) => Some(count.value()),
+            MetricValue::SpilledBytes(count) => Some(count.value()),
+            MetricValue::SpilledRows(count) => Some(count.value()),
+            MetricValue::CurrentMemoryUsage(gauge) => Some(gauge.value()),
             _ => None,
         }
     }
