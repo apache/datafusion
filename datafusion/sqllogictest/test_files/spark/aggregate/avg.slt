@@ -23,9 +23,35 @@ SELECT avg(a) FROM (VALUES (10::INT), (20::INT), (30::INT), (40::INT), (50::INT)
 query R
 SELECT avg(a) FROM (VALUES (40::INT), (23::INT), (17::INT), (40::INT), (NULL)) AS t(a);
 ----
-40.0
+30.0
 
 query R
 SELECT avg(a) FROM (VALUES (0::INT), (0::INT)) AS t(a);
 ----
 0.0
+
+query R
+SELECT a % 2 AS g, avg(a)
+FROM (VALUES (40), (23), (17), (40), (NULL)) AS t(a)
+GROUP BY g
+ORDER BY g;
+----
+0 40.0
+1 20.0
+
+query R
+SELECT a % 2 AS g, avg(a)
+FROM (VALUES (10::INT), (20::INT), (30::INT), (40::INT), (50::INT)) AS t(a)
+GROUP BY g
+ORDER BY g;
+----
+0 30.0
+1 30.0
+
+query R
+SELECT a, avg(a)
+FROM (VALUES (0::INT), (0::INT)) AS t(a)
+GROUP BY a
+ORDER BY a;
+----
+0 0.0
