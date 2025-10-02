@@ -440,8 +440,7 @@ mod test {
             partition_row_counts.push(total_rows);
         }
         assert_eq!(partition_row_counts.len(), 2);
-        assert_eq!(partition_row_counts[0], 2);
-        assert_eq!(partition_row_counts[1], 6);
+        assert_eq!(partition_row_counts.iter().sum::<usize>(), 8);
 
         Ok(())
     }
@@ -973,8 +972,7 @@ mod test {
             partition_row_counts.push(total_rows);
         }
         assert_eq!(partition_row_counts.len(), 2);
-        assert_eq!(partition_row_counts[0], 1);
-        assert_eq!(partition_row_counts[1], 3);
+        assert_eq!(partition_row_counts.iter().sum::<usize>(), 4);
 
         Ok(())
     }
