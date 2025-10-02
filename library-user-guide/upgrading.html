@@ -582,6 +582,16 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#functionregistry-exposes-two-additional-methods">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       FunctionRegistry
+      </span>
+     </code>
+     exposes two additional methods
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#datafusion-proto-use-taskcontext-rather-than-sessioncontext-in-physical-plan-serde-methods">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -1363,6 +1373,24 @@
 <section id="msrv-updated-to-1-87-0">
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.87.0<a class="headerlink" href="#msrv-updated-to-1-87-0" title="Link to this heading">¶</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.87.0/"><code class="docutils literal notranslate"><span class="pre">1.87.0</span></code></a>.</p>
+</section>
+<section id="functionregistry-exposes-two-additional-methods">
+<h3><code class="docutils literal notranslate"><span class="pre">FunctionRegistry</span></code> exposes two additional methods<a class="headerlink" href="#functionregistry-exposes-two-additional-methods" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">FunctionRegistry</span></code> exposes two additional methods <code class="docutils literal notranslate"><span class="pre">udafs</span></code> and <code class="docutils literal notranslate"><span class="pre">udwfs</span></code> which expose set of registered user defined aggregation and window function names. To upgrade implement methods returning set of registered function names:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>impl FunctionRegistry for FunctionRegistryImpl {
+<span class="w"> </span>     fn udfs(&amp;self) -&gt; HashSet&lt;String&gt; {
+<span class="w"> </span>        self.scalar_functions.keys().cloned().collect()
+<span class="w"> </span>    }
+<span class="gi">+    fn udafs(&amp;self) -&gt; HashSet&lt;String&gt; {</span>
+<span class="gi">+        self.aggregate_functions.keys().cloned().collect()</span>
+<span class="gi">+    }</span>
+<span class="gi">+</span>
+<span class="gi">+    fn udwfs(&amp;self) -&gt; HashSet&lt;String&gt; {</span>
+<span class="gi">+        self.window_functions.keys().cloned().collect()</span>
+<span class="gi">+    }</span>
+}
+</pre></div>
+</div>
 </section>
 <section id="datafusion-proto-use-taskcontext-rather-than-sessioncontext-in-physical-plan-serde-methods">
 <h3><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code> use <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code> rather than <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code> in physical plan serde methods<a class="headerlink" href="#datafusion-proto-use-taskcontext-rather-than-sessioncontext-in-physical-plan-serde-methods" title="Link to this heading">¶</a></h3>
