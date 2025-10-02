@@ -379,6 +379,8 @@ impl NestedLoopJoinExec {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) || self.projection.is_some()
         {
             Arc::new(new_join)
@@ -2473,7 +2475,7 @@ pub(crate) mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]"
+                "Resources exhausted: Additional allocation failed for NestedLoopJoinLoad[0] with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]"
             );
         }
 
