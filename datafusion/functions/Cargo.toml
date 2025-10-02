@@ -62,6 +62,7 @@ unicode_expressions = ["unicode-segmentation"]
 name = "datafusion_functions"
 
 [dependencies]
+ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
 base64 = { version = "0.22", optional = true }
