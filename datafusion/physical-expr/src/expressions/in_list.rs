@@ -306,30 +306,32 @@ impl InListExpr {
     }
 }
 
+#[macro_export]
+macro_rules! expr_vec_fmt {
+    ( $ARRAY:expr ) => {{
+        $ARRAY
+            .iter()
+            .map(|e| format!("{e}"))
+            .collect::<Vec<String>>()
+            .join(", ")
+    }};
+}
+
 impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let list = expr_vec_fmt!(self.list);
+
         if self.negated {
             if self.static_filter.is_some() {
-                write!(f, "{} NOT IN (SET)", self.expr)?
+                write!(f, "{} NOT IN (SET) ([{list}])", self.expr)
             } else {
-                write!(f, "{} NOT IN", self.expr)?
+                write!(f, "{} NOT IN ([{list}])", self.expr)
             }
         } else if self.static_filter.is_some() {
-            write!(f, "{} IN (SET)", self.expr)?
+            write!(f, "{} IN (SET) ([{list}])", self.expr)
         } else {
-            write!(f, "{} IN", self.expr)?
+            write!(f, "{} IN ([{list}])", self.expr)
         }
-
-        write!(f, " ([")?;
-        let mut first = true;
-        for item in &self.list {
-            if !first {
-                write!(f, ", ")?;
-            }
-            first = false;
-            write!(f, "{}", item)?;
-        }
-        write!(f, "])")
     }
 }
 
