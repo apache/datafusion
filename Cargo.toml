@@ -258,3 +258,50 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+[patch.crates-io]
+# Local pin
+# arrow = { path = "/Users/andrewlamb/Software/arrow-rs/arrow" }
+# arrow-array = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-array" }
+# arrow-buffer = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-buffer" }
+# arrow-cast = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-cast" }
+# arrow-data = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-data" }
+# arrow-ipc = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-ipc" }
+# arrow-schema = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-schema" }
+# arrow-select = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-select" }
+# arrow-string = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-string" }
+# arrow-ord = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-ord" }
+# arrow-flight = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-flight" }
+# parquet = { path = "/Users/andrewlamb/Software/arrow-rs/parquet" }
+
+
+# Temp pin to get fix for Timestamp parsing
+# https://github.com/apache/arrow-rs/pull/8541
+arrow = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", rev = "64abb2a202720979a0dd6af4bc377f6ed23c2c70" }
+
+
+## Temporary arrow-rs to main patch until 57.0.0 is released
+## https://github.com/apache/arrow-rs/issues/7835
+# arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
+# parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "4b62c8004f5c617fc6b552c7fce73fc93c8fab04" }
