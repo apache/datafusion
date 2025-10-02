@@ -310,15 +310,26 @@ impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.negated {
             if self.static_filter.is_some() {
-                write!(f, "{} NOT IN (SET) ({:?})", self.expr, self.list)
+                write!(f, "{} NOT IN (SET)", self.expr)?
             } else {
-                write!(f, "{} NOT IN ({:?})", self.expr, self.list)
+                write!(f, "{} NOT IN", self.expr)?
             }
         } else if self.static_filter.is_some() {
-            write!(f, "{} IN (SET) ({:?})", self.expr, self.list)
+            write!(f, "{} IN (SET)", self.expr)?
         } else {
-            write!(f, "{} IN ({:?})", self.expr, self.list)
+            write!(f, "{} IN", self.expr)?
         }
+
+        write!(f, " ([")?;
+        let mut first = true;
+        for item in &self.list {
+            if !first {
+                write!(f, ", ")?;
+            }
+            first = false;
+            write!(f, "{}", item)?;
+        }
+        write!(f, "])")
     }
 }
 
@@ -1453,7 +1464,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a IN (a, b)");
-        assert_eq!(display_string, "a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "a@0 IN (SET) ([a, b])");
 
         // Test: a NOT IN ('a', 'b')
         let list = vec![lit("a"), lit("b")];
@@ -1461,7 +1472,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a NOT IN (a, b)");
-        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "a@0 NOT IN (SET) ([a, b])");
 
         // Test: a IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
@@ -1469,7 +1480,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a IN (a, b, NULL)");
-        assert_eq!(display_string, "a@0 IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(NULL), field: Field { name: \"lit\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "a@0 IN (SET) ([a, b, NULL])");
 
         // Test: a NOT IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
@@ -1477,7 +1488,7 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a NOT IN (a, b, NULL)");
-        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(\"b\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, Literal { value: Utf8(NULL), field: Field { name: \"lit\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }])");
+        assert_eq!(display_string, "a@0 NOT IN (SET) ([a, b, NULL])");
 
         Ok(())
     }
