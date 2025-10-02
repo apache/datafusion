@@ -18,5 +18,6 @@
 # under the License.
 
 set -ex
-
+# To use this script, you must have installed `typos`, for example:
+# cargo install typos-cli --locked --version 1.37.0
 typos --config typos.toml
