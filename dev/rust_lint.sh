@@ -19,6 +19,10 @@
 
 # This script runs all the Rust lints locally the same way the
 # DataFusion CI does
+#
+# Note: The installed checking tools (e.g., taplo) are not guaranteed to match
+# the CI versions for simplicity, there might be some minor differences. Check
+# `.github/workflows` for the CI versions.
 
 # For `.toml` format checking
 set -e
@@ -33,8 +37,15 @@ if ! command -v hawkeye &> /dev/null; then
     cargo install hawkeye --locked
 fi
 
+# For spelling checks
+if ! command -v typos &> /dev/null; then
+    echo "Installing typos using cargo"
+    cargo install typos-cli --locked
+fi
+
 ci/scripts/rust_fmt.sh
 ci/scripts/rust_clippy.sh
 ci/scripts/rust_toml_fmt.sh
 ci/scripts/rust_docs.sh
 ci/scripts/license_header.sh
+ci/scripts/typos_check.sh
