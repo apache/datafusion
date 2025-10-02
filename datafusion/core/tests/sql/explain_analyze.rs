@@ -727,6 +727,11 @@ async fn parquet_explain_analyze() {
     assert_contains!(&formatted, "row_groups_pruned_statistics=0");
 }
 
+// This test reproduces the behavior described in
+// https://github.com/apache/datafusion/issues/16684 where projection
+// pushdown with recursive CTEs could fail to remove unused columns
+// (e.g. nested/recursive expansion causing full schema to be scanned).
+// Keeping this test ensures we don't regress that behavior.
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn parquet_recursive_projection_pushdown() {
