@@ -4058,18 +4058,20 @@ fn test_removes_unused_orthogonal_sort() -> Result<()> {
     let output_sort = sort_exec(input_ordering, orthogonal_sort); // same sort as data source
 
     // Test scenario/input has an orthogonal sort:
+    let test = EnforceSortingTest::new(output_sort).with_repartition_sorts(true)
+        .with_expected_description("// Test: should remove orthogonal sort, and the uppermost (unneeded) sort:");
+
+    assert_snapshot!(test.run(), @r#"
     let expected_input = [
         "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
         "  SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
+        "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
     ];
-    assert_eq!(get_plan_string(&output_sort), expected_input);
-
     // Test: should remove orthogonal sort, and the uppermost (unneeded) sort:
     let expected_optimized = [
-        "StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
+        "StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
     ];
-    assert_optimized!(expected_input, expected_optimized, output_sort, true);
+    "#);
 
     Ok(())
 }
@@ -4085,16 +4087,21 @@ fn test_keeps_used_orthogonal_sort() -> Result<()> {
     let output_sort = sort_exec(input_ordering, orthogonal_sort);
 
     // Test scenario/input has an orthogonal sort:
+    let test = EnforceSortingTest::new(output_sort).with_repartition_sorts(true)
+        .with_expected_description("// Test: should keep the orthogonal sort, since it modifies the output:");
+    assert_snapshot!(test.run(), @r#"
     let expected_input = [
         "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
         "  SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]",
-        "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
+        "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
     ];
-    assert_eq!(get_plan_string(&output_sort), expected_input);
-
     // Test: should keep the orthogonal sort, since it modifies the output:
-    let expected_optimized = expected_input;
-    assert_optimized!(expected_input, expected_optimized, output_sort, true);
+    let expected_optimized = [
+        "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
+        "  SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]",
+        "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
+    ];
+    "#);
 
     Ok(())
 }
@@ -4115,6 +4122,9 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
     let output_sort = sort_exec(input_ordering, orthogonal_sort_3); // final sort
 
     // Test scenario/input has an orthogonal sort:
+    let test = EnforceSortingTest::new(output_sort.clone()).with_repartition_sorts(true)
+        .with_expected_description("// Test: should keep only the needed orthogonal sort, and remove the unneeded ones:");
+    assert_snapshot!(test.run(), @r#"
     let expected_input = [
         "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
         "  SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
@@ -4123,16 +4133,13 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
         "        SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
         "          StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
     ];
-    assert_eq!(get_plan_string(&output_sort), expected_input);
-
     // Test: should keep only the needed orthogonal sort, and remove the unneeded ones:
     let expected_optimized = [
         "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
         "  SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]",
         "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
     ];
-    assert_optimized!(expected_input, expected_optimized, output_sort, true);
-
+    "#);
     Ok(())
 }
 
