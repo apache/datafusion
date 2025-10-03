@@ -606,7 +606,7 @@ impl Unparser<'_> {
     }
 
     fn named_struct_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() % 2 != 0 {
+        if !args.len().is_multiple_of(2) {
             return internal_err!("named_struct must have an even number of arguments");
         }
 

@@ -104,7 +104,7 @@ impl ScalarUDFImpl for NamedStructFunc {
             );
         }
 
-        if args.scalar_arguments.len() % 2 != 0 {
+        if !args.scalar_arguments.len().is_multiple_of(2) {
             return exec_err!(
                 "named_struct requires an even number of arguments, got {} instead",
                 args.scalar_arguments.len()

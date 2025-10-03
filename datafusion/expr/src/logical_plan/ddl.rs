@@ -458,14 +458,20 @@ impl PartialOrd for DropCatalogSchema {
     }
 }
 
-/// Arguments passed to `CREATE FUNCTION`
+/// Arguments passed to the `CREATE FUNCTION` statement
 ///
-/// Note this meant to be the same as from sqlparser's [`sqlparser::ast::Statement::CreateFunction`]
+/// These statements are turned into executable functions using [`FunctionFactory`]
+///
+/// # Notes
+///
+/// This structure purposely mirrors the structure in sqlparser's
+/// [`sqlparser::ast::Statement::CreateFunction`], but does not use it directly
+/// to avoid a dependency on sqlparser in the core crate.
+///
+///
+/// [`FunctionFactory`]: https://docs.rs/datafusion/latest/datafusion/execution/context/trait.FunctionFactory.html
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CreateFunction {
-    // TODO: There is open question should we expose sqlparser types or redefine them here?
-    //       At the moment it make more sense to expose sqlparser types and leave
-    //       user to convert them as needed
     pub or_replace: bool,
     pub temporary: bool,
     pub name: String,
@@ -511,6 +517,9 @@ impl PartialOrd for CreateFunction {
     }
 }
 
+/// Part of the `CREATE FUNCTION` statement
+///
+/// See [`CreateFunction`] for details
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct OperateFunctionArg {
     // TODO: figure out how to support mode
@@ -541,6 +550,9 @@ impl<'a> TreeNodeContainer<'a, Expr> for OperateFunctionArg {
     }
 }
 
+/// Part of the `CREATE FUNCTION` statement
+///
+/// See [`CreateFunction`] for details
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct CreateFunctionBody {
     /// LANGUAGE lang_name

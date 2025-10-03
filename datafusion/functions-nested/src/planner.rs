@@ -108,7 +108,7 @@ impl ExprPlanner for NestedFunctionPlanner {
     }
 
     fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        if args.len() % 2 != 0 {
+        if !args.len().is_multiple_of(2) {
             return plan_err!("make_map requires an even number of arguments");
         }
 
