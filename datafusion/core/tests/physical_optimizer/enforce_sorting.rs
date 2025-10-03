@@ -4058,8 +4058,11 @@ fn test_removes_unused_orthogonal_sort() -> Result<()> {
     let output_sort = sort_exec(input_ordering, orthogonal_sort); // same sort as data source
 
     // Test scenario/input has an orthogonal sort:
-    let test = EnforceSortingTest::new(output_sort).with_repartition_sorts(true)
-        .with_expected_description("// Test: should remove orthogonal sort, and the uppermost (unneeded) sort:");
+    let test = EnforceSortingTest::new(output_sort)
+        .with_repartition_sorts(true)
+        .with_expected_description(
+            "// Test: should remove orthogonal sort, and the uppermost (unneeded) sort:",
+        );
 
     assert_snapshot!(test.run(), @r#"
     let expected_input = [
@@ -4087,8 +4090,11 @@ fn test_keeps_used_orthogonal_sort() -> Result<()> {
     let output_sort = sort_exec(input_ordering, orthogonal_sort);
 
     // Test scenario/input has an orthogonal sort:
-    let test = EnforceSortingTest::new(output_sort).with_repartition_sorts(true)
-        .with_expected_description("// Test: should keep the orthogonal sort, since it modifies the output:");
+    let test = EnforceSortingTest::new(output_sort)
+        .with_repartition_sorts(true)
+        .with_expected_description(
+            "// Test: should keep the orthogonal sort, since it modifies the output:",
+        );
     assert_snapshot!(test.run(), @r#"
     let expected_input = [
         "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
