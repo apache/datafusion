@@ -38,6 +38,11 @@ use std::{any::Any, sync::Arc};
 use DataType::*;
 
 /// AVG aggregate expression
+/*
+Uses i64 for count
+ANSI mode to be supported in the future.
+*/
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparkAvg {
     name: String,
