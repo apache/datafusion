@@ -20,9 +20,9 @@ use insta::assert_snapshot;
 use rstest::rstest;
 
 use datafusion::config::ConfigOptions;
-use object_store::path::Path;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
+use object_store::path::Path;
 
 #[tokio::test]
 async fn explain_analyze_baseline_metrics() {
