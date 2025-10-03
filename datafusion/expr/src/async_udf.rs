@@ -61,14 +61,18 @@ pub struct AsyncScalarUDF {
 
 impl PartialEq for AsyncScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(other.inner.as_any())
+        // Deconstruct to catch any new fields added in future
+        let Self { inner } = self;
+        inner.dyn_eq(other.inner.as_any())
     }
 }
 impl Eq for AsyncScalarUDF {}
 
 impl Hash for AsyncScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.dyn_hash(state);
+        // Deconstruct to catch any new fields added in future
+        let Self { inner } = self;
+        inner.dyn_hash(state);
     }
 }
 
@@ -131,7 +135,10 @@ impl Display for AsyncScalarUDF {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, sync::Arc};
+    use std::{
+        hash::{DefaultHasher, Hash, Hasher},
+        sync::Arc,
+    };
 
     use arrow::datatypes::DataType;
     use async_trait::async_trait;
@@ -217,39 +224,37 @@ mod tests {
         }
     }
 
+    fn hash<T: Hash>(value: &T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
+    }
+
     #[test]
-    fn udf_equality_and_hash() {
+    fn test_async_udf_partial_eq_and_hash() {
         // Inner is same cloned arc -> equal
         let inner = Arc::new(TestAsyncUDFImpl1 { a: 1 });
         let a = AsyncScalarUDF::new(Arc::clone(&inner) as Arc<dyn AsyncScalarUDFImpl>);
         let b = AsyncScalarUDF::new(inner);
         assert_eq!(a, b);
-        let mut set = HashSet::new();
-        set.insert(a);
-        assert!(set.contains(&b));
+        assert_eq!(hash(&a), hash(&b));
 
         // Inner is distinct arc -> still equal
         let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
         let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
         assert_eq!(a, b);
-        let mut set = HashSet::new();
-        set.insert(a);
-        assert!(set.contains(&b));
+        assert_eq!(hash(&a), hash(&b));
 
         // Negative case: inner is different value -> not equal
         let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
         let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 2 }));
         assert_ne!(a, b);
-        let mut set = HashSet::new();
-        set.insert(a);
-        assert!(!set.contains(&b));
+        assert_ne!(hash(&a), hash(&b));
 
         // Negative case: different functions -> not equal
         let a = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl1 { a: 1 }));
         let b = AsyncScalarUDF::new(Arc::new(TestAsyncUDFImpl2 { a: 1 }));
         assert_ne!(a, b);
-        let mut set = HashSet::new();
-        set.insert(a);
-        assert!(!set.contains(&b));
+        assert_ne!(hash(&a), hash(&b));
     }
 }
