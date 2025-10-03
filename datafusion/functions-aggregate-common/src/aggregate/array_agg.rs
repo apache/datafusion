@@ -18,11 +18,13 @@
 //! Utilities for implementing GroupsAccumulator
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
-use std::mem::{size_of, size_of_val};
+use std::iter::repeat;
+use std::mem::{size_of, size_of_val, take};
 use std::sync::Arc;
 
-use arrow::array::{new_empty_array, Array, GenericListArray, ListArray};
-use arrow::buffer::OffsetBuffer;
+use arrow::array::{new_empty_array, Array, GenericListArray, ListArray, StructArray};
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::compute::kernels::{self, concat};
 use arrow::datatypes::{DataType, Field};
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
@@ -30,72 +32,33 @@ use arrow::{
     compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::utils::SingleRowListArrayBuilder;
+use datafusion_common::{
+    arrow_datafusion_err, internal_datafusion_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::accumulator::AccumulatorArgs;
+use crate::aggregate::groups_accumulator::accumulate::NullState;
 
-/// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
-///
-/// While [`Accumulator`] are simpler to implement and can support
-/// more general calculations (like retractable window functions),
-/// they are not as fast as a specialized `GroupsAccumulator`. This
-/// interface bridges the gap so the group by operator only operates
-/// in terms of [`Accumulator`].
-///
-/// Internally, this adapter creates a new [`Accumulator`] for each group which
-/// stores the state for that group. This both requires an allocation for each
-/// Accumulator, internal indices, as well as whatever internal allocations the
-/// Accumulator itself requires.
-///
-/// For example, a `MinAccumulator` that computes the minimum string value with
-/// a [`ScalarValue::Utf8`]. That will require at least two allocations per group
-/// (one for the `MinAccumulator` and one for the `ScalarValue::Utf8`).
-///
-/// ```text
-///                       ┌─────────────────────────────────┐
-///                       │MinAccumulator {                 │
-///                ┌─────▶│ min: ScalarValue::Utf8("A")     │───────┐
-///                │      │}                                │       │
-///                │      └─────────────────────────────────┘       └───────▶   "A"
-///    ┌─────┐     │      ┌─────────────────────────────────┐
-///    │  0  │─────┘      │MinAccumulator {                 │
-///    ├─────┤     ┌─────▶│ min: ScalarValue::Utf8("Z")     │───────────────▶   "Z"
-///    │  1  │─────┘      │}                                │
-///    └─────┘            └─────────────────────────────────┘                   ...
-///      ...                 ...
-///    ┌─────┐            ┌────────────────────────────────┐
-///    │ N-2 │            │MinAccumulator {                │
-///    ├─────┤            │  min: ScalarValue::Utf8("A")   │────────────────▶   "A"
-///    │ N-1 │─────┐      │}                               │
-///    └─────┘     │      └────────────────────────────────┘
-///                │      ┌────────────────────────────────┐        ┌───────▶   "Q"
-///                │      │MinAccumulator {                │        │
-///                └─────▶│  min: ScalarValue::Utf8("Q")   │────────┘
-///                       │}                               │
-///                       └────────────────────────────────┘
-///
-///
-///  Logical group         Current Min/Max value for that group stored
-///     number             as a ScalarValue which points to an
-///                        individually allocated String
-///
-///```
-///
-/// # Optimizations
-///
-/// The adapter minimizes the number of calls to [`Accumulator::update_batch`]
-/// by first collecting the input rows for each group into a contiguous array
-/// using [`compute::take`]
-///
-///
 pub struct AggGroupAccumulator {
-    /// state for each group, stored in group_index order
-    states: Vec<AccumulatorState>,
+    // [1,2,3] [4,5,6]
+    stacked_batches: Vec<ArrayRef>,
+    // address items of each group within the stacked_batches
+    // this is maintained to perform kernel::interleave
+    stacked_group_indices: Vec<Vec<(usize, usize)>>,
 
-    factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
+    // similar to the previous two fields, but these for states merging
+    stacked_states: Vec<ArrayRef>,
+    stacked_states_group_indices: Vec<Vec<(usize, usize)>>,
+    // TODO: document me
+    // for each group index, total accumulated length
+    stacked_states_group_length: Vec<i32>,
+    // merged_states: Vec<
+    ns: NullState,
 
+    // factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
     /// Current memory usage, in bytes.
     ///
     /// Note this is incrementally updated with deltas to avoid the
@@ -103,31 +66,6 @@ pub struct AggGroupAccumulator {
     /// bottleneck in earlier implementations when there were many
     /// distinct groups.
     allocation_bytes: usize,
-}
-
-#[derive(Debug)]
-struct AccumulatorState {
-    /// [`Accumulator`] that stores the per-group state
-    accumulator: Box<dyn Accumulator>,
-
-    /// scratch space: indexes in the input array that will be fed to
-    /// this accumulator. Stores indexes as `u32` to match the arrow
-    /// `take` kernel input.
-    indices: Vec<u32>,
-}
-
-impl AccumulatorState {
-    fn new(accumulator: Box<dyn Accumulator>) -> Self {
-        Self {
-            accumulator,
-            indices: vec![],
-        }
-    }
-
-    /// Returns the amount of memory taken by this structure and its accumulator
-    fn size(&self) -> usize {
-        self.accumulator.size() + size_of_val(self) + self.indices.allocated_size()
-    }
 }
 
 impl AggGroupAccumulator {
@@ -138,169 +76,99 @@ impl AggGroupAccumulator {
         F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
     {
         Self {
-            factory: Box::new(f),
-            states: vec![],
+            stacked_batches: vec![],
+            stacked_group_indices: vec![],
+            stacked_states: vec![],
+            stacked_states_group_indices: vec![],
+            stacked_states_group_length: vec![],
+            ns: NullState::new(),
             allocation_bytes: 0,
         }
     }
+    fn consume_stacked_batches(&mut self) -> Result<GenericListArray<i32>> {
+        let stacked = take(&mut self.stacked_batches);
+        let stack2 = stacked.iter().map(|arr| arr.as_ref()).collect::<Vec<_>>();
 
-    /// Ensure that self.accumulators has total_num_groups
-    fn make_accumulators_if_needed(&mut self, total_num_groups: usize) -> Result<()> {
-        // can't shrink
-        assert!(total_num_groups >= self.states.len());
-        let vec_size_pre = self.states.allocated_size();
+        let group_indices = take(&mut self.stacked_group_indices);
+        let offsets = group_indices.iter().map(|v| v.len()).scan(0, |state, len| {
+            *state += len;
+            Some(*state as i32)
+        });
 
-        // instantiate new accumulators
-        let new_accumulators = total_num_groups - self.states.len();
-        for _ in 0..new_accumulators {
-            let accumulator = (self.factory)()?;
-            let state = AccumulatorState::new(accumulator);
-            self.add_allocation(state.size());
-            self.states.push(state);
-        }
+        let offsets_buffer = OffsetBuffer::new(ScalarBuffer::from_iter(offsets));
+        // group indices like [1,1,1,2,2,2]
+        // backend_array like [a,b,c,d,e,f]
+        // offsets should be: [0,3,6]
+        // then result should be [a,b,c], [d,e,f]
 
-        self.adjust_allocation(vec_size_pre, self.states.allocated_size());
-        Ok(())
+        // backend_array is a flatten list of individual values before aggregation
+        let backend_array = kernels::interleave::interleave(
+            &stack2,
+            group_indices
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
+        let dt = backend_array.data_type();
+        let field = Arc::new(Field::new_list_field(dt.clone(), false));
+
+        let arr =
+            GenericListArray::<i32>::new(field, offsets_buffer, backend_array, None);
+        return Ok(arr);
     }
 
-    /// invokes f(accumulator, values) for each group that has values
-    /// in group_indices.
-    ///
-    /// This function first reorders the input and filter so that
-    /// values for each group_index are contiguous and then invokes f
-    /// on the contiguous ranges, to minimize per-row overhead
-    ///
-    /// ```text
-    /// ┌─────────┐   ┌─────────┐   ┌ ─ ─ ─ ─ ┐                       ┌─────────┐   ┌ ─ ─ ─ ─ ┐
-    /// │ ┌─────┐ │   │ ┌─────┐ │     ┌─────┐              ┏━━━━━┓    │ ┌─────┐ │     ┌─────┐
-    /// │ │  2  │ │   │ │ 200 │ │   │ │  t  │ │            ┃  0  ┃    │ │ 200 │ │   │ │  t  │ │
-    /// │ ├─────┤ │   │ ├─────┤ │     ├─────┤              ┣━━━━━┫    │ ├─────┤ │     ├─────┤
-    /// │ │  2  │ │   │ │ 100 │ │   │ │  f  │ │            ┃  0  ┃    │ │ 300 │ │   │ │  t  │ │
-    /// │ ├─────┤ │   │ ├─────┤ │     ├─────┤              ┣━━━━━┫    │ ├─────┤ │     ├─────┤
-    /// │ │  0  │ │   │ │ 200 │ │   │ │  t  │ │            ┃  1  ┃    │ │ 200 │ │   │ │NULL │ │
-    /// │ ├─────┤ │   │ ├─────┤ │     ├─────┤   ────────▶  ┣━━━━━┫    │ ├─────┤ │     ├─────┤
-    /// │ │  1  │ │   │ │ 200 │ │   │ │NULL │ │            ┃  2  ┃    │ │ 200 │ │   │ │  t  │ │
-    /// │ ├─────┤ │   │ ├─────┤ │     ├─────┤              ┣━━━━━┫    │ ├─────┤ │     ├─────┤
-    /// │ │  0  │ │   │ │ 300 │ │   │ │  t  │ │            ┃  2  ┃    │ │ 100 │ │   │ │  f  │ │
-    /// │ └─────┘ │   │ └─────┘ │     └─────┘              ┗━━━━━┛    │ └─────┘ │     └─────┘
-    /// └─────────┘   └─────────┘   └ ─ ─ ─ ─ ┘                       └─────────┘   └ ─ ─ ─ ─ ┘
-    ///
-    /// logical group   values      opt_filter           logical group  values       opt_filter
-    ///
-    /// ```
-    fn invoke_per_accumulator<F>(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-        f: F,
-    ) -> Result<()>
-    where
-        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
-    {
-        self.make_accumulators_if_needed(total_num_groups)?;
+    fn consume_stacked_states(&mut self) -> Result<GenericListArray<i32>> {
+        let stacked = take(&mut self.stacked_states);
+        let stacked2 = stacked.iter().map(|arr| arr.as_ref()).collect::<Vec<_>>();
 
-        assert_eq!(values[0].len(), group_indices.len());
+        let group_indices = take(&mut self.stacked_states_group_indices);
+        let group_length = take(&mut self.stacked_states_group_length);
 
-        // figure out which input rows correspond to which groups.
-        // Note that self.state.indices starts empty for all groups
-        // (it is cleared out below)
-        for (idx, group_index) in group_indices.iter().enumerate() {
-            self.states[*group_index].indices.push(idx as u32);
-        }
+        let offsets: Vec<i32> = group_length
+            .iter()
+            .scan(0, |state, len| {
+                *state += len;
+                Some(*state)
+            })
+            .collect();
 
-        // groups_with_rows holds a list of group indexes that have
-        // any rows that need to be accumulated, stored in order of
-        // group_index
+        let offsets_buffer = OffsetBuffer::new(ScalarBuffer::from_iter(offsets));
+        // group indices like [1,1,2,2]
+        // interleave result like [[a,b],[c,d],[e,f], [g]]
+        // backend array like [a,b,c,d,e,f,g]
+        // offsets should be: [0,4,7]
+        // then result should be [a,b,c,d], [e,f, g]
+        let list_arr = kernels::interleave::interleave(
+            &stacked2,
+            group_indices
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
+        let backend_array = list_arr.as_list::<i32>().values();
+        let dt = backend_array.data_type();
+        let field = Arc::new(Field::new_list_field(dt.clone(), false));
 
-        let mut groups_with_rows = vec![];
-
-        // batch_indices holds indices into values, each group is contiguous
-        let mut batch_indices = vec![];
-
-        // offsets[i] is index into batch_indices where the rows for
-        // group_index i starts
-        let mut offsets = vec![0];
-
-        let mut offset_so_far = 0;
-        for (group_index, state) in self.states.iter_mut().enumerate() {
-            let indices = &state.indices;
-            if indices.is_empty() {
-                continue;
-            }
-
-            groups_with_rows.push(group_index);
-            batch_indices.extend_from_slice(indices);
-            offset_so_far += indices.len();
-            offsets.push(offset_so_far);
-        }
-        let batch_indices = batch_indices.into();
-
-        // reorder the values and opt_filter by batch_indices so that
-        // all values for each group are contiguous, then invoke the
-        // accumulator once per group with values
-        let values = take_arrays(values, &batch_indices, None)?;
-        let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
-
-        // invoke each accumulator with the appropriate rows, first
-        // pulling the input arguments for this group into their own
-        // RecordBatch(es)
-        let iter = groups_with_rows.iter().zip(offsets.windows(2));
-
-        let mut sizes_pre = 0;
-        let mut sizes_post = 0;
-        for (&group_idx, offsets) in iter {
-            let state = &mut self.states[group_idx];
-            sizes_pre += state.size();
-
-            let values_to_accumulate = slice_and_maybe_filter(
-                &values,
-                opt_filter.as_ref().map(|f| f.as_boolean()),
-                offsets,
-            )?;
-            f(state.accumulator.as_mut(), &values_to_accumulate)?;
-
-            // clear out the state so they are empty for next
-            // iteration
-            state.indices.clear();
-            sizes_post += state.size();
-        }
-
-        self.adjust_allocation(sizes_pre, sizes_post);
-        Ok(())
-    }
-
-    /// Increment the allocation by `n`
-    ///
-    /// See [`Self::allocation_bytes`] for rationale.
-    fn add_allocation(&mut self, size: usize) {
-        self.allocation_bytes += size;
-    }
-
-    /// Decrease the allocation by `n`
-    ///
-    /// See [`Self::allocation_bytes`] for rationale.
-    fn free_allocation(&mut self, size: usize) {
-        // use saturating sub to avoid errors if the accumulators
-        // report erroneous sizes
-        self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
-    }
-
-    /// Adjusts the allocation for something that started with
-    /// start_size and now has new_size avoiding overflow
-    ///
-    /// See [`Self::allocation_bytes`] for rationale.
-    fn adjust_allocation(&mut self, old_size: usize, new_size: usize) {
-        if new_size > old_size {
-            self.add_allocation(new_size - old_size)
-        } else {
-            self.free_allocation(old_size - new_size)
-        }
+        let arr = GenericListArray::<i32>::new(
+            field,
+            offsets_buffer,
+            backend_array.clone(),
+            None,
+        );
+        return Ok(arr);
     }
 }
 
 impl GroupsAccumulator for AggGroupAccumulator {
+    // batch1 [1,4,5,6,7]
+    // batch2 [5,1,1,1,1]
+
+    // indices g1: [(0,0), (1,1), (1,2) ...]
+    // indices g2: []
+    // indices g3: []
+    // indices g4: [(0,1)]
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -308,72 +176,58 @@ impl GroupsAccumulator for AggGroupAccumulator {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        self.invoke_per_accumulator(
-            values,
-            group_indices,
-            opt_filter,
-            total_num_groups,
-            |accumulator, values_to_accumulate| {
-                accumulator.update_batch(values_to_accumulate)
-            },
-        )?;
+        if opt_filter.is_some() {
+            panic!("not implemented");
+        }
+
+        let singular_col = values
+            .get(0)
+            .ok_or(internal_datafusion_err!("invalid agg input"))?;
+        if self.stacked_group_indices.len() < total_num_groups {
+            self.stacked_group_indices
+                .resize(total_num_groups, Vec::new());
+        }
+        // null value is handled
+
+        self.stacked_batches.push(Arc::clone(singular_col));
+        let batch_index = self.stacked_batches.len() - 1;
+        for (array_offset, group_index) in group_indices.iter().enumerate() {
+            self.stacked_group_indices[*group_index].push((batch_index, array_offset));
+        }
+
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let vec_size_pre = self.states.allocated_size();
+        if matches!(emit_to, EmitTo::First(_)) {
+            return Err(internal_datafusion_err!("unimpl eimit to first"));
+        }
+        let arr = self.consume_stacked_batches()?;
+        return Ok(Arc::new(arr) as ArrayRef);
+        // only batch stacked no states interleaved
+        // if !self.stacked_batches.is_empty()
+        //     && self.stacked_states_group_indices.is_empty()
+        // {
+        //     let arr = self.consume_stacked_batches()?;
+        //     return Ok(Arc::new(arr) as ArrayRef);
+        // }
+        // // only stacked states, no stacked batches interleave
+        // if self.stacked_batches.is_empty()
+        //     && !self.stacked_states_group_indices.is_empty()
+        // {
+        //     let arr = self.consume_stacked_states()?;
+        //     return Ok(Arc::new(arr) as ArrayRef);
+        // }
+        // let stacked = take(&mut self.stacked_batches);
+        // let stacked_indices = take(&mut self.stacked_group_indices);
 
-        let states = emit_to.take_needed(&mut self.states);
-
-        let results: Vec<ScalarValue> = states
-            .into_iter()
-            .map(|mut state| {
-                self.free_allocation(state.size());
-                state.accumulator.evaluate()
-            })
-            .collect::<Result<_>>()?;
-
-        let result = ScalarValue::iter_to_array(results);
-
-        self.adjust_allocation(vec_size_pre, self.states.allocated_size());
-
-        result
+        // let stacked_states = take(&mut self.stacked_states);
+        // let staced_state_indices = take(&mut self.stacked_states_group_indices);
     }
 
     // filtered_null_mask(opt_filter, &values);
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let vec_size_pre = self.states.allocated_size();
-        let states = emit_to.take_needed(&mut self.states);
-
-        // each accumulator produces a potential vector of values
-        // which we need to form into columns
-        let mut results: Vec<Vec<ScalarValue>> = vec![];
-
-        for mut state in states {
-            self.free_allocation(state.size());
-            let accumulator_state = state.accumulator.state()?;
-            results.resize_with(accumulator_state.len(), Vec::new);
-            for (idx, state_val) in accumulator_state.into_iter().enumerate() {
-                results[idx].push(state_val);
-            }
-        }
-
-        // create an array for each intermediate column
-        let arrays = results
-            .into_iter()
-            .map(ScalarValue::iter_to_array)
-            .collect::<Result<Vec<_>>>()?;
-
-        // double check each array has the same length (aka the
-        // accumulator was implemented correctly
-        if let Some(first_col) = arrays.first() {
-            for arr in &arrays {
-                assert_eq!(arr.len(), first_col.len())
-            }
-        }
-        self.adjust_allocation(vec_size_pre, self.states.allocated_size());
-
-        Ok(arrays)
+        Ok(vec![self.evaluate(emit_to)?])
     }
 
     fn merge_batch(
@@ -383,21 +237,49 @@ impl GroupsAccumulator for AggGroupAccumulator {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        self.invoke_per_accumulator(
-            values,
-            group_indices,
-            opt_filter,
+        // TODO: all the reference to this function always result into this opt_filter as none
+        assert!(opt_filter.is_none());
+        let singular_col = values
+            .get(0)
+            .ok_or(internal_datafusion_err!("invalid agg input"))?;
+        let list_arr = singular_col.as_list::<i32>();
+        let backed_arr = list_arr.values();
+        let flatten_group_index = group_indices
+            .iter()
+            .enumerate()
+            .map(|(row, group_index)| {
+                let row_length = list_arr.value_length(row);
+                repeat(*group_index).take(row_length as usize)
+            })
+            .flatten()
+            .collect::<Vec<usize>>();
+        return self.update_batch(
+            &[backed_arr.clone()],
+            &flatten_group_index,
+            None,
             total_num_groups,
-            |accumulator, values_to_accumulate| {
-                accumulator.merge_batch(values_to_accumulate)?;
-                Ok(())
-            },
-        )?;
+        );
+        // if self.stacked_states.len() < total_num_groups {
+        //     self.stacked_states_group_indices
+        //         .resize(total_num_groups, Vec::new());
+        //     self.stacked_states_group_length.resize(total_num_groups, 0);
+        // }
+
+        // let batch_index = self.stacked_states.len();
+        // for (array_offset, group_index) in group_indices.iter().enumerate() {
+        //     self.stacked_states_group_indices[*group_index]
+        //         .push((batch_index, array_offset));
+        //     self.stacked_states_group_length[*group_index] +=
+        //         singular_col.as_list::<i32>().value_length(array_offset)
+        // }
+
+        // self.stacked_states.push(Arc::clone(singular_col));
         Ok(())
     }
 
     fn size(&self) -> usize {
-        self.allocation_bytes
+        1000
+        // self.allocation_bytes
     }
 
     fn convert_to_state(
@@ -405,116 +287,28 @@ impl GroupsAccumulator for AggGroupAccumulator {
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        let num_rows = values[0].len();
+        assert!(opt_filter.is_none());
+        let col_array = values
+            .get(0)
+            .ok_or(internal_datafusion_err!("invalid state for array agg"))?;
 
+        let num_rows = col_array.len();
         // If there are no rows, return empty arrays
         if num_rows == 0 {
-            // create empty accumulator to get the state types
-            let empty_state = (self.factory)()?.state()?;
-            let empty_arrays = empty_state
-                .into_iter()
-                .map(|state_val| new_empty_array(&state_val.data_type()))
-                .collect::<Vec<_>>();
-
-            return Ok(empty_arrays);
+            return Ok(vec![new_empty_array(col_array.data_type())]);
         }
+        let dt = col_array.data_type();
 
-        if false {
-            let mut results = vec![];
-            for row_idx in 0..num_rows {
-                // Create the empty accumulator for converting
-                let mut converted_accumulator = (self.factory)()?;
+        let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(1, num_rows));
+        let field = Arc::new(Field::new_list_field(dt.clone(), false));
 
-                // Convert row to states
-                let values_to_accumulate =
-                    slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
-                converted_accumulator.update_batch(&values_to_accumulate)?;
-                let states = converted_accumulator.state()?;
-
-                // Resize results to have enough columns according to the converted states
-                results.resize_with(states.len(), || Vec::with_capacity(num_rows));
-
-                // Add the states to results
-                for (idx, state_val) in states.into_iter().enumerate() {
-                    results[idx].push(state_val);
-                }
-            }
-            // vec<vec<scalarvalue>> -> vec<arrayref>
-
-            let arrays = results
-                .into_iter()
-                .map(ScalarValue::iter_to_array)
-                .collect::<Result<Vec<_>>>()?;
-            println!("{:?}", arrays[0]);
-            if arrays[0].len() != num_rows {
-                panic!(
-                    "state after calling convert_to_state is not the same with numrows"
-                )
-            }
-            return Ok(arrays);
-        } else {
-            // Each row has its respective group
-            let mut results = vec![];
-
-            let mut converted_accumulator = (self.factory)()?;
-            // Convert row to states
-            // println!("incoming values {:?}", values);
-            let values_to_accumulate =
-                slice_and_maybe_filter(values, opt_filter, &[0, num_rows])?;
-            converted_accumulator.update_batch(&values_to_accumulate)?;
-            let states = converted_accumulator.state()?;
-
-            // Resize results to have enough columns according to the converted states
-            results.resize_with(states.len(), || ScalarValue::Null);
-
-            // Add the states to results
-            for (idx, state_val) in states.into_iter().enumerate() {
-                results[idx] = state_val;
-            }
-            let arr = results
-                .into_iter()
-                .enumerate()
-                .map(|(index, a)| {
-                    let item_type = inner_datatype_from_list(&a.data_type());
-                    let dt = a.data_type();
-
-                    // let backend = ScalarValue::iter_to_array(a)?;
-                    let backend = try_unnest(&a).unwrap();
-                    let offsets = backend.offsets();
-                    // backend.
-                    // let arr = FixedSizeListArray::new(field, 1, backend, None);
-                    // values.extend_from_slice(&[None, Some("F")]);
-
-                    let offsets =
-                        OffsetBuffer::from_lengths(std::iter::repeat_n(1, num_rows));
-                    // let new_dt = inner_datatype_from_list(dt);
-                    // println!("{new_dt}");
-                    let field = Arc::new(Field::new_list_field(item_type, true));
-
-                    let arr = GenericListArray::<i32>::new(
-                        field,
-                        OffsetBuffer::new(offsets.into()),
-                        backend.values().clone(),
-                        None,
-                    );
-                    return Ok(Arc::new(arr) as Arc<dyn Array>);
-                })
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(arr);
-        }
-        // println!("{:?}, num rows {num_rows}",results[0]);
-        // let a = results[0];
-
-        // let dt = (&results[0][0]).data_type();
-        // let first_state = results.first().unwrap();
-        // let field = Arc::new(Field::new_list_field(dt, false));
-        // // let valid = NullBuffer::from(vec![true, false, true, false, true, true]);
-        // let a = ScalarValue::iter_to_array(first_state.iter())?;
-
-        // let arr = FixedSizeListArray::new(field, 1, a, None);
-        // return Ok(vec![Arc::new(arr)]);
-
-        // Ok(arrays)
+        let arr = GenericListArray::<i32>::new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            col_array.clone(),
+            None,
+        );
+        return Ok(vec![Arc::new(arr) as Arc<dyn Array>]);
     }
 
     fn supports_convert_to_state(&self) -> bool {

@@ -350,6 +350,7 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 }
 
+/// Note that this is order insensitive
 #[derive(Debug)]
 pub struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
