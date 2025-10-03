@@ -23,6 +23,7 @@ use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::windows::BoundedWindowAggExec;
 use datafusion_physical_plan::ExecutionPlan;
 use std::cmp;
@@ -89,6 +90,22 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                     latest_max = cmp::max(end_bound, latest_max);
                 }
                 return Ok(Transformed::no(node));
+            }
+
+            // Apply the limit if we hit a sortpreservingmerge node
+            if let Some(spm) = node.as_any().downcast_ref::<SortPreservingMergeExec>() {
+                let latest = latest_limit.take();
+                let Some(fetch) = latest else {
+                    latest_max = 0;
+                    return Ok(Transformed::no(node));
+                };
+                let fetch = match spm.fetch() {
+                    None => fetch + latest_max,
+                    Some(existing) => cmp::min(existing, fetch + latest_max),
+                };
+                let spm: Arc<dyn ExecutionPlan> = spm.with_fetch(Some(fetch)).unwrap();
+                latest_max = 0;
+                return Ok(Transformed::complete(spm));
             }
 
             // Apply the limit if we hit a sort node
