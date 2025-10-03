@@ -158,53 +158,68 @@ impl ScalarUDFImpl for RegexpLikeFunc {
 
     fn simplify(
         &self,
-        args: Vec<Expr>,
+        mut args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        // Try to simplify regexp_like to ~ or ~* if possible since the implementation of those operators
-        // is more optimised.
-        let Some((st, op, re)) = (match args.as_slice() {
-            [string, regexp] => {
-                Some((string.clone(), Operator::RegexMatch, regexp.clone()))
-            }
-            [string, regexp, Expr::Literal(ScalarValue::Utf8(Some(flags)), _)] => {
-                match flags.as_str() {
-                    "i" => Some((string.clone(), Operator::RegexIMatch, regexp.clone())),
-                    "" => Some((string.clone(), Operator::RegexMatch, regexp.clone())),
-                    _ => None,
-                }
-            }
-            _ => None,
-        }) else {
+        // Try to simplify regexp_like to an operator expression since those are more optimised.
+        let Some(op) = derive_operator(&args) else {
             return Ok(ExprSimplifyResult::Original(args));
         };
 
-        let st_type = info.get_data_type(&st)?;
-        let re_type = info.get_data_type(&re)?;
-        let binary_type_coercer = BinaryTypeCoercer::new(&st_type, &op, &re_type);
-        let Ok((coerced_st_type, coerced_re_type)) =
+        let string_type = info.get_data_type(&args[0])?;
+        let regexp_type = info.get_data_type(&args[1])?;
+        let binary_type_coercer = BinaryTypeCoercer::new(&string_type, &op, &regexp_type);
+        let Ok((coerced_string_type, coerced_regexp_type)) =
             binary_type_coercer.get_input_types()
         else {
             return Ok(ExprSimplifyResult::Original(args));
         };
 
+        // regexp_like(str, regexp [, flags])
+        let regexp = args.swap_remove(1);
+        let string = args.swap_remove(0);
+
         Ok(ExprSimplifyResult::Simplified(binary_expr(
-            if st_type != coerced_st_type {
-                cast(st, coerced_st_type)
+            if string_type != coerced_string_type {
+                cast(string, coerced_string_type)
             } else {
-                st
+                string
             },
             op,
-            if re_type != coerced_re_type {
-                cast(re, coerced_re_type)
+            if regexp_type != coerced_regexp_type {
+                cast(regexp, coerced_regexp_type)
             } else {
-                re
+                regexp
             },
         )))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn derive_operator(args: &[Expr]) -> Option<Operator> {
+    match args.len() {
+        // regexp_like(str, regexp, flags)
+        3 => {
+            match &args[2] {
+                Expr::Literal(ScalarValue::Utf8(Some(flags)), _) => {
+                    match flags.as_str() {
+                        "i" => Some(Operator::RegexIMatch),
+                        "" => Some(Operator::RegexMatch),
+                        // Any flags besides 'i' have no operator equivalent
+                        _ => None,
+                    }
+                }
+                // The flags value is not a literal, so we can't derive the operator statically
+                _ => None,
+            }
+        }
+        // regexp_like(str, regexp)
+        2 => Some(Operator::RegexMatch),
+        // Should never happen, but just in case
+        _ => None,
     }
 }
 
