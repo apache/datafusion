@@ -2512,7 +2512,7 @@ dependencies = [
  "datafusion-proto-common",
  "doc-comment",
  "object_store",
- "pbjson",
+ "pbjson 0.7.0",
  "pretty_assertions",
  "prost 0.13.5",
  "serde",
@@ -2527,7 +2527,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "doc-comment",
- "pbjson",
+ "pbjson 0.7.0",
  "prost 0.13.5",
  "serde",
 ]
@@ -2653,7 +2653,7 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "object_store",
- "pbjson-types",
+ "pbjson-types 0.7.0",
  "prost 0.13.5",
  "serde_json",
  "substrait",
@@ -4478,6 +4478,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pbjson"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "898bac3fa00d0ba57a4e8289837e965baa2dee8c3749f3b11d45a64b4223d9c3"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+]
+
+[[package]]
 name = "pbjson-build"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4509,10 +4519,25 @@ checksum = "e54e5e7bfb1652f95bc361d76f3c780d8e526b134b85417e774166ee941f0887"
 dependencies = [
  "bytes",
  "chrono",
- "pbjson",
+ "pbjson 0.7.0",
  "pbjson-build 0.7.0",
  "prost 0.13.5",
  "prost-build 0.13.5",
+ "serde",
+]
+
+[[package]]
+name = "pbjson-types"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e748e28374f10a330ee3bb9f29b828c0ac79831a32bab65015ad9b661ead526"
+dependencies = [
+ "bytes",
+ "chrono",
+ "pbjson 0.8.0",
+ "pbjson-build 0.8.0",
+ "prost 0.14.1",
+ "prost-build 0.14.1",
  "serde",
 ]
 
@@ -6153,18 +6178,18 @@ dependencies = [
 
 [[package]]
 name = "substrait"
-version = "0.58.0"
+version = "0.60.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de6d24c270c6c672a86c183c3a8439ba46c1936f93cf7296aa692de3b0ff0228"
+checksum = "3ab275be098c14876dbe7c15b65803e99ad19b52075232c142ec4019f5945e5b"
 dependencies = [
  "heck 0.5.0",
- "pbjson",
- "pbjson-build 0.7.0",
- "pbjson-types",
+ "pbjson 0.8.0",
+ "pbjson-build 0.8.0",
+ "pbjson-types 0.8.0",
  "prettyplease",
- "prost 0.13.5",
- "prost-build 0.13.5",
- "prost-types 0.13.5",
+ "prost 0.14.1",
+ "prost-build 0.14.1",
+ "prost-types 0.14.1",
  "protobuf-src",
  "regress",
  "schemars 0.8.22",
