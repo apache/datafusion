@@ -130,7 +130,8 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             }
 
             if let Some(encoding) = &options.encoding {
-                let parsed_encoding = parse_encoding_string(encoding)?;
+                // let parsed_encoding = parse_encoding_string(encoding)?;
+                let parsed_encoding = encoding.0;
                 builder = builder.set_column_encoding(path.clone(), parsed_encoding);
             }
 
@@ -140,13 +141,13 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             }
 
             if let Some(compression) = &options.compression {
-                let parsed_compression = parse_compression_string(compression)?;
-                builder =
-                    builder.set_column_compression(path.clone(), parsed_compression);
+                // let parsed_compression = parse_compression_string(compression)?;
+                builder = builder.set_column_compression(path.clone(), compression.0);
             }
 
             if let Some(statistics_enabled) = &options.statistics_enabled {
-                let parsed_value = parse_statistics_string(statistics_enabled)?;
+                // let parsed_value = parse_statistics_string(statistics_enabled)?;
+                let parsed_value = statistics_enabled.0;
                 builder =
                     builder.set_column_statistics_enabled(path.clone(), parsed_value);
             }
@@ -219,7 +220,8 @@ impl ParquetOptions {
             .set_statistics_enabled(
                 statistics_enabled
                     .as_ref()
-                    .and_then(|s| parse_statistics_string(s).ok())
+                    // .and_then(|s| parse_statistics_string(s).ok())
+                    .and_then(|s| Some(s.0))
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
             .set_max_row_group_size(*max_row_group_size)
@@ -242,10 +244,11 @@ impl ParquetOptions {
         // We do not have access to default ColumnProperties set in Arrow.
         // Therefore, only overwrite if these settings exist.
         if let Some(compression) = compression {
-            builder = builder.set_compression(parse_compression_string(compression)?);
+            builder = builder.set_compression(compression.0);
         }
         if let Some(encoding) = encoding {
-            builder = builder.set_encoding(parse_encoding_string(encoding)?);
+            // builder = builder.set_encoding(parse_encoding_string(encoding)?);
+            builder = builder.set_encoding(encoding.0);
         }
 
         Ok(builder)
@@ -253,6 +256,7 @@ impl ParquetOptions {
 }
 
 /// Parses datafusion.execution.parquet.encoding String to a parquet::basic::Encoding
+// TODO likely we don't need that anymore
 pub(crate) fn parse_encoding_string(
     str_setting: &str,
 ) -> Result<parquet::basic::Encoding> {
@@ -385,6 +389,7 @@ pub(crate) fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
     }
 }
 
+// TODO maybe we don't need it anymore
 pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -405,14 +410,15 @@ mod tests {
     use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
     #[cfg(feature = "parquet_encryption")]
     use crate::encryption::map_encryption_to_config_encryption;
+    use crate::format::{DFCompression, DFEnabledStatistics, DFEncoding};
     use parquet::{
         basic::Compression,
         file::properties::{
-            BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
-            DEFAULT_BLOOM_FILTER_NDV,
+            BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
         },
     };
     use std::collections::HashMap;
+    use std::str::FromStr;
 
     const COL_NAME: &str = "configured";
 
@@ -421,10 +427,10 @@ mod tests {
         src_col_defaults: &ParquetOptions,
     ) -> ParquetColumnOptions {
         ParquetColumnOptions {
-            compression: Some("zstd(22)".into()),
+            compression: Some(DFCompression::from_str("zstd(22)").unwrap()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
-            statistics_enabled: Some("none".into()),
-            encoding: Some("RLE".into()),
+            statistics_enabled: Some(DFEnabledStatistics::from_str("none").unwrap()),
+            encoding: Some(DFEncoding::from_str("RLE").unwrap()),
             bloom_filter_enabled: Some(true),
             bloom_filter_fpp: Some(0.72),
             bloom_filter_ndv: Some(72),
@@ -444,7 +450,7 @@ mod tests {
             data_pagesize_limit: 42,
             write_batch_size: 42,
             writer_version: writer_version.into(),
-            compression: Some("zstd(22)".into()),
+            compression: Some(DFCompression::from_str("zstd(22)").unwrap()),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 42,
             statistics_enabled: Some("chunk".into()),
@@ -453,7 +459,7 @@ mod tests {
             column_index_truncate_length: Some(42),
             statistics_truncate_length: Some(42),
             data_page_row_count_limit: 42,
-            encoding: Some("BYTE_STREAM_SPLIT".into()),
+            encoding: Some(DFEncoding::from_str("BYTE_STREAM_SPLIT").unwrap()),
             bloom_filter_on_write: !defaults.bloom_filter_on_write,
             bloom_filter_fpp: Some(0.42),
             bloom_filter_ndv: Some(42),
@@ -488,7 +494,7 @@ mod tests {
         #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
-            encoding: props.encoding(&col).map(|s| s.to_string()),
+            encoding: props.encoding(&col).map(|e| DFEncoding(e)),
             dictionary_enabled: Some(props.dictionary_enabled(&col)),
             compression: match props.compression(&col) {
                 Compression::ZSTD(lvl) => {
@@ -496,14 +502,7 @@ mod tests {
                 }
                 _ => None,
             },
-            statistics_enabled: Some(
-                match props.statistics_enabled(&col) {
-                    EnabledStatistics::None => "none",
-                    EnabledStatistics::Chunk => "chunk",
-                    EnabledStatistics::Page => "page",
-                }
-                .into(),
-            ),
+            statistics_enabled: Some(DFEnabledStatistics(props.statistics_enabled(&col))),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
         }
@@ -727,7 +726,8 @@ mod tests {
         let mut from_extern_parquet =
             session_config_from_writer_props(&default_writer_props);
         from_extern_parquet.global.created_by = same_created_by;
-        from_extern_parquet.global.compression = Some("zstd(3)".into());
+        from_extern_parquet.global.compression =
+            Some(DFCompression::from_str("zstd(3)").unwrap());
         from_extern_parquet.global.skip_arrow_metadata = true;
 
         assert_eq!(

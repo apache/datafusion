@@ -22,7 +22,10 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::{DFDurationFormat, ExplainFormat, NullOrdering, SQLDialect};
+use crate::format::{
+    DFCompression, DFDurationFormat, DFEnabledStatistics, DFEncoding, ExplainFormat,
+    NullOrdering, SQLDialect,
+};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -35,6 +38,8 @@ use std::str::FromStr;
 
 #[cfg(feature = "parquet_encryption")]
 use hex;
+use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::properties::EnabledStatistics;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -604,7 +609,7 @@ config_namespace! {
         ///
         /// Note that this default setting is not the same as
         /// the default parquet writer setting.
-        pub compression: Option<String>, transform = str::to_lowercase, default = Some("zstd(3)".into())
+        pub compression: Option<DFCompression>, default = Some(DFCompression::default())
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
@@ -617,7 +622,7 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
+        pub statistics_enabled: Option<DFEnabledStatistics>, default = Some(DFEnabledStatistics(EnabledStatistics::Page))
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
@@ -643,7 +648,7 @@ config_namespace! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub encoding: Option<String>, transform = str::to_lowercase, default = None
+        pub encoding: Option<DFEncoding>, default = None
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
@@ -2115,7 +2120,7 @@ config_namespace_with_hashmap! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
-        pub encoding: Option<String>, default = None
+        pub encoding: Option<DFEncoding>, default = None
 
         /// Sets if dictionary encoding is enabled for the column path. If NULL, uses
         /// default parquet options
@@ -2126,13 +2131,13 @@ config_namespace_with_hashmap! {
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
-        pub compression: Option<String>, transform = str::to_lowercase, default = None
+        pub compression: Option<DFCompression>, default = None
 
         /// Sets if statistics are enabled for the column
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet options
-        pub statistics_enabled: Option<String>, default = None
+        pub statistics_enabled: Option<DFEnabledStatistics>, default = None
 
         /// Sets bloom filter false positive probability for the column path. If NULL, uses
         /// default parquet options

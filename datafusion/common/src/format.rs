@@ -16,13 +16,15 @@
 // under the License.
 
 use std::fmt::{self, Display};
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-
-use arrow::compute::CastOptions;
-use arrow::util::display::{DurationFormat, FormatOptions};
 
 use crate::config::{ConfigField, Visit};
 use crate::error::{DataFusionError, Result};
+use arrow::compute::CastOptions;
+use arrow::util::display::{DurationFormat, FormatOptions};
+use parquet::basic::{Compression, Encoding, ZstdLevel};
+use parquet::file::properties::EnabledStatistics;
 
 /// The default [`FormatOptions`] to use within DataFusion
 /// Also see [`crate::config::FormatOptions`]
@@ -206,6 +208,143 @@ impl ConfigField for ExplainFormat {
     }
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DFEnabledStatistics(pub EnabledStatistics);
+
+impl FromStr for DFEnabledStatistics {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match EnabledStatistics::from_str(s) {
+            Ok(enabled_stats) => Ok(DFEnabledStatistics(enabled_stats)),
+            Err(_) => Err(DataFusionError::Configuration(format!(
+                "Invalid enabled statistics format. Expected 'chunk' and others. Got '{s}'"
+            ))),
+        }
+    }
+}
+
+impl Display for DFEnabledStatistics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self.0 {
+            EnabledStatistics::None => "none",
+            EnabledStatistics::Chunk => "chunk",
+            EnabledStatistics::Page => "page",
+        };
+        f.write_str(s)
+    }
+}
+
+impl ConfigField for DFEnabledStatistics {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = DFEnabledStatistics::from_str(value)?;
+        Ok(())
+    }
+}
+
+// ------- ------- ------- ------- ------- ------- -------
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DFEncoding(pub Encoding);
+
+impl Default for DFEncoding {
+    fn default() -> Self {
+        Self(Encoding::PLAIN)
+    }
+}
+
+impl FromStr for DFEncoding {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match Encoding::from_str(s) {
+            Ok(encoding) => Ok(DFEncoding(encoding)),
+            Err(_) => Err(DataFusionError::Configuration(format!(
+                "Invalid encoding format. Expected 'plain' and others. Got '{s}'"
+            ))),
+        }
+    }
+}
+
+impl Display for DFEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0.to_string())
+    }
+}
+
+impl ConfigField for DFEncoding {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = DFEncoding::from_str(value)?;
+        Ok(())
+    }
+}
+
+// -------- -------- -------- -------- --------
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DFCompression(pub Compression);
+
+impl Default for DFCompression {
+    fn default() -> Self {
+        Self(Compression::ZSTD(ZstdLevel::try_new(3_i32).unwrap()))
+    }
+}
+
+impl Hash for DFCompression {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(&self.0).hash(state);
+    }
+}
+
+// TODO use these
+impl From<Compression> for DFCompression {
+    fn from(c: Compression) -> Self {
+        Self(c)
+    }
+}
+impl From<DFCompression> for Compression {
+    fn from(w: DFCompression) -> Self {
+        w.0
+    }
+}
+
+impl FromStr for DFCompression {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match Compression::from_str(s) {
+            Ok(c) => Ok(DFCompression(c)),
+            Err(_) => Err(DataFusionError::Configuration(format!(
+                "Invalid compression format. Expected 'lz4' and others. Got '{s}'"
+            ))),
+        }
+    }
+}
+
+impl Display for DFCompression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0.to_string())
+    }
+}
+
+impl ConfigField for DFCompression {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = DFCompression::from_str(value)?;
+        Ok(())
+    }
+}
+
+// -------- -------- -------- -------- --------
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DFDurationFormat(pub DurationFormat);
 

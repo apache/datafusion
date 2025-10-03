@@ -350,6 +350,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
 #[cfg(feature = "parquet")]
 mod parquet {
     use super::*;
+    use std::str::FromStr;
 
     use crate::protobuf::{
         parquet_column_options, parquet_options,
@@ -362,6 +363,7 @@ mod parquet {
         config::{ParquetColumnOptions, ParquetOptions, TableParquetOptions},
         datasource::file_format::parquet::ParquetFormatFactory,
     };
+    use datafusion_common::format::{DFCompression, DFEnabledStatistics, DFEncoding};
 
     impl TableParquetOptionsProto {
         fn from_factory(factory: &ParquetFormatFactory) -> Self {
@@ -387,7 +389,7 @@ mod parquet {
                 write_batch_size: global_options.global.write_batch_size as u64,
                 writer_version: global_options.global.writer_version.clone(),
                 compression_opt: global_options.global.compression.map(|compression| {
-                    parquet_options::CompressionOpt::Compression(compression)
+                    parquet_options::CompressionOpt::Compression(compression.to_string())
                 }),
                 dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
                     parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
@@ -406,7 +408,7 @@ mod parquet {
                 }),
                 data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
                 encoding_opt: global_options.global.encoding.map(|encoding| {
-                    parquet_options::EncodingOpt::Encoding(encoding)
+                    parquet_options::EncodingOpt::Encoding(encoding.to_string())
                 }),
                 bloom_filter_on_read: global_options.global.bloom_filter_on_read,
                 bloom_filter_on_write: global_options.global.bloom_filter_on_write,
@@ -437,16 +439,16 @@ mod parquet {
                             parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(enabled)
                         }),
                         encoding_opt: options.encoding.map(|encoding| {
-                            parquet_column_options::EncodingOpt::Encoding(encoding)
+                            parquet_column_options::EncodingOpt::Encoding(encoding.to_string())
                         }),
                         dictionary_enabled_opt: options.dictionary_enabled.map(|enabled| {
                             parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
                         }),
                         compression_opt: options.compression.map(|compression| {
-                            parquet_column_options::CompressionOpt::Compression(compression)
+                            parquet_column_options::CompressionOpt::Compression(compression.to_string())
                         }),
                         statistics_enabled_opt: options.statistics_enabled.map(|enabled| {
-                            parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
+                            parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(enabled.to_string())
                         }),
                         bloom_filter_fpp_opt: options.bloom_filter_fpp.map(|fpp| {
                             parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
@@ -483,14 +485,16 @@ mod parquet {
             write_batch_size: proto.write_batch_size as usize,
             writer_version: proto.writer_version.clone(),
             compression: proto.compression_opt.as_ref().map(|opt| match opt {
-                parquet_options::CompressionOpt::Compression(compression) => compression.clone(),
+                parquet_options::CompressionOpt::Compression(compression)
+                => DFCompression::from_str(compression.as_str()).unwrap(), // TODO how to  deal with error
             }),
             dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| match opt {
                 parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled) => *enabled,
             }),
             dictionary_page_size_limit: proto.dictionary_page_size_limit as usize,
             statistics_enabled: proto.statistics_enabled_opt.as_ref().map(|opt| match opt {
-                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(statistics) => statistics.clone(),
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(statistics) =>
+                DFEnabledStatistics::from_str(statistics.as_str()).unwrap(),
             }),
             max_row_group_size: proto.max_row_group_size as usize,
             created_by: proto.created_by.clone(),
@@ -502,7 +506,8 @@ mod parquet {
             }),
             data_page_row_count_limit: proto.data_page_row_count_limit as usize,
             encoding: proto.encoding_opt.as_ref().map(|opt| match opt {
-                parquet_options::EncodingOpt::Encoding(encoding) => encoding.clone(),
+                parquet_options::EncodingOpt::Encoding(encoding) =>
+                    DFEncoding::from_str(encoding.as_str()).unwrap(),
             }),
             bloom_filter_on_read: proto.bloom_filter_on_read,
             bloom_filter_on_write: proto.bloom_filter_on_write,
@@ -537,15 +542,18 @@ mod parquet {
             ),
             encoding: proto
                 .encoding_opt
-                .map(|parquet_column_options::EncodingOpt::Encoding(v)| v),
+                .map(|parquet_column_options::EncodingOpt::Encoding(v)|
+                DFEncoding::from_str(v.as_str()).unwrap()),
             dictionary_enabled: proto.dictionary_enabled_opt.map(
                 |parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| v,
             ),
             compression: proto
                 .compression_opt
-                .map(|parquet_column_options::CompressionOpt::Compression(v)| v),
+                .map(|parquet_column_options::CompressionOpt::Compression(v)|
+                DFCompression::from_str(v.as_str()).unwrap()),
             statistics_enabled: proto.statistics_enabled_opt.map(
-                |parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v)| v,
+                |parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v)|
+                DFEnabledStatistics::from_str(v.as_str()).unwrap(),
             ),
             bloom_filter_fpp: proto
                 .bloom_filter_fpp_opt

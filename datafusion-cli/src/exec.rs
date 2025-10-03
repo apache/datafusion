@@ -616,13 +616,13 @@ mod tests {
         ];
         let ctx = SessionContext::new();
         let task_ctx = ctx.task_ctx();
-        let dialect = task_ctx
+        let binding = task_ctx
             .session_config()
             .options()
             .sql_parser
             .dialect
-            .to_string()
-            .as_str();
+            .to_string();
+        let dialect = binding.as_str();
         // TODO this maybe redundant due to enum
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(

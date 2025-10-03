@@ -857,7 +857,8 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.clone(),
-            compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
+            compression_opt: value.compression.clone().map(|compression| {
+                protobuf::parquet_options::CompressionOpt::Compression(compression.to_string()) }),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
@@ -866,7 +867,9 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
-            encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
+            encoding_opt: value.encoding.clone().map(|encoding|{
+                protobuf::parquet_options::EncodingOpt::Encoding(encoding.to_string())
+            }),
             bloom_filter_on_read: value.bloom_filter_on_read,
             bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
@@ -893,18 +896,18 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
             compression_opt: value
                 .compression
                 .clone()
-                .map(protobuf::parquet_column_options::CompressionOpt::Compression),
+                .map(|c|protobuf::parquet_column_options::CompressionOpt::Compression(c.to_string())),
             dictionary_enabled_opt: value
                 .dictionary_enabled
                 .map(protobuf::parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled),
             statistics_enabled_opt: value
                 .statistics_enabled
                 .clone()
-                .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
+                .map(|stats|protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(stats.to_string())),
             encoding_opt: value
                 .encoding
                 .clone()
-                .map(protobuf::parquet_column_options::EncodingOpt::Encoding),
+                .map(|e|protobuf::parquet_column_options::EncodingOpt::Encoding(e.to_string())),
             bloom_filter_enabled_opt: value
                 .bloom_filter_enabled
                 .map(protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled),
