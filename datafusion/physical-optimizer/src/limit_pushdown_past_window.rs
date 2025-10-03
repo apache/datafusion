@@ -93,19 +93,19 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // Apply the limit if we hit a sortpreservingmerge node
-            if let Some(sort) = node.as_any().downcast_ref::<SortPreservingMergeExec>() {
+            if let Some(spm) = node.as_any().downcast_ref::<SortPreservingMergeExec>() {
                 let latest = latest_limit.take();
                 let Some(fetch) = latest else {
                     latest_max = 0;
                     return Ok(Transformed::no(node));
                 };
-                let fetch = match sort.fetch() {
+                let fetch = match spm.fetch() {
                     None => fetch + latest_max,
                     Some(existing) => cmp::min(existing, fetch + latest_max),
                 };
-                let sort: Arc<dyn ExecutionPlan> = sort.with_fetch(Some(fetch)).unwrap();
+                let spm: Arc<dyn ExecutionPlan> = spm.with_fetch(Some(fetch)).unwrap();
                 latest_max = 0;
-                return Ok(Transformed::complete(sort));
+                return Ok(Transformed::complete(spm));
             }
 
             // Apply the limit if we hit a sort node
