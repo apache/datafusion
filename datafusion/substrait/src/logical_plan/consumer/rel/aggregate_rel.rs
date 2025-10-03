@@ -40,6 +40,7 @@ pub async fn from_aggregate_rel(
         let mut aggr_exprs = vec![];
 
         match agg.groupings.len() {
+            0 => {}
             1 => {
                 group_exprs.extend_from_slice(
                     &from_substrait_grouping(
