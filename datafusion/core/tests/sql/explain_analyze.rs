@@ -742,18 +742,7 @@ async fn parquet_recursive_projection_pushdown() {
     let parquet_path = temp_dir.path().join("hierarchy.parquet");
 
     let ids = Int64Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    let parent_ids = Int64Array::from(vec![
-        Some(0),
-        Some(1),
-        Some(1),
-        Some(2),
-        Some(2),
-        Some(3),
-        Some(4),
-        Some(5),
-        Some(6),
-        Some(7),
-    ]);
+    let parent_ids = Int64Array::from(vec![0, 1, 1, 2, 2, 3, 4, 5, 6, 7]);
     let values = Int64Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
 
     let schema = Arc::new(Schema::new(vec![
