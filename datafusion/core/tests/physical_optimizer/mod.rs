@@ -20,7 +20,10 @@
 mod aggregate_statistics;
 mod combine_partial_final_agg;
 mod enforce_distribution;
-mod enforce_sorting;
+// Updating in parallel -- see
+// https://github.com/apache/datafusion/pull/17903
+// https://github.com/apache/datafusion/pull/17900
+// mod enforce_sorting;
 mod filter_pushdown;
 mod join_selection;
 mod limit_pushdown;
