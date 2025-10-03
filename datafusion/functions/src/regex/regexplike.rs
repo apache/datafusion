@@ -161,7 +161,10 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         mut args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        // Try to simplify regexp_like to an operator expression since those are more optimised.
+        // Try to simplify regexp_like usage to one of the builtin operators since those have
+        // optimized code paths for the case where the regular expression pattern is a scalar.
+        // Additionally, the expression simplification optimization pass will attempt to further
+        // simplify regular expression patterns used in operator expressions.
         let Some(op) = derive_operator(&args) else {
             return Ok(ExprSimplifyResult::Original(args));
         };
@@ -212,7 +215,7 @@ fn derive_operator(args: &[Expr]) -> Option<Operator> {
                         _ => None,
                     }
                 }
-                // The flags value is not a literal, so we can't derive the operator statically
+                // `flags` is not a literal, so we can't derive the correct operator statically
                 _ => None,
             }
         }
