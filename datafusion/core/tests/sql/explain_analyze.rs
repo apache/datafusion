@@ -20,6 +20,7 @@ use insta::assert_snapshot;
 use rstest::rstest;
 
 use datafusion::config::ConfigOptions;
+use object_store::path::Path;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
 
@@ -790,18 +791,43 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
     let physical_plan = dataframe.create_physical_plan().await?;
 
     let normalizer = ExplainNormalizer::new();
-    let actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
+    let mut actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
         .trim()
         .lines()
         .map(|line| normalizer.normalize(line))
         .collect::<Vec<_>>()
         .join("\n");
-    let actual = temp_dir
-        .path()
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .map(|temp_name| actual.replace(&temp_name, "TMP_DIR"))
-        .unwrap_or(actual);
+
+    fn replace_path_variants(actual: &mut String, path: &str) {
+        let mut candidates = vec![path.to_string()];
+
+        let trimmed = path.trim_start_matches(std::path::MAIN_SEPARATOR);
+        if trimmed != path {
+            candidates.push(trimmed.to_string());
+        }
+
+        let forward_slash = path.replace('\\', "/");
+        if forward_slash != path {
+            candidates.push(forward_slash.clone());
+
+            let trimmed_forward = forward_slash.trim_start_matches('/');
+            if trimmed_forward != forward_slash {
+                candidates.push(trimmed_forward.to_string());
+            }
+        }
+
+        for candidate in candidates {
+            *actual = actual.replace(&candidate, "TMP_DIR");
+        }
+    }
+
+    let temp_dir_path = temp_dir.path();
+    let fs_path = temp_dir_path.to_string_lossy().to_string();
+    replace_path_variants(&mut actual, &fs_path);
+
+    if let Ok(url_path) = Path::from_filesystem_path(temp_dir_path) {
+        replace_path_variants(&mut actual, &url_path.to_string());
+    }
 
     assert_snapshot!(
         actual,
@@ -813,7 +839,7 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
             CoalesceBatchesExec: target_batch_size=8192
               FilterExec: id@0 = 1
                 RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[var/folders/_x/tlhn6w_12c3dxxj062jf79900000gn/T/TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
+                  DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
         CoalescePartitionsExec
           ProjectionExec: expr=[id@0 + 1 as ns.id + Int64(1), level@1 + 1 as ns.level + Int64(1)]
             CoalesceBatchesExec: target_batch_size=8192
