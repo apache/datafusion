@@ -17,13 +17,15 @@
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
-use std::str::FromStr;
+// use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
 
+use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::error::add_possible_columns_to_diag;
+use datafusion_common::format::NullOrdering;
 use datafusion_common::TableReference;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
@@ -31,14 +33,12 @@ use datafusion_common::{
 };
 use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
+pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
-
-use crate::utils::make_decimal_type;
-pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
@@ -159,63 +159,59 @@ impl From<&SqlParserOptions> for ParserOptions {
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
-            default_null_ordering: options
-                .default_null_ordering
-                .to_string()
-                .as_str()
-                .into(),
+            default_null_ordering: options.default_null_ordering,
         }
     }
 }
 
 /// Represents the null ordering for sorting expressions.
-#[derive(Debug, Clone, Copy)]
-pub enum NullOrdering {
-    /// Nulls appear last in ascending order.
-    NullsMax,
-    /// Nulls appear first in descending order.
-    NullsMin,
-    /// Nulls appear first.
-    NullsFirst,
-    /// Nulls appear last.
-    NullsLast,
-}
+// #[derive(Debug, Clone, Copy)]
+// pub enum NullOrdering {
+//     /// Nulls appear last in ascending order.
+//     NullsMax,
+//     /// Nulls appear first in descending order.
+//     NullsMin,
+//     /// Nulls appear first.
+//     NullsFirst,
+//     /// Nulls appear last.
+//     NullsLast,
+// }
 
-impl NullOrdering {
-    /// Evaluates the null ordering based on the given ascending flag.
-    ///
-    /// # Returns
-    /// * `true` if nulls should appear first.
-    /// * `false` if nulls should appear last.
-    pub fn nulls_first(&self, asc: bool) -> bool {
-        match self {
-            Self::NullsMax => !asc,
-            Self::NullsMin => asc,
-            Self::NullsFirst => true,
-            Self::NullsLast => false,
-        }
-    }
-}
-
-impl FromStr for NullOrdering {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "nulls_max" => Ok(Self::NullsMax),
-            "nulls_min" => Ok(Self::NullsMin),
-            "nulls_first" => Ok(Self::NullsFirst),
-            "nulls_last" => Ok(Self::NullsLast),
-            _ => plan_err!("Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"),
-        }
-    }
-}
-
-impl From<&str> for NullOrdering {
-    fn from(s: &str) -> Self {
-        Self::from_str(s).unwrap_or(Self::NullsMax)
-    }
-}
+// impl NullOrdering {
+//     /// Evaluates the null ordering based on the given ascending flag.
+//     ///
+//     /// # Returns
+//     /// * `true` if nulls should appear first.
+//     /// * `false` if nulls should appear last.
+//     pub fn nulls_first(&self, asc: bool) -> bool {
+//         match self {
+//             Self::NullsMax => !asc,
+//             Self::NullsMin => asc,
+//             Self::NullsFirst => true,
+//             Self::NullsLast => false,
+//         }
+//     }
+// }
+//
+// impl FromStr for NullOrdering {
+//     type Err = DataFusionError;
+//
+//     fn from_str(s: &str) -> Result<Self> {
+//         match s {
+//             "nulls_max" => Ok(Self::NullsMax),
+//             "nulls_min" => Ok(Self::NullsMin),
+//             "nulls_first" => Ok(Self::NullsFirst),
+//             "nulls_last" => Ok(Self::NullsLast),
+//             _ => plan_err!("Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"),
+//         }
+//     }
+// }
+//
+// impl From<&str> for NullOrdering {
+//     fn from(s: &str) -> Self {
+//         Self::from_str(s).unwrap_or(Self::NullsMax)
+//     }
+// }
 
 /// Ident Normalizer
 #[derive(Debug)]

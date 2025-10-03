@@ -243,10 +243,87 @@ impl ConfigField for DFDurationFormat {
         Ok(())
     }
 }
+// TODO should be moved from here
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SQLDialect {
+    /// Configure the SQL dialect used by DataFusion's parser; supported values include
+    #[default]
+    Generic,
+    MySQL,
+    PostgreSQL,
+    Hive,
+    SQLite,
+    Snowflake,
+    Redshift,
+    MsSQL,
+    ClickHouse,
+    BigQuery,
+    Ansi,
+    DuckDB,
+    Databricks,
+}
 
+impl FromStr for SQLDialect {
+    type Err = DataFusionError;
+
+    fn from_str(format: &str) -> Result<Self, Self::Err> {
+        match format.to_lowercase().as_str() {
+            "" | "generic" => Ok(SQLDialect::Generic), // TODO default behaviour
+            "mysql" => Ok(SQLDialect::MySQL),
+            "postgresql" | "postgres" => Ok(SQLDialect::PostgreSQL),
+            "hive" => Ok(SQLDialect::Hive),
+            "sqlite" => Ok(SQLDialect::SQLite),
+            "snowflake" => Ok(SQLDialect::Snowflake),
+            "redshift" => Ok(SQLDialect::Redshift),
+            "mssql" => Ok(SQLDialect::MsSQL),
+            "clickhouse" => Ok(SQLDialect::ClickHouse),
+            "bigquery" => Ok(SQLDialect::BigQuery),
+            "ansi" => Ok(SQLDialect::Ansi),
+            "duckdb" => Ok(SQLDialect::DuckDB),
+            "databricks" => Ok(SQLDialect::Databricks),
+            _ => {
+                Err(DataFusionError::Configuration(format!("Invalid sql dialect. Expected 'mysql', 'postgresql', 'hive', 'sqlite', 'snowflake', 'redshift', 'mssql', 'clickhouse', 'bigquery', 'ansi', 'duckdb' and 'databricks'. Got '{format}'")))
+            }
+        }
+    }
+}
+
+impl Display for SQLDialect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            SQLDialect::Generic => "generic",
+            SQLDialect::MySQL => "mysql",
+            SQLDialect::PostgreSQL => "postgresql",
+            SQLDialect::Hive => "hive",
+            SQLDialect::SQLite => "sqlite",
+            SQLDialect::Snowflake => "snowflake",
+            SQLDialect::Redshift => "redshift",
+            SQLDialect::MsSQL => "mssql",
+            SQLDialect::ClickHouse => "clickhouse",
+            SQLDialect::BigQuery => "bigquery",
+            SQLDialect::Ansi => "ansi",
+            SQLDialect::DuckDB => "duckdb",
+            SQLDialect::Databricks => "databricks",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl ConfigField for SQLDialect {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = SQLDialect::from_str(value)?;
+        Ok(())
+    }
+}
+
+/// ---------------------------------------------------------------------------
 // TODO should be moved from here
 /// Represents the null ordering for sorting expressions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NullOrdering {
     /// Nulls appear last in ascending order.
     NullsMax,
@@ -258,12 +335,34 @@ pub enum NullOrdering {
     NullsLast,
 }
 
+impl NullOrdering {
+    /// Evaluates the null ordering based on the given ascending flag.
+    ///
+    /// # Returns
+    /// * `true` if nulls should appear first.
+    /// * `false` if nulls should appear last.
+    pub fn nulls_first(&self, asc: bool) -> bool {
+        match self {
+            Self::NullsMax => !asc,
+            Self::NullsMin => asc,
+            Self::NullsFirst => true,
+            Self::NullsLast => false,
+        }
+    }
+}
+
+impl From<&str> for NullOrdering {
+    fn from(s: &str) -> Self {
+        Self::from_str(s).unwrap_or(Self::NullsMax)
+    }
+}
+
 impl FromStr for NullOrdering {
     type Err = DataFusionError;
 
     fn from_str(format: &str) -> Result<Self, Self::Err> {
         match format.to_lowercase().as_str() {
-            "nulls_max" => Ok(NullOrdering::NullsMax),
+            "" | "nulls_max" => Ok(NullOrdering::NullsMax), // TODO default behaviour
             "nulls_min" => Ok(NullOrdering::NullsMin),
             "nulls_first" => Ok(NullOrdering::NullsFirst),
             "nulls_last" => Ok(NullOrdering::NullsLast),

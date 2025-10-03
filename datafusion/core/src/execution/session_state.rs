@@ -503,11 +503,7 @@ impl SessionState {
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
             map_string_types_to_utf8view: sql_parser_options.map_string_types_to_utf8view,
             collect_spans: sql_parser_options.collect_spans,
-            default_null_ordering: sql_parser_options
-                .default_null_ordering
-                .to_string()
-                .as_str()
-                .into(),
+            default_null_ordering: sql_parser_options.default_null_ordering,
         }
     }
 
@@ -528,7 +524,8 @@ impl SessionState {
         &self,
         sql: &str,
     ) -> datafusion_common::Result<LogicalPlan> {
-        let dialect = self.config.options().sql_parser.dialect.as_str();
+        let mut binding = self.config.options().sql_parser.dialect.to_string();
+        let dialect = binding.as_mut_str();
         let statement = self.sql_to_statement(sql, dialect)?;
         let plan = self.statement_to_plan(statement).await?;
         Ok(plan)
@@ -543,7 +540,8 @@ impl SessionState {
         sql: &str,
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Expr> {
-        let dialect = self.config.options().sql_parser.dialect.as_str();
+        let mut binding = self.config.options().sql_parser.dialect.to_string();
+        let dialect = binding.as_mut_str();
 
         let sql_expr = self.sql_to_expr_with_alias(sql, dialect)?;
 
@@ -2060,7 +2058,8 @@ mod tests {
             let sql = "[1,2,3]";
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
             let df_schema = DFSchema::try_from(schema)?;
-            let dialect = state.config.options().sql_parser.dialect.as_str();
+            let string = state.config.options().sql_parser.dialect.to_string();
+            let dialect = string.as_str();
             let sql_expr = state.sql_to_expr(sql, dialect)?;
 
             let query = SqlToRel::new_with_options(&provider, state.get_parser_options());

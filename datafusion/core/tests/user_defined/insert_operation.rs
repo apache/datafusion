@@ -24,6 +24,7 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_catalog::{Session, TableProvider};
+use datafusion_common::format::SQLDialect;
 use datafusion_expr::{dml::InsertOp, Expr, TableType};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::execution_plan::SchedulingType;
@@ -31,6 +32,7 @@ use datafusion_physical_plan::{
     execution_plan::{Boundedness, EmissionType},
     DisplayAs, ExecutionPlan, PlanProperties,
 };
+use std::str::FromStr;
 
 #[tokio::test]
 async fn insert_operation_is_passed_correctly_to_table_provider() {
@@ -63,7 +65,7 @@ async fn assert_insert_op(ctx: &SessionContext, sql: &str, insert_op: InsertOp) 
 fn session_ctx_with_dialect(dialect: impl Into<String>) -> SessionContext {
     let mut config = SessionConfig::new();
     let options = config.options_mut();
-    options.sql_parser.dialect = dialect.into();
+    options.sql_parser.dialect = SQLDialect::from_str(dialect.into().as_str()).unwrap();
     SessionContext::new_with_config(config)
 }
 

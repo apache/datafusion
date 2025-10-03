@@ -22,7 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::{DFDurationFormat, ExplainFormat, NullOrdering};
+use crate::format::{DFDurationFormat, ExplainFormat, NullOrdering, SQLDialect};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -259,7 +259,9 @@ config_namespace! {
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
-        pub dialect: String, default = "generic".to_string()
+        // TODO
+        // pub dialect: String, default = "generic".to_string()
+        pub dialect: SQLDialect, default = SQLDialect::Generic
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
         /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
@@ -309,9 +311,9 @@ impl FromStr for SpillCompression {
             "zstd" => Ok(Self::Zstd),
             "lz4_frame" => Ok(Self::Lz4Frame),
             "uncompressed" | "" => Ok(Self::Uncompressed),
-            other => Err(DataFusionError::Configuration(format!(
-                "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4_frame, uncompressed"
-            ))), // TODO unify the format
+            other => {
+                Err(DataFusionError::Configuration(format!("Invalid spill file compression type. Expected 'lz4_frame', 'uncompressed' or 'zstd'. Got '{other}'")))
+            },
         }
     }
 }
@@ -451,7 +453,7 @@ config_namespace! {
         /// memory consumption
         pub max_buffered_batches_per_output_file: usize, default = 2
 
-        /// Should sub directories be ignored when scanning directories for data
+        /// Should subdirectories be ignored when scanning directories for data
         /// files. Defaults to true (ignores subdirectories), consistent with
         /// Hive. Note that this setting does not affect reading partitioned
         /// tables (e.g. `/table/year=2021/month=01/data.parquet`).

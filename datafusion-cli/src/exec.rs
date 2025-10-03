@@ -132,7 +132,13 @@ pub async fn exec_from_repl(
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
     rl.set_helper(Some(CliHelper::new(
-        &ctx.task_ctx().session_config().options().sql_parser.dialect,
+        &ctx.task_ctx()
+            .session_config()
+            .options()
+            .sql_parser
+            .dialect
+            .to_string()
+            .as_str(),
         print_options.color,
     )));
     rl.load_history(".history").ok();
@@ -187,7 +193,13 @@ pub async fn exec_from_repl(
                     }
                     // dialect might have changed
                     rl.helper_mut().unwrap().set_dialect(
-                        &ctx.task_ctx().session_config().options().sql_parser.dialect,
+                        &ctx.task_ctx()
+                            .session_config()
+                            .options()
+                            .sql_parser
+                            .dialect
+                            .to_string()
+                            .as_str(),
                     );
                 }
             }
@@ -216,7 +228,8 @@ pub(super) async fn exec_and_print(
 ) -> Result<()> {
     let task_ctx = ctx.task_ctx();
     let options = task_ctx.session_config().options();
-    let dialect = &options.sql_parser.dialect;
+    let binding = options.sql_parser.dialect.to_string();
+    let dialect = binding.as_str();
     let dialect = dialect_from_str(dialect).ok_or_else(|| {
         plan_datafusion_err!(
             "Unsupported SQL dialect: {dialect}. Available dialects: \
@@ -603,7 +616,14 @@ mod tests {
         ];
         let ctx = SessionContext::new();
         let task_ctx = ctx.task_ctx();
-        let dialect = &task_ctx.session_config().options().sql_parser.dialect;
+        let dialect = task_ctx
+            .session_config()
+            .options()
+            .sql_parser
+            .dialect
+            .to_string()
+            .as_str();
+        // TODO this maybe redundant due to enum
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
