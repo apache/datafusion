@@ -826,7 +826,7 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
     replace_path_variants(&mut actual, &fs_path);
 
     if let Ok(url_path) = Path::from_filesystem_path(temp_dir_path) {
-        replace_path_variants(&mut actual, &url_path.to_string());
+        replace_path_variants(&mut actual, url_path.as_ref());
     }
 
     assert_snapshot!(
