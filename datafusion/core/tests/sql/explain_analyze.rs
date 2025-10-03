@@ -734,7 +734,7 @@ async fn parquet_explain_analyze() {
 // Keeping this test ensures we don't regress that behavior.
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
-async fn parquet_recursive_projection_pushdown() {
+async fn parquet_recursive_projection_pushdown() -> Result<()> {
     use parquet::arrow::arrow_writer::ArrowWriter;
     use parquet::file::properties::WriterProperties;
 
@@ -769,43 +769,61 @@ async fn parquet_recursive_projection_pushdown() {
         parquet_path.to_str().unwrap(),
         ParquetReadOptions::default(),
     )
-    .await
-    .unwrap();
+    .await?;
 
     let sql = r#"
-        EXPLAIN ANALYZE
-            WITH RECURSIVE number_series AS (
-                SELECT id, 1 as level
-                FROM hierarchy
-                WHERE id = 1
+        WITH RECURSIVE number_series AS (
+            SELECT id, 1 as level
+            FROM hierarchy
+            WHERE id = 1
 
-                UNION ALL
+            UNION ALL
 
-                SELECT ns.id + 1, ns.level + 1
-                FROM number_series ns
-                WHERE ns.id < 10
-            )
-            SELECT * FROM number_series ORDER BY id
+            SELECT ns.id + 1, ns.level + 1
+            FROM number_series ns
+            WHERE ns.id < 10
+        )
+        SELECT * FROM number_series ORDER BY id
     "#;
 
-    let actual = execute_to_batches(&ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
-        .unwrap()
-        .to_string();
+    let dataframe = ctx.sql(sql).await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
 
-    let scan_line = formatted
+    let normalizer = ExplainNormalizer::new();
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
+        .trim()
         .lines()
-        .find(|line| line.contains("DataSourceExec"))
-        .expect("DataSourceExec not found");
+        .map(|line| normalizer.normalize(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let actual = temp_dir
+        .path()
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .map(|temp_name| actual.replace(&temp_name, "TMP_DIR"))
+        .unwrap_or(actual);
 
-    assert!(
-        scan_line.contains("projection=[id]"),
-        "expected scan to only project id column, found: {scan_line}"
+    assert_snapshot!(
+        actual,
+        @r###"
+    SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+      RecursiveQueryExec: name=number_series, is_distinct=false
+        CoalescePartitionsExec
+          ProjectionExec: expr=[id@0 as id, 1 as level]
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: id@0 = 1
+                RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[tmp/TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
+        CoalescePartitionsExec
+          ProjectionExec: expr=[id@0 + 1 as ns.id + Int64(1), level@1 + 1 as ns.level + Int64(1)]
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: id@0 < 10
+                RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
+                  WorkTableExec: name=number_series
+    "###
     );
-    assert!(
-        !scan_line.contains("parent_id") && !scan_line.contains("value"),
-        "unexpected columns projected in scan: {scan_line}"
-    );
+
+    Ok(())
 }
 
 #[tokio::test]
