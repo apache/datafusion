@@ -108,6 +108,37 @@ impl CastColumnExpr {
     pub fn target_field(&self) -> &FieldRef {
         &self.target_field
     }
+
+    /// Options forwarded to [`cast_column`].
+    pub fn cast_options(&self) -> &CastOptions<'static> {
+        &self.cast_options
+    }
+
+    /// Returns `true` if this cast widens the source type and therefore
+    /// preserves ordering semantics.
+    pub fn is_widening_cast(&self, src: &DataType) -> bool {
+        if self.target_field.data_type() == src {
+            return true;
+        }
+
+        use DataType::*;
+
+        matches!(
+            (src, self.target_field.data_type()),
+            (Int8, Int16 | Int32 | Int64)
+                | (Int16, Int32 | Int64)
+                | (Int32, Int64)
+                | (UInt8, UInt16 | UInt32 | UInt64)
+                | (UInt16, UInt32 | UInt64)
+                | (UInt32, UInt64)
+                | (
+                    Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32,
+                    Float32 | Float64
+                )
+                | (Int64 | UInt64, Float64)
+                | (Utf8, LargeUtf8)
+        )
+    }
 }
 
 impl Display for CastColumnExpr {
