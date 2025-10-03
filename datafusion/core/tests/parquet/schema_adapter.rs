@@ -28,10 +28,13 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_common::{ColumnStatistics, ScalarValue};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
 use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions::{self, Column};
 use datafusion_physical_expr::PhysicalExpr;
@@ -42,9 +45,6 @@ use datafusion_physical_expr_adapter::{
 use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource_parquet::source::ParquetSource;
 
 async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &str) {
     let mut out = BytesMut::new().writer();
@@ -376,7 +376,6 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
     assert_batches_eq!(expected, &batches);
 }
 
-
 /// A test schema adapter factory that adds prefix to column names
 #[derive(Debug)]
 struct PrefixAdapterFactory {
@@ -451,7 +450,7 @@ impl SchemaAdapter for PrefixAdapter {
                     batch.columns().to_vec(),
                     &options,
                 )
-                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
             }
 
             fn map_column_statistics(
@@ -495,7 +494,7 @@ fn test_apply_schema_adapter_with_factory() {
         schema.clone(),
         file_source,
     )
-        .build();
+    .build();
 
     // Apply schema adapter to a new source
     let result_source = source.apply_schema_adapter(&config).unwrap();
@@ -542,7 +541,7 @@ fn test_apply_schema_adapter_without_factory() {
         schema.clone(),
         file_source,
     )
-        .build();
+    .build();
 
     // Apply schema adapter function - should pass through the source unchanged
     let result_source = source.apply_schema_adapter(&config).unwrap();
