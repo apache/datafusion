@@ -151,6 +151,7 @@ pub fn schema() -> SchemaRef {
     ]))
 }
 
+#[expect(dead_code)]
 pub fn create_test_schema() -> Result<SchemaRef> {
     let nullable_column = Field::new("nullable_col", DataType::Int32, true);
     let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
@@ -158,6 +159,7 @@ pub fn create_test_schema() -> Result<SchemaRef> {
     Ok(schema)
 }
 
+#[expect(dead_code)]
 pub fn create_test_schema2() -> Result<SchemaRef> {
     let col_a = Field::new("col_a", DataType::Int32, true);
     let col_b = Field::new("col_b", DataType::Int32, true);
@@ -281,6 +283,7 @@ pub fn bounded_window_exec_with_partition(
     )
 }
 
+#[expect(dead_code)]
 pub fn filter_exec(
     predicate: Arc<dyn PhysicalExpr>,
     input: Arc<dyn ExecutionPlan>,
@@ -326,6 +329,7 @@ pub fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan>
     Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap())
 }
 
+#[expect(dead_code)]
 pub fn spr_repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(
         RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10))
@@ -334,6 +338,7 @@ pub fn spr_repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionP
     )
 }
 
+#[expect(dead_code)]
 pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     Arc::new(
@@ -391,6 +396,7 @@ pub fn projection_exec(
 
 /// A test [`ExecutionPlan`] whose requirements can be configured.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct RequirementsTestExec {
     required_input_ordering: Option<LexOrdering>,
     maintains_input_order: bool,
@@ -398,6 +404,7 @@ pub struct RequirementsTestExec {
 }
 
 impl RequirementsTestExec {
+    #[allow(dead_code)]
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             required_input_ordering: None,
@@ -548,6 +555,7 @@ pub fn stream_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
 }
 
 /// Create an unbounded stream table with data ordering.
+#[expect(dead_code)]
 pub fn stream_exec_ordered(
     schema: &SchemaRef,
     ordering: LexOrdering,
