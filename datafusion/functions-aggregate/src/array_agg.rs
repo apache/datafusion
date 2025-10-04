@@ -36,14 +36,13 @@ use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Sort, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::array_agg::AggGroupAccumulator;
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 make_udaf_expr_and_func!(
@@ -93,68 +92,7 @@ impl Default for ArrayAgg {
     }
 }
 
-fn accumulator_independent(
-    is_input_pre_ordered: bool,
-    // acc_args: AccumulatorArgs,
-    data_type: DataType,
-    ignore_nulls: bool,
-    is_distinct: bool,
-    is_reversed: bool,
-    sort_options: Option<SortOptions>,
-    lex_ordering: Option<LexOrdering>,
-    ordering_dtypes: Vec<DataType>,
-) -> Result<Box<dyn Accumulator>> {
-    // let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
-    // let ignore_nulls =
-    //     acc_args.ignore_nulls && acc_args.exprs[0].nullable(acc_args.schema)?;
 
-    if is_distinct {
-        // Limitation similar to Postgres. The aggregation function can only mix
-        // DISTINCT and ORDER BY if all the expressions in the ORDER BY appear
-        // also in the arguments of the function. This implies that if the
-        // aggregation function only accepts one argument, only one argument
-        // can be used in the ORDER BY, For example:
-        //
-        // ARRAY_AGG(DISTINCT col)
-        //
-        // can only be mixed with an ORDER BY if the order expression is "col".
-        //
-        // ARRAY_AGG(DISTINCT col ORDER BY col)                         <- Valid
-        // ARRAY_AGG(DISTINCT concat(col, '') ORDER BY concat(col, '')) <- Valid
-        // ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
-        // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
-        // let sort_option = match acc_args.order_bys {
-        //     [single] if single.expr.eq(&acc_args.exprs[0]) => Some(single.options),
-        //     [] => None,
-        //     _ => {
-        //         return exec_err!(
-        //                 "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
-        //             );
-        //     }
-        // };
-        return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
-            &data_type,
-            sort_options,
-            ignore_nulls,
-        )?));
-    }
-    let Some(ordering) = lex_ordering else {
-        return Ok(Box::new(ArrayAggAccumulator::try_new(
-            &data_type,
-            ignore_nulls,
-        )?));
-    };
-
-    OrderSensitiveArrayAggAccumulator::try_new(
-        &data_type,
-        &ordering_dtypes,
-        ordering,
-        is_input_pre_ordered,
-        is_reversed,
-        ignore_nulls,
-    )
-    .map(|acc| Box::new(acc) as _)
-}
 
 impl AggregateUDFImpl for ArrayAgg {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -164,61 +102,18 @@ impl AggregateUDFImpl for ArrayAgg {
     fn name(&self) -> &str {
         "array_agg"
     }
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-        true
+    // use groups accumulator only when no order and no distinct required
+    // because current groups_acc impl produce undeterministic output
+    fn groups_accumulator_supported(&self, acc_args: AccumulatorArgs) -> bool {
+        let no_order_no_distinct =
+            acc_args.order_bys.is_empty() && (!acc_args.is_distinct);
+        no_order_no_distinct
     }
     fn create_groups_accumulator(
         &self,
         acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn datafusion_expr::GroupsAccumulator>> {
-        let is_distinct = acc_args.is_distinct;
-        let is_reversed = acc_args.is_reversed;
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
-        let ignore_nulls =
-            acc_args.ignore_nulls && acc_args.exprs[0].nullable(acc_args.schema)?;
-
-        let sort_options = match acc_args.order_bys {
-            [single] if single.expr.eq(&acc_args.exprs[0]) => Some(single.options),
-            [] => None,
-            _ => {
-                if acc_args.is_distinct {
-                    return exec_err!(
-                        "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
-                    );
-                }
-                None
-            }
-        };
-
-        let lex_ordering = LexOrdering::new(acc_args.order_bys.to_vec());
-        let ordering_dtypes = match lex_ordering {
-            Some(ref ordering) => {
-                let ordering_dtypes = ordering
-                    .iter()
-                    .map(|e| e.expr.data_type(acc_args.schema))
-                    .collect::<Result<Vec<DataType>>>()?;
-                ordering_dtypes
-            }
-            None => vec![],
-        };
-
-        let is_input_pre_ordered = self.is_input_pre_ordered;
-
-        let factory = {
-            move || {
-                accumulator_independent(
-                    is_input_pre_ordered,
-                    data_type.clone(),
-                    ignore_nulls,
-                    is_distinct,
-                    is_reversed,
-                    sort_options.clone(),
-                    lex_ordering.clone(),
-                    ordering_dtypes.clone(),
-                )
-            }
-        };
-        Ok(Box::new(AggGroupAccumulator::new(factory)))
+        Ok(Box::new(AggGroupAccumulator::new()))
     }
 
     fn signature(&self) -> &Signature {
