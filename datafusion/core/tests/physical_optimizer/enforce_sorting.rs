@@ -2758,6 +2758,73 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
     .into();
     let source = parquet_exec_with_sort(input_schema.clone(), vec![ordering]) as _;
 
+    // Macro for testing window function optimization with snapshots
+    macro_rules! test_window_case {
+        (
+            partition_by: $partition_by:expr,
+            window_frame: $window_frame:expr,
+            func: ($func_def:expr, $func_name:expr, $func_args:expr),
+            required_sort: [$($col:expr, $asc:expr, $nulls_first:expr),*],
+            @ $expected:literal
+        ) => {{
+            let partition_by_exprs = if $partition_by {
+                vec![col("nullable_col", &input_schema)?]
+            } else {
+                vec![]
+            };
+
+            let window_expr = create_window_expr(
+                &$func_def,
+                $func_name,
+                &$func_args,
+                &partition_by_exprs,
+                &[],
+                $window_frame,
+                Arc::clone(&input_schema),
+                false,
+                false,
+                None,
+            )?;
+
+            let window_exec = if window_expr.uses_bounded_memory() {
+                Arc::new(BoundedWindowAggExec::try_new(
+                    vec![window_expr],
+                    Arc::clone(&source),
+                    InputOrderMode::Sorted,
+                    $partition_by,
+                )?) as Arc<dyn ExecutionPlan>
+            } else {
+                Arc::new(WindowAggExec::try_new(
+                    vec![window_expr],
+                    Arc::clone(&source),
+                    $partition_by,
+                )?) as Arc<dyn ExecutionPlan>
+            };
+
+            let output_schema = window_exec.schema();
+            let sort_expr = vec![
+                $(
+                    sort_expr_options(
+                        $col,
+                        &output_schema,
+                        SortOptions {
+                            descending: !$asc,
+                            nulls_first: $nulls_first,
+                        },
+                    )
+                ),*
+            ];
+            let ordering = LexOrdering::new(sort_expr).unwrap();
+            let physical_plan = sort_exec(ordering, window_exec);
+
+            let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
+
+            assert_snapshot!(test.run(), @ $expected);
+
+            Result::<(), datafusion_common::DataFusionError>::Ok(())
+        }};
+    }
+
     // Function definition - Alias of the resulting column - Arguments of the function
     #[derive(Clone)]
     struct WindowFuncParam(WindowFunctionDefinition, String, Vec<Arc<dyn PhysicalExpr>>);
@@ -2803,6 +2870,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         "avg".to_string(),
         function_arg_unordered,
     );
+
     struct TestCase<'a> {
         // Whether window expression has a partition_by expression or not.
         // If it does, it will be on the ordered column -- `nullable_col`.
@@ -2819,25 +2887,28 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         initial_plan: Vec<&'a str>,
         expected_plan: Vec<&'a str>,
     }
+
+    // ============================================REGION STARTS============================================
+    // WindowAggExec + Plain(unbounded preceding, unbounded following) + no partition_by + on ordered column
+    // Case 0:
+    test_window_case!(
+        partition_by: false,
+        window_frame: Arc::new(WindowFrame::new(None)),
+        func: (fn_count_on_ordered.0.clone(), fn_count_on_ordered.1.clone(), fn_count_on_ordered.2.clone()),
+        required_sort: ["nullable_col", true, false, "count", true, false],
+        @ r#"
+    Input Plan:
+    SortExec: expr=[nullable_col@0 ASC NULLS LAST, count@2 ASC NULLS LAST], preserve_partitioning=[false]
+      WindowAggExec: wdw=[count: Ok(Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+
+    Optimized Plan:
+    WindowAggExec: wdw=[count: Ok(Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+    "#
+    )?;
+
     let test_cases = vec![
-        // ============================================REGION STARTS============================================
-        // WindowAggExec + Plain(unbounded preceding, unbounded following) + no partition_by + on ordered column
-        // Case 0:
-        TestCase {
-            partition_by: false,
-            window_frame: Arc::new(WindowFrame::new(None)),
-            func: fn_count_on_ordered.clone(),
-            required_sort_columns: vec![("nullable_col", true, false), ("count", true, false)],
-            initial_plan: vec![
-                "SortExec: expr=[nullable_col@0 ASC NULLS LAST, count@2 ASC NULLS LAST], preserve_partitioning=[false]",
-                "  WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]",
-                "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
-            ],
-            expected_plan: vec![
-                "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]",
-                "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
-            ],
-        },
         // Case 1:
         TestCase {
             partition_by: false,
