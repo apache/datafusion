@@ -314,7 +314,7 @@ async fn verify_file_encrypted(
         for col in row_group.columns() {
             assert!(matches!(
                 col.crypto_metadata(),
-                Some(ColumnCryptoMetaData::EncryptionWithFooterKey)
+                Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY)
             ));
         }
     }

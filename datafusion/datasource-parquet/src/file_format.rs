@@ -84,7 +84,6 @@ use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
-use parquet::format::FileMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -1080,7 +1079,7 @@ pub struct ParquetSink {
     parquet_options: TableParquetOptions,
     /// File metadata from successfully produced parquet files. The Mutex is only used
     /// to allow inserting to HashMap from behind borrowed reference in DataSink::write_all.
-    written: Arc<parking_lot::Mutex<HashMap<Path, FileMetaData>>>,
+    written: Arc<parking_lot::Mutex<HashMap<Path, ParquetMetaData>>>,
 }
 
 impl Debug for ParquetSink {
@@ -1117,7 +1116,7 @@ impl ParquetSink {
 
     /// Retrieve the file metadata for the written files, keyed to the path
     /// which may be partitioned (in the case of hive style partitioning).
-    pub fn written(&self) -> HashMap<Path, FileMetaData> {
+    pub fn written(&self) -> HashMap<Path, ParquetMetaData> {
         self.written.lock().clone()
     }
 
@@ -1244,7 +1243,7 @@ impl FileSink for ParquetSink {
         let parquet_opts = &self.parquet_options;
 
         let mut file_write_tasks: JoinSet<
-            std::result::Result<(Path, FileMetaData), DataFusionError>,
+            std::result::Result<(Path, ParquetMetaData), DataFusionError>,
         > = JoinSet::new();
 
         let runtime = context.runtime_env();
@@ -1275,11 +1274,11 @@ impl FileSink for ParquetSink {
                         writer.write(&batch).await?;
                         reservation.try_resize(writer.memory_size())?;
                     }
-                    let file_metadata = writer
+                    let parquet_meta_data = writer
                         .close()
                         .await
                         .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
-                    Ok((path, file_metadata))
+                    Ok((path, parquet_meta_data))
                 });
             } else {
                 let writer = ObjectWriterBuilder::new(
@@ -1303,7 +1302,7 @@ impl FileSink for ParquetSink {
                 let parallel_options_clone = parallel_options.clone();
                 let pool = Arc::clone(context.memory_pool());
                 file_write_tasks.spawn(async move {
-                    let file_metadata = output_single_parquet_file_parallelized(
+                    let parquet_meta_data = output_single_parquet_file_parallelized(
                         writer,
                         rx,
                         schema,
@@ -1313,7 +1312,7 @@ impl FileSink for ParquetSink {
                         pool,
                     )
                     .await?;
-                    Ok((path, file_metadata))
+                    Ok((path, parquet_meta_data))
                 });
             }
         }
@@ -1322,11 +1321,11 @@ impl FileSink for ParquetSink {
         while let Some(result) = file_write_tasks.join_next().await {
             match result {
                 Ok(r) => {
-                    let (path, file_metadata) = r?;
-                    row_count += file_metadata.num_rows;
+                    let (path, parquet_meta_data) = r?;
+                    row_count += parquet_meta_data.file_metadata().num_rows();
                     let mut written_files = self.written.lock();
                     written_files
-                        .try_insert(path.clone(), file_metadata)
+                        .try_insert(path.clone(), parquet_meta_data)
                         .map_err(|e| internal_datafusion_err!("duplicate entry detected for partitioned file {path}: {e}"))?;
                     drop(written_files);
                 }
@@ -1589,7 +1588,7 @@ async fn concatenate_parallel_row_groups(
     mut serialize_rx: Receiver<SpawnedTask<RBStreamSerializeResult>>,
     mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     pool: Arc<dyn MemoryPool>,
-) -> Result<FileMetaData> {
+) -> Result<ParquetMetaData> {
     let mut file_reservation =
         MemoryConsumer::new("ParquetSink(SerializedFileWriter)").register(&pool);
 
@@ -1617,14 +1616,14 @@ async fn concatenate_parallel_row_groups(
         rg_out.close()?;
     }
 
-    let file_metadata = parquet_writer.close()?;
+    let parquet_meta_data = parquet_writer.close()?;
     let final_buff = merged_buff.buffer.try_lock().unwrap();
 
     object_store_writer.write_all(final_buff.as_slice()).await?;
     object_store_writer.shutdown().await?;
     file_reservation.free();
 
-    Ok(file_metadata)
+    Ok(parquet_meta_data)
 }
 
 /// Parallelizes the serialization of a single parquet file, by first serializing N
@@ -1639,7 +1638,7 @@ async fn output_single_parquet_file_parallelized(
     skip_arrow_metadata: bool,
     parallel_options: ParallelParquetWriterOptions,
     pool: Arc<dyn MemoryPool>,
-) -> Result<FileMetaData> {
+) -> Result<ParquetMetaData> {
     let max_rowgroups = parallel_options.max_parallel_row_groups;
     // Buffer size of this channel limits maximum number of RowGroups being worked on in parallel
     let (serialize_tx, serialize_rx) =
@@ -1666,7 +1665,7 @@ async fn output_single_parquet_file_parallelized(
         parallel_options,
         Arc::clone(&pool),
     );
-    let file_metadata = concatenate_parallel_row_groups(
+    let parquet_meta_data = concatenate_parallel_row_groups(
         writer,
         merged_buff,
         serialize_rx,
@@ -1679,7 +1678,7 @@ async fn output_single_parquet_file_parallelized(
         .join_unwind()
         .await
         .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
-    Ok(file_metadata)
+    Ok(parquet_meta_data)
 }
 
 #[cfg(test)]
