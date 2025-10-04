@@ -25,6 +25,7 @@ use crate::{
     helper::CliHelper,
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
+    progress::ProgressReporter,
 };
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
@@ -265,6 +266,16 @@ impl StatementExecutor {
         let task_ctx = ctx.task_ctx();
         let options = task_ctx.session_config().options();
 
+        // Start progress reporter if enabled
+        let progress_reporter = if print_options.progress.should_show_progress() {
+            Some(
+                ProgressReporter::start(&physical_plan, print_options.progress.clone())
+                    .await?,
+            )
+        } else {
+            None
+        };
+
         // Track memory usage for the query result if it's bounded
         let mut reservation =
             MemoryConsumer::new("DataFusion-Cli").register(task_ctx.memory_pool());
@@ -279,9 +290,16 @@ impl StatementExecutor {
             // As the input stream comes, we can generate results.
             // However, memory safety is not guaranteed.
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
-            print_options
+            let result = print_options
                 .print_stream(stream, now, &options.format)
-                .await?;
+                .await;
+
+            // Stop progress reporter before returning
+            if let Some(reporter) = &progress_reporter {
+                reporter.stop().await;
+            }
+
+            result?;
         } else {
             // Bounded stream; collected results size is limited by the maxrows option
             let schema = physical_plan.schema();
@@ -312,6 +330,11 @@ impl StatementExecutor {
                 &options.format,
             )?;
             reservation.free();
+        }
+
+        // Stop progress reporter
+        if let Some(reporter) = progress_reporter {
+            reporter.stop().await;
         }
 
         Ok(())
