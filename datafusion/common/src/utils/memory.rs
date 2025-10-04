@@ -37,7 +37,7 @@ use std::mem::size_of;
 ///     buckets.
 ///   - One byte overhead for each bucket.
 ///   - The fixed size overhead of the collection.
-/// - If the estimation overflows, we return a [`DataFusionError`]
+/// - If the estimation overflows, we return a [`crate::error::DataFusionError`]
 ///
 /// # Examples
 /// ---
