@@ -6123,3 +6123,22 @@ FROM (
 );
 ----
 1
+
+# window_with_subquery_rewritten_to_join
+# the optimizer `scalar_subquery_to_join` rewrites
+# `WHERE acctbal > ( SELECT AVG(acctbal) FROM suppliers)` into a Join,
+# breaking the input schema passed to the window function above.
+# See: https://github.com/apache/datafusion/issues/17770
+query I
+WITH suppliers AS (
+  SELECT *
+  FROM (VALUES (1, 10.0), (1, 20.0)) AS t(nation, acctbal)
+)
+SELECT
+  ROW_NUMBER() OVER (PARTITION BY nation ORDER BY acctbal DESC) AS rn
+FROM suppliers AS s
+WHERE acctbal > (
+  SELECT AVG(acctbal) FROM suppliers
+);
+----
+1
