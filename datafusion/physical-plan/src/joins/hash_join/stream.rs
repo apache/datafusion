@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::joins::hash_join::exec::JoinLeftData;
-use crate::joins::hash_join::shared_bounds::SharedBoundsAccumulator;
+use crate::joins::hash_join::information_passing::SharedBuildAccumulator;
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
 };
@@ -189,7 +189,7 @@ pub(super) struct HashJoinStream {
     /// right (probe) input
     right: SendableRecordBatchStream,
     /// Random state used for hashing initialization
-    random_state: RandomState,
+    random_state: &'static RandomState,
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Information of index and left / right placement of columns
@@ -207,13 +207,13 @@ pub(super) struct HashJoinStream {
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
     /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
-    bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
+    build_accumulator: Option<Arc<SharedBuildAccumulator>>,
     /// Optional future to signal when bounds have been reported by all partitions
     /// and the dynamic filter has been updated
     bounds_waiter: Option<OnceFut<()>>,
-
     /// Partitioning mode to use
     mode: PartitionMode,
+    enable_hash_collection: bool,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -306,7 +306,7 @@ impl HashJoinStream {
         filter: Option<JoinFilter>,
         join_type: JoinType,
         right: SendableRecordBatchStream,
-        random_state: RandomState,
+        random_state: &'static RandomState,
         join_metrics: BuildProbeJoinMetrics,
         column_indices: Vec<ColumnIndex>,
         null_equality: NullEquality,
@@ -315,8 +315,9 @@ impl HashJoinStream {
         batch_size: usize,
         hashes_buffer: Vec<u64>,
         right_side_ordered: bool,
-        bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
+        build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
+        enable_hash_collection: bool,
     ) -> Self {
         Self {
             partition,
@@ -334,9 +335,10 @@ impl HashJoinStream {
             batch_size,
             hashes_buffer,
             right_side_ordered,
-            bounds_accumulator,
+            build_accumulator,
             bounds_waiter: None,
             mode,
+            enable_hash_collection,
         }
     }
 
@@ -410,19 +412,27 @@ impl HashJoinStream {
         //
         // Dynamic filter coordination between partitions:
         // Report bounds to the accumulator which will handle synchronization and filter updates
-        if let Some(ref bounds_accumulator) = self.bounds_accumulator {
-            let bounds_accumulator = Arc::clone(bounds_accumulator);
-
+        if let Some(ref build_accumulator) = self.build_accumulator {
+            let build_accumulator = Arc::clone(build_accumulator);
+            let left_data_bounds = left_data.bounds.clone();
+            let left_data_hash_map = if self.enable_hash_collection {
+                Some(Arc::clone(&left_data.hash_map))
+            } else {
+                None
+            };
             let left_side_partition_id = match self.mode {
                 PartitionMode::Partitioned => self.partition,
                 PartitionMode::CollectLeft => 0,
                 PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
             };
 
-            let left_data_bounds = left_data.bounds.clone();
             self.bounds_waiter = Some(OnceFut::new(async move {
-                bounds_accumulator
-                    .report_partition_bounds(left_side_partition_id, left_data_bounds)
+                build_accumulator
+                    .report_information(
+                        left_side_partition_id,
+                        left_data_bounds,
+                        left_data_hash_map,
+                    )
                     .await
             }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
@@ -456,7 +466,7 @@ impl HashJoinStream {
 
                 self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);
-                create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+                create_hashes(&keys_values, self.random_state, &mut self.hashes_buffer)?;
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
