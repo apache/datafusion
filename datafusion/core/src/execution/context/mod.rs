@@ -66,7 +66,7 @@ use datafusion_catalog::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
@@ -298,11 +298,11 @@ impl SessionContext {
         let cat_names = self.catalog_names().clone();
         for cat_name in cat_names.iter() {
             let cat = self.catalog(cat_name.as_str()).ok_or_else(|| {
-                DataFusionError::Internal("Catalog not found!".to_string())
+                internal_datafusion_err!("Catalog not found!")
             })?;
             for schema_name in cat.schema_names() {
                 let schema = cat.schema(schema_name.as_str()).ok_or_else(|| {
-                    DataFusionError::Internal("Schema not found!".to_string())
+                    internal_datafusion_err!("Schema not found!")
                 })?;
                 let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
                 if let Some(lister) = lister {

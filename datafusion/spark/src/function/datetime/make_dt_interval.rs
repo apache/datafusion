@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{DataType, Float64Type, Int32Type};
 use datafusion_common::{
-    exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    exec_err, internal_datafusion_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -267,7 +267,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         for i in 0..out.len() {
@@ -293,7 +293,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         for i in 0..out.len() {
@@ -331,7 +331,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(arr.len(), number_rows);
@@ -355,7 +355,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -378,7 +378,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -401,7 +401,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -427,7 +427,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -452,7 +452,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);

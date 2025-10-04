@@ -17,7 +17,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{exec_err, internal_err, DataFusionError};
+use datafusion::common::{exec_datafusion_err, exec_err, internal_err, DataFusionError};
 use datafusion::error::Result;
 use datafusion::execution::context::{
     FunctionFactory, RegisterFunction, SessionContext, SessionState,
@@ -185,9 +185,7 @@ impl ScalarFunctionWrapper {
     fn parse_placeholder_identifier(placeholder: &str) -> Result<usize> {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Placeholder `{placeholder}` parsing error: {e}!"
-                ))
+                exec_datafusion_err!("Placeholder `{placeholder}` parsing error: {e}!")
             })?)
         } else {
             exec_err!("Placeholder should start with `$`!")

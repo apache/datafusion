@@ -23,7 +23,7 @@ use crate::utils::{
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::{
     Documentation, Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
@@ -129,9 +129,7 @@ impl WindowUDFImpl for Ntile {
         let scalar_n =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 0)?
                 .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "NTILE requires a positive integer".to_string(),
-                    )
+                    exec_datafusion_err!("NTILE requires a positive integer")
                 })?;
 
         if scalar_n.is_null() {

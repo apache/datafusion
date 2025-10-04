@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, Result};
 
 pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
     if s.len() != 1 {
@@ -29,9 +29,9 @@ pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
 pub(crate) fn byte_to_string(b: u8, description: &str) -> Result<String> {
     let b = &[b];
     let b = std::str::from_utf8(b).map_err(|_| {
-        DataFusionError::Internal(format!(
+        internal_datafusion_err!(
             "Invalid CSV {description}: can not represent {b:0x?} as utf8"
-        ))
+        )
     })?;
     Ok(b.to_owned())
 }
