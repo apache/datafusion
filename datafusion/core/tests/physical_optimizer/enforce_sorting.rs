@@ -115,7 +115,6 @@ impl EnforceSortingTest {
         self
     }
 
-
     /// Add an expected output description
     fn with_expected_description(mut self, description: &str) -> Self {
         self.expected_description = Some(description.to_string());
@@ -201,7 +200,7 @@ impl EnforceSortingTest {
                 "".to_string()
             };
 
-        if input_plan_string == optimized_plan_string{
+        if input_plan_string == optimized_plan_string {
             return format!(
                 "{expected_description}Input / Optimized Plan:\n{input_plan_string}",
             );
@@ -1759,8 +1758,8 @@ async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
         .into(),
         parquet_input,
     );
-    let test = EnforceSortingTest::new(physical_plan.clone())
-        .with_repartition_sorts(false);
+    let test =
+        EnforceSortingTest::new(physical_plan.clone()).with_repartition_sorts(false);
 
     assert_snapshot!(test.run(), @r"
     Input / Optimized Plan:
@@ -2431,9 +2430,8 @@ async fn test_push_with_required_input_ordering_prohibited() -> Result<()> {
         .with_maintains_input_order(true)
         .into_arc();
     let plan = sort_exec(ordering_b, plan);
-    let test = EnforceSortingTest::new(plan.clone())
-        .with_repartition_sorts(true);
-        // should not be able to push shorts
+    let test = EnforceSortingTest::new(plan.clone()).with_repartition_sorts(true);
+    // should not be able to push shorts
 
     assert_snapshot!(test.run(), @r"
     Input / Optimized Plan:
@@ -2524,8 +2522,8 @@ async fn test_not_replaced_with_partial_sort_for_unbounded_input() -> Result<()>
         .into(),
         unbounded_input,
     );
-    let test = EnforceSortingTest::new(physical_plan.clone())
-        .with_repartition_sorts(true);
+    let test =
+        EnforceSortingTest::new(physical_plan.clone()).with_repartition_sorts(true);
     assert_snapshot!(test.run(), @r"
     Input / Optimized Plan:
     SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]
