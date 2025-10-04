@@ -276,15 +276,30 @@ strip = false
 
 ## Temporary arrow-rs to main patch until 57.0.0 is released
 ## https://github.com/apache/arrow-rs/issues/7835
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+#parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "9d03e410a3c52cc594d2541ec600dde6d26dfd9d" }
+
+# use thrift-remdel branch
+# https://github.com/apache/arrow-rs/pull/8530
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "3dafbe025da52b32573f8c5283da860226deb2ba" }
