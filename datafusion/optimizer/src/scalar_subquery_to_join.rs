@@ -126,6 +126,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     }
                 }
 
+                // Preserve original schema as new Join might have more fields than what Filter & parents expect.
                 let projection =
                     filter.input.schema().columns().into_iter().map(Expr::from);
                 let new_plan = LogicalPlanBuilder::from(cur_input)
