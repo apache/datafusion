@@ -37,6 +37,7 @@ name = "datafusion_spark"
 
 [dependencies]
 arrow = { workspace = true }
+bigdecimal = { workspace = true }
 chrono = { workspace = true }
 crc32fast = "1.4"
 datafusion-catalog = { workspace = true }
