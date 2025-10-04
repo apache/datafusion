@@ -84,6 +84,7 @@ impl ProjectionExec {
     /// # use std::sync::Arc;
     /// # use arrow_schema::{Schema, Field, DataType};
     /// # use datafusion_expr::Operator;
+    /// # use datafusion_expr::execution_props::ExecutionProps;
     /// # use datafusion_physical_plan::ExecutionPlan;
     /// # use datafusion_physical_expr::expressions::{col, binary};
     /// # use datafusion_physical_plan::empty::EmptyExec;
@@ -104,7 +105,7 @@ impl ProjectionExec {
     /// // Create PhysicalExprs
     /// let a = col("a", &schema).unwrap();
     /// let b = col("b", &schema).unwrap();
-    /// let a_plus_b = binary(Arc::clone(&a), Operator::Plus, b, &schema).unwrap();
+    /// let a_plus_b = binary(Arc::clone(&a), Operator::Plus, b, &schema, &ExecutionProps::new()).unwrap();
     /// // create ProjectionExec
     /// let proj = ProjectionExec::try_new([
     ///     ProjectionExpr {
@@ -1164,10 +1165,10 @@ mod tests {
 
     #[test]
     fn test_collect_column_indices() -> Result<()> {
-        let expr = Arc::new(BinaryExpr::new(
+        let expr = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("b", 7)),
             Operator::Minus,
-            Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
                 Operator::Plus,
                 Arc::new(Column::new("a", 1)),
@@ -1438,7 +1439,7 @@ mod tests {
                 alias: "c_renamed".to_string(),
             },
             ProjectionExpr {
-                expr: Arc::new(BinaryExpr::new(
+                expr: Arc::new(BinaryExpr::new_with_overflow_check(
                     Arc::new(Column::new("e", 4)),
                     Operator::Plus,
                     Arc::new(Column::new("f", 5)),

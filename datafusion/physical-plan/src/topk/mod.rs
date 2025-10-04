@@ -437,7 +437,7 @@ impl TopK {
 
             let value_null = value.is_null();
 
-            let comparison = Arc::new(BinaryExpr::new(
+            let comparison = Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::clone(&sort_expr.expr),
                 op,
                 lit(value.clone()),
@@ -446,7 +446,7 @@ impl TopK {
             let comparison_with_null = match (sort_expr.options.nulls_first, value_null) {
                 // For nulls first, transform to (threshold.value is not null) and (threshold.expr is null or comparison)
                 (true, true) => lit(false),
-                (true, false) => Arc::new(BinaryExpr::new(
+                (true, false) => Arc::new(BinaryExpr::new_with_overflow_check(
                     is_null(Arc::clone(&sort_expr.expr))?,
                     Operator::Or,
                     comparison,
@@ -457,14 +457,14 @@ impl TopK {
                 (false, false) => comparison,
             };
 
-            let mut eq_expr = Arc::new(BinaryExpr::new(
+            let mut eq_expr = Arc::new(BinaryExpr::new_with_overflow_check(
                 Arc::clone(&sort_expr.expr),
                 Operator::Eq,
                 lit(value.clone()),
             ));
 
             if value_null {
-                eq_expr = Arc::new(BinaryExpr::new(
+                eq_expr = Arc::new(BinaryExpr::new_with_overflow_check(
                     is_null(Arc::clone(&sort_expr.expr))?,
                     Operator::Or,
                     eq_expr,
@@ -481,21 +481,24 @@ impl TopK {
                     filters.push(comparison_with_null);
                 }
                 Some(p) => {
-                    filters.push(Arc::new(BinaryExpr::new(
+                    filters.push(Arc::new(BinaryExpr::new_with_overflow_check(
                         Arc::clone(&p),
                         Operator::And,
                         comparison_with_null,
                     )));
 
-                    prev_sort_expr =
-                        Some(Arc::new(BinaryExpr::new(p, Operator::And, eq_expr)));
+                    prev_sort_expr = Some(Arc::new(BinaryExpr::new_with_overflow_check(
+                        p,
+                        Operator::And,
+                        eq_expr,
+                    )));
                 }
             }
         }
 
-        let dynamic_predicate = filters
-            .into_iter()
-            .reduce(|a, b| Arc::new(BinaryExpr::new(a, Operator::Or, b)));
+        let dynamic_predicate = filters.into_iter().reduce(|a, b| {
+            Arc::new(BinaryExpr::new_with_overflow_check(a, Operator::Or, b))
+        });
 
         Ok(dynamic_predicate)
     }

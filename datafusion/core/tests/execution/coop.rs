@@ -30,11 +30,12 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, JoinType, ScalarValue};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::operator::Operator::{Divide, Eq, Gt, Modulo};
 use datafusion_functions_aggregate::min_max;
 use datafusion_physical_expr::expressions::{
-    binary, col, lit, BinaryExpr, Column, Literal,
+    self, col, lit, BinaryExpr, Column, Literal,
 };
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -63,6 +64,16 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::runtime::{Handle, Runtime};
 use tokio::select;
+
+fn binary_expr(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    let exec_props = ExecutionProps::new();
+    expressions::binary(lhs, op, rhs, schema, &exec_props)
+}
 
 #[derive(Debug)]
 struct RangeBatchGenerator {
@@ -200,7 +211,7 @@ async fn agg_grouping_yields(
     let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
 
     let value_col = col("value", &inf.schema())?;
-    let group = binary(value_col.clone(), Divide, lit(1000000i64), &inf.schema())?;
+    let group = binary_expr(value_col.clone(), Divide, lit(1000000i64), &inf.schema())?;
 
     let aggr = Arc::new(AggregateExec::try_new(
         AggregateMode::Single,
@@ -231,7 +242,7 @@ async fn agg_grouped_topk_yields(
     let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
 
     let value_col = col("value", &inf.schema())?;
-    let group = binary(value_col.clone(), Divide, lit(1000000i64), &inf.schema())?;
+    let group = binary_expr(value_col.clone(), Divide, lit(1000000i64), &inf.schema())?;
 
     let aggr = Arc::new(
         AggregateExec::try_new(
@@ -385,7 +396,7 @@ async fn filter_yields(
     let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
 
     // set up a FilterExec that will filter out entire batches
-    let filter_expr = binary(
+    let filter_expr = binary_expr(
         col("value", &inf.schema())?,
         Operator::Lt,
         lit(i64::MIN),
@@ -408,7 +419,7 @@ async fn filter_reject_all_batches_yields(
     let infinite = make_lazy_exec_with_range("value", i64::MIN..0, pretend_infinite);
 
     // 2b) Construct a FilterExec that is always false: “value > 10000” (no rows pass)
-    let false_predicate = Arc::new(BinaryExpr::new(
+    let false_predicate = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new("value", 0)),
         Gt,
         Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
@@ -444,10 +455,10 @@ async fn interleave_then_filter_all_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
-        let filter_expr = binary(
-            binary(
-                binary(
+        // Apply a FilterExec: "(value / 8192) % threshold == 0".
+        let filter_expr = binary_expr(
+            binary_expr(
+                binary_expr(
                     col("value", &inf.schema())?,
                     Divide,
                     lit(8192i64),
@@ -500,10 +511,10 @@ async fn interleave_then_aggregate_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
-        let filter_expr = binary(
-            binary(
-                binary(
+        // Apply a FilterExec: "(value / 8192) % threshold == 0".
+        let filter_expr = binary_expr(
+            binary_expr(
+                binary_expr(
                     col("value", &inf.schema())?,
                     Divide,
                     lit(8192i64),

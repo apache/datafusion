@@ -58,7 +58,7 @@ enum JoinTestType {
 }
 
 fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
-    let less_filter = Arc::new(BinaryExpr::new(
+    let less_filter = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new("x", 1)),
         Operator::Lt,
         Arc::new(Column::new("x", 0)),
@@ -663,19 +663,23 @@ impl JoinFuzzTestCase {
                 (Arc::new(Literal::new(ScalarValue::from(true))) as _, 0)
             };
 
-        let equal_a = Arc::new(BinaryExpr::new(
+        let equal_a = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("a", column_idx_offset)),
             Operator::Eq,
             Arc::new(Column::new("a", column_idx_offset + 2)),
         ));
-        let equal_b = Arc::new(BinaryExpr::new(
+        let equal_b = Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("b", column_idx_offset + 1)),
             Operator::Eq,
             Arc::new(Column::new("b", column_idx_offset + 3)),
         ));
-        let on_expression = Arc::new(BinaryExpr::new(equal_a, Operator::And, equal_b));
+        let on_expression = Arc::new(BinaryExpr::new_with_overflow_check(
+            equal_a,
+            Operator::And,
+            equal_b,
+        ));
 
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             filter_expression,
             Operator::And,
             on_expression,

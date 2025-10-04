@@ -211,6 +211,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr_common::interval_arithmetic::Interval;
     use datafusion_expr_common::operator::Operator;
     use datafusion_expr_common::statistics::Distribution;
@@ -230,7 +231,8 @@ mod tests {
 
         let left_expr = try_cast(left, schema, lhs)?;
         let right_expr = try_cast(right, schema, rhs)?;
-        binary(left_expr, op, right_expr, schema)
+        let execution_props = ExecutionProps::new();
+        binary(left_expr, op, right_expr, schema, &execution_props)
     }
 
     #[test]

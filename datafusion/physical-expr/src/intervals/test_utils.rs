@@ -22,8 +22,20 @@ use std::sync::Arc;
 use crate::expressions::{binary, BinaryExpr, Literal};
 use crate::PhysicalExpr;
 use arrow::datatypes::Schema;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::Operator;
+
+/// Helper function for tests that provides default ExecutionProps for binary function calls
+fn binary_expr(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let execution_props = ExecutionProps::new();
+    binary(lhs, op, rhs, schema, &execution_props)
+}
 
 #[allow(clippy::too_many_arguments)]
 /// This test function generates a conjunctive statement with two numeric
@@ -40,25 +52,41 @@ pub fn gen_conjunctive_numerical_expr(
     bounds: (Operator, Operator),
 ) -> Arc<dyn PhysicalExpr> {
     let (op_1, op_2, op_3, op_4) = op;
-    let left_and_1 = Arc::new(BinaryExpr::new(
+    let left_and_1 = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::clone(&left_col),
         op_1,
         Arc::new(Literal::new(a)),
     ));
-    let left_and_2 = Arc::new(BinaryExpr::new(
+    let left_and_2 = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::clone(&right_col),
         op_2,
         Arc::new(Literal::new(b)),
     ));
-    let right_and_1 =
-        Arc::new(BinaryExpr::new(left_col, op_3, Arc::new(Literal::new(c))));
-    let right_and_2 =
-        Arc::new(BinaryExpr::new(right_col, op_4, Arc::new(Literal::new(d))));
+    let right_and_1 = Arc::new(BinaryExpr::new_with_overflow_check(
+        left_col,
+        op_3,
+        Arc::new(Literal::new(c)),
+    ));
+    let right_and_2 = Arc::new(BinaryExpr::new_with_overflow_check(
+        right_col,
+        op_4,
+        Arc::new(Literal::new(d)),
+    ));
     let (greater_op, less_op) = bounds;
 
-    let left_expr = Arc::new(BinaryExpr::new(left_and_1, greater_op, left_and_2));
-    let right_expr = Arc::new(BinaryExpr::new(right_and_1, less_op, right_and_2));
-    Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
+    let left_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+        left_and_1, greater_op, left_and_2,
+    ));
+    let right_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+        right_and_1,
+        less_op,
+        right_and_2,
+    ));
+    Arc::new(BinaryExpr::new_with_overflow_check(
+        left_expr,
+        Operator::And,
+        right_expr,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -78,23 +106,31 @@ pub fn gen_conjunctive_temporal_expr(
     d: ScalarValue,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-    let left_and_1 = binary(
+    let left_and_1 = binary_expr(
         Arc::clone(&left_col),
         op_1,
         Arc::new(Literal::new(a)),
         schema,
     )?;
-    let left_and_2 = binary(
+    let left_and_2 = binary_expr(
         Arc::clone(&right_col),
         op_2,
         Arc::new(Literal::new(b)),
         schema,
     )?;
-    let right_and_1 = binary(left_col, op_3, Arc::new(Literal::new(c)), schema)?;
-    let right_and_2 = binary(right_col, op_4, Arc::new(Literal::new(d)), schema)?;
-    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
-    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
-    Ok(Arc::new(BinaryExpr::new(
+    let right_and_1 = binary_expr(left_col, op_3, Arc::new(Literal::new(c)), schema)?;
+    let right_and_2 = binary_expr(right_col, op_4, Arc::new(Literal::new(d)), schema)?;
+    let left_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+        left_and_1,
+        Operator::Gt,
+        left_and_2,
+    ));
+    let right_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+        right_and_1,
+        Operator::Lt,
+        right_and_2,
+    ));
+    Ok(Arc::new(BinaryExpr::new_with_overflow_check(
         left_expr,
         Operator::And,
         right_expr,

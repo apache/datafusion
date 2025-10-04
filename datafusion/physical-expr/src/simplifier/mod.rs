@@ -95,8 +95,11 @@ mod tests {
         let column_expr = col("c2", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int32, None));
         let literal_expr = lit(ScalarValue::Int32(Some(99)));
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::NotEq, literal_expr));
+        let binary_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            cast_expr,
+            Operator::NotEq,
+            literal_expr,
+        ));
 
         // Apply full simplification (uses TreeNodeRewriter)
         let optimized = simplifier.simplify(binary_expr).unwrap();
@@ -126,14 +129,26 @@ mod tests {
         let c1_expr = col("c1", &schema).unwrap();
         let c1_cast = Arc::new(CastExpr::new(c1_expr, DataType::Int64, None));
         let c1_literal = lit(ScalarValue::Int64(Some(5)));
-        let c1_binary = Arc::new(BinaryExpr::new(c1_cast, Operator::Gt, c1_literal));
+        let c1_binary = Arc::new(BinaryExpr::new_with_overflow_check(
+            c1_cast,
+            Operator::Gt,
+            c1_literal,
+        ));
 
         let c2_expr = col("c2", &schema).unwrap();
         let c2_cast = Arc::new(CastExpr::new(c2_expr, DataType::Int32, None));
         let c2_literal = lit(ScalarValue::Int32(Some(10)));
-        let c2_binary = Arc::new(BinaryExpr::new(c2_cast, Operator::LtEq, c2_literal));
+        let c2_binary = Arc::new(BinaryExpr::new_with_overflow_check(
+            c2_cast,
+            Operator::LtEq,
+            c2_literal,
+        ));
 
-        let or_expr = Arc::new(BinaryExpr::new(c1_binary, Operator::Or, c2_binary));
+        let or_expr = Arc::new(BinaryExpr::new_with_overflow_check(
+            c1_binary,
+            Operator::Or,
+            c2_binary,
+        ));
 
         // Apply simplification
         let optimized = simplifier.simplify(or_expr).unwrap();
