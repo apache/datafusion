@@ -37,9 +37,12 @@ chrono = { workspace = true }
 datafusion = { workspace = true, features = ["sql"] }
 itertools = { workspace = true }
 object_store = { workspace = true }
-pbjson-types = { workspace = true }
-prost = { workspace = true }
-substrait = { version = "0.58", features = ["serde"] }
+# Temporary override: substrait 0.60 requires prost 0.14 and pbjson-types 0.8,
+# but arrow-flight 56.2.0 still uses prost 0.13. Once arrow-rs releases with
+# prost 0.14 support, these can return to { workspace = true }.
+pbjson-types = "0.8"
+prost = "0.14"
+substrait = { version = "0.60", features = ["serde"] }
 url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 uuid = { version = "1.17.0", features = ["v4"] }
