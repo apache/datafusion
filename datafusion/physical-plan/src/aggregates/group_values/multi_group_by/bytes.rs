@@ -633,7 +633,7 @@ mod tests {
         //   - exist not null, input not null; values not equal
         //   - exist not null, input not null; values equal
 
-        // Define PrimitiveGroupValueBuilder
+        // Define ByteGroupValueBuilder
         let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
         let builder_array = Arc::new(StringArray::from(vec![
             None,

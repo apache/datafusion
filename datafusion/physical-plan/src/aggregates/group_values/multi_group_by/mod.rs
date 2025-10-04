@@ -17,6 +17,7 @@
 
 //! `GroupValues` implementations for multi group by cases
 
+mod boolean;
 mod bytes;
 pub mod bytes_view;
 mod primitive;
@@ -24,8 +25,8 @@ mod primitive;
 use std::mem::{self, size_of};
 
 use crate::aggregates::group_values::multi_group_by::{
-    bytes::ByteGroupValueBuilder, bytes_view::ByteViewGroupValueBuilder,
-    primitive::PrimitiveGroupValueBuilder,
+    boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
+    bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
@@ -1047,6 +1048,15 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                         let b = ByteViewGroupValueBuilder::<BinaryViewType>::new();
                         v.push(Box::new(b) as _)
                     }
+                    &DataType::Boolean => {
+                        if nullable {
+                            let b = BooleanGroupValueBuilder::<true>::new();
+                            v.push(Box::new(b) as _)
+                        } else {
+                            let b = BooleanGroupValueBuilder::<false>::new();
+                            v.push(Box::new(b) as _)
+                        }
+                    }
                     dt => {
                         return not_impl_err!("{dt} not supported in GroupValuesColumn")
                     }
@@ -1236,6 +1246,7 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
+            | DataType::Boolean
     )
 }
 
