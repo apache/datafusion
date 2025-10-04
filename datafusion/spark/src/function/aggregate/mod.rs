@@ -15,11 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::DataType;
 use datafusion_expr::AggregateUDF;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+pub mod avg;
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((avg, "Returns the average value of a given column", arg1));
+}
+
+pub fn avg() -> Arc<AggregateUDF> {
+    Arc::new(AggregateUDF::new_from_impl(avg::SparkAvg::new(
+        "avg",
+        DataType::Float64,
+    )))
+}
 
 pub fn functions() -> Vec<Arc<AggregateUDF>> {
-    vec![]
+    vec![avg()]
 }
