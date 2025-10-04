@@ -92,8 +92,6 @@ impl Default for ArrayAgg {
     }
 }
 
-
-
 impl AggregateUDFImpl for ArrayAgg {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -103,15 +101,14 @@ impl AggregateUDFImpl for ArrayAgg {
         "array_agg"
     }
     // use groups accumulator only when no order and no distinct required
-    // because current groups_acc impl produce undeterministic output
+    // because current groups_acc impl produce indeterministic output
     fn groups_accumulator_supported(&self, acc_args: AccumulatorArgs) -> bool {
-        let no_order_no_distinct =
-            acc_args.order_bys.is_empty() && (!acc_args.is_distinct);
-        no_order_no_distinct
+        acc_args.order_bys.is_empty() && (!acc_args.is_distinct)
     }
+
     fn create_groups_accumulator(
         &self,
-        acc_args: AccumulatorArgs,
+        _acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn datafusion_expr::GroupsAccumulator>> {
         Ok(Box::new(AggGroupAccumulator::new()))
     }

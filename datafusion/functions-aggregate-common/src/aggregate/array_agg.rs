@@ -23,9 +23,8 @@ use std::sync::Arc;
 use arrow::array::{new_empty_array, Array, GenericListArray};
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::kernels::{self};
+use arrow::compute::kernels;
 use arrow::datatypes::Field;
-use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
@@ -36,9 +35,6 @@ pub struct AggGroupAccumulator {
     // address items of each group within the stacked_batches
     // this is maintained to perform kernel::interleave
     stacked_group_indices: Vec<Vec<(usize, usize)>>,
-
-    /// Current memory usage, in bytes.
-    allocation_bytes: usize,
 }
 
 impl AggGroupAccumulator {
@@ -48,7 +44,6 @@ impl AggGroupAccumulator {
         Self {
             stacked_batches: vec![],
             stacked_group_indices: vec![],
-            allocation_bytes: 0,
         }
     }
     fn consume_stacked_batches(
@@ -62,15 +57,9 @@ impl AggGroupAccumulator {
             .collect::<Vec<_>>();
 
         let group_indices = emit_to.take_needed(&mut self.stacked_group_indices);
-        let mut reduced_size = 0;
-        let lengths = group_indices.iter().map(|v| {
-            reduced_size += v.len() * size_of::<usize>() * 2;
-            v.len()
-        });
+        let lengths = group_indices.iter().map(|v| v.len());
 
         let offsets_buffer = OffsetBuffer::from_lengths(lengths);
-
-        self.allocation_bytes += reduced_size;
 
         // group indices like [1,1,1,2,2,2]
         // backend_array like [a,b,c,d,e,f]
@@ -127,16 +116,25 @@ impl GroupsAccumulator for AggGroupAccumulator {
             self.stacked_group_indices
                 .resize(total_num_groups, Vec::new());
         }
-        // null value is handled
-        self.allocation_bytes += singular_col.get_array_memory_size();
 
         self.stacked_batches.push(Arc::clone(singular_col));
         let batch_index = self.stacked_batches.len() - 1;
-        for (array_offset, group_index) in group_indices.iter().enumerate() {
-            self.stacked_group_indices[*group_index].push((batch_index, array_offset));
-        }
 
-        self.allocation_bytes += size_of::<usize>() * 2 * group_indices.len();
+        if let Some(filter) = opt_filter {
+            for (array_offset, (group_index, filter_value)) in
+                group_indices.iter().zip(filter.iter()).enumerate()
+            {
+                if let Some(true) = filter_value {
+                    self.stacked_group_indices[*group_index]
+                        .push((batch_index, array_offset));
+                }
+            }
+        } else {
+            for (array_offset, group_index) in group_indices.iter().enumerate() {
+                self.stacked_group_indices[*group_index]
+                    .push((batch_index, array_offset));
+            }
+        }
 
         Ok(())
     }
