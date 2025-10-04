@@ -1450,6 +1450,8 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
         Arc::new(Column::new_with_schema("col_a", &right.schema())?) as _,
     )];
 
+    let settings = Settings::clone_current();
+
     let join_types = vec![
         JoinType::Inner,
         JoinType::Left,
@@ -1467,44 +1469,76 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
         .into();
         let physical_plan = sort_preserving_merge_exec(ordering, join);
 
-        let join_plan = format!(
-            "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+        let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
+
+        let mut settings = settings.clone();
+
+        settings.add_filter(
+            // join_type={} replace with join_type=... to avoid snapshot name issue
+            format!("join_type={}", join_type).as_str(),
+            "join_type=...",
         );
-        let spm_plan = match join_type {
-            JoinType::RightAnti => "SortPreservingMergeExec: [col_a@0 ASC, col_b@1 ASC]",
-            _ => "SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]",
-        };
-        let join_plan2 = format!(
-            "  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
-        );
-        let expected_input = [spm_plan,
-            join_plan2.as_str(),
-            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
-            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet"];
-        let expected_optimized = match join_type {
-            JoinType::Inner | JoinType::Right | JoinType::RightAnti => {
+
+        insta::allow_duplicates! {
+            settings.bind( || {
+
+
+        match join_type {
+            JoinType::Inner | JoinType::Right => {
                 // can push down the sort requirements and save 1 SortExec
-                vec![
-                    join_plan.as_str(),
-                    "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-                    "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
-                    "  SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]",
-                    "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
-                ]
+                assert_snapshot!(test.run(), @r"
+                Input Plan:
+                SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
+                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+
+                Optimized Plan:
+                SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                  SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+                ");
+            }
+            JoinType::RightAnti => {
+                // can push down the sort requirements and save 1 SortExec
+                assert_snapshot!(test.run(), @r"
+                Input Plan:
+                SortPreservingMergeExec: [col_a@0 ASC, col_b@1 ASC]
+                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+
+                Optimized Plan:
+                SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                  SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+                ");
             }
             _ => {
                 // can not push down the sort requirements for Left and Full join.
-                vec![
-                    "SortExec: expr=[col_a@2 ASC, col_b@3 ASC], preserve_partitioning=[false]",
-                    join_plan2.as_str(),
-                    "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-                    "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
-                    "    SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]",
-                    "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
-                ]
+                assert_snapshot!(test.run(), @r"
+                Input Plan:
+                SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
+                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+
+                Optimized Plan:
+                SortExec: expr=[col_a@2 ASC, col_b@3 ASC], preserve_partitioning=[false]
+                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                    SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]
+                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+                ");
             }
         };
-        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+        })
+        }
     }
     Ok(())
 }
