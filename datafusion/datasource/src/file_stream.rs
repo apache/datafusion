@@ -137,7 +137,10 @@ impl FileStream {
     }
 
     /// Fill the prefetch queue up to the configured depth
-    fn fill_prefetch_queue(&mut self, queue: &mut VecDeque<(NextOpen, Vec<ScalarValue>)>) {
+    fn fill_prefetch_queue(
+        &mut self,
+        queue: &mut VecDeque<(NextOpen, Vec<ScalarValue>)>,
+    ) {
         while queue.len() < self.file_prefetch_depth && !self.file_iter.is_empty() {
             match self.start_next_file().transpose() {
                 Ok(Some((future, partition_values))) => {
@@ -150,7 +153,10 @@ impl FileStream {
     }
 
     /// Poll all pending futures in the prefetch queue
-    fn poll_prefetch_queue(queue: &mut VecDeque<(NextOpen, Vec<ScalarValue>)>, cx: &mut Context<'_>) {
+    fn poll_prefetch_queue(
+        queue: &mut VecDeque<(NextOpen, Vec<ScalarValue>)>,
+        cx: &mut Context<'_>,
+    ) {
         for (next_open, _) in queue.iter_mut() {
             if let NextOpen::Pending(f) = next_open {
                 if let Poll::Ready(reader) = f.as_mut().poll(cx) {
@@ -230,7 +236,9 @@ impl FileStream {
                     let file_iter = &mut self.file_iter;
                     let file_opener = Arc::clone(&self.file_opener);
 
-                    while prefetch_queue.len() < file_prefetch_depth && !file_iter.is_empty() {
+                    while prefetch_queue.len() < file_prefetch_depth
+                        && !file_iter.is_empty()
+                    {
                         let part_file = match file_iter.pop_front() {
                             Some(file) => file,
                             None => break,
@@ -246,7 +254,10 @@ impl FileStream {
                         let partition_values = part_file.partition_values.clone();
                         match file_opener.open(file_meta, part_file) {
                             Ok(future) => {
-                                prefetch_queue.push_back((NextOpen::Pending(future), partition_values));
+                                prefetch_queue.push_back((
+                                    NextOpen::Pending(future),
+                                    partition_values,
+                                ));
                             }
                             Err(_) => break,
                         }
@@ -289,7 +300,9 @@ impl FileStream {
                             match self.on_error {
                                 // If `OnError::Skip` we skip the file as soon as we hit the first error
                                 OnError::Skip => {
-                                    if let Some((future, partition_values)) = prefetch_queue.pop_front() {
+                                    if let Some((future, partition_values)) =
+                                        prefetch_queue.pop_front()
+                                    {
                                         self.file_stream_metrics.time_opening.start();
 
                                         match future {
@@ -311,7 +324,7 @@ impl FileStream {
                                     } else {
                                         return Poll::Ready(None);
                                     }
-                                },
+                                }
                                 OnError::Fail => {
                                     self.state = FileStreamState::Error;
                                     return Poll::Ready(Some(Err(err)));
@@ -322,7 +335,9 @@ impl FileStream {
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
 
-                            if let Some((future, partition_values)) = prefetch_queue.pop_front() {
+                            if let Some((future, partition_values)) =
+                                prefetch_queue.pop_front()
+                            {
                                 self.file_stream_metrics.time_opening.start();
 
                                 match future {
@@ -334,9 +349,7 @@ impl FileStream {
                                     }
                                     NextOpen::Ready(reader) => {
                                         self.state = FileStreamState::Open {
-                                            future: Box::pin(std::future::ready(
-                                                reader,
-                                            )),
+                                            future: Box::pin(std::future::ready(reader)),
                                             partition_values,
                                         }
                                     }
@@ -1020,9 +1033,8 @@ mod tests {
     #[tokio::test]
     async fn test_prefetch_depth_1() -> Result<()> {
         // Test with prefetch depth = 1 (default behavior)
-        let file_schema = Arc::new(Schema::new(vec![
-            Field::new("i", DataType::Int32, false),
-        ]));
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
 
         let records = vec![make_partition(2), make_partition(3)];
         let opener = TestOpener {

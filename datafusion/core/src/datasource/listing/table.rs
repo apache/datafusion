@@ -1286,7 +1286,9 @@ impl TableProvider for ListingTable {
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
                 .with_expr_adapter(self.expr_adapter_factory.clone())
-                .with_file_prefetch_depth(state.config_options().execution.file_prefetch_depth)
+                .with_file_prefetch_depth(
+                    state.config_options().execution.file_prefetch_depth,
+                )
                 .build(),
             )
             .await?;
