@@ -163,8 +163,8 @@ mod tests {
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::file::metadata::{KeyValue, ParquetColumnIndex, ParquetOffsetIndex};
-    use parquet::file::page_index::index::Index;
+    use parquet::file::metadata::{KeyValue, ParquetColumnIndex, ParquetMetaData, ParquetOffsetIndex};
+    use parquet::file::page_index::column_index::ColumnIndexMetaData;
     use parquet::format::FileMetaData;
     use tokio::fs::File;
 
@@ -1556,7 +1556,7 @@ mod tests {
         Ok(parquet_sink)
     }
 
-    fn get_written(parquet_sink: Arc<ParquetSink>) -> Result<(Path, FileMetaData)> {
+    fn get_written(parquet_sink: Arc<ParquetSink>) -> Result<(Path, ParquetMetaData)> {
         let mut written = parquet_sink.written();
         let written = written.drain();
         assert_eq!(
@@ -1566,24 +1566,24 @@ mod tests {
             written.len()
         );
 
-        let (path, file_metadata) = written.take(1).next().unwrap();
-        Ok((path, file_metadata))
+        let (path, parquet_meta_data) = written.take(1).next().unwrap();
+        Ok((path, parquet_meta_data))
     }
 
-    fn assert_file_metadata(file_metadata: FileMetaData, expected_kv: &Vec<KeyValue>) {
-        let FileMetaData {
+    fn assert_file_metadata(parquet_meta_data: ParquetMetaData, expected_kv: &Vec<KeyValue>) {
+        let parquet::file::metadata::FileMetaData {
             num_rows,
-            schema,
+            schema_descr,
             key_value_metadata,
             ..
-        } = file_metadata;
-        assert_eq!(num_rows, 2, "file metadata to have 2 rows");
+        } = parquet_meta_data.file_metadata();
+        assert_eq!(*num_rows, 2, "file metadata to have 2 rows");
         assert!(
-            schema.iter().any(|col_schema| col_schema.name == "a"),
+            schema_descr.iter().any(|col_schema| col_schema.name == "a"),
             "output file metadata should contain col a"
         );
         assert!(
-            schema.iter().any(|col_schema| col_schema.name == "b"),
+            schema_descr.iter().any(|col_schema| col_schema.name == "b"),
             "output file metadata should contain col b"
         );
 
