@@ -31,7 +31,8 @@ use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, plan_err, utils::take_function_args, Result, ScalarValue,
+    exec_err, internal_datafusion_err, plan_err, utils::take_function_args, Result,
+    ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,

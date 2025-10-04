@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_common_runtime::JoinSet;
 use rand::{rng, Rng};
 

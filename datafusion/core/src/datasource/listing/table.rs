@@ -31,8 +31,8 @@ use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::{
-    config_datafusion_err, config_err, internal_datafusion_err, internal_err, plan_err, project_schema,
-    stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
+    config_datafusion_err, config_err, internal_datafusion_err, internal_err, plan_err,
+    project_schema, stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
 };
 use datafusion_datasource::{
     compute_all_files_statistics,
@@ -986,9 +986,9 @@ impl ListingTable {
             .file_schema
             .ok_or_else(|| internal_datafusion_err!("No schema provided."))?;
 
-        let options = config.options.ok_or_else(|| {
-            internal_datafusion_err!("No ListingOptions provided")
-        })?;
+        let options = config
+            .options
+            .ok_or_else(|| internal_datafusion_err!("No ListingOptions provided"))?;
 
         // Add the partition columns to the file schema
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());

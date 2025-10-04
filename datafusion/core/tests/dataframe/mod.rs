@@ -64,8 +64,8 @@ use datafusion::test_util::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
 use datafusion_common::{
-    assert_contains, internal_datafusion_err, Constraint, Constraints, DFSchema, DataFusionError, ParamValues,
-    ScalarValue, TableReference, UnnestOptions,
+    assert_contains, internal_datafusion_err, Constraint, Constraints, DFSchema,
+    DataFusionError, ParamValues, ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;

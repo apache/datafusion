@@ -44,7 +44,8 @@ use arrow::ipc::{root_as_message, CompressionType};
 use datafusion_catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
+    internal_datafusion_err, not_impl_err, DataFusionError, GetExt, Statistics,
+    DEFAULT_ARROW_EXTENSION,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;

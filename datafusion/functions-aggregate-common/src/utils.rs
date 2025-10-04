@@ -112,11 +112,17 @@ impl<T: DecimalType> DecimalAverager<T> {
     ) -> Result<Self> {
         let sum_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(sum_scale as u32))
-            .ok_or_else(|| internal_datafusion_err!("Failed to compute sum_mul in DecimalAverager"))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!("Failed to compute sum_mul in DecimalAverager")
+            })?;
 
         let target_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(target_scale as u32))
-            .ok_or_else(|| internal_datafusion_err!("Failed to compute target_mul in DecimalAverager"))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Failed to compute target_mul in DecimalAverager"
+                )
+            })?;
 
         if target_mul >= sum_mul {
             Ok(Self {

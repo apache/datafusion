@@ -23,7 +23,7 @@ use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Arra
 use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::{exec_err, internal_datafusion_err, plan_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,

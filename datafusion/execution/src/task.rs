@@ -168,7 +168,10 @@ impl FunctionRegistry for TaskContext {
         let result = self.window_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            internal_datafusion_err!("There is no UDWF named \"{}\" in the TaskContext", name)
+            internal_datafusion_err!(
+                "There is no UDWF named \"{}\" in the TaskContext",
+                name
+            )
         })
     }
     fn register_udaf(
