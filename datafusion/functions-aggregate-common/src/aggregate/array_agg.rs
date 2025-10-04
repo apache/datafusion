@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utilities for implementing GroupsAccumulator
-//! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
+//! Dedicated implementation of `GroupsAccumulator` for `array_agg`
 
 use std::iter::repeat_n;
 use std::sync::Arc;
@@ -129,6 +128,7 @@ impl GroupsAccumulator for AggGroupAccumulator {
                 .resize(total_num_groups, Vec::new());
         }
         // null value is handled
+        self.allocation_bytes += singular_col.get_array_memory_size();
 
         self.stacked_batches.push(Arc::clone(singular_col));
         let batch_index = self.stacked_batches.len() - 1;
@@ -182,9 +182,14 @@ impl GroupsAccumulator for AggGroupAccumulator {
     }
 
     fn size(&self) -> usize {
-        // all batched array's underlying memory is borrowed, and thus not counted
-        self.stacked_batches.allocated_size() + self.allocation_bytes
-        // self.allocation_bytes
+        size_of_val(self)
+            + self.stacked_group_indices.capacity() * size_of::<Vec<(usize, usize)>>()
+            + self
+                .stacked_group_indices
+                .iter()
+                .map(|v| v.capacity() * size_of::<usize>())
+                .sum::<usize>()
+            + self.stacked_batches.capacity() * size_of::<Vec<ArrayRef>>()
     }
 
     fn convert_to_state(
