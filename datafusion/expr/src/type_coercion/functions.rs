@@ -36,6 +36,7 @@ use datafusion_expr_common::{
     type_coercion::binary::comparison_coercion_numeric,
     type_coercion::binary::string_coercion,
 };
+use itertools::Itertools as _;
 use std::sync::Arc;
 
 /// Performs type coercion for scalar function arguments.
@@ -278,7 +279,8 @@ fn try_coerce_types(
 
     // none possible -> Error
     plan_err!(
-        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {current_types:?} to the signature {type_signature:?} failed"
+        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {} to the signature {type_signature:?} failed",
+        current_types.iter().join(", ")
     )
 }
 
@@ -529,7 +531,7 @@ fn get_valid_types(
                     new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::String but received {logical_data_type}"
+                        "Function '{function_name}' expects NativeType::String but NativeType::received NativeType::{logical_data_type}"
                     );
                 }
             }
@@ -589,7 +591,7 @@ fn get_valid_types(
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
+                        "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
                     );
                 }
 
@@ -610,7 +612,7 @@ fn get_valid_types(
                 valid_type = DataType::Float64;
             } else if !logical_data_type.is_numeric() {
                 return plan_err!(
-                    "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
+                    "Function '{function_name}' expects NativeType::Numeric but received NativeType::{logical_data_type}"
                 );
             }
 
@@ -657,7 +659,7 @@ fn get_valid_types(
                     new_types.push(casted_type);
                 } else {
                     return internal_err!(
-                        "Expect {} but received {}, DataType: {}",
+                        "Expect {} but received NativeType::{}, DataType: {}",
                         param.desired_type(),
                         current_native_type,
                         current_type
@@ -877,7 +879,10 @@ fn coerced_from<'a>(
             | UInt64
             | Float32
             | Float64
-            | Decimal128(_, _),
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _),
         ) => Some(type_into.clone()),
         (
             Timestamp(TimeUnit::Nanosecond, None),

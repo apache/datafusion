@@ -842,9 +842,9 @@ mod tests {
         values.iter().enumerate().for_each(|(pos, &v)| {
             // utf8
             let v_sv = ScalarValue::Utf8(Some(v.to_string()));
-            let regex_sv = ScalarValue::Utf8(regex.get(pos).map(|s| s.to_string()));
+            let regex_sv = ScalarValue::Utf8(regex.get(pos).map(|s| (*s).to_string()));
             let start_sv = ScalarValue::Int64(Some(start));
-            let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| f.to_string()));
+            let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| (*f).to_string()));
             let expected = expected.get(pos).cloned();
             let re = regexp_count_with_scalar_values(&[
                 v_sv,
@@ -861,8 +861,10 @@ mod tests {
 
             // largeutf8
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
-            let regex_sv = ScalarValue::LargeUtf8(regex.get(pos).map(|s| s.to_string()));
-            let flags_sv = ScalarValue::LargeUtf8(flags.get(pos).map(|f| f.to_string()));
+            let regex_sv =
+                ScalarValue::LargeUtf8(regex.get(pos).map(|s| (*s).to_string()));
+            let flags_sv =
+                ScalarValue::LargeUtf8(flags.get(pos).map(|f| (*f).to_string()));
             let re = regexp_count_with_scalar_values(&[
                 v_sv,
                 regex_sv,
@@ -878,8 +880,10 @@ mod tests {
 
             // utf8view
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
-            let regex_sv = ScalarValue::Utf8View(regex.get(pos).map(|s| s.to_string()));
-            let flags_sv = ScalarValue::Utf8View(flags.get(pos).map(|f| f.to_string()));
+            let regex_sv =
+                ScalarValue::Utf8View(regex.get(pos).map(|s| (*s).to_string()));
+            let flags_sv =
+                ScalarValue::Utf8View(flags.get(pos).map(|f| (*f).to_string()));
             let re = regexp_count_with_scalar_values(&[
                 v_sv,
                 regex_sv,

@@ -140,7 +140,7 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
         }
         _ => {
             plan_err!(
-                "bit_count function does not support data type: {:?}",
+                "bit_count function does not support data type: {}",
                 value_array.data_type()
             )
         }

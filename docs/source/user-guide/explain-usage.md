@@ -227,10 +227,10 @@ When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains 
 
 - `page_index_rows_matched`: number of rows in pages that were tested by a page index filter, and passed
 - `page_index_rows_pruned`: number of rows in pages that were tested by a page index filter, and did not pass
-- `row_groups_matched_bloom_filter`: number of rows in row groups that were tested by a Bloom Filter, and passed
-- `row_groups_pruned_bloom_filter`: number of rows in row groups that were tested by a Bloom Filter, and did not pass
-- `row_groups_matched_statistics`: number of rows in row groups that were tested by row group statistics (min and max value), and passed
-- `row_groups_pruned_statistics`: number of rows in row groups that were tested by row group statistics (min and max value), and did not pass
+- `row_groups_matched_bloom_filter`: number of row groups that were tested by a Bloom Filter, and passed
+- `row_groups_pruned_bloom_filter`: number of row groups that were tested by a Bloom Filter, and did not pass
+- `row_groups_matched_statistics`: number of row groups that were tested by row group statistics (min and max value), and passed
+- `row_groups_pruned_statistics`: number of row groups that were tested by row group statistics (min and max value), and did not pass
 - `pushdown_rows_matched`: rows that were tested by any of the above filtered, and passed all of them (this should be minimum of `page_index_rows_matched`, `row_groups_pruned_bloom_filter`, and `row_groups_pruned_statistics`)
 - `pushdown_rows_pruned`: rows that were tested by any of the above filtered, and did not pass one of them (this should be sum of `page_index_rows_matched`, `row_groups_pruned_bloom_filter`, and `row_groups_pruned_statistics`)
 - `predicate_evaluation_errors`: number of times evaluating the filter expression failed (expected to be zero in normal operation)
