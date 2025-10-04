@@ -196,6 +196,10 @@ pub struct FileScanConfig {
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    /// Number of files to prefetch (open concurrently) within a single FileStream partition.
+    /// This controls the balance between I/O and CPU utilization. Higher values can improve
+    /// I/O throughput but use more memory and file handles. Defaults to 1.
+    pub file_prefetch_depth: usize,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -275,6 +279,7 @@ pub struct FileScanConfigBuilder {
     new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    file_prefetch_depth: Option<usize>,
 }
 
 impl FileScanConfigBuilder {
@@ -304,6 +309,7 @@ impl FileScanConfigBuilder {
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
+            file_prefetch_depth: None,
         }
     }
 
@@ -426,6 +432,13 @@ impl FileScanConfigBuilder {
         self
     }
 
+    /// Set the file prefetch depth (number of files to open concurrently).
+    /// Higher values can improve I/O throughput but use more memory and file handles.
+    pub fn with_file_prefetch_depth(mut self, file_prefetch_depth: usize) -> Self {
+        self.file_prefetch_depth = Some(file_prefetch_depth);
+        self
+    }
+
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -446,6 +459,7 @@ impl FileScanConfigBuilder {
             new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
+            file_prefetch_depth,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -458,6 +472,7 @@ impl FileScanConfigBuilder {
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
+        let file_prefetch_depth = file_prefetch_depth.unwrap_or(1);
 
         FileScanConfig {
             object_store_url,
@@ -473,6 +488,7 @@ impl FileScanConfigBuilder {
             new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
+            file_prefetch_depth,
         }
     }
 }
@@ -494,6 +510,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
+            file_prefetch_depth: Some(config.file_prefetch_depth),
         }
     }
 }
