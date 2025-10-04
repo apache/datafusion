@@ -38,8 +38,6 @@ pub struct AggGroupAccumulator {
 }
 
 impl AggGroupAccumulator {
-    /// Create a new adapter that will create a new [`Accumulator`]
-    /// for each group, using the specified factory function
     pub fn new() -> Self {
         Self {
             stacked_batches: vec![],

@@ -19,9 +19,8 @@
 //!
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
-use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, ListArray, PrimitiveArray, StructArray};
+use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::kernels;
 use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
@@ -117,7 +116,6 @@ impl NullState {
             value_fn(group_index, value);
         });
     }
-
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
     /// filtered value in `values`, while tracking which groups have
@@ -372,7 +370,6 @@ pub fn accumulate<T, F>(
         }
     }
 }
-
 
 /// Accumulates with multiple accumulate(value) columns. (e.g. `corr(c1, c2)`)
 ///
