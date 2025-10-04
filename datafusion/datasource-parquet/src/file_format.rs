@@ -43,8 +43,8 @@ use datafusion_common::encryption::map_config_decryption_to_decryption;
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
-    HashSet, Result, DEFAULT_PARQUET_EXTENSION,
+    exec_datafusion_err, internal_datafusion_err, internal_err, not_impl_err,
+    DataFusionError, GetExt, HashSet, Result, DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -1343,7 +1343,7 @@ impl FileSink for ParquetSink {
         demux_task
             .join_unwind()
             .await
-            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+            .map_err(|e| exec_datafusion_err!("Join error in demux task: {e}"))??;
 
         Ok(row_count as u64)
     }
@@ -1468,7 +1468,7 @@ fn spawn_rg_join_and_finalize_task(
             let (writer, _col_reservation) = task
                 .join_unwind()
                 .await
-                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+                .map_err(|e| exec_datafusion_err!("Join error: {e}"))??;
             let encoded_size = writer.get_estimated_total_bytes();
             rg_reservation.grow(encoded_size);
             finalized_rg.push(writer.close()?);
@@ -1596,7 +1596,7 @@ async fn concatenate_parallel_row_groups(
     while let Some(task) = serialize_rx.recv().await {
         let result = task.join_unwind().await;
         let (serialized_columns, mut rg_reservation, _cnt) =
-            result.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+            result.map_err(|e| exec_datafusion_err!("Join error: {e}"))??;
 
         let mut rg_out = parquet_writer.next_row_group()?;
         for chunk in serialized_columns {
@@ -1678,7 +1678,7 @@ async fn output_single_parquet_file_parallelized(
     launch_serialization_task
         .join_unwind()
         .await
-        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+        .map_err(|e| exec_datafusion_err!("Join error: {e}"))??;
     Ok(file_metadata)
 }
 

@@ -28,7 +28,9 @@ use std::sync::Arc;
 use crate::{Session, TableProvider, TableProviderFactory};
 use arrow::array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
+use datafusion_common::{
+    config_err, exec_datafusion_err, plan_err, Constraints, DataFusionError, Result,
+};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -440,6 +442,6 @@ impl DataSink for StreamWrite {
         write_task
             .join_unwind()
             .await
-            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
+            .map_err(|e| exec_datafusion_err!("Write task failed: {}", e))?
     }
 }
