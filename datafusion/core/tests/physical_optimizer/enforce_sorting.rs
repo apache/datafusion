@@ -96,8 +96,6 @@ fn csv_exec_sorted(
 struct EnforceSortingTest {
     plan: Arc<dyn ExecutionPlan>,
     repartition_sorts: bool,
-    /// If true, asserts that the input and optimized plans are the same
-    expect_no_change: bool,
     /// A message printed into the snapshot to describe the expected output
     expected_description: Option<String>,
 }
@@ -107,7 +105,6 @@ impl EnforceSortingTest {
         Self {
             plan,
             repartition_sorts: false,
-            expect_no_change: false,
             expected_description: None,
         }
     }
@@ -118,11 +115,6 @@ impl EnforceSortingTest {
         self
     }
 
-    /// Set whether to expect no change in the plan
-    fn with_expect_no_change(mut self, expect_no_change: bool) -> Self {
-        self.expect_no_change = expect_no_change;
-        self
-    }
 
     /// Add an expected output description
     fn with_expected_description(mut self, description: &str) -> Self {
@@ -209,11 +201,7 @@ impl EnforceSortingTest {
                 "".to_string()
             };
 
-        if self.expect_no_change {
-            assert_eq!(input_plan_string, optimized_plan_string,
-                       "Expected no change in the plan, but the optimized plan differs from the input plan"
-            );
-
+        if input_plan_string == optimized_plan_string{
             return format!(
                 "{expected_description}Input / Optimized Plan:\n{input_plan_string}",
             );
@@ -314,8 +302,7 @@ async fn test_union_inputs_sorted() -> Result<()> {
     // one input to the union is already sorted, one is not.
     let test = EnforceSortingTest::new(physical_plan)
         .with_repartition_sorts(true)
-        .with_expected_description("// should not add a sort at the output of the union, input plan should not be changed")
-        .with_expect_no_change(true);
+        .with_expected_description("// should not add a sort at the output of the union, input plan should not be changed");
 
     assert_snapshot!(test.run(), @r"
     // should not add a sort at the output of the union, input plan should not be changed
@@ -348,8 +335,7 @@ async fn test_union_inputs_different_sorted() -> Result<()> {
     // one input to the union is already sorted, one is not.
     let test = EnforceSortingTest::new(physical_plan)
         .with_repartition_sorts(true)
-        .with_expected_description("// should not add a sort at the output of the union, input plan should not be changed")
-        .with_expect_no_change(true);
+        .with_expected_description("// should not add a sort at the output of the union, input plan should not be changed");
     assert_snapshot!(test.run(), @r"
     // should not add a sort at the output of the union, input plan should not be changed
     Input / Optimized Plan:
@@ -1640,14 +1626,7 @@ async fn test_with_lost_ordering_bounded() -> Result<()> {
         EnforceSortingTest::new(physical_plan.clone()).with_repartition_sorts(false);
 
     assert_snapshot!(test_no_repartition_sorts.run(), @r"
-    Input Plan:
-    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-      CoalescePartitionsExec
-        RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false
-
-    Optimized Plan:
+    Input / Optimized Plan:
     SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
       CoalescePartitionsExec
         RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
@@ -1689,13 +1668,7 @@ async fn test_do_not_pushdown_through_spm() -> Result<()> {
     let test =
         EnforceSortingTest::new(physical_plan.clone()).with_repartition_sorts(true);
     assert_snapshot!(test.run(), @r"
-    Input Plan:
-    SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
-      SortPreservingMergeExec: [a@0 ASC, b@1 ASC]
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false
-
-    Optimized Plan:
+    Input / Optimized Plan:
     SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
       SortPreservingMergeExec: [a@0 ASC, b@1 ASC]
         RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
@@ -1787,8 +1760,8 @@ async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
         parquet_input,
     );
     let test = EnforceSortingTest::new(physical_plan.clone())
-        .with_repartition_sorts(false)
-        .with_expect_no_change(true);
+        .with_repartition_sorts(false);
+
     assert_snapshot!(test.run(), @r"
     Input / Optimized Plan:
     SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]
@@ -2179,13 +2152,7 @@ async fn test_do_not_pushdown_through_limit() -> Result<()> {
     let test =
         EnforceSortingTest::new(physical_plan.clone()).with_repartition_sorts(true);
     assert_snapshot!(test.run(), @r"
-    Input Plan:
-    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-      GlobalLimitExec: skip=0, fetch=5
-        SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
-          DataSourceExec: partitions=1, partition_sizes=[0]
-
-    Optimized Plan:
+    Input / Optimized Plan:
     SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
       GlobalLimitExec: skip=0, fetch=5
         SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
@@ -2465,9 +2432,9 @@ async fn test_push_with_required_input_ordering_prohibited() -> Result<()> {
         .into_arc();
     let plan = sort_exec(ordering_b, plan);
     let test = EnforceSortingTest::new(plan.clone())
-        .with_repartition_sorts(true)
+        .with_repartition_sorts(true);
         // should not be able to push shorts
-        .with_expect_no_change(true);
+
     assert_snapshot!(test.run(), @r"
     Input / Optimized Plan:
     SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
@@ -2558,8 +2525,7 @@ async fn test_not_replaced_with_partial_sort_for_unbounded_input() -> Result<()>
         unbounded_input,
     );
     let test = EnforceSortingTest::new(physical_plan.clone())
-        .with_repartition_sorts(true)
-        .with_expect_no_change(true);
+        .with_repartition_sorts(true);
     assert_snapshot!(test.run(), @r"
     Input / Optimized Plan:
     SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]
@@ -2895,16 +2861,11 @@ WindowAggExec: wdw=[max: Ok(Field { name: "max", data_type: Int32, nullable: tru
         func: (fn_min_on_ordered.0.clone(), fn_min_on_ordered.1.clone(), fn_min_on_ordered.2.clone()),
         required_sort: ["min", false, false, "nullable_col", true, false],
         @ r#"
-Input Plan:
-SortExec: expr=[min@2 DESC NULLS LAST, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]
-  WindowAggExec: wdw=[min: Ok(Field { name: "min", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
-
-Optimized Plan:
-SortExec: expr=[min@2 DESC NULLS LAST, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]
-  WindowAggExec: wdw=[min: Ok(Field { name: "min", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
-"#
+    Input / Optimized Plan:
+    SortExec: expr=[min@2 DESC NULLS LAST, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]
+      WindowAggExec: wdw=[min: Ok(Field { name: "min", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+    "#
     )?;
 
     // Case 11:
@@ -3991,13 +3952,8 @@ fn test_keeps_used_orthogonal_sort() -> Result<()> {
             "// Test: should keep the orthogonal sort, since it modifies the output:",
         );
     assert_snapshot!(test.run(), @r"
-    Input Plan:
-    SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]
-      SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]
-        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]
-
     // Test: should keep the orthogonal sort, since it modifies the output:
-    Optimized Plan:
+    Input / Optimized Plan:
     SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]
       SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]
         StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]
