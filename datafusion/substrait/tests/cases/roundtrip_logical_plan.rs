@@ -300,6 +300,14 @@ async fn aggregate_grouping_sets() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_grouping_sets_with_grouping() -> Result<()> {
+    roundtrip(
+        "SELECT a, c, grouping(a) as g1, grouping(c) as g2, grouping(a, c) as g3, avg(b) FROM data GROUP BY GROUPING SETS ((a, c), (a), ())",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn aggregate_grouping_rollup() -> Result<()> {
     let plan = generate_plan_from_sql(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",

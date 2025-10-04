@@ -45,7 +45,14 @@ pub fn to_substrait_rel(
     plan: &LogicalPlan,
 ) -> datafusion::common::Result<Box<Rel>> {
     match plan {
-        LogicalPlan::Projection(plan) => producer.handle_projection(plan),
+        LogicalPlan::Projection(plan) => {
+            if producer.has_grouping_set(plan) {
+                let plan = producer.unproject_grouping_set(plan)?;
+                producer.handle_projection(&plan)
+            } else {
+                producer.handle_projection(plan)
+            }
+        }
         LogicalPlan::Filter(plan) => producer.handle_filter(plan),
         LogicalPlan::Window(plan) => producer.handle_window(plan),
         LogicalPlan::Aggregate(plan) => producer.handle_aggregate(plan),

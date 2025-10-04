@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::extensions::Extensions;
 use crate::logical_plan::producer::{
     from_aggregate, from_aggregate_function, from_alias, from_between, from_binary_expr,
@@ -24,10 +26,11 @@ use crate::logical_plan::producer::{
     from_subquery_alias, from_table_scan, from_try_cast, from_unary_expr, from_union,
     from_values, from_window, from_window_function, to_substrait_rel, to_substrait_rex,
 };
-use datafusion::common::{substrait_err, Column, DFSchemaRef, ScalarValue};
+use datafusion::common::{internal_err, substrait_err, Column, DFSchemaRef, ScalarValue};
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr::{Alias, InList, InSubquery, WindowFunction};
+use datafusion::logical_expr::grouping::DummyGroupingUDAF;
 use datafusion::logical_expr::{
     expr, Aggregate, Between, BinaryExpr, Case, Cast, Distinct, EmptyRelation, Expr,
     Extension, Filter, Join, Like, Limit, LogicalPlan, Projection, Repartition, Sort,
@@ -345,6 +348,60 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         schema: &DFSchemaRef,
     ) -> datafusion::common::Result<Expression> {
         from_in_subquery(self, in_subquery, schema)
+    }
+
+    fn has_grouping_set(&self, plan: &Projection) -> bool {
+        for expr in plan.expr.iter() {
+            let Expr::Alias(Alias { expr, .. }) = expr else {
+                continue;
+            };
+            let Expr::ScalarFunction(expr::ScalarFunction { func, .. }) = expr.as_ref()
+            else {
+                continue;
+            };
+            if func.name() == "grouping" {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn unproject_grouping_set(
+        &self,
+        plan: &Projection,
+    ) -> datafusion::common::Result<Projection> {
+        let input = plan.input.as_ref();
+        let LogicalPlan::Aggregate(agg) = input else {
+            return internal_err!(
+                "Projecting grouping set is not supported for non-aggregate input"
+            );
+        };
+
+        let mut exprs = vec![];
+        let mut agg_expr = agg.aggr_expr.clone();
+
+        for expr in plan.expr.iter() {
+            if let Expr::Alias(Alias { expr, name, .. }) = expr {
+                if let Expr::ScalarFunction(f @ expr::ScalarFunction { func, .. }) =
+                    expr.as_ref()
+                {
+                    if func.name() == "grouping" {
+                        exprs.push(Expr::Column(Column::from_name(name)));
+                        agg_expr.push(
+                            Expr::AggregateFunction(
+                                DummyGroupingUDAF::from_scalar_function(f, agg)?,
+                            )
+                            .alias(name),
+                        );
+                        continue;
+                    }
+                };
+            };
+            exprs.push(expr.clone());
+        }
+        let agg =
+            Aggregate::try_new(Arc::clone(&agg.input), agg.group_expr.clone(), agg_expr)?;
+        Projection::try_new(exprs, Arc::new(LogicalPlan::Aggregate(agg)))
     }
 }
 

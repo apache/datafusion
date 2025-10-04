@@ -2632,15 +2632,15 @@ fn test_grouping() -> Result<()> {
 
     let group1 =
         ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![Some(vec![Some(0)])],
+            vec![Some(vec![Some(1)])],
         )));
     let group2 =
         ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![Some(vec![Some(1)])],
+            vec![Some(vec![Some(0)])],
         )));
     let group3 =
         ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![Some(vec![Some(0), Some(1)])],
+            vec![Some(vec![Some(1), Some(0)])],
         )));
     let project = LogicalPlanBuilder::from(plan)
         .project(vec![
