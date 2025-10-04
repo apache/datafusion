@@ -38,6 +38,7 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
+use datafusion_functions_aggregate_common::aggregate::array_agg::AggGroupAccumulator;
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
@@ -98,6 +99,18 @@ impl AggregateUDFImpl for ArrayAgg {
 
     fn name(&self) -> &str {
         "array_agg"
+    }
+    // use groups accumulator only when no order and no distinct required
+    // because current groups_acc impl produce indeterministic output
+    fn groups_accumulator_supported(&self, acc_args: AccumulatorArgs) -> bool {
+        acc_args.order_bys.is_empty() && (!acc_args.is_distinct)
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        _acc_args: AccumulatorArgs,
+    ) -> Result<Box<dyn datafusion_expr::GroupsAccumulator>> {
+        Ok(Box::new(AggGroupAccumulator::new()))
     }
 
     fn signature(&self) -> &Signature {
@@ -229,6 +242,7 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 }
 
+/// Note that this is order insensitive
 #[derive(Debug)]
 pub struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
