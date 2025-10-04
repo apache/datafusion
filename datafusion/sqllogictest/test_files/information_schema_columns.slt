@@ -42,7 +42,7 @@ my_catalog my_schema table_with_many_types float64_col 1 NULL YES Float64 NULL N
 my_catalog my_schema table_with_many_types int32_col 0 NULL NO Int32 NULL NULL 32 2 NULL NULL NULL
 my_catalog my_schema table_with_many_types large_binary_col 5 NULL NO LargeBinary NULL 9223372036854775807 NULL NULL NULL NULL NULL
 my_catalog my_schema table_with_many_types large_utf8_col 3 NULL NO LargeUtf8 NULL 9223372036854775807 NULL NULL NULL NULL NULL
-my_catalog my_schema table_with_many_types timestamp_nanos 6 NULL NO Timestamp(Nanosecond, None) NULL NULL NULL NULL NULL NULL NULL
+my_catalog my_schema table_with_many_types timestamp_nanos 6 NULL NO Timestamp(ns) NULL NULL NULL NULL NULL NULL NULL
 my_catalog my_schema table_with_many_types utf8_col 2 NULL YES Utf8 NULL 2147483647 NULL NULL NULL NULL NULL
 
 # Cleanup

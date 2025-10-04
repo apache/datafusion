@@ -47,7 +47,7 @@ query error DataFusion error: Error during planning: Cannot coerce arithmetic ex
 select interval '1 month' - '2023-05-01'::date;
 
 # interval - timestamp
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(ns\) to valid types
 SELECT interval '1 month' - '2023-05-01 12:30:00'::timestamp;
 
 # dictionary(int32, utf8) -> utf8
