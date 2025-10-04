@@ -71,7 +71,6 @@ use datafusion_catalog::streaming::StreamingTable;
 
 use futures::StreamExt;
 use insta::{assert_snapshot, Settings};
-use rstest::rstest;
 
 /// Create a sorted Csv exec
 fn csv_exec_sorted(
@@ -1295,7 +1294,7 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
 
         settings.add_filter(
             // join_type={} replace with join_type=... to avoid snapshot name issue
-            format!("join_type={}", join_type).as_str(),
+            format!("join_type={join_type}").as_str(),
             "join_type=...",
         );
 
@@ -1388,7 +1387,7 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
 
         settings.add_filter(
             // join_type={} replace with join_type=... to avoid snapshot name issue
-            format!("join_type={}", join_type).as_str(),
+            format!("join_type={join_type}").as_str(),
             "join_type=...",
         );
 
