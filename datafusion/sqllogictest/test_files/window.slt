@@ -2602,7 +2602,7 @@ SELECT
   FROM aggregate_test_100;
 
 statement ok
-set datafusion.optimizer.skip_failed_rules = true
+set datafusion.optimizer.skip_failed_rules = false
 
 # Error is returned from the logical plan.
 query error Cannot cast Utf8\("1 DAY"\) to Int8
