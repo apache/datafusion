@@ -953,7 +953,7 @@ mod tests {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
             let actual = string_to_datetime_formatted(&Utc, s, f)
                 .unwrap_err()
-                .to_string();
+                .strip_backtrace();
             assert_eq!(actual, expected)
         }
     }
@@ -981,7 +981,7 @@ mod tests {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
             let actual = string_to_datetime_formatted(&Utc, s, f)
                 .unwrap_err()
-                .to_string();
+                .strip_backtrace();
             assert_eq!(actual, expected)
         }
     }

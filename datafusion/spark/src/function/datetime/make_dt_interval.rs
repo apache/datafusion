@@ -477,7 +477,7 @@ mod tests {
 
         assert!(
             matches!(res, Err(DataFusionError::Execution(_))),
-            "make_dt_interval expects between 0 and 4 arguments, got 5"
+            "make_dt_interval should return execution error for too many arguments"
         );
 
         Ok(())

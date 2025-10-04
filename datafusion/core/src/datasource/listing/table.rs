@@ -249,7 +249,7 @@ impl ListingTableConfig {
             .await?
             .next()
             .await
-            .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
+            .ok_or_else(|| internal_datafusion_err!("No files for table"))??;
 
         let (file_extension, maybe_compression_type) =
             ListingTableConfig::infer_file_extension_and_compression_type(

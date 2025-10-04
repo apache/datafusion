@@ -36,6 +36,7 @@ use datafusion::{
     error::Result,
     logical_expr::{Signature, WindowUDF, WindowUDFImpl},
 };
+use datafusion_common::exec_err;
 use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
@@ -336,9 +337,9 @@ impl WindowUDFImpl for ForeignWindowUDF {
             let schema: SchemaRef = schema.into();
 
             match schema.fields().is_empty() {
-                true => Err(DataFusionError::Execution(
-                    "Unable to retrieve field in WindowUDF via FFI".to_string(),
-                )),
+                true => exec_err!(
+                    "Unable to retrieve field in WindowUDF via FFI - schema has no fields"
+                ),
                 false => Ok(schema.field(0).to_owned().into()),
             }
         }

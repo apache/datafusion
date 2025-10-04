@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::array::{downcast_primitive, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{i256, DataType};
-use datafusion_common::DataFusionError;
+use datafusion_common::exec_datafusion_err;
 use datafusion_common::Result;
 
 use half::f16;
@@ -478,9 +478,7 @@ pub fn new_heap(
         _ => {}
     }
 
-    Err(DataFusionError::Execution(format!(
-        "Can't group type: {vt:?}"
-    )))
+    Err(exec_datafusion_err!("Can't group type: {vt:?}"))
 }
 
 #[cfg(test)]

@@ -43,7 +43,7 @@ use crate::stream::ObservedStream;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
 
@@ -213,11 +213,9 @@ impl ExecutionPlan for UnionExec {
     fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
         check_default_invariants(self, check)?;
 
-        (self.inputs().len() >= 2)
-            .then_some(())
-            .ok_or(DataFusionError::Internal(
-                "UnionExec should have at least 2 children".into(),
-            ))
+        (self.inputs().len() >= 2).then_some(()).ok_or_else(|| {
+            internal_datafusion_err!("UnionExec should have at least 2 children")
+        })
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

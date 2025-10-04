@@ -42,7 +42,9 @@ use datafusion::{
     },
     physical_plan::expressions::LikeExpr,
 };
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+};
 use datafusion_expr::WindowFrame;
 
 use crate::protobuf::{
@@ -159,7 +161,7 @@ pub fn serialize_physical_window_expr(
     let window_frame: protobuf::WindowFrame = window_frame
         .as_ref()
         .try_into()
-        .map_err(|e| DataFusionError::Internal(format!("{e}")))?;
+        .map_err(|e| internal_datafusion_err!("{e}"))?;
 
     Ok(protobuf::PhysicalWindowExprNode {
         args,

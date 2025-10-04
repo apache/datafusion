@@ -26,7 +26,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{
-    exec_err, not_impl_err, parsers::CompressionTypeVariant, DataFusionError,
+    exec_datafusion_err, exec_err, not_impl_err, parsers::CompressionTypeVariant,
     TableReference,
 };
 use prost::Message;
@@ -203,7 +203,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to decode CsvOptionsProto: {e:?}"))
+            exec_datafusion_err!("Failed to decode CsvOptionsProto: {e:?}")
         })?;
         let options: CsvOptions = (&proto).into();
         Ok(Arc::new(CsvFormatFactory {
@@ -227,9 +227,9 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
             options: Some(options),
         });
 
-        proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode CsvOptions: {e:?}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|e| exec_datafusion_err!("Failed to encode CsvOptions: {e:?}"))?;
 
         Ok(())
     }
@@ -310,9 +310,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = JsonOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to decode JsonOptionsProto: {e:?}"
-            ))
+            exec_datafusion_err!("Failed to decode JsonOptionsProto: {e:?}")
         })?;
         let options: JsonOptions = (&proto).into();
         Ok(Arc::new(JsonFormatFactory {
@@ -330,18 +328,16 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         {
             json_factory.options.clone().unwrap_or_default()
         } else {
-            return Err(DataFusionError::Execution(
-                "Unsupported FileFormatFactory type".to_string(),
-            ));
+            return exec_err!("Unsupported FileFormatFactory type");
         };
 
         let proto = JsonOptionsProto::from_factory(&JsonFormatFactory {
             options: Some(options),
         });
 
-        proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode JsonOptions: {e:?}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|e| exec_datafusion_err!("Failed to encode JsonOptions: {e:?}"))?;
 
         Ok(())
     }
@@ -638,9 +634,7 @@ mod parquet {
             _ctx: &SessionContext,
         ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
             let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Failed to decode TableParquetOptionsProto: {e:?}"
-                ))
+                exec_datafusion_err!("Failed to decode TableParquetOptionsProto: {e:?}")
             })?;
             let options: TableParquetOptions = (&proto).into();
             Ok(Arc::new(
@@ -662,9 +656,7 @@ mod parquet {
             {
                 parquet_factory.options.clone().unwrap_or_default()
             } else {
-                return Err(DataFusionError::Execution(
-                    "Unsupported FileFormatFactory type".to_string(),
-                ));
+                return exec_err!("Unsupported FileFormatFactory type");
             };
 
             let proto = TableParquetOptionsProto::from_factory(&ParquetFormatFactory {
@@ -672,9 +664,7 @@ mod parquet {
             });
 
             proto.encode(buf).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Failed to encode TableParquetOptionsProto: {e:?}"
-                ))
+                exec_datafusion_err!("Failed to encode TableParquetOptionsProto: {e:?}")
             })?;
 
             Ok(())

@@ -1274,9 +1274,9 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         let proto = MyRegexUdfNode {
             pattern: udf.pattern.clone(),
         };
-        proto.encode(buf).map_err(|err| {
-            DataFusionError::Internal(format!("failed to encode udf: {err}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
 
@@ -2276,7 +2276,7 @@ fn roundtrip_scalar_udf() {
             if name == "dummy" {
                 Ok(Arc::new(dummy_udf()))
             } else {
-                Err(DataFusionError::Internal(format!("UDF {name} not found")))
+                Err(internal_datafusion_err!("UDF {name} not found"))
             }
         }
     }

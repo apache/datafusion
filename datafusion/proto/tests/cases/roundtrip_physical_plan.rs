@@ -1162,9 +1162,9 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
             let proto = MyRegexUdfNode {
                 pattern: udf.pattern.clone(),
             };
-            proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udf: {err}"))
-            })?;
+            proto
+                .encode(buf)
+                .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         }
         Ok(())
     }
@@ -1190,7 +1190,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
                 result: udf.result.clone(),
             };
             proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udf: {err:?}"))
+                internal_datafusion_err!("failed to encode udf: {err:?}")
             })?;
         }
         Ok(())
@@ -1217,7 +1217,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
                 payload: udwf.payload.clone(),
             };
             proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udwf: {err:?}"))
+                internal_datafusion_err!("failed to encode udwf: {err:?}")
             })?;
         }
         Ok(())

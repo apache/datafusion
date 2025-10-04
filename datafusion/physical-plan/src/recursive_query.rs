@@ -32,7 +32,7 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, not_impl_err, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -183,9 +183,9 @@ impl ExecutionPlan for RecursiveQueryExec {
     ) -> Result<SendableRecordBatchStream> {
         // TODO: we might be able to handle multiple partitions in the future.
         if partition != 0 {
-            return Err(DataFusionError::Internal(format!(
+            return Err(internal_datafusion_err!(
                 "RecursiveQueryExec got an invalid partition {partition} (expected 0)"
-            )));
+            ));
         }
 
         let static_stream = self.static_term.execute(partition, Arc::clone(&context))?;

@@ -33,7 +33,7 @@ use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -157,10 +157,9 @@ impl WindowExpr for PlainAggregateWindowExpr {
         // This enables us to run queries involving UNBOUNDED PRECEDING frames
         // using bounded memory for suitable aggregations.
         for partition_row in partition_batches.keys() {
-            let window_state =
-                window_agg_state.get_mut(partition_row).ok_or_else(|| {
-                    DataFusionError::Execution("Cannot find state".to_string())
-                })?;
+            let window_state = window_agg_state
+                .get_mut(partition_row)
+                .ok_or_else(|| exec_datafusion_err!("Cannot find state"))?;
             let state = &mut window_state.state;
             if self.window_frame.start_bound.is_unbounded() {
                 state.window_frame_range.start =

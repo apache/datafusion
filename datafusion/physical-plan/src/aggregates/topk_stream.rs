@@ -26,7 +26,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
-use datafusion_common::DataFusionError;
+use datafusion_common::internal_datafusion_err;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -61,7 +61,7 @@ impl GroupedTopKAggregateStream {
             aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
         let (val_field, desc) = aggr
             .get_minmax_desc()
-            .ok_or_else(|| DataFusionError::Internal("Min/max required".to_string()))?;
+            .ok_or_else(|| internal_datafusion_err!("Min/max required"))?;
 
         let (expr, _) = &aggr.group_expr().expr()[0];
         let kt = expr.data_type(&aggr.input().schema())?;

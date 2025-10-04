@@ -37,8 +37,8 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
-    plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_datafusion_err,
+    exec_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -1009,9 +1009,7 @@ impl ScalarFunctionWrapper {
     fn parse_placeholder_identifier(placeholder: &str) -> Result<usize> {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Placeholder `{placeholder}` parsing error: {e}!"
-                ))
+                exec_datafusion_err!("Placeholder `{placeholder}` parsing error: {e}!")
             })?)
         } else {
             exec_err!("Placeholder should start with `$`!")
