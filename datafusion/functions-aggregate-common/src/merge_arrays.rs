@@ -87,7 +87,7 @@ impl PartialOrd for CustomElement<'_> {
 
 /// This functions merges `values` array (`&[Vec<ScalarValue>]`) into single array `Vec<ScalarValue>`
 /// Merging done according to ordering values stored inside `ordering_values` (`&[Vec<Vec<ScalarValue>>]`)
-/// Inner `Vec<ScalarValue>` in the `ordering_values` can be thought as ordering information for the
+/// Inner `Vec<ScalarValue>` in the `ordering_values` can be thought as ordering information for
 /// each `ScalarValue` in the `values` array.
 /// Desired ordering specified by `sort_options` argument (Should have same size with inner `Vec<ScalarValue>`
 /// of the `ordering_values` array).
@@ -119,17 +119,25 @@ pub fn merge_ordered_arrays(
     // Defines according to which ordering comparisons should be done.
     sort_options: &[SortOptions],
 ) -> datafusion_common::Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
-    // Keep track the most recent data of each branch, in binary heap data structure.
+    // Keep track of the most recent data of each branch, in a binary heap data structure.
     let mut heap = BinaryHeap::<CustomElement>::new();
 
-    if values.len() != ordering_values.len()
-        || values
-            .iter()
-            .zip(ordering_values.iter())
-            .any(|(vals, ordering_vals)| vals.len() != ordering_vals.len())
+    if values.len() != ordering_values.len() {
+        return exec_err!(
+            "Expects values and ordering_values to have same size but got {} and {}",
+            values.len(),
+            ordering_values.len()
+        );
+    }
+    if values
+        .iter()
+        .zip(ordering_values.iter())
+        .any(|(vals, ordering_vals)| vals.len() != ordering_vals.len())
     {
         return exec_err!(
-            "Expects values arguments and/or ordering_values arguments to have same size"
+            "Expects values elements and ordering_values elements to have same size but got {} and {}",
+            values.len(),
+            ordering_values.len()
         );
     }
     let n_branch = values.len();

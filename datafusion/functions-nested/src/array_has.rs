@@ -145,6 +145,7 @@ impl ScalarUDFImpl for ArrayHas {
                     let list = scalar_values
                         .into_iter()
                         .flatten()
+                        .flatten()
                         .map(|v| Expr::Literal(v, None))
                         .collect();
 
