@@ -17,26 +17,30 @@
 
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
+use arrow_schema::SortOptions;
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
+use datafusion_common::{
+    config::ConfigOptions, internal_err, JoinType, Result, Statistics,
+};
 use datafusion_datasource::{
     file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
+use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::filter::batch_filter;
-use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
     displayable,
-    filter::FilterExec,
+    filter::{batch_filter, FilterExec},
     filter_pushdown::{
         ChildFilterDescription, ChildPushdownResult, FilterDescription,
-        FilterPushdownPropagation,
+        FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
     },
+    joins::{HashJoinExec, PartitionMode},
     metrics::ExecutionPlanMetricsSet,
+    sorts::sort::SortExec,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 use futures::StreamExt;
@@ -298,6 +302,79 @@ impl TestScanBuilder {
         .build();
         DataSourceExec::from_data_source(base_config)
     }
+}
+
+/// Create a [`DataSourceExec`] from the provided [`RecordBatch`]es that
+/// supports filter pushdown. All batches must have the same schema.
+pub fn build_scan(batches: Vec<RecordBatch>) -> Arc<dyn ExecutionPlan> {
+    assert!(!batches.is_empty(), "batches must not be empty");
+    let schema = Arc::clone(&batches[0].schema());
+    TestScanBuilder::new(schema)
+        .with_support(true)
+        .with_batches(batches)
+        .build()
+}
+
+/// Create a [`HashJoinExec`] joining the provided batches on the named columns.
+///
+/// The `on` parameter specifies the join keys as pairs of column names
+/// `(left, right)`.
+pub fn build_hash_join(
+    left_batches: Vec<RecordBatch>,
+    right_batches: Vec<RecordBatch>,
+    on: Vec<(&str, &str)>,
+    join_type: JoinType,
+    partition_mode: PartitionMode,
+) -> Arc<dyn ExecutionPlan> {
+    let left_schema = Arc::clone(&left_batches[0].schema());
+    let right_schema = Arc::clone(&right_batches[0].schema());
+    let left = build_scan(left_batches);
+    let right = build_scan(right_batches);
+    let on = on
+        .into_iter()
+        .map(|(l, r)| {
+            (
+                col(l, &left_schema).unwrap(),
+                col(r, &right_schema).unwrap(),
+            )
+        })
+        .collect();
+    Arc::new(
+        HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &join_type,
+            None,
+            partition_mode,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    )
+}
+
+/// Create a [`SortExec`] configured for TopK behaviour with the given
+/// sort expressions and fetch value.
+pub fn build_topk(
+    input: Arc<dyn ExecutionPlan>,
+    sort_exprs: Vec<PhysicalSortExpr>,
+    fetch: usize,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        SortExec::new(LexOrdering::new(sort_exprs).unwrap(), input)
+            .with_fetch(Some(fetch)),
+    )
+}
+
+/// Convenience function to create a [`PhysicalSortExpr`] given a column name
+/// and [`SortOptions`].
+pub fn sort_expr(
+    column: &str,
+    schema: &SchemaRef,
+    options: SortOptions,
+) -> PhysicalSortExpr {
+    PhysicalSortExpr::new(col(column, schema).unwrap(), options)
 }
 
 /// Index into the data that has been returned so far
