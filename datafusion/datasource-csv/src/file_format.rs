@@ -497,7 +497,20 @@ impl FileFormat for CsvFormat {
 impl CsvFormat {
     /// Return the inferred schema reading up to records_to_read from a
     /// stream of delimited chunks returning the inferred schema and the
-    /// number of lines that were read
+    /// number of lines that were read.
+    ///
+    /// This method can handle CSV files with different numbers of columns.
+    /// The inferred schema will be the union of all columns found across all files.
+    /// Files with fewer columns will have missing columns filled with null values.
+    ///
+    /// # Example
+    ///
+    /// If you have two CSV files:
+    /// - `file1.csv`: `col1,col2,col3`
+    /// - `file2.csv`: `col1,col2,col3,col4,col5`
+    ///
+    /// The inferred schema will contain all 5 columns, with files that don't
+    /// have columns 4 and 5 having null values for those columns.
     pub async fn infer_schema_from_stream(
         &self,
         state: &dyn Session,
@@ -560,21 +573,37 @@ impl CsvFormat {
                     })
                     .unzip();
             } else {
-                if fields.len() != column_type_possibilities.len() {
+                if fields.len() != column_type_possibilities.len()
+                    && !self.options.truncated_rows.unwrap_or(false)
+                {
                     return exec_err!(
-                            "Encountered unequal lengths between records on CSV file whilst inferring schema. \
-                             Expected {} fields, found {} fields at record {}",
-                            column_type_possibilities.len(),
-                            fields.len(),
-                            record_number + 1
-                        );
+                        "Encountered unequal lengths between records on CSV file whilst inferring schema. \
+                         Expected {} fields, found {} fields at record {}",
+                        column_type_possibilities.len(),
+                        fields.len(),
+                        record_number + 1
+                    );
                 }
 
+                // First update type possibilities for existing columns using zip
                 column_type_possibilities.iter_mut().zip(&fields).for_each(
                     |(possibilities, field)| {
                         possibilities.insert(field.data_type().clone());
                     },
                 );
+
+                // Handle files with different numbers of columns by extending the schema
+                if fields.len() > column_type_possibilities.len() {
+                    // New columns found - extend our tracking structures
+                    for field in fields.iter().skip(column_type_possibilities.len()) {
+                        column_names.push(field.name().clone());
+                        let mut possibilities = HashSet::new();
+                        if records_read > 0 {
+                            possibilities.insert(field.data_type().clone());
+                        }
+                        column_type_possibilities.push(possibilities);
+                    }
+                }
             }
 
             if records_to_read == 0 {
@@ -767,5 +796,84 @@ impl DataSink for CsvSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_schema_helper;
+    use arrow::datatypes::DataType;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_build_schema_helper_different_column_counts() {
+        // Test the core schema building logic with different column counts
+        let mut column_names =
+            vec!["col1".to_string(), "col2".to_string(), "col3".to_string()];
+
+        // Simulate adding two more columns from another file
+        column_names.push("col4".to_string());
+        column_names.push("col5".to_string());
+
+        let column_type_possibilities = vec![
+            HashSet::from([DataType::Int64]),
+            HashSet::from([DataType::Utf8]),
+            HashSet::from([DataType::Float64]),
+            HashSet::from([DataType::Utf8]), // col4
+            HashSet::from([DataType::Utf8]), // col5
+        ];
+
+        let schema = build_schema_helper(column_names, &column_type_possibilities);
+
+        // Verify schema has 5 columns
+        assert_eq!(schema.fields().len(), 5);
+        assert_eq!(schema.field(0).name(), "col1");
+        assert_eq!(schema.field(1).name(), "col2");
+        assert_eq!(schema.field(2).name(), "col3");
+        assert_eq!(schema.field(3).name(), "col4");
+        assert_eq!(schema.field(4).name(), "col5");
+
+        // All fields should be nullable
+        for field in schema.fields() {
+            assert!(
+                field.is_nullable(),
+                "Field {} should be nullable",
+                field.name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_schema_helper_type_merging() {
+        // Test type merging logic
+        let column_names = vec!["col1".to_string(), "col2".to_string()];
+
+        let column_type_possibilities = vec![
+            HashSet::from([DataType::Int64, DataType::Float64]), // Should resolve to Float64
+            HashSet::from([DataType::Utf8]),                     // Should remain Utf8
+        ];
+
+        let schema = build_schema_helper(column_names, &column_type_possibilities);
+
+        // col1 should be Float64 due to Int64 + Float64 = Float64
+        assert_eq!(*schema.field(0).data_type(), DataType::Float64);
+
+        // col2 should remain Utf8
+        assert_eq!(*schema.field(1).data_type(), DataType::Utf8);
+    }
+
+    #[test]
+    fn test_build_schema_helper_conflicting_types() {
+        // Test when we have incompatible types - should default to Utf8
+        let column_names = vec!["col1".to_string()];
+
+        let column_type_possibilities = vec![
+            HashSet::from([DataType::Boolean, DataType::Int64, DataType::Utf8]), // Should resolve to Utf8 due to conflicts
+        ];
+
+        let schema = build_schema_helper(column_names, &column_type_possibilities);
+
+        // Should default to Utf8 for conflicting types
+        assert_eq!(*schema.field(0).data_type(), DataType::Utf8);
     }
 }
