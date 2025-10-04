@@ -22,8 +22,8 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_err};
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
+use crate::{Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
     OffsetSizeTrait,
@@ -147,9 +147,7 @@ pub fn bisect<const SIDE: bool>(
     let low: usize = 0;
     let high: usize = item_columns
         .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
+        .ok_or_else(|| _internal_datafusion_err!("Column array shouldn't be empty"))?
         .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare_rows(current, target, sort_options)?;
@@ -198,9 +196,7 @@ pub fn linear_search<const SIDE: bool>(
     let low: usize = 0;
     let high: usize = item_columns
         .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
+        .ok_or_else(|| _internal_datafusion_err!("Column array shouldn't be empty"))?
         .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare_rows(current, target, sort_options)?;
@@ -365,9 +361,7 @@ pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
         .map(|idx| items.get(*idx.borrow()).cloned())
         .collect::<Option<Vec<T>>>()
         .ok_or_else(|| {
-            DataFusionError::Execution(
-                "Expects indices to be in the range of searched vector".to_string(),
-            )
+            _exec_datafusion_err!("Expects indices to be in the range of searched vector")
         })
 }
 
@@ -808,7 +802,7 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
         .into_iter()
         .map(|target| items.iter().position(|e| target.borrow().eq(e)))
         .collect::<Option<_>>()
-        .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
+        .ok_or_else(|| _exec_datafusion_err!("Target not found"))
 }
 
 /// Transposes the given vector of vectors.

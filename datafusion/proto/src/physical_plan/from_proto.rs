@@ -47,7 +47,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_proto_common::common::proto_error;
 
 use crate::convert_required;
@@ -138,11 +138,9 @@ pub fn parse_physical_window_expr(
         .as_ref()
         .map(|wf| wf.clone().try_into())
         .transpose()
-        .map_err(|e| DataFusionError::Internal(format!("{e}")))?
+        .map_err(|e| internal_datafusion_err!("{e}"))?
         .ok_or_else(|| {
-            DataFusionError::Internal(
-                "Missing required field 'window_frame' in protobuf".to_string(),
-            )
+            internal_datafusion_err!("Missing required field 'window_frame' in protobuf")
         })?;
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
@@ -421,9 +419,7 @@ fn parse_required_physical_expr(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.map(|e| parse_physical_expr(e, ctx, input_schema, codec))
         .transpose()?
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!("Missing required field {field:?}"))
-        })
+        .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
 }
 
 pub fn parse_protobuf_hash_partitioning(

@@ -32,7 +32,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, internal_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
@@ -244,10 +245,9 @@ pub trait AggregateWindowExpr: WindowExpr {
                     },
                 );
             };
-            let window_state =
-                window_agg_state.get_mut(partition_row).ok_or_else(|| {
-                    DataFusionError::Execution("Cannot find state".to_string())
-                })?;
+            let window_state = window_agg_state
+                .get_mut(partition_row)
+                .ok_or_else(|| exec_datafusion_err!("Cannot find state"))?;
             let accumulator = match &mut window_state.window_fn {
                 WindowFn::Aggregate(accumulator) => accumulator,
                 _ => unreachable!(),

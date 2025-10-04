@@ -64,8 +64,8 @@ use datafusion::test_util::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
 use datafusion_common::{
-    assert_contains, Constraint, Constraints, DFSchema, DataFusionError, ParamValues,
-    ScalarValue, TableReference, UnnestOptions,
+    assert_contains, internal_datafusion_err, Constraint, Constraints, DFSchema,
+    DataFusionError, ParamValues, ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
@@ -5446,11 +5446,11 @@ async fn union_literal_is_null_and_not_null() -> Result<()> {
     for batch in batches {
         // Verify schema is the same for all batches
         if !schema.contains(&batch.schema()) {
-            return Err(DataFusionError::Internal(format!(
+            return Err(internal_datafusion_err!(
                 "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
                 &schema,
                 batch.schema()
-            )));
+            ));
         }
     }
 

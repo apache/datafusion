@@ -34,10 +34,10 @@ use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::error::Result;
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err,
+    internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
@@ -1218,9 +1218,9 @@ fn rewrite_column_expr(
 
 fn reverse_operator(op: Operator) -> Result<Operator> {
     op.swap().ok_or_else(|| {
-        DataFusionError::Internal(format!(
+        internal_datafusion_err!(
             "Could not reverse operator {op} while building pruning predicate"
-        ))
+        )
     })
 }
 

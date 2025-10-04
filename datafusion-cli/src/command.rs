@@ -26,9 +26,9 @@ use clap::ValueEnum;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::exec_err;
 use datafusion::common::instant::Instant;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::common::{exec_datafusion_err, exec_err};
+use datafusion::error::Result;
 use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
@@ -84,9 +84,7 @@ impl Command {
             Self::Include(filename) => {
                 if let Some(filename) = filename {
                     let file = File::open(filename).map_err(|e| {
-                        DataFusionError::Execution(format!(
-                            "Error opening {filename:?} {e}"
-                        ))
+                        exec_datafusion_err!("Error opening {filename:?} {e}")
                     })?;
                     exec_from_lines(ctx, &mut BufReader::new(file), print_options)
                         .await?;

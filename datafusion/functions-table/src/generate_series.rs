@@ -269,9 +269,9 @@ impl GenerateSeriesTable {
                     .map(|s| Tz::from_str(s.as_ref()))
                     .transpose()
                     .map_err(|e| {
-                        datafusion_common::DataFusionError::Internal(format!(
+                        datafusion_common::internal_datafusion_err!(
                             "Failed to parse timezone: {e}"
-                        ))
+                        )
                     })?
                     .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
                 Arc::new(RwLock::new(GenericSeriesState {

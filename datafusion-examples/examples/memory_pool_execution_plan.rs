@@ -27,8 +27,9 @@
 use arrow::record_batch::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::common::record_batch;
+use datafusion::common::{exec_datafusion_err, internal_err};
 use datafusion::datasource::{memory::MemTable, DefaultTableSource};
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -247,9 +248,7 @@ impl ExecutionPlan for BufferingExecutionPlan {
                 children[0].clone(),
             )))
         } else {
-            Err(DataFusionError::Internal(
-                "BufferingExecutionPlan must have exactly one child".to_string(),
-            ))
+            internal_err!("BufferingExecutionPlan must have exactly one child")
         }
     }
 
@@ -289,9 +288,7 @@ impl ExecutionPlan for BufferingExecutionPlan {
                 // In a real implementation, you would create a batch stream from the processed results
                 record_batch!(("id", Int32, vec![5]), ("name", Utf8, vec!["Eve"]))
                     .map_err(|e| {
-                        DataFusionError::Execution(format!(
-                            "Failed to create final RecordBatch: {e}",
-                        ))
+                        exec_datafusion_err!("Failed to create final RecordBatch: {e}")
                     })
             }),
         )))

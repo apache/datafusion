@@ -29,8 +29,9 @@ use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
@@ -440,23 +441,23 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let low_type = low.get_type(self.schema)?;
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
+                        internal_datafusion_err!(
                             "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
-                        ))
+                        )
                     })?;
                 let high_type = high.get_type(self.schema)?;
                 let high_coerced_type = comparison_coercion(&expr_type, &high_type)
                     .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
+                        internal_datafusion_err!(
                             "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                        ))
+                        )
                     })?;
                 let coercion_type =
                     comparison_coercion(&low_coerced_type, &high_coerced_type)
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                            ))
+                            )
                         })?;
                 Ok(Transformed::yes(Expr::Between(Between::new(
                     Box::new(expr.cast_to(&coercion_type, self.schema)?),

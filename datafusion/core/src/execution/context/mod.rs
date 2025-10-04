@@ -34,7 +34,7 @@ use crate::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
     datasource::{provider_as_source, MemTable, ViewTable},
-    error::{DataFusionError, Result},
+    error::Result,
     execution::{
         options::ArrowReadOptions,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
@@ -66,9 +66,10 @@ use datafusion_catalog::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
+    plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
+    DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
@@ -297,13 +298,13 @@ impl SessionContext {
     pub async fn refresh_catalogs(&self) -> Result<()> {
         let cat_names = self.catalog_names().clone();
         for cat_name in cat_names.iter() {
-            let cat = self.catalog(cat_name.as_str()).ok_or_else(|| {
-                DataFusionError::Internal("Catalog not found!".to_string())
-            })?;
+            let cat = self
+                .catalog(cat_name.as_str())
+                .ok_or_else(|| internal_datafusion_err!("Catalog not found!"))?;
             for schema_name in cat.schema_names() {
-                let schema = cat.schema(schema_name.as_str()).ok_or_else(|| {
-                    DataFusionError::Internal("Schema not found!".to_string())
-                })?;
+                let schema = cat
+                    .schema(schema_name.as_str())
+                    .ok_or_else(|| internal_datafusion_err!("Schema not found!"))?;
                 let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
                 if let Some(lister) = lister {
                     lister.refresh(&self.state()).await?;
@@ -949,17 +950,15 @@ impl SessionContext {
                 let state = self.state.read();
                 let name = &state.config().options().catalog.default_catalog;
                 let catalog = state.catalog_list().catalog(name).ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "Missing default catalog '{name}'"
-                    ))
+                    exec_datafusion_err!("Missing default catalog '{name}'")
                 })?;
                 (catalog, tokens[0])
             }
             2 => {
                 let name = &tokens[0];
-                let catalog = self.catalog(name).ok_or_else(|| {
-                    DataFusionError::Execution(format!("Missing catalog '{name}'"))
-                })?;
+                let catalog = self
+                    .catalog(name)
+                    .ok_or_else(|| exec_datafusion_err!("Missing catalog '{name}'"))?;
                 (catalog, tokens[1])
             }
             _ => return exec_err!("Unable to parse catalog from {schema_name}"),
@@ -1099,11 +1098,7 @@ impl SessionContext {
                 let limit = Self::parse_memory_limit(value)?;
                 builder.with_metadata_cache_limit(limit)
             }
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "Unknown runtime configuration: {variable}"
-                )))
-            }
+            _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
 
         *state = SessionStateBuilder::from(state.clone())
@@ -1126,18 +1121,14 @@ impl SessionContext {
     pub fn parse_memory_limit(limit: &str) -> Result<usize> {
         let (number, unit) = limit.split_at(limit.len() - 1);
         let number: f64 = number.parse().map_err(|_| {
-            DataFusionError::Plan(format!(
-                "Failed to parse number from memory limit '{limit}'"
-            ))
+            plan_datafusion_err!("Failed to parse number from memory limit '{limit}'")
         })?;
 
         match unit {
             "K" => Ok((number * 1024.0) as usize),
             "M" => Ok((number * 1024.0 * 1024.0) as usize),
             "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
-            _ => Err(DataFusionError::Plan(format!(
-                "Unsupported unit '{unit}' in memory limit '{limit}'"
-            ))),
+            _ => plan_err!("Unsupported unit '{unit}' in memory limit '{limit}'"),
         }
     }
 
@@ -1152,10 +1143,7 @@ impl SessionContext {
                 .table_factories()
                 .get(file_type.as_str())
                 .ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "Unable to find factory for {}",
-                        cmd.file_type
-                    ))
+                    exec_datafusion_err!("Unable to find factory for {}", cmd.file_type)
                 })?;
         let table = (*factory).create(&state, cmd).await?;
         Ok(table)
@@ -1196,9 +1184,11 @@ impl SessionContext {
 
             match function_factory {
                 Some(f) => f.create(&state, stmt).await?,
-                _ => Err(DataFusionError::Configuration(
-                    "Function factory has not been configured".into(),
-                ))?,
+                _ => {
+                    return Err(DataFusionError::Configuration(
+                        "Function factory has not been configured".to_string(),
+                    ))
+                }
             }
         };
 
@@ -1974,6 +1964,7 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
+    use datafusion_common::DataFusionError;
     use std::error::Error;
     use std::path::PathBuf;
 

@@ -20,7 +20,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{
     ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
 };
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::sync::Arc;
@@ -112,15 +112,17 @@ impl<T: DecimalType> DecimalAverager<T> {
     ) -> Result<Self> {
         let sum_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(sum_scale as u32))
-            .ok_or(DataFusionError::Internal(
-                "Failed to compute sum_mul in DecimalAverager".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!("Failed to compute sum_mul in DecimalAverager")
+            })?;
 
         let target_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(target_scale as u32))
-            .ok_or(DataFusionError::Internal(
-                "Failed to compute target_mul in DecimalAverager".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Failed to compute target_mul in DecimalAverager"
+                )
+            })?;
 
         if target_mul >= sum_mul {
             Ok(Self {

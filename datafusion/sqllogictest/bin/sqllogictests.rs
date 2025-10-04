@@ -18,7 +18,7 @@
 use clap::Parser;
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
-use datafusion::common::{exec_err, DataFusionError, Result};
+use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_sqllogictest::{
     df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
     should_skip_record, value_normalizer, DataFusion, DataFusionSubstraitRoundTrip,
@@ -484,9 +484,7 @@ async fn run_complete_file(
         )
         .await
         // Can't use e directly because it isn't marked Send, so turn it into a string.
-        .map_err(|e| {
-            DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
-        });
+        .map_err(|e| exec_datafusion_err!("Error completing {relative_path:?}: {e}"));
 
     pb.finish_and_clear();
 
@@ -536,9 +534,7 @@ async fn run_complete_file_with_postgres(
         )
         .await
         // Can't use e directly because it isn't marked Send, so turn it into a string.
-        .map_err(|e| {
-            DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
-        });
+        .map_err(|e| exec_datafusion_err!("Error completing {relative_path:?}: {e}"));
 
     pb.finish_and_clear();
 

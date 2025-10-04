@@ -25,7 +25,7 @@ use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::config::{EncryptionFactoryOptions, TableParquetOptions};
-use datafusion_common::{assert_batches_sorted_eq, DataFusionError};
+use datafusion_common::{assert_batches_sorted_eq, exec_datafusion_err, DataFusionError};
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
@@ -359,9 +359,9 @@ impl EncryptionFactory for MockEncryptionFactory {
             Some(&"test value".to_string())
         );
         let keys = self.encryption_keys.lock().unwrap();
-        let key = keys.get(file_path).ok_or_else(|| {
-            DataFusionError::Execution(format!("No key for file {file_path:?}"))
-        })?;
+        let key = keys
+            .get(file_path)
+            .ok_or_else(|| exec_datafusion_err!("No key for file {file_path:?}"))?;
         let decryption_properties =
             FileDecryptionProperties::builder(key.clone()).build()?;
         Ok(Some(decryption_properties))

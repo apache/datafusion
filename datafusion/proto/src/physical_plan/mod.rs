@@ -94,7 +94,9 @@ use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use prost::bytes::BufMut;
@@ -109,7 +111,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         Self: Sized,
     {
         protobuf::PhysicalPlanNode::decode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to decode physical plan: {e:?}"))
+            internal_datafusion_err!("failed to decode physical plan: {e:?}")
         })
     }
 
@@ -119,7 +121,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         Self: Sized,
     {
         self.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode physical plan: {e:?}"))
+            internal_datafusion_err!("failed to encode physical plan: {e:?}")
         })
     }
 
@@ -556,8 +558,8 @@ impl protobuf::PhysicalPlanNode {
             })
             .transpose()?
             .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "filter (FilterExecNode) in PhysicalPlanNode is missing.".to_owned(),
+                internal_datafusion_err!(
+                    "filter (FilterExecNode) in PhysicalPlanNode is missing."
                 )
             })?;
 
@@ -580,8 +582,8 @@ impl protobuf::PhysicalPlanNode {
             Ok(filter_selectivity) => Ok(Arc::new(
                 filter.with_default_selectivity(filter_selectivity)?,
             )),
-            Err(_) => Err(DataFusionError::Internal(
-                "filter_selectivity in PhysicalPlanNode is invalid ".to_owned(),
+            Err(_) => Err(internal_datafusion_err!(
+                "filter_selectivity in PhysicalPlanNode is invalid "
             )),
         }
     }
@@ -746,9 +748,7 @@ impl protobuf::PhysicalPlanNode {
             .collect::<Result<Vec<_>>>()?;
 
         let proto_schema = scan.schema.as_ref().ok_or_else(|| {
-            DataFusionError::Internal(
-                "schema in MemoryScanExecNode is missing.".to_owned(),
-            )
+            internal_datafusion_err!("schema in MemoryScanExecNode is missing.")
         })?;
         let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
 
@@ -983,9 +983,7 @@ impl protobuf::PhysicalPlanNode {
         };
 
         let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
-            DataFusionError::Internal(
-                "input_schema in AggregateNode is missing.".to_owned(),
-            )
+            internal_datafusion_err!("input_schema in AggregateNode is missing.")
         })?;
         let physical_schema: SchemaRef = SchemaRef::new(input_schema.try_into()?);
 
@@ -1903,7 +1901,7 @@ impl protobuf::PhysicalPlanNode {
             }
             Some(protobuf::generate_series_node::Args::TimestampArgs(args)) => {
                 let step_proto = args.step.as_ref().ok_or_else(|| {
-                    DataFusionError::Internal("Missing step in TimestampArgs".to_string())
+                    internal_datafusion_err!("Missing step in TimestampArgs")
                 })?;
                 let step = IntervalMonthDayNanoType::make_value(
                     step_proto.months,
@@ -1921,7 +1919,7 @@ impl protobuf::PhysicalPlanNode {
             }
             Some(protobuf::generate_series_node::Args::DateArgs(args)) => {
                 let step_proto = args.step.as_ref().ok_or_else(|| {
-                    DataFusionError::Internal("Missing step in DateArgs".to_string())
+                    internal_datafusion_err!("Missing step in DateArgs")
                 })?;
                 let step = IntervalMonthDayNanoType::make_value(
                     step_proto.months,
@@ -3340,13 +3338,11 @@ impl ComposedPhysicalExtensionCodec {
         buf: &[u8],
         decode: impl FnOnce(&dyn PhysicalExtensionCodec, &[u8]) -> Result<R>,
     ) -> Result<R> {
-        let proto = DataEncoderTuple::decode(buf)
-            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+        let proto =
+            DataEncoderTuple::decode(buf).map_err(|e| internal_datafusion_err!("{e}"))?;
 
         let codec = self.codecs.get(proto.encoder_position as usize).ok_or(
-            DataFusionError::Internal(
-                "Can't find required codec in codec list".to_owned(),
-            ),
+            internal_datafusion_err!("Can't find required codec in codec list"),
         )?;
 
         decode(codec.as_ref(), &proto.blob)
@@ -3387,7 +3383,7 @@ impl ComposedPhysicalExtensionCodec {
         };
         proto
             .encode(buf)
-            .map_err(|e| DataFusionError::Internal(e.to_string()))
+            .map_err(|e| internal_datafusion_err!("{e}"))
     }
 }
 

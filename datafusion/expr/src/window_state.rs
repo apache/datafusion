@@ -28,9 +28,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    internal_err,
+    internal_datafusion_err, internal_err,
     utils::{compare_rows, get_row_at_idx, search_in_slice},
-    DataFusionError, Result, ScalarValue,
+    Result, ScalarValue,
 };
 
 /// Holds the state of evaluating a window function
@@ -402,8 +402,8 @@ impl WindowFrameStateRange {
                 .sort_options
                 .first()
                 .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Sort options unexpectedly absent in a window frame".to_string(),
+                    internal_datafusion_err!(
+                        "Sort options unexpectedly absent in a window frame"
                     )
                 })?
                 .descending;

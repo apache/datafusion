@@ -313,6 +313,6 @@ mod test {
         let result = round(&args);
 
         assert!(result.is_err());
-        assert!(matches!(result, Err(DataFusionError::Execution { .. })));
+        assert!(matches!(result, Err(DataFusionError::Execution(_))));
     }
 }

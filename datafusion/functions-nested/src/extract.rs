@@ -32,8 +32,8 @@ use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
-    DataFusionError, Result,
+    exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
+    utils::take_function_args, Result,
 };
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
@@ -237,9 +237,7 @@ where
         i64: TryInto<O>,
     {
         let index: O = index.try_into().map_err(|_| {
-            DataFusionError::Execution(format!(
-                "array_element got invalid index: {index}"
-            ))
+            exec_datafusion_err!("array_element got invalid index: {index}")
         })?;
         // 0 ~ len - 1
         let adjusted_zero_index = if index < O::usize_as(0) {

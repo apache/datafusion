@@ -275,7 +275,7 @@ pub(crate) mod tests {
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+    use datafusion_common::{exec_err, internal_datafusion_err, ScalarValue};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -335,11 +335,11 @@ pub(crate) mod tests {
                         .as_any()
                         .downcast_ref::<Float64Array>()
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "could not cast {} to {}",
                                 self.name(),
                                 std::any::type_name::<Float64Array>()
-                            ))
+                            )
                         })?;
 
                     arg.iter()
@@ -351,11 +351,11 @@ pub(crate) mod tests {
                         .as_any()
                         .downcast_ref::<Float32Array>()
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "could not cast {} to {}",
                                 self.name(),
                                 std::any::type_name::<Float32Array>()
-                            ))
+                            )
                         })?;
 
                     arg.iter()

@@ -238,7 +238,7 @@ mod tests {
     use arrow::array::{Float64Array, Int32Array, IntervalMonthDayNanoArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::Result;
+    use datafusion_common::{internal_datafusion_err, internal_err, Result};
 
     use super::*;
     fn run_make_interval_month_day_nano(arrs: Vec<ArrayRef>) -> Result<ArrayRef> {
@@ -332,9 +332,7 @@ mod tests {
         let out = out
             .as_any()
             .downcast_ref::<IntervalMonthDayNanoArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected IntervalMonthDayNano".into())
-            })
+            .ok_or_else(|| internal_datafusion_err!("expected IntervalMonthDayNano"))
             .unwrap();
 
         for i in 0..out.len() {
@@ -360,9 +358,7 @@ mod tests {
         let out = out
             .as_any()
             .downcast_ref::<IntervalMonthDayNanoArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected IntervalMonthDayNano".into())
-            })
+            .ok_or_else(|| internal_datafusion_err!("expected IntervalMonthDayNano"))
             .unwrap();
 
         for i in 0..out.len() {
@@ -387,9 +383,7 @@ mod tests {
         let out = out
             .as_any()
             .downcast_ref::<IntervalMonthDayNanoArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected IntervalMonthDayNano".into())
-            })
+            .ok_or_else(|| internal_datafusion_err!("expected IntervalMonthDayNano"))
             .unwrap();
 
         for i in 0..out.len() {
@@ -413,9 +407,7 @@ mod tests {
         let out = out
             .as_any()
             .downcast_ref::<IntervalMonthDayNanoArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected IntervalMonthDayNano".into())
-            })
+            .ok_or_else(|| internal_datafusion_err!("expected IntervalMonthDayNano"))
             .unwrap();
 
         for i in 0..out.len() {
@@ -439,9 +431,7 @@ mod tests {
         let out = out
             .as_any()
             .downcast_ref::<IntervalMonthDayNanoArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("expected IntervalMonthDayNano".into())
-            })
+            .ok_or_else(|| internal_datafusion_err!("expected IntervalMonthDayNano"))
             .unwrap();
 
         for i in 0..out.len() {
@@ -541,38 +531,40 @@ mod tests {
                     .as_any()
                     .downcast_ref::<IntervalMonthDayNanoArray>()
                     .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "expected IntervalMonthDayNanoArray".into(),
-                        )
+                        internal_datafusion_err!("expected IntervalMonthDayNanoArray")
                     })?;
                 if arr.len() != number_rows {
-                    return Err(DataFusionError::Internal(format!(
+                    return internal_err!(
                         "expected array length {number_rows}, got {}",
                         arr.len()
-                    )));
+                    );
                 }
                 for i in 0..number_rows {
                     let iv = arr.value(i);
                     if (iv.months, iv.days, iv.nanoseconds) != (0, 0, 0) {
-                        return Err(DataFusionError::Internal(format!(
+                        return internal_err!(
                             "row {i}: expected (0,0,0), got ({},{},{})",
-                            iv.months, iv.days, iv.nanoseconds
-                        )));
+                            iv.months,
+                            iv.days,
+                            iv.nanoseconds
+                        );
                     }
                 }
             }
             ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(iv))) => {
                 if (iv.months, iv.days, iv.nanoseconds) != (0, 0, 0) {
-                    return Err(DataFusionError::Internal(format!(
+                    return internal_err!(
                         "expected scalar 0s, got ({},{},{})",
-                        iv.months, iv.days, iv.nanoseconds
-                    )));
+                        iv.months,
+                        iv.days,
+                        iv.nanoseconds
+                    );
                 }
             }
             other => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "expected Array or Scalar IntervalMonthDayNano, got {other:?}"
-                )));
+                );
             }
         }
 

@@ -51,9 +51,9 @@ use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, ParamValues, ScalarValue, SchemaError, TableReference,
-    UnnestOptions,
+    exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
+    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
+    TableReference, UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -1347,9 +1347,9 @@ impl DataFrame {
             .and_then(|r| r.columns().first())
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
             .and_then(|a| a.values().first())
-            .ok_or(DataFusionError::Internal(
-                "Unexpected output when collecting for count()".to_string(),
-            ))? as usize;
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unexpected output when collecting for count()")
+            })? as usize;
         Ok(len)
     }
 

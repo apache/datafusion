@@ -17,7 +17,8 @@
 
 //! This module provides a function to estimate the memory size of a HashTable prior to allocation
 
-use crate::{DataFusionError, Result};
+use crate::error::_exec_datafusion_err;
+use crate::Result;
 use std::mem::size_of;
 
 /// Estimates the memory size required for a hash table prior to allocation.
@@ -36,7 +37,7 @@ use std::mem::size_of;
 ///     buckets.
 ///   - One byte overhead for each bucket.
 ///   - The fixed size overhead of the collection.
-/// - If the estimation overflows, we return a [`DataFusionError`]
+/// - If the estimation overflows, we return a [`crate::error::DataFusionError`]
 ///
 /// # Examples
 /// ---
@@ -94,9 +95,7 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
                 .checked_add(fixed_size)
         })
         .ok_or_else(|| {
-            DataFusionError::Execution(
-                "usize overflow while estimating the number of buckets".to_string(),
-            )
+            _exec_datafusion_err!("usize overflow while estimating the number of buckets")
         })
 }
 
