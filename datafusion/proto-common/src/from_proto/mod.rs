@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::common::proto_error;
@@ -30,6 +31,7 @@ use arrow::datatypes::{
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
+use datafusion_common::format::{DFCompression, DFEnabledStatistics, DFEncoding};
 use datafusion_common::{
     arrow_datafusion_err,
     config::{
@@ -944,7 +946,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             write_batch_size: value.write_batch_size as usize,
             writer_version: value.writer_version.clone(),
             compression: value.compression_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
+                protobuf::parquet_options::CompressionOpt::Compression(v) => Some(DFCompression::try_from(v)?),
             }).unwrap_or(None),
             dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             // Continuing from where we left off in the TryFrom implementation
@@ -952,7 +954,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             statistics_enabled: value
                 .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
+                    protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(DFEnabledStatistics::from_str(v.as_str())?),
                 })
                 .unwrap_or(None),
             max_row_group_size: value.max_row_group_size as usize,
@@ -973,7 +975,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             encoding: value
                 .encoding_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
+                    protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(DFEncoding::try_from(v)?),
                 })
                 .unwrap_or(None),
             bloom_filter_on_read: value.bloom_filter_on_read,
@@ -1014,19 +1016,19 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
         #[allow(deprecated)] // max_statistics_size
         Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
-                protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),
+                protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(DFCompression::from_str(v.as_str()).unwrap()),
             }).unwrap_or(None),
             dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             statistics_enabled: value
                 .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
+                    protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(DFEnabledStatistics::from_str(v.as_str()).unwrap()),
                 })
                 .unwrap_or(None),
             encoding: value
                 .encoding_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::parquet_column_options::EncodingOpt::Encoding(v) => Some(v),
+                    protobuf::parquet_column_options::EncodingOpt::Encoding(v) => Some(DFEncoding::from_str(v.as_str()).unwrap()),
                 })
                 .unwrap_or(None),
             bloom_filter_enabled: value.bloom_filter_enabled_opt.map(|opt| match opt {
