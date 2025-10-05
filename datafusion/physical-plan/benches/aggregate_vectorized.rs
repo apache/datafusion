@@ -30,7 +30,7 @@ const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
 
 fn bench_vectorized_append(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ByteViewGroupValueBuilder_vectorized_append");
+    let mut group = c.benchmark_group("PrimitiveGroupValueBuilder_vectorized_append");
 
     for &size in &SIZES {
         let rows: Vec<usize> = (0..size).collect();
@@ -52,7 +52,7 @@ fn bench_single<const NULLABLE: bool>(group: &mut BenchmarkGroup<WallTime>, size
 
     // vectorized_append
     let id = BenchmarkId::new(
-        format!("inlined_null_{null_density:.1}_size_{size}"),
+        format!("inlined_null_{null_density:.1}_nullable_{NULLABLE}_size_{size}"),
         "vectorized_append",
     );
     group.bench_function(id, |b| {
@@ -64,13 +64,13 @@ fn bench_single<const NULLABLE: bool>(group: &mut BenchmarkGroup<WallTime>, size
 
     // append_val
     let id = BenchmarkId::new(
-        format!("inlined_null_{null_density:.1}_size_{size}"),
+        format!("inlined_null_{null_density:.1}_nullable_{NULLABLE}_size_{size}"),
         "append_val",
     );
     group.bench_function(id, |b| {
         b.iter(|| {
             let mut builder = PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32);
-            for &i in &rows {
+            for &i in rows {
                 builder.append_val(&input, i).unwrap();
             }
         });
@@ -78,7 +78,7 @@ fn bench_single<const NULLABLE: bool>(group: &mut BenchmarkGroup<WallTime>, size
 
     // vectorized_equal_to
     let id = BenchmarkId::new(
-        format!("inlined_null_{null_density:.1}_size_{size}"),
+        format!("inlined_null_{null_density:.1}_nullable_{NULLABLE}_size_{size}"),
         "vectorized_equal_to",
     );
     group.bench_function(id, |b| {
