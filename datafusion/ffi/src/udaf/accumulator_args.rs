@@ -75,6 +75,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             ignore_nulls: args.ignore_nulls,
             fun_definition: None,
             aggregate_function: None,
+            human_display: args.name.to_string(),
         };
         let physical_expr_def = physical_expr_def.encode_to_vec().into();
 
@@ -115,16 +116,17 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
         let schema = Schema::try_from(&value.schema.0)?;
 
         let default_ctx = SessionContext::new();
+        let task_ctx = default_ctx.task_ctx();
         let codex = DefaultPhysicalExtensionCodec {};
 
         let order_bys = parse_physical_sort_exprs(
             &proto_def.ordering_req,
-            &default_ctx,
+            &task_ctx,
             &schema,
             &codex,
         )?;
 
-        let exprs = parse_physical_exprs(&proto_def.expr, &default_ctx, &schema, &codex)?;
+        let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
 
         Ok(Self {
             return_field,

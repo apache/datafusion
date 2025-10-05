@@ -226,7 +226,7 @@ where
 /// # use datafusion::execution::SessionStateBuilder;
 /// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 /// // Configure a 4k batch size
-/// let config = SessionConfig::new() .with_batch_size(4 * 1024);
+/// let config = SessionConfig::new().with_batch_size(4 * 1024);
 ///
 /// // configure a memory limit of 1GB with 20%  slop
 ///  let runtime_env = RuntimeEnvBuilder::new()
@@ -585,6 +585,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
         self.sql_with_options(sql, SQLOptions::new()).await
     }
@@ -615,6 +616,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub async fn sql_with_options(
         &self,
         sql: &str,
@@ -648,6 +650,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn parse_sql_expr(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
         self.state.read().create_logical_expr(sql, df_schema)
     }
@@ -789,19 +792,44 @@ impl SessionContext {
             return not_impl_err!("Temporary tables not supported");
         }
 
-        if exist {
-            match cmd.if_not_exists {
-                true => return self.return_empty_dataframe(),
-                false => {
-                    return exec_err!("Table '{}' already exists", cmd.name);
+        match (cmd.if_not_exists, cmd.or_replace, exist) {
+            (true, false, true) => self.return_empty_dataframe(),
+            (false, true, true) => {
+                let result = self
+                    .find_and_deregister(cmd.name.clone(), TableType::Base)
+                    .await;
+
+                match result {
+                    Ok(true) => {
+                        let table_provider: Arc<dyn TableProvider> =
+                            self.create_custom_table(cmd).await?;
+                        self.register_table(cmd.name.clone(), table_provider)?;
+                        self.return_empty_dataframe()
+                    }
+                    Ok(false) => {
+                        let table_provider: Arc<dyn TableProvider> =
+                            self.create_custom_table(cmd).await?;
+                        self.register_table(cmd.name.clone(), table_provider)?;
+                        self.return_empty_dataframe()
+                    }
+                    Err(e) => {
+                        exec_err!("Errored while deregistering external table: {}", e)
+                    }
                 }
             }
+            (true, true, true) => {
+                exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+            }
+            (_, _, false) => {
+                let table_provider: Arc<dyn TableProvider> =
+                    self.create_custom_table(cmd).await?;
+                self.register_table(cmd.name.clone(), table_provider)?;
+                self.return_empty_dataframe()
+            }
+            (false, false, true) => {
+                exec_err!("External table '{}' already exists", cmd.name)
+            }
         }
-
-        let table_provider: Arc<dyn TableProvider> =
-            self.create_custom_table(cmd).await?;
-        self.register_table(cmd.name.clone(), table_provider)?;
-        self.return_empty_dataframe()
     }
 
     async fn create_memory_table(&self, cmd: CreateMemoryTable) -> Result<DataFrame> {
@@ -827,7 +855,7 @@ impl SessionContext {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let schema = Arc::new(input.schema().as_ref().into());
+                let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
@@ -845,8 +873,7 @@ impl SessionContext {
                 exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
             }
             (_, _, Err(_)) => {
-                let df_schema = input.schema();
-                let schema = Arc::new(df_schema.as_ref().into());
+                let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
@@ -914,7 +941,7 @@ impl SessionContext {
             ..
         } = cmd;
 
-        // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
+        // sqlparser doesn't accept database / catalog as parameter to CREATE SCHEMA
         // so for now, we default to default catalog
         let tokens: Vec<&str> = schema_name.split('.').collect();
         let (catalog, schema_name) = match tokens.len() {
@@ -1055,24 +1082,34 @@ impl SessionContext {
     fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
         let key = variable.strip_prefix("datafusion.runtime.").unwrap();
 
-        match key {
+        let mut state = self.state.write();
+
+        let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
+        builder = match key {
             "memory_limit" => {
                 let memory_limit = Self::parse_memory_limit(value)?;
-
-                let mut state = self.state.write();
-                let mut builder =
-                    RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
-                builder = builder.with_memory_limit(memory_limit, 1.0);
-                *state = SessionStateBuilder::from(state.clone())
-                    .with_runtime_env(Arc::new(builder.build()?))
-                    .build();
+                builder.with_memory_limit(memory_limit, 1.0)
+            }
+            "max_temp_directory_size" => {
+                let directory_size = Self::parse_memory_limit(value)?;
+                builder.with_max_temp_directory_size(directory_size as u64)
+            }
+            "temp_directory" => builder.with_temp_file_path(value),
+            "metadata_cache_limit" => {
+                let limit = Self::parse_memory_limit(value)?;
+                builder.with_metadata_cache_limit(limit)
             }
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unknown runtime configuration: {variable}"
                 )))
             }
-        }
+        };
+
+        *state = SessionStateBuilder::from(state.clone())
+            .with_runtime_env(Arc::new(builder.build()?))
+            .build();
+
         Ok(())
     }
 
@@ -1640,7 +1677,7 @@ impl SessionContext {
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
         let mut state = self.state.read().clone();
-        state.execution_props_mut().start_execution();
+        state.mark_start_execution();
         state
     }
 
@@ -1717,6 +1754,14 @@ impl FunctionRegistry for SessionContext {
     ) -> Result<()> {
         self.state.write().register_expr_planner(expr_planner)
     }
+
+    fn udafs(&self) -> HashSet<String> {
+        self.state.read().udafs()
+    }
+
+    fn udwfs(&self) -> HashSet<String> {
+        self.state.read().udwfs()
+    }
 }
 
 /// Create a new task context instance from SessionContext
@@ -1741,7 +1786,7 @@ impl From<SessionContext> for SessionStateBuilder {
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
 pub trait QueryPlanner: Debug {
-    /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
+    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1749,12 +1794,46 @@ pub trait QueryPlanner: Debug {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
-/// A pluggable interface to handle `CREATE FUNCTION` statements
-/// and interact with [SessionState] to registers new udf, udaf or udwf.
+/// Interface for handling `CREATE FUNCTION` statements and interacting with
+/// [SessionState] to create and register functions ([`ScalarUDF`],
+/// [`AggregateUDF`], [`WindowUDF`], and [`TableFunctionImpl`]) dynamically.
+///
+/// Implement this trait to create user-defined functions in a custom way, such
+/// as loading from external libraries or defining them programmatically.
+/// DataFusion will parse `CREATE FUNCTION` statements into [`CreateFunction`]
+/// structs and pass them to the [`create`](Self::create) method.
+///
+/// Note there is no default implementation of this trait provided in DataFusion,
+/// because the implementation and requirements vary widely. Please see
+/// [function_factory example] for a reference implementation.
+///
+/// [function_factory example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/function_factory.rs
+///
+/// # Examples of syntax that can be supported
+///
+/// ```sql
+/// CREATE FUNCTION f1(BIGINT)
+///   RETURNS BIGINT
+///   RETURN $1 + 1;
+/// ```
+/// or
+/// ```sql
+/// CREATE FUNCTION to_miles(DOUBLE)
+/// RETURNS DOUBLE
+/// LANGUAGE PYTHON
+/// AS '
+/// import pyarrow.compute as pc
+///
+/// conversation_rate_multiplier = 0.62137119
+///
+/// def to_miles(km_data):
+///     return pc.multiply(km_data, conversation_rate_multiplier)
+/// '
+/// ```
 
 #[async_trait]
 pub trait FunctionFactory: Debug + Sync + Send {
-    /// Handles creation of user defined function specified in [CreateFunction] statement
+    /// Creates a new dynamic function from the SQL in the [CreateFunction] statement
     async fn create(
         &self,
         state: &SessionState,
@@ -1762,7 +1841,8 @@ pub trait FunctionFactory: Debug + Sync + Send {
     ) -> Result<RegisterFunction>;
 }
 
-/// Type of function to create
+/// The result of processing a [`CreateFunction`] statement with [`FunctionFactory`].
+#[derive(Debug, Clone)]
 pub enum RegisterFunction {
     /// Scalar user defined function
     Scalar(Arc<ScalarUDF>),

@@ -43,7 +43,7 @@ use std::sync::Arc;
 ```"#,
     standard_argument(name = "union", prefix = "Union")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UnionTagFunc {
     signature: Signature,
 }
@@ -136,7 +136,7 @@ impl ScalarUDFImpl for UnionTagFunc {
                     })
                     .ok_or_else(|| {
                         exec_datafusion_err!(
-                            "union_tag: union scalar with unknow type_id {value_type_id}"
+                            "union_tag: union scalar with unknown type_id {value_type_id}"
                         )
                     }),
                 None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
@@ -156,6 +156,7 @@ impl ScalarUDFImpl for UnionTagFunc {
 mod tests {
     use super::UnionTagFunc;
     use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -182,6 +183,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
 
@@ -204,6 +206,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
 

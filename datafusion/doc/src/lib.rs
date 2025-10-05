@@ -19,7 +19,15 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+mod udaf;
+mod udf;
+mod udwf;
+
+pub use udaf::aggregate_doc_sections;
+pub use udf::scalar_doc_sections;
+pub use udwf::window_doc_sections;
 
 #[allow(rustdoc::broken_intra_doc_links)]
 /// Documentation for use by [`ScalarUDFImpl`](ScalarUDFImpl),
@@ -39,7 +47,7 @@
 /// thus all text should be in English.
 ///
 /// [SQL function documentation]: https://datafusion.apache.org/user-guide/sql/index.html
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Documentation {
     /// The section in the documentation where the UDF will be documented
     pub doc_section: DocSection,
@@ -158,7 +166,7 @@ impl Documentation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DocSection {
     /// True to include this doc section in the public
     /// documentation, false otherwise
@@ -212,15 +220,6 @@ pub struct DocumentationBuilder {
 }
 
 impl DocumentationBuilder {
-    #[allow(clippy::new_without_default)]
-    #[deprecated(
-        since = "44.0.0",
-        note = "please use `DocumentationBuilder::new_with_details` instead"
-    )]
-    pub fn new() -> Self {
-        Self::new_with_details(DocSection::default(), "<no description>", "<no example>")
-    }
-
     /// Creates a new [`DocumentationBuilder`] with all required fields
     pub fn new_with_details(
         doc_section: DocSection,

@@ -23,15 +23,128 @@
 
 ## Original Query: SELECT make_dt_interval(1, 12, 30, 01.001001);
 ## PySpark 3.5.5 Result: {'make_dt_interval(1, 12, 30, 1.001001)': datetime.timedelta(days=1, seconds=45001, microseconds=1001), 'typeof(make_dt_interval(1, 12, 30, 1.001001))': 'interval day to second', 'typeof(1)': 'int', 'typeof(12)': 'int', 'typeof(30)': 'int', 'typeof(1.001001)': 'decimal(7,6)'}
-#query
-#SELECT make_dt_interval(1::int, 12::int, 30::int, 1.001001::decimal(7,6));
+query ?
+SELECT make_dt_interval(1::int, 12::int, 30::int, 1.001001::decimal(7,6));
+----
+1 days 12 hours 30 mins 1.001001 secs
 
 ## Original Query: SELECT make_dt_interval(100, null, 3);
 ## PySpark 3.5.5 Result: {'make_dt_interval(100, NULL, 3, 0.000000)': None, 'typeof(make_dt_interval(100, NULL, 3, 0.000000))': 'interval day to second', 'typeof(100)': 'int', 'typeof(NULL)': 'void', 'typeof(3)': 'int'}
-#query
-#SELECT make_dt_interval(100::int, NULL::void, 3::int);
+query ?
+SELECT make_dt_interval(100::int, NULL, 3::int);
+----
+NULL
 
 ## Original Query: SELECT make_dt_interval(2);
 ## PySpark 3.5.5 Result: {'make_dt_interval(2, 0, 0, 0.000000)': datetime.timedelta(days=2), 'typeof(make_dt_interval(2, 0, 0, 0.000000))': 'interval day to second', 'typeof(2)': 'int'}
-#query
-#SELECT make_dt_interval(2::int);
+query ?
+SELECT make_dt_interval(2::int);
+----
+2 days 0 hours 0 mins 0.000000 secs
+
+# null
+query ?
+SELECT (make_dt_interval(null, 0, 0, 0))
+----
+NULL
+
+query ?
+SELECT (make_dt_interval(0, null, 0, 0))
+----
+NULL
+
+query ?
+SELECT (make_dt_interval(0, 0, null, 0))
+----
+NULL
+
+query ?
+SELECT (make_dt_interval(0, 0, 0, null))
+----
+NULL
+
+# missing params
+query ?
+SELECT (make_dt_interval()) AS make_dt_interval
+----
+0 days 0 hours 0 mins 0.000000 secs
+
+query ?
+SELECT (make_dt_interval(1)) AS make_dt_interval
+----
+1 days 0 hours 0 mins 0.000000 secs
+
+query ?
+SELECT (make_dt_interval(1, 1)) AS make_dt_interval
+----
+1 days 1 hours 0 mins 0.000000 secs
+
+query ?
+SELECT (make_dt_interval(1, 1, 1)) AS make_dt_interval
+----
+1 days 1 hours 1 mins 0.000000 secs
+
+query ?
+SELECT (make_dt_interval(1, 1, 1, 1)) AS make_dt_interval
+----
+1 days 1 hours 1 mins 1.000000 secs
+
+
+# all 0 values
+query ?
+SELECT (make_dt_interval(0, 0, 0, 0))
+----
+0 days 0 hours 0 mins 0.000000 secs
+
+query ?
+SELECT (make_dt_interval(-1, 24, 0, 0)) df
+----
+0 days 0 hours 0 mins 0.000000 secs
+
+query ?
+SELECT (make_dt_interval(1, -24, 0, 0)) dt
+----
+0 days 0 hours 0 mins 0.000000 secs
+
+query ?
+SELECT (make_dt_interval(0, 0, 0, 0.1))
+----
+0 days 0 hours 0 mins 0.100000 secs
+
+
+# doctest https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.make_dt_interval.html
+# extract only the value make_dt_interval
+
+query ?
+SELECT MAKE_DT_INTERVAL(day) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+----
+1 days 0 hours 0 mins 0.000000 secs
+
+query ?
+SELECT MAKE_DT_INTERVAL(day, hour) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+----
+1 days 12 hours 0 mins 0.000000 secs
+
+query ?
+SELECT MAKE_DT_INTERVAL(day, hour, min) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+----
+1 days 12 hours 30 mins 0.000000 secs
+
+query ?
+SELECT MAKE_DT_INTERVAL(day, hour, min, sec) AS interval_val
+FROM VALUES (1, 12, 30, 1.001001) AS t(day, hour, min, sec);
+----
+1 days 12 hours 30 mins 1.001001 secs
+
+query ?
+SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001)
+----
+1 days 12 hours 30 mins 1.001001 secs
+
+query ?
+SELECT MAKE_DT_INTERVAL(1, 12, 30, 1.001001);
+----
+1 days 12 hours 30 mins 1.001001 secs

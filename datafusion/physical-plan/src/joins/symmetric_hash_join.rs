@@ -34,7 +34,6 @@ use std::vec;
 
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
-use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
@@ -43,9 +42,9 @@ use crate::joins::stream_join_utils::{
 };
 use crate::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, symmetric_join_output_partitioning, BatchSplitter,
-    BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn, JoinOnRef,
-    NoopBatchTransformer, StatefulStreamResult,
+    check_join_is_valid, equal_rows_arr, symmetric_join_output_partitioning, update_hash,
+    BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
+    JoinOnRef, NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
@@ -1019,6 +1018,7 @@ pub(crate) fn join_with_probe_batch(
             | JoinType::LeftSemi
             | JoinType::LeftMark
             | JoinType::RightSemi
+            | JoinType::RightMark
     ) {
         Ok(None)
     } else {
@@ -1865,6 +1865,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -1953,6 +1954,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2021,6 +2023,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2074,6 +2077,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2102,6 +2106,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2486,6 +2491,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2572,6 +2578,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2650,6 +2657,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,

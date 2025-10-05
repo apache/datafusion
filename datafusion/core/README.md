@@ -17,15 +17,12 @@
   under the License.
 -->
 
-# DataFusion Core
+<!--
+  Note the main crates.io landing page https://crates.io/crates/datafusion
+  uses the workspace README.md file, not this file
+-->
 
-DataFusion is an extensible query execution framework, written in Rust,
-that uses Apache Arrow as its in-memory format.
+# Apache DataFusion Core
 
 This crate contains the main entry points and high level DataFusion APIs such as
 `SessionContext`, `DataFrame` and `ListingTable`.
-
-For more information, please see:
-
-- [DataFusion Website](https://datafusion.apache.org)
-- [DataFusion API Docs](https://docs.rs/datafusion/latest/datafusion/)

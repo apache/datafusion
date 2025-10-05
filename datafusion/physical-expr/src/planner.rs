@@ -24,6 +24,7 @@ use crate::{
 };
 
 use arrow::datatypes::Schema;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
@@ -110,7 +111,7 @@ pub fn create_physical_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_schema: &Schema = &input_dfschema.into();
+    let input_schema = input_dfschema.as_arrow();
 
     match e {
         Expr::Alias(Alias { expr, metadata, .. }) => {
@@ -317,11 +318,16 @@ pub fn create_physical_expr(
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
+            let config_options = match execution_props.config_options.as_ref() {
+                Some(config_options) => Arc::clone(config_options),
+                None => Arc::new(ConfigOptions::default()),
+            };
 
             Ok(Arc::new(ScalarFunctionExpr::try_new(
                 Arc::clone(func),
                 physical_args,
                 input_schema,
+                config_options,
             )?))
         }
         Expr::Between(Between {
@@ -401,6 +407,7 @@ where
 
 /// Convert a logical expression to a physical expression (without any simplification, etc)
 pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+    // TODO this makes a deep copy of the Schema. Should take SchemaRef instead and avoid deep copy
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()

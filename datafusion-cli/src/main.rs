@@ -28,9 +28,10 @@ use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-use datafusion_cli::functions::ParquetMetadataFunc;
+use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
 use datafusion_cli::{
     exec,
     pool_type::PoolType,
@@ -219,6 +220,14 @@ async fn main_inner() -> Result<()> {
     // register `parquet_metadata` table function to get metadata from parquet files
     ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
+    // register `metadata_cache` table function to get the contents of the file metadata cache
+    ctx.register_udtf(
+        "metadata_cache",
+        Arc::new(MetadataCacheFunc::new(
+            ctx.task_ctx().runtime_env().cache_manager.clone(),
+        )),
+    );
+
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
@@ -280,7 +289,7 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
     // use easier to understand "tree" mode by default
     // if the user hasn't specified an explain format in the environment
     if env::var_os("DATAFUSION_EXPLAIN_FORMAT").is_none() {
-        config_options.explain.format = String::from("tree");
+        config_options.explain.format = ExplainFormat::Tree;
     }
 
     // in the CLI, we want to show NULL values rather the empty strings
@@ -397,7 +406,7 @@ pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::common::test_util::batches_to_string;
+    use datafusion::{common::test_util::batches_to_string, prelude::ParquetReadOptions};
     use insta::assert_snapshot;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
@@ -509,6 +518,99 @@ mod tests {
         | ../parquet-testing/data/data_index_bloom_encoding_stats.parquet | 0            | 14                 | 1                     | 163             | 0         | 4           | 14         | "String"       | BYTE_ARRAY | Hello     | today     | 0                |                      | Hello           | today           | GZIP(GzipLevel(6)) | [BIT_PACKED, RLE, PLAIN] |                   |                        | 4                | 152                   | 163                     |
         +-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
         "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metadata_cache() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_udtf(
+            "metadata_cache",
+            Arc::new(MetadataCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        ctx.register_parquet(
+            "alltypes_plain",
+            "../parquet-testing/data/alltypes_plain.parquet",
+            ParquetReadOptions::new(),
+        )
+        .await?;
+
+        ctx.register_parquet(
+            "alltypes_tiny_pages",
+            "../parquet-testing/data/alltypes_tiny_pages.parquet",
+            ParquetReadOptions::new(),
+        )
+        .await?;
+
+        ctx.register_parquet(
+            "lz4_raw_compressed_larger",
+            "../parquet-testing/data/lz4_raw_compressed_larger.parquet",
+            ParquetReadOptions::new(),
+        )
+        .await?;
+
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_tiny_pages")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from lz4_raw_compressed_larger")
+            .await?
+            .collect()
+            .await?;
+
+        // initial state
+        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, metadata_size_bytes, hits, extra from metadata_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | alltypes_plain.parquet            | 1851            | 10181               | 2    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 881418              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 2    | page_index=false |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        ");
+
+        // increase the number of hits
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from lz4_raw_compressed_larger")
+            .await?
+            .collect()
+            .await?;
+        let sql = "select split_part(path, '/', -1) as filename, file_size_bytes, metadata_size_bytes, hits, extra from metadata_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | alltypes_plain.parquet            | 1851            | 10181               | 5    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 881418              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 3    | page_index=false |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        ");
 
         Ok(())
     }

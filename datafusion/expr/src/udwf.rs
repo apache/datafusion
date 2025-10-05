@@ -19,7 +19,7 @@
 
 use arrow::compute::SortOptions;
 use std::cmp::Ordering;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{
     any::Any,
     fmt::{self, Debug, Display, Formatter},
@@ -29,11 +29,13 @@ use std::{
 use arrow::datatypes::{DataType, FieldRef};
 
 use crate::expr::WindowFunction;
+use crate::udf_eq::UdfEq;
 use crate::{
     function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
 };
 use datafusion_common::{not_impl_err, Result};
 use datafusion_doc::Documentation;
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -80,7 +82,7 @@ impl Display for WindowUDF {
 
 impl PartialEq for WindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.equals(other.inner.as_ref())
+        self.inner.dyn_eq(other.inner.as_any())
     }
 }
 
@@ -88,7 +90,7 @@ impl Eq for WindowUDF {}
 
 impl Hash for WindowUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.hash_value().hash(state)
+        self.inner.dyn_hash(state)
     }
 }
 
@@ -227,6 +229,10 @@ where
 /// This trait exposes the full API for implementing user defined window functions and
 /// can be used to implement any function.
 ///
+/// While the trait depends on [`DynEq`] and [`DynHash`] traits, these should not be
+/// implemented directly. Instead, implement [`Eq`] and [`Hash`] and leverage the
+/// blanket implementations of [`DynEq`] and [`DynHash`].
+///
 /// See [`advanced_udwf.rs`] for a full example with complete implementation and
 /// [`WindowUDF`] for other available options.
 ///
@@ -244,7 +250,7 @@ where
 /// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// # use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 ///
-/// #[derive(Debug, Clone)]
+/// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// struct SmoothIt {
 ///   signature: Signature,
 /// }
@@ -303,10 +309,7 @@ where
 ///     .build()
 ///     .unwrap();
 /// ```
-pub trait WindowUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedWindowUDFImpl below!
-
+pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -357,42 +360,6 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// * 'info': [crate::simplify::SimplifyInfo]
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         None
-    }
-
-    /// Return true if this window UDF is equal to the other.
-    ///
-    /// Allows customizing the equality of window UDFs.
-    /// *Must* be implemented explicitly if the UDF type has internal state.
-    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
-    ///
-    /// - reflexive: `a.equals(a)`;
-    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
-    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
-    ///
-    /// By default, compares type, [`Self::name`], [`Self::aliases`] and [`Self::signature`].
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        self.as_any().type_id() == other.as_any().type_id()
-            && self.name() == other.name()
-            && self.aliases() == other.aliases()
-            && self.signature() == other.signature()
-    }
-
-    /// Returns a hash value for this window UDF.
-    ///
-    /// Allows customizing the hash code of window UDFs.
-    /// *Must* be implemented explicitly whenever [`Self::equals`] is implemented.
-    ///
-    /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
-    /// their `hash_value`s must be the same.
-    ///
-    /// By default, it is consistent with default implementation of [`Self::equals`].
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.as_any().type_id().hash(hasher);
-        self.name().hash(hasher);
-        self.aliases().hash(hasher);
-        self.signature().hash(hasher);
-        hasher.finish()
     }
 
     /// The [`FieldRef`] of the final result of evaluating this window function.
@@ -463,7 +430,7 @@ pub enum ReversedUDWF {
 
 impl PartialEq for dyn WindowUDFImpl {
     fn eq(&self, other: &Self) -> bool {
-        self.equals(other)
+        self.dyn_eq(other.as_any())
     }
 }
 
@@ -473,14 +440,16 @@ impl PartialOrd for dyn WindowUDFImpl {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
 /// WindowUDF that adds an alias to the underlying function. It is better to
 /// implement [`WindowUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedWindowUDFImpl {
-    inner: Arc<dyn WindowUDFImpl>,
+    inner: UdfEq<Arc<dyn WindowUDFImpl>>,
     aliases: Vec<String>,
 }
 
@@ -492,10 +461,14 @@ impl AliasedWindowUDFImpl {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
 
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -531,21 +504,6 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.simplify()
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedWindowUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
-    }
-
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         self.inner.field(field_args)
     }
@@ -558,40 +516,13 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
+    fn reverse_expr(&self) -> ReversedUDWF {
+        self.inner.reverse_expr()
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
-}
-
-// Window UDF doc sections for use in public documentation
-pub mod window_doc_sections {
-    use datafusion_doc::DocSection;
-
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_AGGREGATE,
-            DOC_SECTION_RANKING,
-            DOC_SECTION_ANALYTICAL,
-        ]
-    }
-
-    pub const DOC_SECTION_AGGREGATE: DocSection = DocSection {
-        include: true,
-        label: "Aggregate Functions",
-        description: Some("All aggregate functions can be used as window functions."),
-    };
-
-    pub const DOC_SECTION_RANKING: DocSection = DocSection {
-        include: true,
-        label: "Ranking Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_ANALYTICAL: DocSection = DocSection {
-        include: true,
-        label: "Analytical Functions",
-        description: None,
-    };
 }
 
 #[cfg(test)]
@@ -604,8 +535,9 @@ mod test {
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::any::Any;
     use std::cmp::Ordering;
+    use std::hash::{DefaultHasher, Hash, Hasher};
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AWindowUDF {
         signature: Signature,
     }
@@ -644,7 +576,7 @@ mod test {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct BWindowUDF {
         signature: Signature,
     }
@@ -684,6 +616,16 @@ mod test {
     }
 
     #[test]
+    fn test_partial_eq() {
+        let a1 = WindowUDF::from(AWindowUDF::new());
+        let a2 = WindowUDF::from(AWindowUDF::new());
+        let eq = a1 == a2;
+        assert!(eq);
+        assert_eq!(a1, a2);
+        assert_eq!(hash(a1), hash(a2));
+    }
+
+    #[test]
     fn test_partial_ord() {
         let a1 = WindowUDF::from(AWindowUDF::new());
         let a2 = WindowUDF::from(AWindowUDF::new());
@@ -692,5 +634,11 @@ mod test {
         let b1 = WindowUDF::from(BWindowUDF::new());
         assert!(a1 < b1);
         assert!(!(a1 == b1));
+    }
+
+    fn hash<T: Hash>(value: T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
     }
 }

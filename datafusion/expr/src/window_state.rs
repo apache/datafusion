@@ -34,7 +34,7 @@ use datafusion_common::{
 };
 
 /// Holds the state of evaluating a window function
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WindowAggState {
     /// The range that we calculate the window function
     pub window_frame_range: Range<usize>,
@@ -90,7 +90,12 @@ impl WindowAggState {
         partition_batch_state: &PartitionBatchState,
     ) -> Result<()> {
         self.last_calculated_index += out_col.len();
-        self.out_col = concat(&[&self.out_col, &out_col])?;
+        // no need to use concat if the current `out_col` is empty
+        if self.out_col.is_empty() {
+            self.out_col = Arc::clone(out_col);
+        } else {
+            self.out_col = concat(&[&self.out_col, &out_col])?;
+        }
         self.n_row_result_missing =
             partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
         self.is_end = partition_batch_state.is_end;
@@ -112,7 +117,7 @@ impl WindowAggState {
 }
 
 /// This object stores the window frame state for use in incremental calculations.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WindowFrameContext {
     /// ROWS frames are inherently stateless.
     Rows(Arc<WindowFrame>),
@@ -240,7 +245,7 @@ impl WindowFrameContext {
 }
 
 /// State for each unique partition determined according to PARTITION BY column(s)
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PartitionBatchState {
     /// The record batch belonging to current partition
     pub record_batch: RecordBatch,
@@ -265,6 +270,15 @@ impl PartitionBatchState {
         }
     }
 
+    pub fn new_with_batch(batch: RecordBatch) -> Self {
+        Self {
+            record_batch: batch,
+            most_recent_row: None,
+            is_end: false,
+            n_out_row: 0,
+        }
+    }
+
     pub fn extend(&mut self, batch: &RecordBatch) -> Result<()> {
         self.record_batch =
             concat_batches(&self.record_batch.schema(), [&self.record_batch, batch])?;
@@ -282,7 +296,7 @@ impl PartitionBatchState {
 /// ranges of data while processing RANGE frames.
 /// Attribute `sort_options` stores the column ordering specified by the ORDER
 /// BY clause. This information is used to calculate the range.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateRange {
     sort_options: Vec<SortOptions>,
 }
@@ -454,7 +468,7 @@ impl WindowFrameStateRange {
 
 /// This structure encapsulates all the state information we require as we
 /// scan groups of data while processing window frames.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateGroups {
     /// A tuple containing group values and the row index where the group ends.
     /// Example: [[1, 1], [1, 1], [2, 1], [2, 1], ...] would correspond to

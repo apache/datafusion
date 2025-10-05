@@ -286,8 +286,10 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     &partitionby_exprs,
                     &[],
                     Arc::new(window_frame),
-                    &extended_schema,
+                    extended_schema,
                     false,
+                    false,
+                    None,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
                     vec![window_expr],
@@ -453,7 +455,7 @@ fn get_random_function(
         }
     }
 
-    (window_fn.clone(), args, fn_name.to_string())
+    (window_fn.clone(), args, (*fn_name).to_string())
 }
 
 fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
@@ -658,8 +660,10 @@ async fn run_window_test(
             &partitionby_exprs,
             &orderby_exprs.clone(),
             Arc::new(window_frame.clone()),
-            &extended_schema,
+            Arc::clone(&extended_schema),
             false,
+            false,
+            None,
         )?],
         exec1,
         false,
@@ -676,8 +680,10 @@ async fn run_window_test(
             &partitionby_exprs,
             &orderby_exprs,
             Arc::new(window_frame.clone()),
-            &extended_schema,
+            extended_schema,
             false,
+            false,
+            None,
         )?],
         exec2,
         search_mode.clone(),

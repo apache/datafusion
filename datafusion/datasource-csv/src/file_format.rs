@@ -222,6 +222,11 @@ impl CsvFormat {
         self
     }
 
+    pub fn with_truncated_rows(mut self, truncated_rows: bool) -> Self {
+        self.options.truncated_rows = Some(truncated_rows);
+        self
+    }
+
     /// Set the regex to use for null values in the CSV reader.
     /// - default to treat empty values as null.
     pub fn with_null_regex(mut self, null_regex: Option<String>) -> Self {
@@ -288,6 +293,13 @@ impl CsvFormat {
         file_compression_type: FileCompressionType,
     ) -> Self {
         self.options.compression = file_compression_type.into();
+        self
+    }
+
+    /// Set whether rows should be truncated to the column width
+    /// - defaults to false
+    pub fn with_truncate_rows(mut self, truncate_rows: bool) -> Self {
+        self.options.truncated_rows = Some(truncate_rows);
         self
     }
 
@@ -426,11 +438,13 @@ impl FileFormat for CsvFormat {
             .with_file_compression_type(self.options.compression.into())
             .with_newlines_in_values(newlines_in_values);
 
+        let truncated_rows = self.options.truncated_rows.unwrap_or(false);
         let source = Arc::new(
             CsvSource::new(has_header, self.options.delimiter, self.options.quote)
                 .with_escape(self.options.escape)
                 .with_terminator(self.options.terminator)
-                .with_comment(self.options.comment),
+                .with_comment(self.options.comment)
+                .with_truncate_rows(truncated_rows),
         );
 
         let config = conf_builder.with_source(source).build();
@@ -509,7 +523,8 @@ impl CsvFormat {
                             .unwrap_or_else(|| state.config_options().catalog.has_header),
                 )
                 .with_delimiter(self.options.delimiter)
-                .with_quote(self.options.quote);
+                .with_quote(self.options.quote)
+                .with_truncated_rows(self.options.truncated_rows.unwrap_or(false));
 
             if let Some(null_regex) = &self.options.null_regex {
                 let regex = Regex::new(null_regex.as_str())
@@ -567,20 +582,28 @@ impl CsvFormat {
             }
         }
 
-        let schema = build_schema_helper(column_names, &column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities);
         Ok((schema, total_records_read))
     }
 }
 
-fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schema {
+fn build_schema_helper(names: Vec<String>, types: Vec<HashSet<DataType>>) -> Schema {
     let fields = names
         .into_iter()
         .zip(types)
-        .map(|(field_name, data_type_possibilities)| {
+        .map(|(field_name, mut data_type_possibilities)| {
             // ripped from arrow::csv::reader::infer_reader_schema_with_csv_options
             // determine data type based on possible types
             // if there are incompatible types, use DataType::Utf8
+
+            // ignore nulls, to avoid conflicting datatypes (e.g. [nulls, int]) being inferred as Utf8.
+            data_type_possibilities.remove(&DataType::Null);
+
             match data_type_possibilities.len() {
+                // Return Null for columns with only nulls / empty files
+                // This allows schema merging to work when reading folders
+                // such files along with normal files.
+                0 => Field::new(field_name, DataType::Null, true),
                 1 => Field::new(
                     field_name,
                     data_type_possibilities.iter().next().unwrap().clone(),

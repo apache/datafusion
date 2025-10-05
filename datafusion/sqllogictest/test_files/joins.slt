@@ -3348,6 +3348,27 @@ physical_plan
 05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
+# Test ordering preservation for RIGHT join
+query TT
+EXPLAIN SELECT *
+FROM annotated_data as l_table
+RIGHT JOIN (SELECT * FROM annotated_data) as r_table
+ON l_table.b = r_table.b
+ORDER BY r_table.a ASC NULLS FIRST, r_table.b, r_table.c, l_table.a ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: r_table.a ASC NULLS FIRST, r_table.b ASC NULLS LAST, r_table.c ASC NULLS LAST, l_table.a ASC NULLS FIRST
+02)--Right Join: l_table.b = r_table.b
+03)----SubqueryAlias: l_table
+04)------TableScan: annotated_data projection=[a0, a, b, c, d]
+05)----SubqueryAlias: r_table
+06)------TableScan: annotated_data projection=[a0, a, b, c, d]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@2, b@2)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+
 query TT
 EXPLAIN SELECT l.a, LAST_VALUE(r.b ORDER BY r.a ASC NULLS FIRST) as last_col1
 FROM annotated_data as l
@@ -3608,12 +3629,12 @@ logical_plan
 02)--SubqueryAlias: a
 03)----Union
 04)------Projection: Int64(1) AS c, Int64(2) AS d
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Projection: Int64(1) AS c, Int64(3) AS d
-07)--------EmptyRelation
+07)--------EmptyRelation: rows=1
 08)--SubqueryAlias: rhs
 09)----Projection: Int64(1) AS e, Int64(3) AS f
-10)------EmptyRelation
+10)------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -3651,12 +3672,12 @@ logical_plan
 02)--SubqueryAlias: a
 03)----Union
 04)------Projection: Int64(1) AS c, Int64(2) AS d
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Projection: Int64(1) AS c, Int64(3) AS d
-07)--------EmptyRelation
+07)--------EmptyRelation: rows=1
 08)--SubqueryAlias: rhs
 09)----Projection: Int64(1) AS e, Int64(3) AS f
-10)------EmptyRelation
+10)------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -3691,7 +3712,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a INNER JOIN (SELECT 1 as a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Inner join with empty right table
 query TT
@@ -3699,7 +3720,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a INNER JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left join with empty left table
 query TT
@@ -3707,7 +3728,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a LEFT JOIN (SELECT 1 as a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left join with empty left and empty right table
 query TT
@@ -3715,7 +3736,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a LEFT JOIN (SELECT 1 as a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right join with empty right table
 query TT
@@ -3723,7 +3744,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right join with empty right and empty left table
 query TT
@@ -3731,7 +3752,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a RIGHT JOIN (SELECT 1 as a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left SEMI join with empty left table
 query TT
@@ -3739,7 +3760,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a LEFT SEMI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left SEMI join with empty right table
 query TT
@@ -3747,7 +3768,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a LEFT SEMI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right SEMI join with empty left table
 query TT
@@ -3755,7 +3776,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a RIGHT SEMI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right SEMI join with empty right table
 query TT
@@ -3763,7 +3784,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT SEMI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left ANTI join with empty left table
 query TT
@@ -3771,7 +3792,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a LEFT ANTI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right ANTI join with empty right table
 query TT
@@ -3779,7 +3800,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT ANTI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # FULL OUTER join with empty left and empty right table
 query TT
@@ -3787,7 +3808,7 @@ EXPLAIN SELECT * FROM (
 	SELECT 1 as a WHERE 1=0
 ) AS a FULL JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left ANTI join with empty right table
 query TT
@@ -3798,7 +3819,7 @@ EXPLAIN SELECT * FROM (
 logical_plan
 01)SubqueryAlias: a
 02)--Projection: Int64(1) AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 
 # Right ANTI join with empty left table
 query TT
@@ -3809,7 +3830,7 @@ EXPLAIN SELECT * FROM (
 logical_plan
 01)SubqueryAlias: b
 02)--Projection: Int64(1) AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 
 
 statement ok
@@ -4012,13 +4033,13 @@ logical_plan
 08)----------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))
 09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
 10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
-11)----------------EmptyRelation
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
+11)----------------EmptyRelation: rows=1
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
 
 
 # Test CROSS JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(UInt32, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
 select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
 
 
@@ -4037,13 +4058,13 @@ logical_plan
 08)----------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int)))
 09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))|depth=1] structs[]
 10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))
-11)----------------EmptyRelation
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
+11)----------------EmptyRelation: rows=1
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
 
 
 # Test INNER JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(UInt32, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
 select t1_id, t1_name, i from join_t1 t2 inner join lateral (select * from unnest(generate_series(1, t1_int))) as series(i) on(t1_id > i);
 
 # Test RIGHT JOIN LATERAL syntax (unsupported)
@@ -4127,9 +4148,9 @@ logical_plan
 03)----TableScan: left_table projection=[a, b, c]
 04)----TableScan: right_table projection=[x, y, z]
 physical_plan
-01)NestedLoopJoinExec: join_type=Inner, filter=a@0 < x@1
-02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+01)SortExec: expr=[x@3 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=Inner, filter=a@0 < x@1
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
@@ -4164,23 +4185,43 @@ AS VALUES
 (3, 3, true),
 (3, 3, false);
 
-query IIIIB
-SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 2;
+query IIIIB rowsort
+-- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
+SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 20;
 ----
-2 2 2 2 true
+1 1 NULL NULL NULL
 2 2 2 2 false
-
-query IIIIB
-SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 2;
-----
 2 2 2 2 true
+3 3 3 3 false
+3 3 3 3 true
+4 4 NULL NULL NULL
+
+query IIIIB rowsort
+-- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
+SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
+----
+1 1 NULL NULL NULL
+2 2 2 2 false
+2 2 2 2 true
+3 3 2 2 false
 3 3 2 2 true
+3 3 3 3 false
+3 3 3 3 true
+4 4 2 2 false
+4 4 2 2 true
+4 4 3 3 false
+4 4 3 3 true
 
-query IIIIB
-SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 AND t0.c2 >= t1.c2 LIMIT 2;
+query IIIIB rowsort
+-- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
+SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 AND t0.c2 >= t1.c2 LIMIT 20;
 ----
-2 2 2 2 true
+1 1 NULL NULL NULL
 2 2 2 2 false
+2 2 2 2 true
+3 3 3 3 false
+3 3 3 3 true
+4 4 NULL NULL NULL
 
 ## Test !join.on.is_empty() && join.filter.is_none()
 query TT
@@ -4240,23 +4281,23 @@ set datafusion.execution.target_partitions = 1;
 # Note we use csv as MemoryExec does not support limit push down (so doesn't manifest
 # bugs if limits are improperly pushed down)
 query I
-COPY (values (1), (2), (3), (4), (5))  TO 'test_files/scratch/limit/t1.csv'
+COPY (values (1), (2), (3), (4), (5))  TO 'test_files/scratch/joins/t1.csv'
 STORED AS CSV
 ----
 5
 
 # store t2 in different order so the top N rows are not the same as the top N rows of t1
 query I
-COPY (values (5), (4), (3), (2), (1))  TO 'test_files/scratch/limit/t2.csv'
+COPY (values (5), (4), (3), (2), (1))  TO 'test_files/scratch/joins/t2.csv'
 STORED AS CSV
 ----
 5
 
 statement ok
-create external table t1(a int) stored as CSV location 'test_files/scratch/limit/t1.csv';
+create external table t1(a int) stored as CSV location 'test_files/scratch/joins/t1.csv';
 
 statement ok
-create external table t2(b int) stored as CSV location 'test_files/scratch/limit/t2.csv';
+create external table t2(b int) stored as CSV location 'test_files/scratch/joins/t2.csv';
 
 ######
 ## LEFT JOIN w/ LIMIT
@@ -4288,8 +4329,8 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3, fetch=2
 02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, b@0)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/t1.csv]]}, projection=[a], limit=2, file_type=csv, has_header=true
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/t2.csv]]}, projection=[b], file_type=csv, has_header=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], limit=2, file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], file_type=csv, has_header=true
 
 ######
 ## RIGHT JOIN w/ LIMIT
@@ -4322,8 +4363,8 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3, fetch=2
 02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, b@0)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/t1.csv]]}, projection=[a], file_type=csv, has_header=true
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/t2.csv]]}, projection=[b], limit=2, file_type=csv, has_header=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], limit=2, file_type=csv, has_header=true
 
 ######
 ## FULL JOIN w/ LIMIT
@@ -4359,8 +4400,8 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3, fetch=2
 02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(a@0, b@0)]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/t1.csv]]}, projection=[a], file_type=csv, has_header=true
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/t2.csv]]}, projection=[b], file_type=csv, has_header=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t1.csv]]}, projection=[a], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/joins/t2.csv]]}, projection=[b], file_type=csv, has_header=true
 
 statement ok
 drop table t1;
@@ -4628,7 +4669,7 @@ logical_plan
 05)------Subquery:
 06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
 07)----------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id), LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4
@@ -4644,7 +4685,7 @@ logical_plan
 08)----Subquery:
 09)------Filter: j3.j3_string = outer_ref(j2.j2_string)
 10)--------TableScan: j3 projection=[j3_string, j3_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Utf8View, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j2_string", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
 
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT * FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id = j2_id) as j2) as j2;
@@ -4660,7 +4701,7 @@ logical_plan
 08)----------Subquery:
 09)------------Filter: outer_ref(j1.j1_id) = j2.j2_id
 10)--------------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT j1_string, j2_string FROM j1 LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);
@@ -4673,7 +4714,7 @@ logical_plan
 05)------Subquery:
 06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
 07)----------TableScan: j2 projection=[j2_string, j2_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1, (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true));
@@ -4687,7 +4728,7 @@ logical_plan
 06)------Subquery:
 07)--------Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id
 08)----------TableScan: j3 projection=[j3_string, j3_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT 1) AS j2;
@@ -4697,7 +4738,7 @@ logical_plan
 02)--TableScan: j1 projection=[j1_string, j1_id]
 03)--SubqueryAlias: j2
 04)----Projection: Int64(1)
-05)------EmptyRelation
+05)------EmptyRelation: rows=1
 physical_plan
 01)CrossJoinExec
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
@@ -5119,6 +5160,36 @@ LEFT ANTI JOIN t2 ON k1 = k2
 WHERE k1 < 0
 ----
 
+# Mark testing
+statement ok
+CREATE OR REPLACE TABLE t1(b INT, c INT, d INT);
+
+statement ok
+INSERT INTO t1 VALUES
+  (10, 5, 3),   
+  ( 1, 7, 8),  
+  ( 2, 9, 7),   
+  ( 3, 8,10),   
+  ( 5, 6, 6),   
+  ( 0, 4, 9),   
+  ( 4, 8, 7),   
+  (100,6, 5);  
+
+query I rowsort
+SELECT c
+  FROM t1
+ WHERE c > d
+    OR EXISTS(SELECT 1 FROM t1 AS x WHERE x.b<t1.b)
+    OR (c <= d-2 OR c >= d+2)
+----
+4
+5
+6
+6
+7
+8
+8
+9
 
 statement ok
 DROP TABLE t1;
