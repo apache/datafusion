@@ -120,10 +120,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn add(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a + b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_add(*b).map_or_else(
+                || Precision::Inexact(a.saturating_add(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a + b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_add(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -133,10 +138,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn sub(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a - b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_sub(*b).map_or_else(
+                || Precision::Inexact(a.saturating_sub(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a - b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_sub(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -146,10 +156,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn multiply(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a * b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_mul(*b).map_or_else(
+                || Precision::Inexact(a.saturating_mul(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a * b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_mul(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -807,11 +822,21 @@ mod tests {
         let precision2 = Precision::Inexact(23);
         let precision3 = Precision::Exact(30);
         let absent_precision = Precision::Absent;
+        let precision_max_exact = Precision::Exact(usize::MAX);
+        let precision_max_inexact = Precision::Exact(usize::MAX);
 
         assert_eq!(precision1.add(&precision2), Precision::Inexact(65));
         assert_eq!(precision1.add(&precision3), Precision::Exact(72));
         assert_eq!(precision2.add(&precision3), Precision::Inexact(53));
         assert_eq!(precision1.add(&absent_precision), Precision::Absent);
+        assert_eq!(
+            precision_max_exact.add(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
+        assert_eq!(
+            precision_max_inexact.add(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
     }
 
     #[test]
@@ -843,6 +868,8 @@ mod tests {
 
         assert_eq!(precision1.sub(&precision2), Precision::Inexact(19));
         assert_eq!(precision1.sub(&precision3), Precision::Exact(12));
+        assert_eq!(precision2.sub(&precision1), Precision::Inexact(0));
+        assert_eq!(precision3.sub(&precision1), Precision::Inexact(0));
         assert_eq!(precision1.sub(&absent_precision), Precision::Absent);
     }
 
@@ -871,12 +898,22 @@ mod tests {
         let precision1 = Precision::Exact(6);
         let precision2 = Precision::Inexact(3);
         let precision3 = Precision::Exact(5);
+        let precision_max_exact = Precision::Exact(usize::MAX);
+        let precision_max_inexact = Precision::Exact(usize::MAX);
         let absent_precision = Precision::Absent;
 
         assert_eq!(precision1.multiply(&precision2), Precision::Inexact(18));
         assert_eq!(precision1.multiply(&precision3), Precision::Exact(30));
         assert_eq!(precision2.multiply(&precision3), Precision::Inexact(15));
         assert_eq!(precision1.multiply(&absent_precision), Precision::Absent);
+        assert_eq!(
+            precision_max_exact.multiply(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
+        assert_eq!(
+            precision_max_inexact.multiply(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
     }
 
     #[test]
