@@ -3683,7 +3683,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             &partition_by,
             &[],
             case.window_frame,
-            input_schema.as_ref(),
+            Arc::clone(&input_schema),
             false,
             false,
             None,
