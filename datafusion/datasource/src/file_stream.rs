@@ -177,6 +177,7 @@ impl FileStream {
                             self.state = FileStreamState::Open {
                                 future,
                                 partition_values,
+                                prefetch_queue: VecDeque::new(),
                             }
                         }
                         Ok(None) => return Poll::Ready(None),
@@ -189,6 +190,7 @@ impl FileStream {
                 FileStreamState::Open {
                     future,
                     partition_values,
+                    prefetch_queue,
                 } => match ready!(future.poll_unpin(cx)) {
                     Ok(reader) => {
                         let partition_values = mem::take(partition_values);
@@ -196,8 +198,8 @@ impl FileStream {
                         // include time needed to start opening in `start_next_file`
                         self.file_stream_metrics.time_opening.stop();
 
-                        // Initialize prefetch queue
-                        let mut prefetch_queue = VecDeque::new();
+                        // Fill the prefetch queue (reuse existing queue from previous scan)
+                        let mut prefetch_queue = mem::take(prefetch_queue);
                         self.fill_prefetch_queue(&mut prefetch_queue);
 
                         self.file_stream_metrics.time_scanning_until_data.start();
@@ -214,7 +216,30 @@ impl FileStream {
                         match self.on_error {
                             OnError::Skip => {
                                 self.file_stream_metrics.time_opening.stop();
-                                self.state = FileStreamState::Idle
+
+                                // Try to open the next file from the prefetch queue
+                                if let Some((future, partition_values)) = prefetch_queue.pop_front() {
+                                    let remaining_queue = mem::take(prefetch_queue);
+                                    match future {
+                                        NextOpen::Pending(future) => {
+                                            self.state = FileStreamState::Open {
+                                                future,
+                                                partition_values,
+                                                prefetch_queue: remaining_queue,
+                                            }
+                                        }
+                                        NextOpen::Ready(reader) => {
+                                            self.state = FileStreamState::Open {
+                                                future: Box::pin(std::future::ready(reader)),
+                                                partition_values,
+                                                prefetch_queue: remaining_queue,
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // No more files in queue, go to Idle to check file_iter
+                                    self.state = FileStreamState::Idle
+                                }
                             }
                             OnError::Fail => {
                                 self.state = FileStreamState::Error;
@@ -305,11 +330,15 @@ impl FileStream {
                                     {
                                         self.file_stream_metrics.time_opening.start();
 
+                                        // Move the remaining queue to the Open state
+                                        let remaining_queue = mem::take(prefetch_queue);
+
                                         match future {
                                             NextOpen::Pending(future) => {
                                                 self.state = FileStreamState::Open {
                                                     future,
                                                     partition_values,
+                                                    prefetch_queue: remaining_queue,
                                                 }
                                             }
                                             NextOpen::Ready(reader) => {
@@ -318,6 +347,7 @@ impl FileStream {
                                                         reader,
                                                     )),
                                                     partition_values,
+                                                    prefetch_queue: remaining_queue,
                                                 }
                                             }
                                         }
@@ -340,17 +370,22 @@ impl FileStream {
                             {
                                 self.file_stream_metrics.time_opening.start();
 
+                                // Move the remaining queue to the Open state
+                                let remaining_queue = mem::take(prefetch_queue);
+
                                 match future {
                                     NextOpen::Pending(future) => {
                                         self.state = FileStreamState::Open {
                                             future,
                                             partition_values,
+                                            prefetch_queue: remaining_queue,
                                         }
                                     }
                                     NextOpen::Ready(reader) => {
                                         self.state = FileStreamState::Open {
                                             future: Box::pin(std::future::ready(reader)),
                                             partition_values,
+                                            prefetch_queue: remaining_queue,
                                         }
                                     }
                                 }
@@ -434,6 +469,8 @@ pub enum FileStreamState {
         future: FileOpenFuture,
         /// The partition values for this file
         partition_values: Vec<ScalarValue>,
+        /// Queue of prefetched files to preserve across state transitions
+        prefetch_queue: VecDeque<(NextOpen, Vec<ScalarValue>)>,
     },
     /// Scanning the [`BoxStream`] returned by the completion of a [`FileOpenFuture`]
     /// returned by [`FileOpener::open`]
@@ -630,6 +667,8 @@ mod tests {
         on_error: OnError,
         /// Mock `FileOpener`
         opener: TestOpener,
+        /// Number of files to prefetch
+        file_prefetch_depth: Option<usize>,
     }
 
     impl FileStreamTest {
@@ -676,6 +715,12 @@ mod tests {
             self
         }
 
+        /// Specify the file prefetch depth
+        pub fn with_file_prefetch_depth(mut self, depth: usize) -> Self {
+            self.file_prefetch_depth = Some(depth);
+            self
+        }
+
         /// Collect the results of the `FileStream`
         pub async fn result(self) -> Result<Vec<RecordBatch>> {
             let file_schema = self
@@ -702,14 +747,19 @@ mod tests {
 
             let on_error = self.on_error;
 
-            let config = FileScanConfigBuilder::new(
+            let mut config_builder = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema,
                 Arc::new(MockSource::default()),
             )
             .with_file_group(file_group)
-            .with_limit(self.limit)
-            .build();
+            .with_limit(self.limit);
+
+            if let Some(depth) = self.file_prefetch_depth {
+                config_builder = config_builder.with_file_prefetch_depth(depth);
+            }
+
+            let config = config_builder.build();
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream =
                 FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)
@@ -1079,6 +1129,7 @@ mod tests {
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(1)]) // Each file returns 1 batch with 1 record
             .with_num_files(3)
+            .with_file_prefetch_depth(3)
             .result()
             .await?;
 
@@ -1094,6 +1145,7 @@ mod tests {
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(1)])
             .with_num_files(3)
+            .with_file_prefetch_depth(2)
             .with_on_error(OnError::Skip)
             .with_open_errors(vec![1]) // File 1 will fail to open
             .result()
@@ -1101,6 +1153,247 @@ mod tests {
 
         // Should get 2 batches (from files 0 and 2, skipping 1)
         assert_eq!(batches.len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_depth_greater_than_num_files() -> Result<()> {
+        // Test with prefetch depth larger than number of files - should work correctly
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2)])
+            .with_num_files(3)
+            .with_file_prefetch_depth(10) // Much larger than num_files
+            .result()
+            .await?;
+
+        // Should get 3 batches (one from each file), prefetch depth shouldn't cause issues
+        assert_eq!(batches.len(), 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_depth_2() -> Result<()> {
+        // Test with prefetch depth = 2
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(3)])
+            .with_num_files(5)
+            .with_file_prefetch_depth(2)
+            .result()
+            .await?;
+
+        // Should get 10 batches (5 files * 2 batches each)
+        assert_eq!(batches.len(), 10);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_depth_5() -> Result<()> {
+        // Test with prefetch depth = 5
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(1)])
+            .with_num_files(10)
+            .with_file_prefetch_depth(5)
+            .result()
+            .await?;
+
+        // Should get 10 batches (one from each file)
+        assert_eq!(batches.len(), 10);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_depth_10() -> Result<()> {
+        // Test with prefetch depth = 10
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3)])
+            .with_num_files(20)
+            .with_file_prefetch_depth(10)
+            .result()
+            .await?;
+
+        // Should get 20 batches (one from each file)
+        assert_eq!(batches.len(), 20);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_with_limit() -> Result<()> {
+        // Test prefetch combined with limit - ensure limit still works correctly
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(5)])
+            .with_num_files(10)
+            .with_file_prefetch_depth(5)
+            .with_limit(Some(23)) // Limit in the middle of 5th file
+            .result()
+            .await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 23);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_with_limit_at_file_boundary() -> Result<()> {
+        // Test prefetch with limit that falls exactly on a file boundary
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(5)])
+            .with_num_files(10)
+            .with_file_prefetch_depth(3)
+            .with_limit(Some(15)) // Exactly 3 files worth of data
+            .result()
+            .await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 15);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_error_at_queue_start() -> Result<()> {
+        // Test error at the beginning of prefetch queue
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(3)])
+            .with_num_files(5)
+            .with_file_prefetch_depth(3)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![0]) // First file fails
+            .result()
+            .await?;
+
+        // Should get 8 batches (4 files * 2 batches each, skipping file 0)
+        assert_eq!(batches.len(), 8);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_error_at_queue_middle() -> Result<()> {
+        // Test error in the middle of prefetch queue
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(3)])
+            .with_num_files(5)
+            .with_file_prefetch_depth(3)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![2]) // Middle file fails
+            .result()
+            .await?;
+
+        // Should get 8 batches (4 files * 2 batches each, skipping file 2)
+        assert_eq!(batches.len(), 8);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_error_at_queue_end() -> Result<()> {
+        // Test error at the end of prefetch queue
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(3)])
+            .with_num_files(5)
+            .with_file_prefetch_depth(3)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![4]) // Last file fails
+            .result()
+            .await?;
+
+        // Should get 8 batches (4 files * 2 batches each, skipping file 4)
+        assert_eq!(batches.len(), 8);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_multiple_errors_in_queue() -> Result<()> {
+        // Test multiple errors within the prefetch queue
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(1)])
+            .with_num_files(10)
+            .with_file_prefetch_depth(5)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![1, 3, 7]) // Multiple files fail
+            .result()
+            .await?;
+
+        // Should get 14 batches (7 files * 2 batches each, skipping 3 files)
+        assert_eq!(batches.len(), 14);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_scan_error_in_queue() -> Result<()> {
+        // Test scan errors (not open errors) with prefetch
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(3)])
+            .with_num_files(5)
+            .with_file_prefetch_depth(3)
+            .with_on_error(OnError::Skip)
+            .with_scan_errors(vec![1]) // File 1 fails during scanning
+            .result()
+            .await?;
+
+        // Should get 8 batches (4 files * 2 batches each, skipping file 1)
+        assert_eq!(batches.len(), 8);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_mixed_errors() -> Result<()> {
+        // Test combination of open and scan errors with prefetch
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(3)])
+            .with_num_files(8)
+            .with_file_prefetch_depth(4)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![1, 5])
+            .with_scan_errors(vec![3])
+            .result()
+            .await?;
+
+        // Should get 10 batches (5 files * 2 batches each, skipping 3 files)
+        assert_eq!(batches.len(), 10);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_many_files() -> Result<()> {
+        // Test with many files to ensure prefetch scales
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(1)])
+            .with_num_files(50)
+            .with_file_prefetch_depth(8)
+            .result()
+            .await?;
+
+        // Should get 50 batches (one from each file)
+        assert_eq!(batches.len(), 50);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_many_files_with_errors() -> Result<()> {
+        // Test many files with some errors scattered throughout
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(1)])
+            .with_num_files(50)
+            .with_file_prefetch_depth(7)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![5, 15, 25, 35, 45]) // 5 files fail
+            .result()
+            .await?;
+
+        // Should get 90 batches (45 files * 2 batches each, skipping 5 files)
+        assert_eq!(batches.len(), 90);
 
         Ok(())
     }
