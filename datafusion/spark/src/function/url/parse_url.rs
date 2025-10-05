@@ -92,10 +92,7 @@ impl ParseUrl {
         };
         url.map_err(|e| exec_datafusion_err!("{e:?}"))
             .map(|url| match part {
-                "HOST" => {
-                    0;
-                    url.host_str().map(String::from)
-                }
+                "HOST" => url.host_str().map(String::from),
                 "PATH" => {
                     let path: String = url.path().to_string();
                     let path: String = if path == "/" { "".to_string() } else { path };
