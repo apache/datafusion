@@ -51,8 +51,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             self.plan_with_clause(with, planner_context)?;
         }
 
-        let pipe_operators = query.pipe_operators.clone();
-
         let set_expr = *query.body;
         let plan = match set_expr {
             SetExpr::Select(mut select) => {
