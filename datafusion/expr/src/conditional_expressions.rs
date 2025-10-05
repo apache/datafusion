@@ -22,7 +22,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, DFSchema, HashSet, Result};
 use itertools::Itertools as _;
 
-/// Helper struct for building [Expr::Case]
+/// Helper struct for building [Expr::Case
+#[derive(Debug, Clone)]
 pub struct CaseBuilder {
     expr: Option<Box<Expr>>,
     when_expr: Vec<Expr>,
