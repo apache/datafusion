@@ -120,3 +120,8 @@ query T
 SELECT try_parse_url('https://ex.com/?Tag=ok', 'query', 'tag');
 ----
 NULL
+
+query T
+SELECT try_parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
+----
+NULL

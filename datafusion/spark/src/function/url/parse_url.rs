@@ -32,7 +32,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
-use url::Url;
+use url::{ParseError, Url};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ParseUrl {
@@ -82,10 +82,20 @@ impl ParseUrl {
     /// * `Err(DataFusionError)` - If the URL is malformed and cannot be parsed
     ///
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
-        Url::parse(value)
-            .map_err(|e| exec_datafusion_err!("{e:?}"))
+        let url: std::result::Result<Url, ParseError> = Url::parse(value);
+        if let Err(ParseError::RelativeUrlWithoutBase) = url {
+            return if !value.contains("://") {
+                Ok(None)
+            } else {
+                Err(exec_datafusion_err!("The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"))
+            };
+        };
+        url.map_err(|e| exec_datafusion_err!("{e:?}"))
             .map(|url| match part {
-                "HOST" => url.host_str().map(String::from),
+                "HOST" => {
+                    0;
+                    url.host_str().map(String::from)
+                }
                 "PATH" => {
                     let path: String = url.path().to_string();
                     let path: String = if path == "/" { "".to_string() } else { path };
@@ -107,13 +117,7 @@ impl ParseUrl {
                         None => Some(path.to_string()),
                     }
                 }
-                "AUTHORITY" => {
-                    let authority: String = url.authority().to_string();
-                    match (url.port(), url.port_or_known_default()) {
-                        (None, Some(port)) => Some(format!("{authority}:{port}")),
-                        _ => Some(authority),
-                    }
-                }
+                "AUTHORITY" => Some(url.authority().to_string()),
                 "USERINFO" => {
                     let username = url.username();
                     if username.is_empty() {
@@ -335,7 +339,7 @@ mod tests {
         );
         assert_eq!(
             ParseUrl::parse(url, "AUTHORITY", None)?,
-            Some("user:pwd@ftp.example.com:21".to_string())
+            Some("user:pwd@ftp.example.com".to_string())
         );
         Ok(())
     }
@@ -348,13 +352,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_malformed_url_returns_error() {
-        let err = ParseUrl::parse("notaurl", "HOST", None).unwrap_err();
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("DataFusion") || msg.contains("error"),
-            "msg was: {msg}"
-        );
+    fn test_parse_malformed_url_returns_error() -> Result<()> {
+        let got = ParseUrl::parse("notaurl", "HOST", None)?;
+        assert_eq!(got, None);
+        Ok(())
     }
 
     #[test]
