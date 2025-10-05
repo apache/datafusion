@@ -363,7 +363,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         alias: Option<Ident>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // Extract pivot values from the value source
         let pivot_values = if let PivotValueSource::List(values) = value_source {
             values
         } else {
@@ -372,7 +371,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             );
         };
 
-        // Convert pivot column to DataFusion expression
         if value_column.len() != 1 {
             return not_impl_err!("Multi-column pivot is not supported yet");
         }
@@ -408,7 +406,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        // Create aggregate expressions for each pivot value
         let mut aggr_exprs = Vec::new();
 
         // For each pivot value and aggregate function combination, create a conditional aggregate
@@ -469,7 +466,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        // Create the aggregate logical plan
         let result_plan = LogicalPlanBuilder::from(plan)
             .aggregate(group_by_cols, aggr_exprs)?
             .build()?;
