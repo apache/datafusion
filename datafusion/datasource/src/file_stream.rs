@@ -218,7 +218,9 @@ impl FileStream {
                                 self.file_stream_metrics.time_opening.stop();
 
                                 // Try to open the next file from the prefetch queue
-                                if let Some((future, partition_values)) = prefetch_queue.pop_front() {
+                                if let Some((future, partition_values)) =
+                                    prefetch_queue.pop_front()
+                                {
                                     let remaining_queue = mem::take(prefetch_queue);
                                     match future {
                                         NextOpen::Pending(future) => {
@@ -230,7 +232,9 @@ impl FileStream {
                                         }
                                         NextOpen::Ready(reader) => {
                                             self.state = FileStreamState::Open {
-                                                future: Box::pin(std::future::ready(reader)),
+                                                future: Box::pin(std::future::ready(
+                                                    reader,
+                                                )),
                                                 partition_values,
                                                 prefetch_queue: remaining_queue,
                                             }
