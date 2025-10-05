@@ -32,7 +32,15 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = r#"Returns a random float value in the range [0, 1).
 The random seed is unique to each row."#,
-    syntax_example = "random()"
+    syntax_example = "random()",
+    sql_example = r#"```sql
+> SELECT random();
++------------------+
+| random()         |
++------------------+
+| 0.7389238902938  |
++------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RandomFunc {

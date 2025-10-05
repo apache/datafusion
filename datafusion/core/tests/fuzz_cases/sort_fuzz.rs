@@ -188,7 +188,7 @@ impl SortTest {
     }
 
     fn with_sort_columns(mut self, sort_columns: Vec<&str>) -> Self {
-        self.sort_columns = sort_columns.iter().map(|s| s.to_string()).collect();
+        self.sort_columns = sort_columns.iter().map(|s| (*s).to_string()).collect();
         self
     }
 

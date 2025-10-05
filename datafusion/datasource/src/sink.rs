@@ -100,6 +100,11 @@ impl Debug for DataSinkExec {
 
 impl DataSinkExec {
     /// Create a plan to write to `sink`
+    /// Note: DataSinkExec requires its input to have a single partition.
+    /// If the input has multiple partitions, the physical optimizer will
+    /// automatically insert a Merge-related operator to merge them.
+    /// If you construct PhysicalPlan without going through the physical optimizer,
+    /// you must ensure that the input has a single partition.
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,

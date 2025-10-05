@@ -150,7 +150,7 @@ pub mod test {
             let df_schema = from_substrait_named_struct(self.consumer, substrait_schema)?
                 .replace_qualifier(table_reference.clone());
 
-            let table = EmptyTable::new(df_schema.inner().clone());
+            let table = EmptyTable::new(Arc::clone(df_schema.inner()));
             self.schemas.push((table_reference, Arc::new(table)));
             Ok(())
         }

@@ -185,11 +185,12 @@ impl StreamedBatch {
 }
 
 /// A buffered batch that contains contiguous rows with same join key
+///
+/// `BufferedBatch` can exist as either an in-memory `RecordBatch` or a `RefCountedTempFile` on disk.
 #[derive(Debug)]
 pub(super) struct BufferedBatch {
-    /// The buffered record batch
-    /// None if the batch spilled to disk th
-    pub batch: Option<RecordBatch>,
+    /// Represents in memory or spilled record batch
+    pub batch: BufferedBatchState,
     /// The range in which the rows share the same join key
     pub range: Range<usize>,
     /// Array refs of the join key
@@ -207,10 +208,6 @@ pub(super) struct BufferedBatch {
     /// but if batch is spilled to disk this property is preferable
     /// and less expensive
     pub num_rows: usize,
-    /// An optional temp spill file name on the disk if the batch spilled
-    /// None by default
-    /// Some(fileName) if the batch spilled to the disk
-    pub spill_file: Option<RefCountedTempFile>,
 }
 
 impl BufferedBatch {
@@ -238,16 +235,25 @@ impl BufferedBatch {
 
         let num_rows = batch.num_rows();
         BufferedBatch {
-            batch: Some(batch),
+            batch: BufferedBatchState::InMemory(batch),
             range,
             join_arrays,
             null_joined: vec![],
             size_estimation,
             join_filter_not_matched_map: HashMap::new(),
             num_rows,
-            spill_file: None,
         }
     }
+}
+
+// TODO: Spill join arrays (https://github.com/apache/datafusion/pull/17429)
+// Used to represent whether the buffered data is currently in memory or written to disk
+#[derive(Debug)]
+pub(super) enum BufferedBatchState {
+    // In memory record batch
+    InMemory(RecordBatch),
+    // Spilled temp file
+    Spilled(RefCountedTempFile),
 }
 
 /// Sort-Merge join stream that consumes streamed and buffered data streams
@@ -424,7 +430,7 @@ pub(super) fn get_corrected_filter_mask(
             corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
-        JoinType::LeftMark => {
+        JoinType::LeftMark | JoinType::RightMark => {
             for i in 0..row_indices_length {
                 let last_index =
                     last_index_for_row(i, row_indices, batch_ids, row_indices_length);
@@ -576,6 +582,7 @@ impl Stream for SortMergeJoinStream {
                                                 | JoinType::LeftMark
                                                 | JoinType::Right
                                                 | JoinType::RightSemi
+                                                | JoinType::RightMark
                                                 | JoinType::LeftAnti
                                                 | JoinType::RightAnti
                                                 | JoinType::Full
@@ -685,6 +692,7 @@ impl Stream for SortMergeJoinStream {
                                         | JoinType::LeftAnti
                                         | JoinType::RightAnti
                                         | JoinType::LeftMark
+                                        | JoinType::RightMark
                                         | JoinType::Full
                                 )
                             {
@@ -712,6 +720,7 @@ impl Stream for SortMergeJoinStream {
                                     | JoinType::RightAnti
                                     | JoinType::Full
                                     | JoinType::LeftMark
+                                    | JoinType::RightMark
                             )
                         {
                             let record_batch = self.filter_joined_batch()?;
@@ -849,11 +858,10 @@ impl SortMergeJoinStream {
 
     fn free_reservation(&mut self, buffered_batch: BufferedBatch) -> Result<()> {
         // Shrink memory usage for in-memory batches only
-        if buffered_batch.spill_file.is_none() && buffered_batch.batch.is_some() {
+        if let BufferedBatchState::InMemory(_) = buffered_batch.batch {
             self.reservation
                 .try_shrink(buffered_batch.size_estimation)?;
         }
-
         Ok(())
     }
 
@@ -867,21 +875,21 @@ impl SortMergeJoinStream {
             }
             Err(_) if self.runtime_env.disk_manager.tmp_files_enabled() => {
                 // Spill buffered batch to disk
-                if let Some(batch) = buffered_batch.batch {
-                    let spill_file = self
-                        .spill_manager
-                        .spill_record_batch_and_finish(
-                            &[batch],
-                            "sort_merge_join_buffered_spill",
-                        )?
-                        .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
-                    buffered_batch.spill_file = Some(spill_file);
-                    buffered_batch.batch = None;
+                match buffered_batch.batch {
+                    BufferedBatchState::InMemory(batch) => {
+                        let spill_file = self
+                            .spill_manager
+                            .spill_record_batch_and_finish(
+                                &[batch],
+                                "sort_merge_join_buffered_spill",
+                            )?
+                            .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
-                    Ok(())
-                } else {
-                    internal_err!("Buffered batch has empty body")
+                        buffered_batch.batch = BufferedBatchState::Spilled(spill_file);
+                        Ok(())
+                    }
+                    _ => internal_err!("Buffered batch has empty body"),
                 }
             }
             Err(e) => exec_err!("{}. Disk spilling disabled.", e.message()),
@@ -1037,6 +1045,7 @@ impl SortMergeJoinStream {
                         | JoinType::LeftAnti
                         | JoinType::RightAnti
                         | JoinType::LeftMark
+                        | JoinType::RightMark
                 ) {
                     join_streamed = !self.streamed_joined;
                 }
@@ -1044,9 +1053,15 @@ impl SortMergeJoinStream {
             Ordering::Equal => {
                 if matches!(
                     self.join_type,
-                    JoinType::LeftSemi | JoinType::LeftMark | JoinType::RightSemi
+                    JoinType::LeftSemi
+                        | JoinType::LeftMark
+                        | JoinType::RightSemi
+                        | JoinType::RightMark
                 ) {
-                    mark_row_as_match = matches!(self.join_type, JoinType::LeftMark);
+                    mark_row_as_match = matches!(
+                        self.join_type,
+                        JoinType::LeftMark | JoinType::RightMark
+                    );
                     // if the join filter is specified then its needed to output the streamed index
                     // only if it has not been emitted before
                     // the `join_filter_matched_idxs` keeps track on if streamed index has a successful
@@ -1261,31 +1276,32 @@ impl SortMergeJoinStream {
 
             // The row indices of joined buffered batch
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
-            let mut right_columns = if matches!(self.join_type, JoinType::LeftMark) {
-                vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
-            } else if matches!(
-                self.join_type,
-                JoinType::LeftSemi
-                    | JoinType::LeftAnti
-                    | JoinType::RightAnti
-                    | JoinType::RightSemi
-            ) {
-                vec![]
-            } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                fetch_right_columns_by_idxs(
-                    &self.buffered_data,
-                    buffered_idx,
-                    &right_indices,
-                )?
-            } else {
-                // If buffered batch none, meaning it is null joined batch.
-                // We need to create null arrays for buffered columns to join with streamed rows.
-                create_unmatched_columns(
+            let mut right_columns =
+                if matches!(self.join_type, JoinType::LeftMark | JoinType::RightMark) {
+                    vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
+                } else if matches!(
                     self.join_type,
-                    &self.buffered_schema,
-                    right_indices.len(),
-                )
-            };
+                    JoinType::LeftSemi
+                        | JoinType::LeftAnti
+                        | JoinType::RightAnti
+                        | JoinType::RightSemi
+                ) {
+                    vec![]
+                } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
+                    fetch_right_columns_by_idxs(
+                        &self.buffered_data,
+                        buffered_idx,
+                        &right_indices,
+                    )?
+                } else {
+                    // If buffered batch none, meaning it is null joined batch.
+                    // We need to create null arrays for buffered columns to join with streamed rows.
+                    create_unmatched_columns(
+                        self.join_type,
+                        &self.buffered_schema,
+                        right_indices.len(),
+                    )
+                };
 
             // Prepare the columns we apply join filter on later.
             // Only for joined rows between streamed and buffered.
@@ -1304,7 +1320,7 @@ impl SortMergeJoinStream {
                         get_filter_column(&self.filter, &left_columns, &right_cols)
                     } else if matches!(
                         self.join_type,
-                        JoinType::RightAnti | JoinType::RightSemi
+                        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
                     ) {
                         let right_cols = fetch_right_columns_by_idxs(
                             &self.buffered_data,
@@ -1370,6 +1386,7 @@ impl SortMergeJoinStream {
                             | JoinType::LeftAnti
                             | JoinType::RightAnti
                             | JoinType::LeftMark
+                            | JoinType::RightMark
                             | JoinType::Full
                     ) {
                         self.staging_output_record_batches
@@ -1470,6 +1487,7 @@ impl SortMergeJoinStream {
                     | JoinType::LeftAnti
                     | JoinType::RightAnti
                     | JoinType::LeftMark
+                    | JoinType::RightMark
                     | JoinType::Full
             ))
         {
@@ -1532,7 +1550,7 @@ impl SortMergeJoinStream {
 
         if matches!(
             self.join_type,
-            JoinType::Left | JoinType::LeftMark | JoinType::Right
+            JoinType::Left | JoinType::LeftMark | JoinType::Right | JoinType::RightMark
         ) {
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(&record_batch, &null_mask)?;
@@ -1653,7 +1671,7 @@ fn create_unmatched_columns(
     schema: &SchemaRef,
     size: usize,
 ) -> Vec<ArrayRef> {
-    if matches!(join_type, JoinType::LeftMark) {
+    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         vec![Arc::new(BooleanArray::from(vec![false; size])) as ArrayRef]
     } else {
         schema
@@ -1741,16 +1759,16 @@ fn fetch_right_columns_from_batch_by_idxs(
     buffered_batch: &BufferedBatch,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>> {
-    match (&buffered_batch.spill_file, &buffered_batch.batch) {
+    match &buffered_batch.batch {
         // In memory batch
-        (None, Some(batch)) => Ok(batch
+        BufferedBatchState::InMemory(batch) => Ok(batch
             .columns()
             .iter()
             .map(|column| take(column, &buffered_indices, None))
             .collect::<Result<Vec<_>, ArrowError>>()
             .map_err(Into::<DataFusionError>::into)?),
         // If the batch was spilled to disk, less likely
-        (Some(spill_file), None) => {
+        BufferedBatchState::Spilled(spill_file) => {
             let mut buffered_cols: Vec<ArrayRef> =
                 Vec::with_capacity(buffered_indices.len());
 
@@ -1763,10 +1781,8 @@ fn fetch_right_columns_from_batch_by_idxs(
                 });
             }
 
-                Ok(buffered_cols)
-            }
-        // Invalid combination
-        (spill, batch) => internal_err!("Unexpected buffered batch spill status. Spill exists: {}. In-memory exists: {}", spill.is_some(), batch.is_some()),
+            Ok(buffered_cols)
+        }
     }
 }
 
@@ -1915,6 +1931,12 @@ fn compare_join_arrays(
             DataType::Utf8 => compare_value!(StringArray),
             DataType::Utf8View => compare_value!(StringViewArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
+            DataType::LargeBinary => compare_value!(LargeBinaryArray),
+            DataType::Decimal32(..) => compare_value!(Decimal32Array),
+            DataType::Decimal64(..) => compare_value!(Decimal64Array),
             DataType::Decimal128(..) => compare_value!(Decimal128Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
@@ -1983,7 +2005,14 @@ fn is_join_arrays_equal(
             DataType::Utf8 => compare_value!(StringArray),
             DataType::Utf8View => compare_value!(StringViewArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
+            DataType::LargeBinary => compare_value!(LargeBinaryArray),
+            DataType::Decimal32(..) => compare_value!(Decimal32Array),
+            DataType::Decimal64(..) => compare_value!(Decimal64Array),
             DataType::Decimal128(..) => compare_value!(Decimal128Array),
+            DataType::Decimal256(..) => compare_value!(Decimal256Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
                 TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),

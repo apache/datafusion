@@ -1,4 +1,4 @@
-# GSoC Project Ideas
+# GSoC Project Ideas (2025)
 
 ## Introduction
 

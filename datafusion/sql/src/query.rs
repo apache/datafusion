@@ -85,17 +85,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }?;
 
-        self.pipe_operators(plan, pipe_operators, planner_context)
+        self.pipe_operators(plan, query.pipe_operators, planner_context)
     }
 
     /// Apply pipe operators to a plan
     fn pipe_operators(
         &self,
-        plan: LogicalPlan,
+        mut plan: LogicalPlan,
         pipe_operators: Vec<PipeOperator>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let mut plan = plan;
         for pipe_operator in pipe_operators {
             plan = self.pipe_operator(plan, pipe_operator, planner_context)?;
         }
@@ -222,26 +221,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Handle Union/Intersect/Except pipe operators
     fn pipe_operator_set(
         &self,
-        plan: LogicalPlan,
+        mut plan: LogicalPlan,
         set_operator: SetOperator,
         set_quantifier: SetQuantifier,
         queries: Vec<Query>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let mut result_plan = plan;
-
-        // Process each query
         for query in queries {
             let right_plan = self.query_to_plan(query, planner_context)?;
-            result_plan = self.set_operation_to_plan(
+            plan = self.set_operation_to_plan(
                 set_operator,
-                result_plan,
+                plan,
                 right_plan,
                 set_quantifier,
             )?;
         }
 
-        Ok(result_plan)
+        Ok(plan)
     }
 
     /// Wrap a plan in a limit
@@ -328,63 +324,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         group_by_expr: Vec<ExprWithAliasAndOrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // Convert aggregate expressions directly
+        let plan_schema = plan.schema();
+        let process_expr =
+            |expr_with_alias_and_order_by: ExprWithAliasAndOrderBy,
+             planner_context: &mut PlannerContext| {
+                let expr_with_alias = expr_with_alias_and_order_by.expr;
+                let sql_expr = expr_with_alias.expr;
+                let alias = expr_with_alias.alias;
+
+                let df_expr = self.sql_to_expr(sql_expr, plan_schema, planner_context)?;
+
+                match alias {
+                    Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
+                    None => Ok(df_expr),
+                }
+            };
+
         let aggr_exprs: Vec<Expr> = full_table_exprs
             .into_iter()
-            .map(|expr_with_alias_and_order_by| {
-                let expr_with_alias = expr_with_alias_and_order_by.expr;
-                let sql_expr = expr_with_alias.expr;
-                let alias = expr_with_alias.alias;
-
-                // Convert SQL expression to DataFusion expression
-                let df_expr =
-                    self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
-
-                // Apply alias if present, but handle the case where the expression might already be aliased
-                match alias {
-                    Some(alias_ident) => {
-                        // If the expression is already an alias, replace the alias name
-                        match df_expr {
-                            Expr::Alias(alias_expr) => {
-                                Ok(alias_expr.expr.alias(alias_ident.value))
-                            }
-                            _ => Ok(df_expr.alias(alias_ident.value)),
-                        }
-                    }
-                    None => Ok(df_expr),
-                }
-            })
+            .map(|e| process_expr(e, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        // Convert group by expressions directly
         let group_by_exprs: Vec<Expr> = group_by_expr
             .into_iter()
-            .map(|expr_with_alias_and_order_by| {
-                let expr_with_alias = expr_with_alias_and_order_by.expr;
-                let sql_expr = expr_with_alias.expr;
-                let alias = expr_with_alias.alias;
-
-                // Convert SQL expression to DataFusion expression
-                let df_expr =
-                    self.sql_to_expr(sql_expr, plan.schema(), planner_context)?;
-
-                // Apply alias if present (though group by aliases are less common)
-                match alias {
-                    Some(alias_ident) => {
-                        // If the expression is already an alias, replace the alias name
-                        match df_expr {
-                            Expr::Alias(alias_expr) => {
-                                Ok(alias_expr.expr.alias(alias_ident.value))
-                            }
-                            _ => Ok(df_expr.alias(alias_ident.value)),
-                        }
-                    }
-                    None => Ok(df_expr),
-                }
-            })
+            .map(|e| process_expr(e, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        // Create the aggregate logical plan
         LogicalPlanBuilder::from(plan)
             .aggregate(group_by_exprs, aggr_exprs)?
             .build()

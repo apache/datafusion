@@ -135,6 +135,7 @@ pub async fn test_table() -> Result<DataFrame> {
 }
 
 /// Execute SQL and return results
+#[cfg(feature = "sql")]
 pub async fn plan_and_collect(
     ctx: &SessionContext,
     sql: &str,
@@ -184,7 +185,7 @@ impl TableProviderFactory for TestTableFactory {
     ) -> Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
             url: cmd.location.to_string(),
-            schema: Arc::new(cmd.schema.as_ref().into()),
+            schema: Arc::clone(cmd.schema.inner()),
         }))
     }
 }

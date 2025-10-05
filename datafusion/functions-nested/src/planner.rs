@@ -22,11 +22,15 @@ use datafusion_common::ExprSchema;
 use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
+#[cfg(feature = "sql")]
+use datafusion_expr::sqlparser::ast::BinaryOperator;
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
-    sqlparser, Expr, ExprSchemable, GetFieldAccess,
+    Expr, ExprSchemable, GetFieldAccess,
 };
+#[cfg(not(feature = "sql"))]
+use datafusion_expr_common::operator::Operator as BinaryOperator;
 use datafusion_functions::core::get_field as get_field_inner;
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
@@ -51,7 +55,7 @@ impl ExprPlanner for NestedFunctionPlanner {
     ) -> Result<PlannerResult<RawBinaryExpr>> {
         let RawBinaryExpr { op, left, right } = expr;
 
-        if op == sqlparser::ast::BinaryOperator::StringConcat {
+        if op == BinaryOperator::StringConcat {
             let left_type = left.get_type(schema)?;
             let right_type = right.get_type(schema)?;
             let left_list_ndims = list_ndims(&left_type);
@@ -75,18 +79,14 @@ impl ExprPlanner for NestedFunctionPlanner {
             } else if left_list_ndims < right_list_ndims {
                 return Ok(PlannerResult::Planned(array_prepend(left, right)));
             }
-        } else if matches!(
-            op,
-            sqlparser::ast::BinaryOperator::AtArrow
-                | sqlparser::ast::BinaryOperator::ArrowAt
-        ) {
+        } else if matches!(op, BinaryOperator::AtArrow | BinaryOperator::ArrowAt) {
             let left_type = left.get_type(schema)?;
             let right_type = right.get_type(schema)?;
             let left_list_ndims = list_ndims(&left_type);
             let right_list_ndims = list_ndims(&right_type);
             // if both are list
             if left_list_ndims > 0 && right_list_ndims > 0 {
-                if op == sqlparser::ast::BinaryOperator::AtArrow {
+                if op == BinaryOperator::AtArrow {
                     // array1 @> array2 -> array_has_all(array1, array2)
                     return Ok(PlannerResult::Planned(array_has_all(left, right)));
                 } else {
@@ -108,7 +108,7 @@ impl ExprPlanner for NestedFunctionPlanner {
     }
 
     fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        if args.len() % 2 != 0 {
+        if !args.len().is_multiple_of(2) {
             return plan_err!("make_map requires an even number of arguments");
         }
 
@@ -123,7 +123,7 @@ impl ExprPlanner for NestedFunctionPlanner {
     }
 
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-        if expr.op == sqlparser::ast::BinaryOperator::Eq {
+        if expr.op == BinaryOperator::Eq {
             Ok(PlannerResult::Planned(Expr::ScalarFunction(
                 ScalarFunction::new_udf(
                     array_has_udf(),
