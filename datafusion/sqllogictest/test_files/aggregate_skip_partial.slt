@@ -69,9 +69,6 @@ set datafusion.execution.target_partitions = 2;
 statement ok
 set datafusion.execution.batch_size = 1;
 
-statement ok
-set datafusion.sql_parser.dialect = 'Postgres';
-
 # Grouping by unique fields allows to check all accumulators
 query ITIIII
 SELECT c5, c1,
@@ -419,10 +416,6 @@ b NULL false NULL
 c true false NULL
 d NULL false NULL
 e true false NULL
-
-# Enabling PG dialect for filtered aggregates tests
-statement ok
-set datafusion.sql_parser.dialect = 'Postgres';
 
 # Test count with filter
 query III

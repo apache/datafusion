@@ -52,6 +52,7 @@ use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
+#[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::map_config_decryption_to_decryption;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
@@ -312,16 +313,9 @@ impl ParquetSource {
         self
     }
 
-    fn with_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
-        self.metrics = metrics;
-        self
-    }
-
     /// Set predicate information
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
-        let metrics = ExecutionPlanMetricsSet::new();
-        conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
         conf
     }
@@ -424,6 +418,12 @@ impl ParquetSource {
     /// Return the value described in [`Self::with_bloom_filter_on_read`]
     fn bloom_filter_on_read(&self) -> bool {
         self.table_parquet_options.global.bloom_filter_on_read
+    }
+
+    /// Return the maximum predicate cache size, in bytes, used when
+    /// `pushdown_filters`
+    pub fn max_predicate_cache_size(&self) -> Option<usize> {
+        self.table_parquet_options.global.max_predicate_cache_size
     }
 
     /// Applies schema adapter factory from the FileScanConfig if present.
@@ -541,6 +541,7 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
+        #[cfg(feature = "parquet_encryption")]
         let file_decryption_properties = self
             .table_parquet_options()
             .crypto
@@ -576,10 +577,12 @@ impl FileSource for ParquetSource {
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             schema_adapter_factory,
             coerce_int96,
+            #[cfg(feature = "parquet_encryption")]
             file_decryption_properties,
             expr_adapter_factory,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
+            max_predicate_cache_size: self.max_predicate_cache_size(),
         })
     }
 

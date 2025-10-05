@@ -98,8 +98,7 @@ impl Eq for DynamicFilterPhysicalExpr {}
 
 impl Display for DynamicFilterPhysicalExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.current().expect("Failed to get current expression");
-        write!(f, "DynamicFilterPhysicalExpr [ {inner} ]")
+        self.render(f, |expr, f| write!(f, "{expr}"))
     }
 }
 
@@ -173,6 +172,11 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
+    /// Get the current generation of the expression.
+    fn current_generation(&self) -> u64 {
+        self.inner.read().generation
+    }
+
     /// Get the current expression.
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
@@ -205,6 +209,26 @@ impl DynamicFilterPhysicalExpr {
             expr: new_expr,
         };
         Ok(())
+    }
+
+    fn render(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        render_expr: impl FnOnce(
+            Arc<dyn PhysicalExpr>,
+            &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result,
+    ) -> std::fmt::Result {
+        let inner = self.current().map_err(|_| std::fmt::Error)?;
+        let current_generation = self.current_generation();
+        write!(f, "DynamicFilter [ ")?;
+        if current_generation == 1 {
+            write!(f, "empty")?;
+        } else {
+            render_expr(inner, f)?;
+        }
+
+        write!(f, " ]")
     }
 }
 
@@ -295,8 +319,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.current().map_err(|_| std::fmt::Error)?;
-        inner.fmt_sql(f)
+        self.render(f, |expr, f| expr.fmt_sql(f))
     }
 
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
@@ -314,7 +337,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 mod test {
     use crate::{
         expressions::{col, lit, BinaryExpr},
-        utils::reassign_predicate_columns,
+        utils::reassign_expr_columns,
     };
     use arrow::{
         array::RecordBatch,
@@ -352,18 +375,16 @@ mod test {
         ]));
         // Each ParquetExec calls `with_new_children` on the DynamicFilterPhysicalExpr
         // and remaps the children to the file schema.
-        let dynamic_filter_1 = reassign_predicate_columns(
+        let dynamic_filter_1 = reassign_expr_columns(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             &filter_schema_1,
-            false,
         )
         .unwrap();
         let snap = dynamic_filter_1.snapshot().unwrap().unwrap();
         insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "lit", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#);
-        let dynamic_filter_2 = reassign_predicate_columns(
+        let dynamic_filter_2 = reassign_expr_columns(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             &filter_schema_2,
-            false,
         )
         .unwrap();
         let snap = dynamic_filter_2.snapshot().unwrap().unwrap();

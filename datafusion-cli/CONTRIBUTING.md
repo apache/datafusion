@@ -21,10 +21,16 @@
 
 ## Running Tests
 
-Tests can be run using `cargo`
+First check out test files with
 
 ```shell
-cargo test
+git submodule update --init
+```
+
+Then run all the tests with
+
+```shell
+cargo test --all-targets
 ```
 
 ## Running Storage Integration Tests
