@@ -84,8 +84,7 @@ fn bench_single<const NULLABLE: bool>(group: &mut BenchmarkGroup<WallTime>, size
     group.bench_function(id, |b| {
         let mut builder = PrimitiveGroupValueBuilder::<Int32Type, NULLABLE>::new(DataType::Int32);
         builder.vectorized_append(&input, &rows).unwrap();
-        let mut results = BooleanBufferBuilder::new(size);
-        results.append_n(size, true);
+        let mut results = vec![true; size];
 
         b.iter(|| {
             builder.vectorized_equal_to(&rows, &input, &rows, &mut results);

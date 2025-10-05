@@ -62,10 +62,9 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut BooleanBufferBuilder,
+        equal_to_results: &mut [bool],
     ) {
         assert!(!NULLABLE || (array.null_count() == 0 && !self.nulls.has_nulls()), "called with nullable input");
-        let equal_to_results: &mut [u8] = equal_to_results.as_slice_mut();
         let array = array.as_primitive::<T>();
 
         let (call_index, lhs_rows_leftover, rhs_rows_leftover) = run_on_auto_vectorization_simd_tuple::<usize, 8, _>(
@@ -74,13 +73,15 @@ where
             &mut |call_index, lhs_rows_idxs: &[usize; 8], rhs_rows_idxs: &[usize; 8]| {
                 let bitmask = gather_and_compare_u8(&self.group_values, lhs_rows_idxs, array.values(), rhs_rows_idxs);
 
-                equal_to_results[call_index] &= bitmask;
+                for i in call_index..call_index + 8 {
+                    equal_to_results[i] = equal_to_results[i] && (bitmask & (1 << (i - call_index)) != 0);
+                }
             }
         );
 
         assert!(lhs_rows_leftover.len() < 8, "must have less than 8 left over");
         if !lhs_rows_leftover.is_empty() {
-            let result: u8 = lhs_rows_leftover.into_iter()
+            let bitmask: u8 = lhs_rows_leftover.into_iter()
               .map(|&idx| unsafe { *self.group_values.get_unchecked(idx) })
               .zip(
                   rhs_rows_leftover
@@ -93,7 +94,9 @@ where
                   |acc, (index, (l, r))| acc | (l.is_eq(r) as u8) << index
               );
 
-            equal_to_results[call_index] &= result;
+            for i in call_index..call_index + lhs_rows_leftover.len() {
+                equal_to_results[i] = equal_to_results[i] && (bitmask & (1 << (i - call_index)) != 0);
+            }
         }
     }
 
@@ -102,9 +105,8 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut BooleanBufferBuilder,
+        equal_to_results: &mut [bool],
     ) {
-        let equal_to_results: &mut [u8] = equal_to_results.as_slice_mut();
         let array = array.as_primitive::<T>();
 
         let (call_index, lhs_rows_leftover, rhs_rows_leftover) = run_on_auto_vectorization_simd_tuple::<usize, 8, _>(
@@ -124,7 +126,9 @@ where
                     )
                 );
 
-                equal_to_results[call_index] &= block_equal_to_results;
+                for i in call_index..call_index + 8 {
+                    equal_to_results[i] = equal_to_results[i] && (block_equal_to_results & (1 << (i - call_index)) != 0);
+                }
             }
         );
 
@@ -154,7 +158,9 @@ where
                 )
             );
 
-            equal_to_results[call_index] &= block_equal_to_results;
+            for i in call_index..call_index + lhs_rows_leftover.len() {
+                equal_to_results[i] = equal_to_results[i] && (block_equal_to_results & (1 << (i - call_index)) != 0);
+            }
         }
     }
 }
@@ -198,7 +204,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut BooleanBufferBuilder,
+        equal_to_results: &mut [bool],
     ) {
         if(!NULLABLE || (array.null_count() == 0 && !self.nulls.has_nulls())) {
             self.vectorized_equal_to_non_nullable(

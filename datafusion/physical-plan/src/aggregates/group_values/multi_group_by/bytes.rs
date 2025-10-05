@@ -17,13 +17,16 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{types::GenericStringType, Array, ArrayRef, AsArray, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray, GenericByteArray, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{
+    types::GenericStringType, Array, ArrayRef, AsArray, BufferBuilder,
+    GenericBinaryArray, GenericByteArray, GenericStringArray, OffsetSizeTrait,
+};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
-use itertools::{izip, Itertools};
+use itertools::izip;
 use std::mem::size_of;
 use std::sync::Arc;
 use std::vec;
@@ -101,39 +104,25 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut BooleanBufferBuilder,
+        equal_to_results: &mut [bool],
     ) where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
 
-        let lhs_rows_chunks = lhs_rows.iter().chunks(8);
-        let rhs_rows_chunks = rhs_rows.iter().chunks(8);
-
         let iter = izip!(
-            lhs_rows_chunks.into_iter(),
-            rhs_rows_chunks.into_iter(),
-            equal_to_results.as_slice_mut().into_iter(),
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
         );
 
-        for (lhs_row, rhs_row, equal_to_result) in iter {
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to, don't need to check
-            if *equal_to_result == 0 {
+            if !*equal_to_result {
                 continue;
             }
 
-            for (index, (&lhs_row, &rhs_row)) in lhs_row.zip(rhs_row).enumerate() {
-                let bit_mask = 1 << index;
-                if *equal_to_result & bit_mask == 0 {
-                    break;
-                }
-
-                let is_equal = self.do_equal_to_inner(lhs_row, array, rhs_row) as u8;
-
-                let set_bit_mask = is_equal << index;
-
-                *equal_to_result &= set_bit_mask
-            }
+            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
         }
     }
 
@@ -284,7 +273,7 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut BooleanBufferBuilder,
+        equal_to_results: &mut [bool],
     ) {
         // Sanity array type
         match self.output_type {
