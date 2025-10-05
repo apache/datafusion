@@ -38,10 +38,9 @@ use std::{any::Any, sync::Arc};
 use DataType::*;
 
 /// AVG aggregate expression
-/*
-Uses i64 for count
-ANSI mode to be supported in the future.
-*/
+/// Spark average aggregate expression. Differs from standard DataFusion average aggregate
+/// in that it uses an `i64` for the count (DataFusion version uses `u64`); also there is ANSI mode
+/// support planned in the future for Spark version.
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparkAvg {
