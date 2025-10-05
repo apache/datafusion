@@ -21,6 +21,7 @@ use ahash::RandomState;
 use arrow::datatypes::DECIMAL32_MAX_PRECISION;
 use arrow::datatypes::DECIMAL64_MAX_PRECISION;
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::Expr;
 use std::any::Any;
 use std::mem::size_of_val;
 
@@ -54,6 +55,17 @@ make_udaf_expr_and_func!(
     "Returns the sum of a group of values.",
     sum_udaf
 );
+
+pub fn sum_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        sum_udaf(),
+        vec![expr],
+        true,
+        None,
+        vec![],
+        None,
+    ))
+}
 
 /// Sum only supports a subset of numeric types, instead relying on type coercion
 ///
@@ -335,7 +347,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
         if let Some(x) = arrow::compute::sum(values) {
-            let v = self.sum.get_or_insert(T::Native::usize_as(0));
+            let v = self.sum.get_or_insert_with(|| T::Native::usize_as(0));
             *v = v.add_wrapping(x);
         }
         Ok(())

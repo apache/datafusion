@@ -478,13 +478,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     "###);
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
-    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
-    +------------+
-    | dummy(t.i) |
-    +------------+
-    | 1          |
-    +------------+
-    "###);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r"
+    +------------------+
+    | dummy_alias(t.i) |
+    +------------------+
+    | 1                |
+    +------------------+
+    ");
 
     Ok(())
 }
@@ -775,10 +775,12 @@ async fn deregister_udf() -> Result<()> {
     ctx.register_udf(cast2i64);
 
     assert!(ctx.udfs().contains("cast_to_i64"));
+    assert!(FunctionRegistry::udfs(&ctx).contains("cast_to_i64"));
 
     ctx.deregister_udf("cast_to_i64");
 
     assert!(!ctx.udfs().contains("cast_to_i64"));
+    assert!(!FunctionRegistry::udfs(&ctx).contains("cast_to_i64"));
 
     Ok(())
 }

@@ -514,7 +514,11 @@ pub(crate) fn swap_join_according_to_unboundedness(
     match (*partition_mode, *join_type) {
         (
             _,
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark
+            | JoinType::Full,
         ) => internal_err!("{join_type} join cannot be swapped for unbounded input."),
         (PartitionMode::Partitioned, _) => {
             hash_join.swap_inputs(PartitionMode::Partitioned)
