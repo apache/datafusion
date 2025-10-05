@@ -1128,23 +1128,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_prefetch_depth_multiple() -> Result<()> {
+    async fn test_prefetch_depth_multiple() {
         // Test with prefetch depth = 3 using the FileStreamTest helper
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(1)]) // Each file returns 1 batch with 1 record
             .with_num_files(3)
             .with_file_prefetch_depth(3)
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 3 batches (one from each file)
         assert_eq!(batches.len(), 3);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_with_errors() -> Result<()> {
+    async fn test_prefetch_with_errors() {
         // Test prefetch behavior when some files have errors - this should behave the same as the original error test
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(1)])
@@ -1153,76 +1152,71 @@ mod tests {
             .with_on_error(OnError::Skip)
             .with_open_errors(vec![1]) // File 1 will fail to open
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 2 batches (from files 0 and 2, skipping 1)
         assert_eq!(batches.len(), 2);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_depth_greater_than_num_files() -> Result<()> {
+    async fn test_prefetch_depth_greater_than_num_files() {
         // Test with prefetch depth larger than number of files - should work correctly
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2)])
             .with_num_files(3)
             .with_file_prefetch_depth(10) // Much larger than num_files
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 3 batches (one from each file), prefetch depth shouldn't cause issues
         assert_eq!(batches.len(), 3);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_depth_2() -> Result<()> {
+    async fn test_prefetch_depth_2() {
         // Test with prefetch depth = 2
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2), make_partition(3)])
             .with_num_files(5)
             .with_file_prefetch_depth(2)
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 10 batches (5 files * 2 batches each)
         assert_eq!(batches.len(), 10);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_depth_5() -> Result<()> {
+    async fn test_prefetch_depth_5() {
         // Test with prefetch depth = 5
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(1)])
             .with_num_files(10)
             .with_file_prefetch_depth(5)
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 10 batches (one from each file)
         assert_eq!(batches.len(), 10);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_depth_10() -> Result<()> {
+    async fn test_prefetch_depth_10() {
         // Test with prefetch depth = 10
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(3)])
             .with_num_files(20)
             .with_file_prefetch_depth(10)
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 20 batches (one from each file)
         assert_eq!(batches.len(), 20);
-
-        Ok(())
     }
 
     #[tokio::test]
@@ -1253,7 +1247,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_prefetch_with_limit_at_file_boundary() -> Result<()> {
+    async fn test_prefetch_with_limit_at_file_boundary() {
         // Test prefetch with limit that falls exactly on a file boundary
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(5)])
@@ -1261,16 +1255,15 @@ mod tests {
             .with_file_prefetch_depth(3)
             .with_limit(Some(15)) // Exactly 3 files worth of data
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 15);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_error_at_queue_start() -> Result<()> {
+    async fn test_prefetch_error_at_queue_start() {
         // Test error at the beginning of prefetch queue
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2), make_partition(3)])
@@ -1279,16 +1272,15 @@ mod tests {
             .with_on_error(OnError::Skip)
             .with_open_errors(vec![0]) // First file fails
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 8 batches (4 files * 2 batches each, skipping file 0)
         assert_eq!(batches.len(), 8);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_error_at_queue_middle() -> Result<()> {
+    async fn test_prefetch_error_at_queue_middle() {
         // Test error in the middle of prefetch queue
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2), make_partition(3)])
@@ -1297,16 +1289,15 @@ mod tests {
             .with_on_error(OnError::Skip)
             .with_open_errors(vec![2]) // Middle file fails
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 8 batches (4 files * 2 batches each, skipping file 2)
         assert_eq!(batches.len(), 8);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_error_at_queue_end() -> Result<()> {
+    async fn test_prefetch_error_at_queue_end() {
         // Test error at the end of prefetch queue
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2), make_partition(3)])
@@ -1315,16 +1306,15 @@ mod tests {
             .with_on_error(OnError::Skip)
             .with_open_errors(vec![4]) // Last file fails
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 8 batches (4 files * 2 batches each, skipping file 4)
         assert_eq!(batches.len(), 8);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_multiple_errors_in_queue() -> Result<()> {
+    async fn test_prefetch_multiple_errors_in_queue() {
         // Test multiple errors within the prefetch queue
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2), make_partition(1)])
@@ -1333,16 +1323,15 @@ mod tests {
             .with_on_error(OnError::Skip)
             .with_open_errors(vec![1, 3, 7]) // Multiple files fail
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 14 batches (7 files * 2 batches each, skipping 3 files)
         assert_eq!(batches.len(), 14);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_scan_error_in_queue() -> Result<()> {
+    async fn test_prefetch_scan_error_in_queue() {
         // Test scan errors (not open errors) with prefetch
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2), make_partition(3)])
@@ -1351,16 +1340,15 @@ mod tests {
             .with_on_error(OnError::Skip)
             .with_scan_errors(vec![1]) // File 1 fails during scanning
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 8 batches (4 files * 2 batches each, skipping file 1)
         assert_eq!(batches.len(), 8);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_mixed_errors() -> Result<()> {
+    async fn test_prefetch_mixed_errors() {
         // Test combination of open and scan errors with prefetch
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2), make_partition(3)])
@@ -1370,32 +1358,30 @@ mod tests {
             .with_open_errors(vec![1, 5])
             .with_scan_errors(vec![3])
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 10 batches (5 files * 2 batches each, skipping 3 files)
         assert_eq!(batches.len(), 10);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_many_files() -> Result<()> {
+    async fn test_prefetch_many_files() {
         // Test with many files to ensure prefetch scales
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(1)])
             .with_num_files(50)
             .with_file_prefetch_depth(8)
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 50 batches (one from each file)
         assert_eq!(batches.len(), 50);
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_prefetch_many_files_with_errors() -> Result<()> {
+    async fn test_prefetch_many_files_with_errors() {
         // Test many files with some errors scattered throughout
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(2), make_partition(1)])
@@ -1404,11 +1390,10 @@ mod tests {
             .with_on_error(OnError::Skip)
             .with_open_errors(vec![5, 15, 25, 35, 45]) // 5 files fail
             .result()
-            .await?;
+            .await
+            .unwrap();
 
         // Should get 90 batches (45 files * 2 batches each, skipping 5 files)
         assert_eq!(batches.len(), 90);
-
-        Ok(())
     }
 }
