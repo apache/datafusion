@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::datatypes::StringViewType;
 use arrow::util::bench_util::{
     create_string_view_array_with_len, create_string_view_array_with_max_len,
@@ -72,7 +72,9 @@ fn bench_vectorized_append(c: &mut Criterion) {
             group.bench_function(id, |b| {
                 let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
                 builder.vectorized_append(&input, &rows).unwrap();
-                let mut results = vec![true; size];
+                let mut results = BooleanBufferBuilder::new(size);
+                results.append_n(size, true);
+                
                 b.iter(|| {
                     builder.vectorized_equal_to(&rows, &input, &rows, &mut results);
                 });
@@ -122,7 +124,8 @@ fn bench_vectorized_append(c: &mut Criterion) {
             group.bench_function(id, |b| {
                 let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
                 builder.vectorized_append(&input, &rows).unwrap();
-                let mut results = vec![true; size];
+                let mut results = BooleanBufferBuilder::new(size);
+                results.append_n(size, true);
                 b.iter(|| {
                     builder.vectorized_equal_to(&rows, &input, &rows, &mut results);
                 });
@@ -172,7 +175,8 @@ fn bench_vectorized_append(c: &mut Criterion) {
             group.bench_function(id, |b| {
                 let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
                 builder.vectorized_append(&input, &rows).unwrap();
-                let mut results = vec![true; size];
+                let mut results = BooleanBufferBuilder::new(size);
+                results.append_n(size, true);
                 b.iter(|| {
                     builder.vectorized_equal_to(&rows, &input, &rows, &mut results);
                 });

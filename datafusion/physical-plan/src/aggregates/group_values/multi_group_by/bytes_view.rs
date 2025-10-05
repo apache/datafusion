@@ -17,11 +17,11 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{make_view, Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
+use arrow::array::{make_view, Array, ArrayRef, AsArray, BooleanBufferBuilder, ByteView, GenericByteViewArray};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
-use itertools::izip;
+use itertools::{izip, Itertools};
 use std::marker::PhantomData;
 use std::mem::{replace, size_of};
 use std::sync::Arc;
@@ -120,23 +120,37 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
         let array = array.as_byte_view::<B>();
 
+        let lhs_rows_chunks = lhs_rows.iter().chunks(8);
+        let rhs_rows_chunks = rhs_rows.iter().chunks(8);
+
         let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
+            lhs_rows_chunks.into_iter(),
+            rhs_rows_chunks.into_iter(),
+            equal_to_results.as_slice_mut().into_iter(),
         );
 
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+        for (lhs_row, rhs_row, equal_to_result) in iter {
             // Has found not equal to, don't need to check
-            if !*equal_to_result {
+            if *equal_to_result == 0 {
                 continue;
             }
 
-            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            for (index, (&lhs_row, &rhs_row)) in lhs_row.zip(rhs_row).enumerate() {
+                let bit_mask = 1 << index;
+                if *equal_to_result & bit_mask == 0 {
+                    break;
+                }
+
+                let is_equal = self.do_equal_to_inner(lhs_row, array, rhs_row) as u8;
+
+                let set_bit_mask = is_equal << index;
+
+                *equal_to_result &= set_bit_mask
+            }
         }
     }
 
@@ -503,7 +517,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         group_indices: &[usize],
         array: &ArrayRef,
         rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
         self.vectorized_equal_to_inner(group_indices, array, rows, equal_to_results);
     }

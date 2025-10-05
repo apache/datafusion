@@ -89,4 +89,9 @@ impl MaybeNullBufferBuilder {
         new_builder.truncate(n);
         new_builder.finish()
     }
+
+    pub fn has_nulls(&self) -> bool {
+        // TODO - assert correctness
+        self.nulls.as_slice().is_some()
+    }
 }

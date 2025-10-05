@@ -29,7 +29,7 @@ use crate::aggregates::group_values::multi_group_by::{
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, RecordBatch};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
@@ -82,7 +82,7 @@ pub trait GroupColumn: Send + Sync {
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     );
 
     /// The vectorized version `append_val`
@@ -228,7 +228,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
 
 /// Buffers to store intermediate results in `vectorized_append`
 /// and `vectorized_equal_to`, for reducing memory allocation
-#[derive(Default)]
 struct VectorizedOperationBuffers {
     /// The `vectorized append` row indices buffer
     append_row_indices: Vec<usize>,
@@ -240,7 +239,7 @@ struct VectorizedOperationBuffers {
     equal_to_group_indices: Vec<usize>,
 
     /// The `vectorized_equal_to` result buffer
-    equal_to_results: Vec<bool>,
+    equal_to_results: BooleanBufferBuilder,
 
     /// The buffer for storing row indices found not equal to
     /// exist groups in `group_values` in `vectorized_equal_to`.
@@ -248,12 +247,24 @@ struct VectorizedOperationBuffers {
     remaining_row_indices: Vec<usize>,
 }
 
+impl Default for VectorizedOperationBuffers {
+    fn default() -> Self {
+        Self {
+            append_row_indices: Vec::new(),
+            equal_to_row_indices: Vec::new(),
+            equal_to_group_indices: Vec::new(),
+            equal_to_results: BooleanBufferBuilder::new(0),
+            remaining_row_indices: Vec::new(),
+        }
+    }
+}
+
 impl VectorizedOperationBuffers {
     fn clear(&mut self) {
         self.append_row_indices.clear();
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
-        self.equal_to_results.clear();
+        self.equal_to_results.truncate(0);
         self.remaining_row_indices.clear();
     }
 }
@@ -624,9 +635,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         // 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
         //    and `group_indices` in `vectorized_equal_to_group_indices`
         let mut equal_to_results =
-            mem::take(&mut self.vectorized_operation_buffers.equal_to_results);
-        equal_to_results.clear();
-        equal_to_results.resize(
+            mem::replace(&mut self.vectorized_operation_buffers.equal_to_results, BooleanBufferBuilder::new(0));
+        equal_to_results.truncate(0);
+        equal_to_results.append_n(
             self.vectorized_operation_buffers
                 .equal_to_group_indices
                 .len(),
@@ -651,7 +662,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .iter()
             .enumerate()
         {
-            let equal_to_result = equal_to_results[idx];
+            let equal_to_result = equal_to_results.get_bit(idx);
 
             // Equal to case, set the `group_indices` to `rows` in `groups`
             if equal_to_result {
