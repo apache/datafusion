@@ -24,8 +24,8 @@ use super::log::LogFunc;
 use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, exec_err, internal_datafusion_err,
-    plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -39,6 +39,14 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = "Returns a base expression raised to the power of an exponent.",
     syntax_example = "power(base, exponent)",
+    sql_example = r#"```sql
+> SELECT power(2, 3);
++-------------+
+| power(2,3)  |
++-------------+
+| 8           |
++-------------+
+```"#,
     standard_argument(name = "base", prefix = "Numeric"),
     standard_argument(name = "exponent", prefix = "Exponent numeric")
 )]
