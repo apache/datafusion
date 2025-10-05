@@ -1076,7 +1076,9 @@ mod tests {
     use super::*;
     use datafusion_common::assert_contains;
     use sqlparser::ast::Expr::Identifier;
-    use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident, ValueWithSpan};
+    use sqlparser::ast::{
+        BinaryOperator, DataType, ExactNumberInfo, Expr, Ident, ValueWithSpan,
+    };
     use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::Span;
 
@@ -1573,7 +1575,7 @@ mod tests {
             name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
-                make_column_def("c2", DataType::Float(None)),
+                make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),
@@ -1641,7 +1643,7 @@ mod tests {
             name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
-                make_column_def("c2", DataType::Float(None)),
+                make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),

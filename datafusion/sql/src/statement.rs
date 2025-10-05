@@ -1006,7 +1006,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 selection,
                 returning,
                 or,
-                limit: _,
+                limit,
             } => {
                 let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
@@ -1023,6 +1023,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if or.is_some() {
                     plan_err!("ON conflict not supported")?;
+                }
+                if limit.is_some() {
+                    return not_impl_err!("Update-limit clause not supported")?;
                 }
                 self.update_to_plan(table, assignments, update_from, selection)
             }
