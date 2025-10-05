@@ -1227,7 +1227,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_prefetch_with_limit() -> Result<()> {
-        // Test prefetch combined with limit - ensure limit still works correctly
+        // With no limit we get >23 rows (10 files * 5 rows each = 50)
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(5)])
+            .with_num_files(10)
+            .with_file_prefetch_depth(5)
+            .result()
+            .await?;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert!(total_rows > 23);
+
+        // With a limit of 23 we should get exactly 23 rows
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(5)])
             .with_num_files(10)
