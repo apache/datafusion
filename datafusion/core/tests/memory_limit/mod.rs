@@ -200,7 +200,7 @@ async fn sort_merge_join_no_spill() {
         .with_expected_errors(vec![
             "Execution error: Additional allocation failed for SMJStream[partition=0] with top memory consumers (across reservations) as:
   SMJStream[partition=0]#ID(can spill: false) consumed x B, peak x B.
-Error: Failed to allocate additional x KB for SMJStream[partition=0] with x B already allocated for this reservation - x B remain available for the total pool. Disk spilling disabled.",
+Error: Failed to allocate additional x KB for SMJStream[partition=0] with x B already allocated for this reservation - x B remain available for the total pool",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
