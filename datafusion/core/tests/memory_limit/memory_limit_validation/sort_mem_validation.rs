@@ -123,7 +123,7 @@ fn spawn_test_process(test: &str) {
     let stdout = str::from_utf8(&output.stdout).unwrap_or("");
     let stderr = str::from_utf8(&output.stderr).unwrap_or("");
 
-    info!("{}", stdout);
+    info!("{stdout}");
 
     assert!(
         output.status.success(),
