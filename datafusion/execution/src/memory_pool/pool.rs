@@ -268,8 +268,45 @@ fn insufficient_capacity_err(
 struct TrackedConsumer {
     name: String,
     can_spill: bool,
+    parent_id: Option<usize>,
     reserved: AtomicUsize,
     peak: AtomicUsize,
+}
+
+/// A snapshot of a TrackedConsumer with static values and consumer ID
+#[derive(Debug, Clone)]
+struct ReportedConsumer {
+    consumer_id: usize,
+    name: String,
+    can_spill: bool,
+    reserved: usize,
+    peak: usize,
+}
+
+impl std::fmt::Display for ReportedConsumer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}#{}(can spill: {}) consumed {}, peak {}",
+            self.name,
+            self.consumer_id,
+            self.can_spill,
+            human_readable_size(self.reserved),
+            human_readable_size(self.peak)
+        )
+    }
+}
+
+impl From<(usize, &TrackedConsumer)> for ReportedConsumer {
+    fn from((consumer_id, tracked): (usize, &TrackedConsumer)) -> Self {
+        Self {
+            consumer_id,
+            name: tracked.name.clone(),
+            can_spill: tracked.can_spill,
+            reserved: tracked.reserved(),
+            peak: tracked.peak(),
+        }
+    }
 }
 
 impl TrackedConsumer {
@@ -380,29 +417,13 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
             .tracked_consumers
             .lock()
             .iter()
-            .map(|(consumer_id, tracked_consumer)| {
-                (
-                    (
-                        *consumer_id,
-                        tracked_consumer.name.to_owned(),
-                        tracked_consumer.can_spill,
-                        tracked_consumer.peak(),
-                    ),
-                    tracked_consumer.reserved(),
-                )
-            })
+            .map(|(id, consumer_stats)| ReportedConsumer::from((*id, consumer_stats)))
             .collect::<Vec<_>>();
-        consumers.sort_by(|a, b| b.1.cmp(&a.1)); // inverse ordering
+        consumers.sort_by(|a, b| b.reserved.cmp(&a.reserved)); // inverse ordering
 
         consumers[0..std::cmp::min(top, consumers.len())]
             .iter()
-            .map(|((id, name, can_spill, peak), size)| {
-                format!(
-                    "  {name}#{id}(can spill: {can_spill}) consumed {}, peak {}",
-                    human_readable_size(*size),
-                    human_readable_size(*peak),
-                )
-            })
+            .map(|reported_consumer| format!("  {reported_consumer}"))
             .collect::<Vec<_>>()
             .join(",\n")
             + "."
