@@ -43,8 +43,8 @@ use datafusion_common::encryption::map_config_decryption_to_decryption;
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    exec_datafusion_err, internal_datafusion_err, internal_err, not_impl_err,
-    DataFusionError, GetExt, HashSet, Result, DEFAULT_PARQUET_EXTENSION,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
+    HashSet, Result, DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};

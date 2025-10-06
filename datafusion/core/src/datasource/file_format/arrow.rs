@@ -42,7 +42,6 @@ use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{root_as_message, CompressionType};
 use datafusion_catalog::Session;
-use datafusion_common::exec_datafusion_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     internal_datafusion_err, not_impl_err, DataFusionError, GetExt, Statistics,
