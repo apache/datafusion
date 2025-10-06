@@ -146,9 +146,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .into_iter()
             .map(|input_expr_bytes| PhysicalExprNode::decode(input_expr_bytes.as_ref()))
             .collect::<std::result::Result<Vec<_>, prost::DecodeError>>()
-            .map_err(|e| {
-                exec_datafusion_err!("Failed to decode PhysicalExprNode: {}", e)
-            })?
+            .map_err(|e| exec_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
             .iter()
             .map(|expr_node| {
                 parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)

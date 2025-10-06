@@ -150,7 +150,7 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
         .naive_utc()
         .and_utc()
         .timestamp_nanos_opt()
-        .ok_or_else(|| exec_datafusion_err!("{}", ERR_NANOSECONDS_NOT_SUPPORTED))
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
 }
 
 /// Accepts a string with a `chrono` format and converts it to a

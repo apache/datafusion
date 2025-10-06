@@ -488,13 +488,13 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
                 .into_iter()
                 .map(|field_bytes| {
                     datafusion_proto_common::Field::decode(field_bytes.as_ref())
-                        .map_err(|e| exec_datafusion_err!("{}", e))
+                        .map_err(|e| exec_datafusion_err!("{e}"))
                 })
                 .collect::<Result<Vec<_>>>()?;
 
             parse_proto_fields_to_fields(fields.iter())
                 .map(|fields| fields.into_iter().map(Arc::new).collect())
-                .map_err(|e| exec_datafusion_err!("{}", e))
+                .map_err(|e| exec_datafusion_err!("{e}"))
         }
     }
 

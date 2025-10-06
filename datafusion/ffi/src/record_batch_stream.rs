@@ -178,7 +178,7 @@ fn maybe_wrapped_array_to_record_batch(
         ROption::RSome(RResult::ROk(wrapped_array)) => {
             Some(wrapped_array_to_record_batch(wrapped_array))
         }
-        ROption::RSome(RResult::RErr(e)) => Some(exec_err!("FFI error: {}", e)),
+        ROption::RSome(RResult::RErr(e)) => Some(exec_err!("FFI error: {e}")),
         ROption::RNone => None,
     }
 }

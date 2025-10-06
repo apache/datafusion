@@ -113,7 +113,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
             value.physical_expr_def.as_ref(),
         )
         .map_err(|e| {
-            exec_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {}", e)
+            exec_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {e}")
         })?;
 
         let return_field = Arc::new((&value.return_field.0).try_into()?);

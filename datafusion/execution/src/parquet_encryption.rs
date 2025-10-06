@@ -76,8 +76,7 @@ impl EncryptionFactoryRegistry {
             .map(|f| Arc::clone(f.value()))
             .ok_or_else(|| {
                 internal_datafusion_err!(
-                    "No Parquet encryption factory found for id '{}'",
-                    id
+                    "No Parquet encryption factory found for id '{id}'"
                 )
             })
     }

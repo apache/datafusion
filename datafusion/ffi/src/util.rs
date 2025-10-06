@@ -148,7 +148,7 @@ mod tests {
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
         let err_result: Result<String, DataFusionError> =
-            datafusion_common::exec_err!("{}", ERROR_VALUE);
+            datafusion_common::exec_err!("{ERROR_VALUE}");
 
         let returned_ok_r_result = wrap_result(ok_result);
         assert!(returned_ok_r_result == RResult::ROk(VALID_VALUE.into()));

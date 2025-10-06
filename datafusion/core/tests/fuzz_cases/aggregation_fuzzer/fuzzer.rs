@@ -308,7 +308,7 @@ impl AggregationFuzzTestTask {
                 format_batches_with_limit(expected_result),
                 format_batches_with_limit(&self.dataset_ref.batches),
             );
-            internal_datafusion_err!("{}", message)
+            internal_datafusion_err!("{message}")
         })
     }
 

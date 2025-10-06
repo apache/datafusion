@@ -169,8 +169,7 @@ impl FunctionRegistry for TaskContext {
 
         result.cloned().ok_or_else(|| {
             internal_datafusion_err!(
-                "There is no UDWF named \"{}\" in the TaskContext",
-                name
+                "There is no UDWF named \"{name}\" in the TaskContext"
             )
         })
     }

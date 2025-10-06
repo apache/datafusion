@@ -310,14 +310,14 @@ fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
     let out_len = input.len() / 2;
     let buf = &mut buf[..out_len];
     hex::decode_to_slice(input, buf)
-        .map_err(|e| internal_datafusion_err!("Failed to decode from hex: {}", e))?;
+        .map_err(|e| internal_datafusion_err!("Failed to decode from hex: {e}"))?;
     Ok(out_len)
 }
 
 fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
     general_purpose::STANDARD_NO_PAD
         .decode_slice(input, buf)
-        .map_err(|e| internal_datafusion_err!("Failed to decode from base64: {}", e))
+        .map_err(|e| internal_datafusion_err!("Failed to decode from base64: {e}"))
 }
 
 macro_rules! encode_to_array {
@@ -416,13 +416,12 @@ impl Encoding {
                     .decode(value)
                     .map_err(|e| {
                         internal_datafusion_err!(
-                            "Failed to decode value using base64: {}",
-                            e
+                            "Failed to decode value using base64: {e}"
                         )
                     })?
             }
             Self::Hex => hex::decode(value).map_err(|e| {
-                internal_datafusion_err!("Failed to decode value using hex: {}", e)
+                internal_datafusion_err!("Failed to decode value using hex: {e}")
             })?,
         };
 
@@ -441,13 +440,12 @@ impl Encoding {
                     .decode(value)
                     .map_err(|e| {
                         internal_datafusion_err!(
-                            "Failed to decode value using base64: {}",
-                            e
+                            "Failed to decode value using base64: {e}"
                         )
                     })?
             }
             Self::Hex => hex::decode(value).map_err(|e| {
-                internal_datafusion_err!("Failed to decode value using hex: {}", e)
+                internal_datafusion_err!("Failed to decode value using hex: {e}")
             })?,
         };
 

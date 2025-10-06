@@ -236,7 +236,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
             .get(&s)
             .map(|o| Arc::clone(o.value()))
             .ok_or_else(|| {
-                internal_datafusion_err!("No suitable object store found for {}. See `RuntimeEnv::register_object_store`", url)
+                internal_datafusion_err!("No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
             })
     }
 }
