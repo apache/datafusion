@@ -699,7 +699,7 @@ impl TryFrom<&ScalarValue> for TriStateBool {
                 Some(true) => TriStateBool::True,
                 Some(false) => TriStateBool::False,
             }),
-            _ => Self::try_from(&value.cast_to(&DataType::Boolean)?)
+            _ => Self::try_from(&value.cast_to(&DataType::Boolean)?),
         }
     }
 }
