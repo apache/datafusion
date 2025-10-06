@@ -1268,8 +1268,9 @@ impl FileSink for ParquetSink {
                         parquet_props.clone(),
                     )
                     .await?;
-                let mut reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
-                    .register(context.memory_pool());
+                let mut reservation =
+                    MemoryConsumer::new(format!("ParquetSink[path={path}]"))
+                        .register(context.memory_pool());
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
                         writer.write(&batch).await?;

@@ -953,7 +953,7 @@ impl ExecutionPlan for HashJoinExec {
                 let left_stream = self.left.execute(partition, Arc::clone(&context))?;
 
                 let reservation =
-                    MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
+                    MemoryConsumer::new(format!("HashJoinInput[partition={partition}]"))
                         .register(context.memory_pool());
 
                 OnceFut::new(collect_left_input(

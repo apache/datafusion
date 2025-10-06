@@ -188,7 +188,7 @@ impl TopK {
         metrics: &ExecutionPlanMetricsSet,
         filter: Arc<RwLock<TopKDynamicFilters>>,
     ) -> Result<Self> {
-        let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
+        let reservation = MemoryConsumer::new(format!("TopK[partition={partition_id}]"))
             .register(&runtime.memory_pool);
 
         let sort_fields = build_sort_fields(&expr, &schema)?;

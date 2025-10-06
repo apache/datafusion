@@ -491,8 +491,9 @@ impl ExecutionPlan for SortMergeJoinExec {
         let batch_size = context.session_config().batch_size();
 
         // create memory reservation
-        let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
-            .register(context.memory_pool());
+        let reservation =
+            MemoryConsumer::new(format!("SMJStream[partition={partition}]"))
+                .register(context.memory_pool());
 
         // create join stream
         Ok(Box::pin(SortMergeJoinStream::try_new(

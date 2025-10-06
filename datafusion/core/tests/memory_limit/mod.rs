@@ -153,7 +153,7 @@ async fn join_by_expression() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
         .with_expected_errors(vec![
-           "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]",
+           "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[partition=0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -375,7 +375,7 @@ async fn oom_parquet_sink() {
         ))
         .with_expected_errors(vec![
             "Failed to allocate additional",
-            "for ParquetSink(ArrowColumnWriter)",
+            "ParquetSink(ArrowColumnWriter(col=1))",
         ])
         .with_memory_limit(200_000)
         .run()
@@ -402,8 +402,8 @@ async fn oom_with_tracked_consumer_pool() {
         ))
         .with_expected_errors(vec![
             "Failed to allocate additional",
-            "for ParquetSink(ArrowColumnWriter)",
-            "Additional allocation failed", "with top memory consumers (across reservations) as:\n  ParquetSink(ArrowColumnWriter)"
+            "for ParquetSink(ArrowColumnWriter(col=2))",
+            "Additional allocation failed", "with top memory consumers (across reservations) as:\n  ParquetSink(ArrowColumnWriter(col=8))"
         ])
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(

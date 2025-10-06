@@ -280,12 +280,13 @@ impl ExternalSorter {
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
         let metrics = ExternalSorterMetrics::new(metrics, partition_id);
-        let reservation = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
-            .with_can_spill(true)
-            .register(&runtime.memory_pool);
+        let reservation =
+            MemoryConsumer::new(format!("ExternalSorter[partition={partition_id}]"))
+                .with_can_spill(true)
+                .register(&runtime.memory_pool);
 
         let merge_reservation =
-            MemoryConsumer::new(format!("ExternalSorterMerge[{partition_id}]"))
+            MemoryConsumer::new(format!("ExternalSorterMerge[partition={partition_id}]"))
                 .register(&runtime.memory_pool);
 
         let spill_manager = SpillManager::new(

@@ -88,8 +88,9 @@ impl AggregateStream {
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;
 
-        let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
-            .register(context.memory_pool());
+        let reservation =
+            MemoryConsumer::new(format!("AggregateStream[partition={partition}]"))
+                .register(context.memory_pool());
 
         let inner = AggregateStreamInner {
             schema: Arc::clone(&agg.schema),

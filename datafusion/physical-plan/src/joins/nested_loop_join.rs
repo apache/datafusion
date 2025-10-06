@@ -496,7 +496,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
         // Initialization reservation for load of inner table
         let load_reservation =
-            MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
+            MemoryConsumer::new(format!("NestedLoopJoinLoad[partition={partition}]"))
                 .register(context.memory_pool());
 
         let build_side_data = self.build_side_data.try_once(|| {
