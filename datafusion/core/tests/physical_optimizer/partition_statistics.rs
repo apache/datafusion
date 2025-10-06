@@ -617,7 +617,7 @@ mod test {
                 scan_schema.clone(),
             )?) as _;
 
-        let plan_string = get_plan_string(&aggregate_exec_partial).swap_remove(1);
+        let plan_string = get_plan_string(&aggregate_exec_partial).swap_remove(0);
         assert_snapshot!(
             plan_string,
             @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
