@@ -1799,7 +1799,7 @@ async fn overallocation_single_batch_no_spill() -> Result<()> {
         let err = common::collect(stream).await.unwrap_err();
 
         assert_contains!(err.to_string(), "Failed to allocate additional");
-        assert_contains!(err.to_string(), "SMJStream[0]");
+        assert_contains!(err.to_string(), "SMJStream[partition=0]");
         assert_contains!(err.to_string(), "Disk spilling disabled");
         assert!(join.metrics().is_some());
         assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
@@ -1879,7 +1879,7 @@ async fn overallocation_multi_batch_no_spill() -> Result<()> {
         let err = common::collect(stream).await.unwrap_err();
 
         assert_contains!(err.to_string(), "Failed to allocate additional");
-        assert_contains!(err.to_string(), "SMJStream[0]");
+        assert_contains!(err.to_string(), "SMJStream[partition=0]");
         assert_contains!(err.to_string(), "Disk spilling disabled");
         assert!(join.metrics().is_some());
         assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
