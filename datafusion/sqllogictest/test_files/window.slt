@@ -2602,7 +2602,7 @@ SELECT
   FROM aggregate_test_100;
 
 statement ok
-set datafusion.optimizer.skip_failed_rules = true
+set datafusion.optimizer.skip_failed_rules = false
 
 # Error is returned from the logical plan.
 query error Cannot cast Utf8\("1 DAY"\) to Int8
@@ -6120,6 +6120,25 @@ FROM (
         AND a33 = '' AND a34 = '' AND a35 = '' AND a36 = '' AND a37 = '' AND a38 = '' AND a39 = '' AND a40 = ''
     ORDER BY a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20,
         a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31, a32, a33, a34, a35, a36, a37, a38, a39, a40
+);
+----
+1
+
+# window_with_subquery_rewritten_to_join
+# the optimizer `scalar_subquery_to_join` rewrites
+# `WHERE acctbal > ( SELECT AVG(acctbal) FROM suppliers)` into a Join,
+# breaking the input schema passed to the window function above.
+# See: https://github.com/apache/datafusion/issues/17770
+query I
+WITH suppliers AS (
+  SELECT *
+  FROM (VALUES (1, 10.0), (1, 20.0)) AS t(nation, acctbal)
+)
+SELECT
+  ROW_NUMBER() OVER (PARTITION BY nation ORDER BY acctbal DESC) AS rn
+FROM suppliers AS s
+WHERE acctbal > (
+  SELECT AVG(acctbal) FROM suppliers
 );
 ----
 1
