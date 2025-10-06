@@ -479,9 +479,18 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
             .collect::<Vec<_>>();
         consumers.sort_by(|a, b| b.reserved.cmp(&a.reserved)); // inverse ordering
 
+        let consumers_map: HashMap<usize, ReportedConsumer> = consumers
+            .iter()
+            .map(|consumer| (consumer.consumer_id, consumer.clone()))
+            .collect();
+
         consumers[0..std::cmp::min(top, consumers.len())]
             .iter()
-            .map(|reported_consumer| format!("  {reported_consumer}"))
+            .map(|reported_consumer| {
+                let trace =
+                    build_consumer_stack_trace(reported_consumer.clone(), &consumers_map);
+                format!("  {trace}")
+            })
             .collect::<Vec<_>>()
             .join(",\n")
             + "."

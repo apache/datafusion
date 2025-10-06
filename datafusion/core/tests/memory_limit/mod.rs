@@ -394,11 +394,36 @@ async fn oom_parquet_sink() {
         ))
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed for ParquetSink(ArrowColumnWriter(col=1)) with top memory consumers (across reservations) as:
-  ParquetSink(ArrowColumnWriter(col=8))#ID(can spill: false) consumed x KB, peak x KB,
-  ParquetSink(ArrowColumnWriter(col=14))#ID(can spill: false) consumed x KB, peak x KB,
-  ParquetSink(ArrowColumnWriter(col=0))#ID(can spill: false) consumed x KB, peak x KB,
-  ParquetSink(ArrowColumnWriter(col=2))#ID(can spill: false) consumed x KB, peak x KB,
-  ParquetSink(ArrowColumnWriter(col=1))#ID(can spill: false) consumed x KB, peak x KB.
+  ParquetSink(ArrowColumnWriter(col=8))#ID(can spill: false) consumed x KB, peak x KB:
+stack backtrace:
+   0: ParquetSink(ArrowColumnWriter(col=8))#ID(can spill: false) consumed x KB, peak x KB
+   1: ParquetSink(ParallelColumnWriters)#ID(can spill: false) consumed x B, peak x B
+   2: ParquetSink(ParallelWriter)#ID(can spill: false) consumed x B, peak x B
+,
+  ParquetSink(ArrowColumnWriter(col=14))#ID(can spill: false) consumed x KB, peak x KB:
+stack backtrace:
+   0: ParquetSink(ArrowColumnWriter(col=14))#ID(can spill: false) consumed x KB, peak x KB
+   1: ParquetSink(ParallelColumnWriters)#ID(can spill: false) consumed x B, peak x B
+   2: ParquetSink(ParallelWriter)#ID(can spill: false) consumed x B, peak x B
+,
+  ParquetSink(ArrowColumnWriter(col=0))#ID(can spill: false) consumed x KB, peak x KB:
+stack backtrace:
+   0: ParquetSink(ArrowColumnWriter(col=0))#ID(can spill: false) consumed x KB, peak x KB
+   1: ParquetSink(ParallelColumnWriters)#ID(can spill: false) consumed x B, peak x B
+   2: ParquetSink(ParallelWriter)#ID(can spill: false) consumed x B, peak x B
+,
+  ParquetSink(ArrowColumnWriter(col=2))#ID(can spill: false) consumed x KB, peak x KB:
+stack backtrace:
+   0: ParquetSink(ArrowColumnWriter(col=2))#ID(can spill: false) consumed x KB, peak x KB
+   1: ParquetSink(ParallelColumnWriters)#ID(can spill: false) consumed x B, peak x B
+   2: ParquetSink(ParallelWriter)#ID(can spill: false) consumed x B, peak x B
+,
+  ParquetSink(ArrowColumnWriter(col=1))#ID(can spill: false) consumed x KB, peak x KB:
+stack backtrace:
+   0: ParquetSink(ArrowColumnWriter(col=1))#ID(can spill: false) consumed x KB, peak x KB
+   1: ParquetSink(ParallelColumnWriters)#ID(can spill: false) consumed x B, peak x B
+   2: ParquetSink(ParallelWriter)#ID(can spill: false) consumed x B, peak x B
+.
 Error: Failed to allocate additional x KB for ParquetSink(ArrowColumnWriter(col=1)) with x KB already allocated for this reservation - x KB remain available for the total pool",
         ])
         .with_memory_limit(200_000)
@@ -426,7 +451,12 @@ async fn oom_with_tracked_consumer_pool() {
         ))
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed for ParquetSink(ArrowColumnWriter(col=2)) with top memory consumers (across reservations) as:
-  ParquetSink(ArrowColumnWriter(col=8))#ID(can spill: false) consumed x KB, peak x KB.
+  ParquetSink(ArrowColumnWriter(col=8))#ID(can spill: false) consumed x KB, peak x KB:
+stack backtrace:
+   0: ParquetSink(ArrowColumnWriter(col=8))#ID(can spill: false) consumed x KB, peak x KB
+   1: ParquetSink(ParallelColumnWriters)#ID(can spill: false) consumed x B, peak x B
+   2: ParquetSink(ParallelWriter)#ID(can spill: false) consumed x B, peak x B
+.
 Error: Failed to allocate additional x KB for ParquetSink(ArrowColumnWriter(col=2)) with x KB already allocated for this reservation - x KB remain available for the total pool"
         ])
         .with_memory_pool(Arc::new(
