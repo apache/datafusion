@@ -277,6 +277,7 @@ struct TrackedConsumer {
 #[derive(Debug, Clone)]
 struct ReportedConsumer {
     consumer_id: usize,
+    parent_id: Option<usize>,
     name: String,
     can_spill: bool,
     reserved: usize,
@@ -301,12 +302,69 @@ impl From<(usize, &TrackedConsumer)> for ReportedConsumer {
     fn from((consumer_id, tracked): (usize, &TrackedConsumer)) -> Self {
         Self {
             consumer_id,
+            parent_id: tracked.parent_id,
             name: tracked.name.clone(),
             can_spill: tracked.can_spill,
             reserved: tracked.reserved(),
             peak: tracked.peak(),
         }
     }
+}
+
+/// A stack trace representation of a memory consumer's lineage
+#[derive(Debug, Clone)]
+struct ConsumerStackTrace {
+    /// The consumer for which we're building the stack trace
+    consumer: ReportedConsumer,
+    /// The trace from immediate parent to oldest ancestor (excluding the consumer itself)
+    trace: Vec<ReportedConsumer>,
+}
+
+impl std::fmt::Display for ConsumerStackTrace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.trace.is_empty() {
+            // If no trace, just display the consumer
+            write!(f, "{}", self.consumer)?;
+        } else {
+            // If there's a trace, show the full stack backtrace
+            writeln!(f, "{}:", self.consumer)?;
+            writeln!(f, "stack backtrace:")?;
+            writeln!(f, "   0: {}", self.consumer)?;
+            for (i, consumer) in self.trace.iter().enumerate() {
+                writeln!(f, "   {}: {}", i + 1, consumer)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Builds a stack trace for a consumer, following parent relationships until reaching a root
+///
+/// # Arguments
+/// * `consumer` - The consumer to build a stack trace for
+/// * `map` - HashMap mapping consumer_id to ReportedConsumer
+///
+/// # Returns
+/// A ConsumerStackTrace containing the consumer and its parent lineage
+fn build_consumer_stack_trace(
+    consumer: ReportedConsumer,
+    map: &HashMap<usize, ReportedConsumer>,
+) -> ConsumerStackTrace {
+    let mut trace = Vec::new();
+    let mut current_parent_id = consumer.parent_id;
+
+    // Follow the parent chain until we reach a root (parent_id is None)
+    while let Some(parent_id) = current_parent_id {
+        if let Some(parent_consumer) = map.get(&parent_id) {
+            trace.push(parent_consumer.clone());
+            current_parent_id = parent_consumer.parent_id;
+        } else {
+            // Parent not found in map, stop traversal
+            break;
+        }
+    }
+
+    ConsumerStackTrace { consumer, trace }
 }
 
 impl TrackedConsumer {
@@ -440,6 +498,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             TrackedConsumer {
                 name: consumer.name().to_string(),
                 can_spill: consumer.can_spill(),
+                parent_id: consumer.parent_id(),
                 reserved: Default::default(),
                 peak: Default::default(),
             },
@@ -822,5 +881,75 @@ mod tests {
         r3#[ID](can spill: false) consumed 45.0 B, peak 45.0 B,
         r1#[ID](can spill: false) consumed 20.0 B, peak 20.0 B.
         ");
+    }
+
+    #[test]
+    fn test_build_consumer_stack_trace_no_parent() {
+        // Test case 1: Consumer with no parent (root consumer)
+        let mut reported_consumers = HashMap::new();
+
+        let root_consumer = ReportedConsumer {
+            consumer_id: 1,
+            name: "root".to_string(),
+            can_spill: false,
+            parent_id: None,
+            reserved: 100,
+            peak: 150,
+        };
+
+        reported_consumers.insert(1, root_consumer.clone());
+
+        let stack_trace =
+            build_consumer_stack_trace(root_consumer.clone(), &reported_consumers);
+
+        assert_eq!(stack_trace.consumer.consumer_id, 1);
+        assert_eq!(stack_trace.trace.len(), 0); // No parents
+
+        assert_eq!(
+            format!("{stack_trace}"),
+            "root#1(can spill: false) consumed 100.0 B, peak 150.0 B"
+        );
+    }
+
+    #[test]
+    fn test_build_consumer_stack_trace_hierarchy() {
+        let mut reported_consumers = HashMap::new();
+
+        // Create: great_grandparent(1) -> grandparent(2) -> parent(3) -> child(4) -> grandchild(5)
+        for i in 1..=5 {
+            let parent_id = if i == 1 { None } else { Some(i - 1) };
+            let consumer = ReportedConsumer {
+                consumer_id: i,
+                name: format!("consumer_{i}"),
+                can_spill: i % 2 == 0,
+                parent_id,
+                reserved: i * 10,
+                peak: i * 15,
+            };
+            reported_consumers.insert(i, consumer);
+        }
+
+        let grandchild = reported_consumers.get(&5).unwrap().clone();
+        let stack_trace = build_consumer_stack_trace(grandchild, &reported_consumers);
+
+        assert_eq!(stack_trace.consumer.consumer_id, 5);
+        assert_eq!(stack_trace.trace.len(), 4);
+        // Verify the order: immediate parent (4) to oldest ancestor (1)
+        assert_eq!(stack_trace.trace[0].consumer_id, 4); // immediate parent
+        assert_eq!(stack_trace.trace[1].consumer_id, 3); // grandparent
+        assert_eq!(stack_trace.trace[2].consumer_id, 2); // great-grandparent
+        assert_eq!(stack_trace.trace[3].consumer_id, 1); // oldest ancestor
+
+        assert_eq!(
+            format!("{stack_trace}"),
+            "consumer_5#5(can spill: false) consumed 50.0 B, peak 75.0 B:
+stack backtrace:
+   0: consumer_5#5(can spill: false) consumed 50.0 B, peak 75.0 B
+   1: consumer_4#4(can spill: true) consumed 40.0 B, peak 60.0 B
+   2: consumer_3#3(can spill: false) consumed 30.0 B, peak 45.0 B
+   3: consumer_2#2(can spill: true) consumed 20.0 B, peak 30.0 B
+   4: consumer_1#1(can spill: false) consumed 10.0 B, peak 15.0 B
+"
+        );
     }
 }
