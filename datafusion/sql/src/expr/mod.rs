@@ -292,7 +292,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             SQLExpr::TypedString(TypedString {
-                data_type, value, ..
+                data_type,
+                value,
+                uses_odbc_syntax: _,
             }) => Ok(Expr::Cast(Cast::new(
                 Box::new(lit(value.into_string().unwrap())),
                 self.convert_data_type(&data_type)?,

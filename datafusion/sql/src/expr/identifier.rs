@@ -17,8 +17,8 @@
 
 use arrow::datatypes::Field;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, Result, Span, TableReference,
+    exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
+    Column, DFSchema, Result, Span, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
@@ -117,9 +117,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "variable {var_names:?} has no type information"
-                    ))
+                    exec_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {

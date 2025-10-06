@@ -191,9 +191,8 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
-        let msg = TestTableProto::decode(buf).map_err(|_| {
-            DataFusionError::Internal("Error decoding test table".to_string())
-        })?;
+        let msg = TestTableProto::decode(buf)
+            .map_err(|_| internal_datafusion_err!("Error decoding test table"))?;
         assert_eq!(msg.table_name, table_ref.to_string());
         let provider = TestTableProvider {
             url: msg.url,
@@ -217,9 +216,8 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             url: table.url.clone(),
             table_name: table_ref.to_string(),
         };
-        msg.encode(buf).map_err(|_| {
-            DataFusionError::Internal("Error encoding test table".to_string())
-        })
+        msg.encode(buf)
+            .map_err(|_| internal_datafusion_err!("Error encoding test table"))
     }
 }
 
@@ -1164,7 +1162,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
     ) -> Result<Extension> {
         if let Some((input, _)) = inputs.split_first() {
             let proto = proto::TopKPlanProto::decode(buf).map_err(|e| {
-                DataFusionError::Internal(format!("failed to decode logical plan: {e:?}"))
+                internal_datafusion_err!("failed to decode logical plan: {e:?}")
             })?;
 
             if let Some(expr) = proto.expr.as_ref() {
@@ -1193,7 +1191,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
             };
 
             proto.encode(buf).map_err(|e| {
-                DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
+                internal_datafusion_err!("failed to encode logical plan: {e:?}")
             })?;
 
             Ok(())
@@ -1261,7 +1259,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         if name == "regex_udf" {
             let proto = MyRegexUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to decode regex_udf: {err}"))
+                internal_datafusion_err!("failed to decode regex_udf: {err}")
             })?;
 
             Ok(Arc::new(ScalarUDF::from(MyRegexUdf::new(proto.pattern))))
@@ -1276,18 +1274,16 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         let proto = MyRegexUdfNode {
             pattern: udf.pattern.clone(),
         };
-        proto.encode(buf).map_err(|err| {
-            DataFusionError::Internal(format!("failed to encode udf: {err}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         if name == "aggregate_udf" {
             let proto = MyAggregateUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "failed to decode aggregate_udf: {err}"
-                ))
+                internal_datafusion_err!("failed to decode aggregate_udf: {err}")
             })?;
 
             Ok(Arc::new(AggregateUDF::from(MyAggregateUDF::new(
@@ -1304,9 +1300,9 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         let proto = MyAggregateUdfNode {
             result: udf.result.clone(),
         };
-        proto.encode(buf).map_err(|err| {
-            DataFusionError::Internal(format!("failed to encode udf: {err}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
 }
@@ -2280,7 +2276,7 @@ fn roundtrip_scalar_udf() {
             if name == "dummy" {
                 Ok(Arc::new(dummy_udf()))
             } else {
-                Err(DataFusionError::Internal(format!("UDF {name} not found")))
+                Err(internal_datafusion_err!("UDF {name} not found"))
             }
         }
     }
