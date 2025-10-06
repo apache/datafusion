@@ -2675,7 +2675,7 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_custom_listing_tables_schema_explicit_projection() -> Result<()> {
+async fn roundtrip_custom_listing_tables_schema_table_scan_projection() -> Result<()> {
     let ctx = SessionContext::new();
     // Make sure during round-trip, constraint information is preserved
     let file_format = JsonFormat::default();
