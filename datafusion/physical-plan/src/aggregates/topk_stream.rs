@@ -98,6 +98,8 @@ impl RecordBatchStream for GroupedTopKAggregateStream {
 
 impl GroupedTopKAggregateStream {
     fn intern(&mut self, ids: ArrayRef, vals: ArrayRef) -> Result<()> {
+        let _timer = self.group_by_metrics.time_calculating_group_ids.timer();
+
         let len = ids.len();
         self.priority_map.set_batch(ids, Arc::clone(&vals));
 
@@ -120,6 +122,7 @@ impl Stream for GroupedTopKAggregateStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let emitting_time = self.group_by_metrics.emitting_time.clone();
         while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
             let _timer = elapsed_compute.timer();
             match res {
@@ -164,7 +167,6 @@ impl Stream for GroupedTopKAggregateStream {
                     let input_values = Arc::clone(&input_values[0][0]);
 
                     // iterate over each column of group_by values
-                    self.group_by_metrics.time_calculating_group_ids.timer();
                     (*self).intern(group_by_values, input_values)?;
                 }
                 // inner is done, emit all rows and switch to producing output
@@ -173,11 +175,11 @@ impl Stream for GroupedTopKAggregateStream {
                         trace!("partition {} emit None", self.partition);
                         return Poll::Ready(None);
                     }
-                    let cols = {
-                        self.group_by_metrics.emitting_time.timer();
-                        self.priority_map.emit()?
+                    let batch = {
+                        let _timer = emitting_time.timer();
+                        let cols = self.priority_map.emit()?;
+                        RecordBatch::try_new(Arc::clone(&self.schema), cols)?
                     };
-                    let batch = RecordBatch::try_new(Arc::clone(&self.schema), cols)?;
                     trace!(
                         "partition {} emit batch with {} rows",
                         self.partition,

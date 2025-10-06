@@ -926,7 +926,7 @@ impl GroupedHashAggregateStream {
                 }
                 self.group_by_metrics
                     .aggregation_time
-                    .add_duration(Instant::now() - agg_start_time);
+                    .add_elapsed(agg_start_time);
             }
         }
 

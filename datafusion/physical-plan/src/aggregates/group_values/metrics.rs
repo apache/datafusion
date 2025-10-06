@@ -24,11 +24,12 @@ pub(crate) struct GroupByMetrics {
     pub(crate) time_calculating_group_ids: Time,
     /// Time spent evaluating the inputs to the aggregate functions.
     pub(crate) aggregate_arguments_time: Time,
-    /// Time spent performing the group by (e.g. in case of hash aggregation this would be searching and building the hash table)
-    /// and evaluating the aggregate expressions themself (e.g. summing all elements and counting number of elements for `avg` aggregate).
+    /// Time spent evaluating the aggregate expressions themselves
+    /// (e.g. summing all elements and counting number of elements for `avg` aggregate).
     pub(crate) aggregation_time: Time,
     /// Time spent emitting the final results and constructing the record batch
-    /// which includes finalizing the grouping expressions (e.g. emit from the hash table in case of hash aggregation) and the accumulators
+    /// which includes finalizing the grouping expressions
+    /// (e.g. emit from the hash table in case of hash aggregation) and the accumulators
     pub(crate) emitting_time: Time,
 }
 
