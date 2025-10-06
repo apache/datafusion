@@ -38,7 +38,7 @@ use datafusion_common::cast::{
     as_int8_array, as_string_array, as_string_view_array, as_uint16_array,
     as_uint32_array, as_uint64_array, as_uint8_array,
 };
-use datafusion_common::{exec_datafusion_err, not_impl_err};
+use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
@@ -322,7 +322,7 @@ async fn hive_style_partitions_demuxer(
 
             // Finally send the partial batch partitioned by distinct value!
             part_tx.send(final_batch_to_send).await.map_err(|_| {
-                exec_datafusion_err!("Unexpected error sending parted batch!")
+                internal_datafusion_err!("Unexpected error sending parted batch!")
             })?;
         }
     }
