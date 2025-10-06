@@ -442,6 +442,6 @@ impl DataSink for StreamWrite {
         write_task
             .join_unwind()
             .await
-            .map_err(|e| exec_datafusion_err!("Write task failed: {}", e))?
+            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
     }
 }
