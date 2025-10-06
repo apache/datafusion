@@ -356,7 +356,8 @@ impl FileStream {
                                             }
                                         }
                                     } else {
-                                        return Poll::Ready(None);
+                                        // Prefetch queue is empty, go to Idle to check file_iter
+                                        self.state = FileStreamState::Idle;
                                     }
                                 }
                                 OnError::Fail => {
@@ -394,7 +395,8 @@ impl FileStream {
                                     }
                                 }
                             } else {
-                                return Poll::Ready(None);
+                                // Prefetch queue is empty, go to Idle to check file_iter
+                                self.state = FileStreamState::Idle;
                             }
                         }
                     }
@@ -622,7 +624,7 @@ mod tests {
     use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
     use crate::test_util::MockSource;
     use arrow::array::RecordBatch;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::Schema;
 
     use datafusion_common::{assert_batches_eq, exec_err, internal_err};
 
@@ -1085,64 +1087,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_prefetch_depth_1() -> Result<()> {
-        // Test with prefetch depth = 1 (default behavior)
-        let file_schema =
-            Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
-
-        let records = vec![make_partition(2), make_partition(3)];
-        let opener = TestOpener {
-            records: records.clone(),
-            ..Default::default()
-        };
-
-        let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema,
-            Arc::new(MockSource::default()),
-        )
-        .with_file_group(
-            (0..3)
-                .map(|idx| PartitionedFile::new(format!("file{idx}"), 10))
-                .collect(),
-        )
-        .with_file_prefetch_depth(1)
-        .build();
-
-        let metrics = ExecutionPlanMetricsSet::new();
-        let stream = FileStream::new(&config, 0, Arc::new(opener), &metrics)?;
-
-        // Verify the prefetch depth is set correctly
-        assert_eq!(stream.file_prefetch_depth, 1);
-
-        let batches: Vec<_> = stream
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
-
-        // Should work the same as before - 3 files * 2 records each + 3 files * 3 records each
-        assert_eq!(batches.len(), 6);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_prefetch_depth_multiple() {
-        // Test with prefetch depth = 3 using the FileStreamTest helper
-        let batches = FileStreamTest::new()
-            .with_records(vec![make_partition(1)]) // Each file returns 1 batch with 1 record
-            .with_num_files(3)
-            .with_file_prefetch_depth(3)
-            .result()
-            .await
-            .unwrap();
-
-        // Should get 3 batches (one from each file)
-        assert_eq!(batches.len(), 3);
-    }
-
-    #[tokio::test]
     async fn test_prefetch_with_errors() {
         // Test prefetch behavior when some files have errors - this should behave the same as the original error test
         let batches = FileStreamTest::new()
@@ -1172,6 +1116,40 @@ mod tests {
 
         // Should get 3 batches (one from each file), prefetch depth shouldn't cause issues
         assert_eq!(batches.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_depth_0() {
+        // Test with prefetch depth = 0 (no prefetching)
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(3)])
+            .with_num_files(5)
+            .with_file_prefetch_depth(0)
+            .result()
+            .await
+            .unwrap();
+
+        // Should get 10 batches (5 files * 2 batches each)
+        assert_eq!(batches.len(), 10);
+
+        // Verify total row count: 5 files * (2 rows + 3 rows) = 25 rows
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 25);
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_depth_1() {
+        // Test with prefetch depth = 1 (default behavior)
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(2), make_partition(3)])
+            .with_num_files(5)
+            .with_file_prefetch_depth(1)
+            .result()
+            .await
+            .unwrap();
+
+        // Should get 10 batches (5 files * 2 batches each)
+        assert_eq!(batches.len(), 10);
     }
 
     #[tokio::test]
