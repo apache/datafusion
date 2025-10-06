@@ -83,7 +83,7 @@ float_col Float32 YES
 double_col Float64 YES
 date_string_col Utf8View YES
 string_col Utf8View YES
-timestamp_col Timestamp(Nanosecond, None) YES
+timestamp_col Timestamp(ns) YES
 year Int32 YES
 month Int32 YES
 
