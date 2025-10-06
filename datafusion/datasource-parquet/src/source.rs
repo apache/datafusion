@@ -313,16 +313,9 @@ impl ParquetSource {
         self
     }
 
-    fn with_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
-        self.metrics = metrics;
-        self
-    }
-
     /// Set predicate information
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
-        let metrics = ExecutionPlanMetricsSet::new();
-        conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
         conf
     }

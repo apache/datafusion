@@ -1786,7 +1786,7 @@ impl From<SessionContext> for SessionStateBuilder {
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
 pub trait QueryPlanner: Debug {
-    /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
+    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1794,12 +1794,46 @@ pub trait QueryPlanner: Debug {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
-/// A pluggable interface to handle `CREATE FUNCTION` statements
-/// and interact with [SessionState] to registers new udf, udaf or udwf.
+/// Interface for handling `CREATE FUNCTION` statements and interacting with
+/// [SessionState] to create and register functions ([`ScalarUDF`],
+/// [`AggregateUDF`], [`WindowUDF`], and [`TableFunctionImpl`]) dynamically.
+///
+/// Implement this trait to create user-defined functions in a custom way, such
+/// as loading from external libraries or defining them programmatically.
+/// DataFusion will parse `CREATE FUNCTION` statements into [`CreateFunction`]
+/// structs and pass them to the [`create`](Self::create) method.
+///
+/// Note there is no default implementation of this trait provided in DataFusion,
+/// because the implementation and requirements vary widely. Please see
+/// [function_factory example] for a reference implementation.
+///
+/// [function_factory example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/function_factory.rs
+///
+/// # Examples of syntax that can be supported
+///
+/// ```sql
+/// CREATE FUNCTION f1(BIGINT)
+///   RETURNS BIGINT
+///   RETURN $1 + 1;
+/// ```
+/// or
+/// ```sql
+/// CREATE FUNCTION to_miles(DOUBLE)
+/// RETURNS DOUBLE
+/// LANGUAGE PYTHON
+/// AS '
+/// import pyarrow.compute as pc
+///
+/// conversation_rate_multiplier = 0.62137119
+///
+/// def to_miles(km_data):
+///     return pc.multiply(km_data, conversation_rate_multiplier)
+/// '
+/// ```
 
 #[async_trait]
 pub trait FunctionFactory: Debug + Sync + Send {
-    /// Handles creation of user defined function specified in [CreateFunction] statement
+    /// Creates a new dynamic function from the SQL in the [CreateFunction] statement
     async fn create(
         &self,
         state: &SessionState,
@@ -1807,7 +1841,8 @@ pub trait FunctionFactory: Debug + Sync + Send {
     ) -> Result<RegisterFunction>;
 }
 
-/// Type of function to create
+/// The result of processing a [`CreateFunction`] statement with [`FunctionFactory`].
+#[derive(Debug, Clone)]
 pub enum RegisterFunction {
     /// Scalar user defined function
     Scalar(Arc<ScalarUDF>),
