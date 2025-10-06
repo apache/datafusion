@@ -1087,7 +1087,7 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{DataFusionError, Result, Statistics};
+    use datafusion_common::{internal_datafusion_err, Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
@@ -1153,9 +1153,7 @@ mod tests {
             }
             match self {
                 Self::Panic => panic!("expected panic"),
-                Self::Error => {
-                    Err(DataFusionError::Internal("expected error".to_string()))
-                }
+                Self::Error => Err(internal_datafusion_err!("expected error")),
                 Self::Ok => Ok(Statistics::new_unknown(self.schema().as_ref())),
             }
         }

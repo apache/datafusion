@@ -41,7 +41,7 @@ use arrow::datatypes::{
     UInt8Type,
 };
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, not_impl_err, Result};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -1180,9 +1180,9 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             if let DataType::Dictionary(_, v) = expected {
                 let actual = array.data_type();
                 if v.as_ref() != actual {
-                    return Err(DataFusionError::Internal(format!(
+                    return Err(internal_datafusion_err!(
                         "Converted group rows expected dictionary of {v} got {actual}"
-                    )));
+                    ));
                 }
                 *array = cast(array.as_ref(), expected)?;
             }

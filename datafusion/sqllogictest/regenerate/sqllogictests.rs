@@ -497,7 +497,7 @@ async fn run_complete_file_with_postgres(
         .await
         // Can't use e directly because it isn't marked Send, so turn it into a string.
         .map_err(|e| {
-            DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
+            exec_datafusion_err!("Failed to complete test file {relative_path:?}: {e}")
         });
 
     pb.finish_and_clear();
