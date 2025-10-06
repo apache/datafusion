@@ -258,7 +258,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     ))
                                 })
                                 .collect::<Result<Vec<_>>>(),
-                            _ => return plan_err!("Pivot default value cannot be NULL"),
+                            _ => plan_err!("Pivot default value cannot be NULL"),
                         }
                     })
                     .transpose()?;
@@ -271,6 +271,122 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         default_on_null,
                     )?
                     .build()?;
+                (plan, alias)
+            }
+            TableFactor::Unpivot {
+                table,
+                value,
+                name,
+                columns,
+                null_inclusion,
+                alias,
+            } => {
+                let plan =
+                    self.create_relation(table.as_ref().clone(), planner_context)?;
+
+                // Parse value expression(s)
+                let value_columns = match value {
+                    SqlExpr::Tuple(exprs) => exprs,
+                    single_expr => vec![single_expr],
+                };
+                let value_column_names: Vec<String> = value_columns
+                    .into_iter()
+                    .map(|expr| match expr {
+                        SqlExpr::Identifier(id) => Ok(id.value),
+                        _ => plan_err!("Expected identifier in UNPIVOT value clause"),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Parse name column
+                let name_column = name.value;
+
+                // Parse columns to unpivot
+                let unpivot_columns: Vec<(Vec<String>, Option<String>)> = columns
+                    .into_iter()
+                    .map(|col_with_alias| {
+                        let column_names = match &col_with_alias.expr {
+                            SqlExpr::Tuple(exprs) => exprs
+                                .iter()
+                                .map(|e| match e {
+                                    SqlExpr::Identifier(id) => Ok(id.value.clone()),
+                                    SqlExpr::CompoundIdentifier(ids) => Ok(ids
+                                        .iter()
+                                        .map(|i| i.value.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(".")),
+                                    _ => plan_err!(
+                                        "Expected identifier in UNPIVOT IN clause"
+                                    ),
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                            SqlExpr::Identifier(id) => vec![id.value.clone()],
+                            SqlExpr::CompoundIdentifier(ids) => {
+                                vec![ids
+                                    .iter()
+                                    .map(|i| i.value.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(".")]
+                            }
+                            _ => {
+                                return plan_err!(
+                                    "Expected identifier or tuple in UNPIVOT IN clause"
+                                )
+                            }
+                        };
+
+                        let alias = col_with_alias.alias.map(|alias| alias.value);
+                        Ok((column_names, alias))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Determine if nulls should be included (default is EXCLUDE)
+                let include_nulls = matches!(
+                    null_inclusion,
+                    Some(sqlparser::ast::NullInclusion::IncludeNulls)
+                );
+
+                // Get named_struct and make_array functions from context
+                let named_struct_fn = self
+                    .context_provider
+                    .get_function_meta("named_struct")
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Plan(
+                            "named_struct function not found".to_string(),
+                        )
+                    })?;
+
+                let make_array_fn = self
+                    .context_provider
+                    .get_function_meta("make_array")
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Plan(
+                            "make_array function not found".to_string(),
+                        )
+                    })?;
+
+                let get_field_fn = self
+                    .context_provider
+                    .get_function_meta("get_field")
+                    .ok_or_else(|| {
+                    datafusion_common::DataFusionError::Plan(
+                        "get_field function not found".to_string(),
+                    )
+                })?;
+
+                // Call the unpivot function from LogicalPlanBuilder
+                let plan = LogicalPlanBuilder::from(plan)
+                    .unpivot(
+                        value_column_names,
+                        name_column,
+                        unpivot_columns,
+                        None, // id_columns - will be inferred from schema
+                        include_nulls,
+                        &named_struct_fn,
+                        &make_array_fn,
+                        &get_field_fn,
+                    )?
+                    .build()?;
+
                 (plan, alias)
             }
             // @todo Support TableFactory::TableFunction?

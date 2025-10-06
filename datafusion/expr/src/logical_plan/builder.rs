@@ -47,8 +47,8 @@ use crate::utils::{
 };
 use crate::{
     and, binary_expr, lit, when, DmlStatement, ExplainOption, Expr, ExprSchemable,
-    Operator, RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource,
-    WriteOp,
+    Operator, RecursiveQuery, ScalarUDF, Statement, TableProviderFilterPushDown,
+    TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
@@ -1589,14 +1589,23 @@ impl LogicalPlanBuilder {
             };
 
             for (i, agg_func) in aggregate_functions.iter().enumerate() {
-                let Expr::Alias(Alias {
-                    expr,
-                    name,
-                    metadata,
-                    ..
-                }) = agg_func
-                else {
-                    return plan_err!("Aggregate function must has an alias");
+                let (expr, name, metadata) = match agg_func {
+                    Expr::Alias(Alias {
+                        expr,
+                        name,
+                        metadata,
+                        ..
+                    }) if matches!(expr.as_ref(), Expr::AggregateFunction(_)) => {
+                        (expr.as_ref(), name, metadata)
+                    }
+                    Expr::AggregateFunction(_) => {
+                        (agg_func, &agg_func.to_string(), &None)
+                    }
+                    _ => {
+                        return plan_err!(
+                            "Pivot aggregate function must be either an alias or an aggregate function expression, but got: {agg_func:?}"
+                        );
+                    }
                 };
                 let expr = expr
                     .clone()
@@ -1636,6 +1645,154 @@ impl LogicalPlanBuilder {
         let aggregate_plan = self.aggregate(group_by_columns, aggr_exprs)?;
 
         Ok(aggregate_plan)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn unpivot(
+        self,
+        value_column_names: Vec<String>,
+        name_column: String,
+        unpivot_columns: Vec<(Vec<String>, Option<String>)>,
+        id_columns: Option<Vec<String>>,
+        include_nulls: bool,
+        named_struct_fn: &Arc<ScalarUDF>,
+        make_array_fn: &Arc<ScalarUDF>,
+        get_field_fn: &Arc<ScalarUDF>,
+    ) -> Result<Self> {
+        let schema = self.schema();
+        let num_value_columns = value_column_names.len();
+
+        // Validate that all unpivot columns have the same number of columns
+        for (cols, _) in &unpivot_columns {
+            if cols.len() != num_value_columns {
+                return plan_err!(
+                    "All unpivot columns must have {} column(s), but found {}",
+                    num_value_columns,
+                    cols.len()
+                );
+            }
+        }
+
+        // Get the list of columns that should be preserved (not unpivoted)
+        let unpivot_col_set: HashSet<String> = unpivot_columns
+            .iter()
+            .flat_map(|(cols, _)| cols.iter().cloned())
+            .collect();
+
+        let preserved_columns: Vec<Expr> = if let Some(id_columns) = id_columns {
+            id_columns
+                .iter()
+                .map(|col| Expr::Column(Column::from_name(col)))
+                .collect()
+        } else {
+            schema
+                .iter()
+                .filter_map(|(q, f)| {
+                    if !unpivot_col_set.contains(f.name()) {
+                        Some(Expr::Column(Column::new(q.cloned(), f.name())))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // Build array of structs: array[struct(name_val, col1_val, col2_val, ...), ...]
+        let mut struct_exprs = Vec::new();
+
+        for (col_names, alias_opt) in unpivot_columns {
+            // Build struct fields: [name_literal, name_column_name, value1, value1_name, value2, value2_name, ...]
+            let mut struct_fields = Vec::new();
+
+            // Add name field
+            let name_value = alias_opt.unwrap_or_else(|| col_names[0].clone());
+            struct_fields.push(lit(name_column.clone()));
+            struct_fields.push(lit(name_value));
+
+            // Add value fields
+            for (i, col_name) in col_names.iter().enumerate() {
+                struct_fields.push(lit(value_column_names[i].clone()));
+                struct_fields.push(Expr::Column(Column::from_qualified_name(col_name)));
+            }
+
+            // Create struct expression
+            let struct_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(named_struct_fn),
+                struct_fields,
+            ));
+
+            struct_exprs.push(struct_expr);
+        }
+
+        let unpivot_array_column = "__unpivot_array";
+
+        // Create array expression
+        let array_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::clone(make_array_fn),
+            struct_exprs,
+        ))
+        .alias(unpivot_array_column);
+
+        // Project: preserved_columns + array
+        let mut projection = preserved_columns.clone();
+        projection.push(array_expr);
+
+        let plan = self.project(projection)?.build()?;
+
+        // Unnest the array
+        let plan = LogicalPlanBuilder::from(plan)
+            .unnest_column(Column::from_name(unpivot_array_column))?
+            .build()?;
+
+        // Extract fields from the unnested struct
+        let mut final_projection = preserved_columns.clone();
+        final_projection.push(
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(get_field_fn),
+                vec![
+                    Expr::Column(Column::from_name(unpivot_array_column)),
+                    lit(name_column.clone()),
+                ],
+            ))
+            .alias(&name_column),
+        );
+
+        // Add value columns from struct fields
+        for value_col_name in &value_column_names {
+            final_projection.push(
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    Arc::clone(get_field_fn),
+                    vec![
+                        Expr::Column(Column::from_name(unpivot_array_column)),
+                        lit(value_col_name.clone()),
+                    ],
+                ))
+                .alias(value_col_name),
+            );
+        }
+
+        let mut plan_builder =
+            LogicalPlanBuilder::from(plan).project(final_projection)?;
+
+        // Add filter to exclude NULLs if needed
+        if !include_nulls {
+            // Create a condition that checks if any of the value columns is NOT NULL
+            let mut not_null_condition: Option<Expr> = None;
+            for value_col_name in &value_column_names {
+                let is_not_null =
+                    Expr::Column(Column::from_name(value_col_name)).is_not_null();
+                not_null_condition = match not_null_condition {
+                    None => Some(is_not_null),
+                    Some(prev) => Some(prev.or(is_not_null)),
+                };
+            }
+
+            if let Some(condition) = not_null_condition {
+                plan_builder = plan_builder.filter(condition)?;
+            }
+        }
+
+        Ok(plan_builder)
     }
 }
 

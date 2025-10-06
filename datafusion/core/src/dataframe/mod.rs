@@ -2423,6 +2423,80 @@ impl DataFrame {
             projection_requires_validation: self.projection_requires_validation,
         })
     }
+
+    /// Unpivot the DataFrame, transforming columns into rows.
+    ///
+    /// # Arguments
+    /// * `value_column_names` - Names for the value columns in the output
+    /// * `name_column` - Name for the column that will contain the original column names
+    /// * `unpivot_columns` - List of (column_names, optional_alias) tuples to unpivot
+    /// * `id_columns` - Optional list of columns to preserve (if None, all non-unpivoted columns are preserved)
+    /// * `include_nulls` - Whether to include rows with NULL values (default: false excludes NULLs)
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// // Assume we have a DataFrame with columns: id, jan, feb, mar
+    /// // We want to unpivot jan, feb, mar into month/value columns
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unpivot(
+        self,
+        value_column_names: Vec<String>,
+        name_column: String,
+        unpivot_columns: Vec<(Vec<String>, Option<String>)>,
+        id_columns: Option<Vec<String>>,
+        include_nulls: bool,
+    ) -> Result<Self> {
+        // Get required UDF functions from the session state
+        let named_struct_fn = self
+            .session_state
+            .scalar_functions()
+            .get("named_struct")
+            .ok_or_else(|| {
+            DataFusionError::Plan("named_struct function not found".to_string())
+        })?;
+
+        let make_array_fn = self
+            .session_state
+            .scalar_functions()
+            .get("make_array")
+            .ok_or_else(|| {
+                DataFusionError::Plan("make_array function not found".to_string())
+            })?;
+
+        let get_field_fn = self
+            .session_state
+            .scalar_functions()
+            .get("get_field")
+            .ok_or_else(|| {
+                DataFusionError::Plan("get_field function not found".to_string())
+            })?;
+
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .unpivot(
+                value_column_names,
+                name_column,
+                unpivot_columns,
+                id_columns,
+                include_nulls,
+                named_struct_fn,
+                make_array_fn,
+                get_field_fn,
+            )?
+            .build()?;
+
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
 }
 
 /// Macro for creating DataFrame.
