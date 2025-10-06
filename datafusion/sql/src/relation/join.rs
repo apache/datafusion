@@ -95,7 +95,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
-            JoinOperator::CrossJoin => self.parse_cross_join(left, right),
+            JoinOperator::CrossJoin(JoinConstraint::None) => {
+                self.parse_cross_join(left, right)
+            }
             other => not_impl_err!("Unsupported JOIN operator {other:?}"),
         }
     }
