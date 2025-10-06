@@ -876,7 +876,7 @@ impl DFSchema {
             .zip(self.inner.fields().iter())
             .map(|(qualifier, field)| (qualifier.as_ref(), field))
     }
-    /// Print schema in tree format
+    /// Returns a tree-like string representation of the schema.
     ///
     /// This method formats the schema
     /// with a tree-like structure showing field names, types, and nullability.
@@ -896,12 +896,12 @@ impl DFSchema {
     ///     HashMap::new()
     /// ).unwrap();
     ///
-    /// assert_eq!(schema.print_schema_tree().to_string(),
+    /// assert_eq!(schema.tree_string().to_string(),
     /// r#"root
     ///  |-- id: int32 (nullable = false)
     ///  |-- name: utf8 (nullable = true)"#);
     /// ```
-    pub fn print_schema_tree(&self) -> impl Display + '_ {
+    pub fn tree_string(&self) -> impl Display + '_ {
         let mut result = String::from("root\n");
 
         for (qualifier, field) in self.iter() {
@@ -1982,7 +1982,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2004,7 +2004,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2042,7 +2042,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
         insta::assert_snapshot!(output, @r"
         root
          |-- id: int32 (nullable = false)
@@ -2058,7 +2058,7 @@ mod tests {
     #[test]
     fn test_print_schema_empty() {
         let schema = DFSchema::empty();
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
         insta::assert_snapshot!(output, @r###"root"###);
     }
 
@@ -2131,7 +2131,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2174,7 +2174,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2213,7 +2213,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2355,7 +2355,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root
@@ -2430,7 +2430,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = schema.print_schema_tree();
+        let output = schema.tree_string();
 
         insta::assert_snapshot!(output, @r"
         root

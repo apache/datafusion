@@ -60,6 +60,7 @@ mod tests {
     use futures::stream::BoxStream;
     use futures::StreamExt;
     use insta::assert_snapshot;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
@@ -104,6 +105,14 @@ mod tests {
         }
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+            self.get_opts(location, GetOptions::default()).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            _opts: GetOptions,
+        ) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
             let len = bytes.len() as u64;
             let range = 0..len * self.max_iterations;
@@ -128,14 +137,6 @@ mod tests {
                 range: Default::default(),
                 attributes: Attributes::default(),
             })
-        }
-
-        async fn get_opts(
-            &self,
-            _location: &Path,
-            _opts: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            unimplemented!()
         }
 
         async fn get_ranges(
@@ -467,6 +468,59 @@ mod tests {
             vec!["c1: Float64", "c2: Utf8", "c3: Utf8", "c4: Int64",],
             actual_fields
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_stream_null_chunks() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        // a stream where each line is read as a separate chunk,
+        // data type for each chunk is inferred separately.
+        // +----+-----+----+
+        // | c1 | c2  | c3 |
+        // +----+-----+----+
+        // | 1  | 1.0 |    |  type: Int64, Float64, Null
+        // |    |     |    |  type: Null, Null, Null
+        // +----+-----+----+
+        let chunked_object_store = Arc::new(ChunkedStore::new(
+            Arc::new(VariableStream::new(
+                Bytes::from(
+                    r#"c1,c2,c3
+1,1.0,
+,,
+"#,
+                ),
+                1,
+            )),
+            1,
+        ));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        let csv_format = CsvFormat::default().with_has_header(true);
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(chunked_object_store as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        let actual_fields: Vec<_> = inferred_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+
+        // ensure null chunks don't skew type inference
+        assert_eq!(vec!["c1: Int64", "c2: Float64", "c3: Null"], actual_fields);
         Ok(())
     }
 
@@ -818,6 +872,48 @@ mod tests {
             ++
             ++
         "###);
+
+        Ok(())
+    }
+
+    /// Read multiple csv files (some are empty) with header
+    ///
+    /// some_empty_with_header
+    /// ├── a_empty.csv
+    /// ├── b.csv
+    /// └── c_nulls_column.csv
+    ///
+    /// a_empty.csv:
+    /// c1,c2,c3
+    ///
+    /// b.csv:
+    /// c1,c2,c3
+    /// 1,1,1
+    /// 2,2,2
+    ///
+    /// c_nulls_column.csv:
+    /// c1,c2,c3
+    /// 3,3,
+    #[tokio::test]
+    async fn test_csv_some_empty_with_header() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.register_csv(
+            "some_empty_with_header",
+            "tests/data/empty_files/some_empty_with_header",
+            CsvReadOptions::new().has_header(true),
+        )
+        .await?;
+
+        let query = "select sum(c3) from some_empty_with_header;";
+        let query_result = ctx.sql(query).await?.collect().await?;
+
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        +--------------------------------+
+        | sum(some_empty_with_header.c3) |
+        +--------------------------------+
+        | 3                              |
+        +--------------------------------+
+        ");
 
         Ok(())
     }
