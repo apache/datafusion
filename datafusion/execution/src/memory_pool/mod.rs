@@ -240,6 +240,7 @@ pub struct MemoryConsumer {
     name: String,
     can_spill: bool,
     id: usize,
+    parent_id: Option<usize>,
 }
 
 impl PartialEq for MemoryConsumer {
@@ -250,6 +251,7 @@ impl PartialEq for MemoryConsumer {
         if is_same_id {
             assert_eq!(self.name, other.name);
             assert_eq!(self.can_spill, other.can_spill);
+            assert_eq!(self.parent_id, other.parent_id);
         }
 
         is_same_id
@@ -263,6 +265,7 @@ impl Hash for MemoryConsumer {
         self.id.hash(state);
         self.name.hash(state);
         self.can_spill.hash(state);
+        self.parent_id.hash(state);
     }
 }
 
@@ -278,6 +281,17 @@ impl MemoryConsumer {
             name: name.into(),
             can_spill: false,
             id: Self::new_unique_id(),
+            parent_id: None,
+        }
+    }
+
+    /// Create a new [`MemoryConsumer`] with a parent consumer ID for lineage tracking
+    pub fn new_with_parent(name: impl Into<String>, parent_id: usize) -> Self {
+        Self {
+            name: name.into(),
+            can_spill: false,
+            id: Self::new_unique_id(),
+            parent_id: Some(parent_id),
         }
     }
 
@@ -289,6 +303,7 @@ impl MemoryConsumer {
             name: self.name.clone(),
             can_spill: self.can_spill,
             id: Self::new_unique_id(),
+            parent_id: self.parent_id,
         }
     }
 
@@ -310,6 +325,11 @@ impl MemoryConsumer {
     /// Returns the name associated with this allocation
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the parent consumer ID if this consumer has a parent
+    pub fn parent_id(&self) -> Option<usize> {
+        self.parent_id
     }
 
     /// Registers this [`MemoryConsumer`] with the provided [`MemoryPool`] returning
@@ -460,6 +480,27 @@ impl MemoryReservation {
             size: 0,
             registration: Arc::clone(&self.registration),
         }
+    }
+
+    /// Create a new [`MemoryReservation`] with a new [`MemoryConsumer] that
+    /// is a child of this reservation's consumer.
+    ///
+    /// This is useful for creating memory consumers with lineage tracking.
+    pub fn new_child_reservation(&self, name: impl Into<String>) -> MemoryReservation {
+        MemoryConsumer::new_with_parent(name, self.consumer().id())
+            .register(&self.registration.pool)
+    }
+
+    /// Create a new [`MemoryReservation`] which is a clone to the current
+    /// [`MemoryReservation`]. This means that it's a cloned [`MemoryConsumer`]
+    /// with the same configuration, but a new unique ID.
+    ///
+    /// This is useful for creating memory consumers with lineage tracking,
+    /// while dealing with multithreaded scenarios.
+    pub fn cloned_reservation(&self) -> MemoryReservation {
+        self.consumer()
+            .clone_with_new_id()
+            .register(&self.registration.pool)
     }
 
     /// Splits off all the bytes from this [`MemoryReservation`] into
