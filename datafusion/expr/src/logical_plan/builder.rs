@@ -25,7 +25,9 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, FieldMetadata, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{
+    Alias, FieldMetadata, PlannedReplaceSelectItem, ScalarFunction, Sort as SortExpr,
+};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -44,11 +46,12 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, when, DmlStatement, ExplainOption, Expr, ExprSchemable, Literal, Operator, RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp
+    and, binary_expr, lit, when, DmlStatement, ExplainOption, Expr, ExprSchemable,
+    Operator, RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource,
+    WriteOp,
 };
 
 use super::dml::InsertOp;
-use arrow::array::Array;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -1495,14 +1498,15 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
-    pub fn pivot(self, 
-        aggregate_functions: Vec<Expr>, 
-        value_column: Vec<Column>, 
-        value_source: Vec<Expr>, 
-        default_on_null: Option<Vec<Expr>>
+    pub fn pivot(
+        self,
+        aggregate_functions: Vec<Expr>,
+        value_column: Vec<Column>,
+        value_source: Vec<Expr>,
+        default_on_null: Option<Vec<Expr>>,
     ) -> Result<Self> {
         match default_on_null {
-            Some(default_values) if default_values.len() != aggregate_functions.len() =>  {
+            Some(default_values) if default_values.len() != aggregate_functions.len() => {
                 return plan_err!("Number of default values must match the number of aggregate functions");
             }
             _ => {}
@@ -1521,90 +1525,116 @@ impl LogicalPlanBuilder {
         // Extract group by columns (all columns not involved in aggregation or pivot)
         let schema = self.schema();
 
-        let group_by_columns = schema.fields().iter().filter_map(|f| {
-            if used_columns.contains(f.name()) {
-                None // Skip columns that are used in aggregation or pivot
-            } else {
-                Some(Expr::Column(Column::from_name(f.name())))
-            }
-        }).collect::<Vec<_>>();
+        let group_by_columns = schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                if used_columns.contains(f.name()) {
+                    None // Skip columns that are used in aggregation or pivot
+                } else {
+                    Some(Expr::Column(Column::from_name(f.name())))
+                }
+            })
+            .collect::<Vec<_>>();
 
         // Create filtered aggregate expressions for each value in value_source
         let mut aggr_exprs = Vec::new();
-        
+
         for value in &value_source {
-            let (value, value_alias) = if let Expr::Alias(Alias{expr, name, ..}) = value {
-                (expr.as_ref(), name)
-            } else {
-                (value, &value.to_string())
-            };
+            let (value, value_alias) =
+                if let Expr::Alias(Alias { expr, name, .. }) = value {
+                    (expr.as_ref(), name)
+                } else {
+                    (value, &value.to_string())
+                };
             let condition = match value_column.len() {
                 0 => return plan_err!("Pivot requires at least one value column"),
                 1 => binary_expr(
                     Expr::Column(value_column[0].clone()),
                     Operator::IsNotDistinctFrom,
-                    value.clone()
+                    value.clone(),
                 ),
                 _ => {
-                    let Expr::Literal(ScalarValue::List(list), _) = value else {
-                        return plan_err!("Pivot value must be a list of values if multiple value columns are provided");
+                    let Expr::ScalarFunction(ScalarFunction { func, args }) = value
+                    else {
+                        return plan_err!("Pivot value must be struct(literals) if multiple value columns are provided");
                     };
-                    if list.len() != value_column.len() {
-                        return plan_err!("Pivot value list length must match value column count");
+                    if func.name() != "struct" {
+                        return plan_err!("Pivot value must be struct(literals) if multiple value columns are provided");
+                    }
+                    if args.len() != value_column.len() {
+                        return plan_err!(
+                            "Pivot value list length must match value column count"
+                        );
                     }
                     let mut condition: Option<Expr> = None;
                     for (idx, col) in value_column.iter().enumerate() {
                         let single_condition = binary_expr(
                             Expr::Column(col.clone()),
                             Operator::IsNotDistinctFrom,
-                            ScalarValue::try_from_array(list.as_ref(), idx)?.lit()
+                            args[idx].clone(),
                         );
                         condition = match condition {
                             None => Some(single_condition),
-                            Some(prev) => Some(and(prev, single_condition))
+                            Some(prev) => Some(and(prev, single_condition)),
                         };
                     }
                     match condition {
-                        None => return plan_err!("Pivot value condition cannot be empty"),
+                        None => {
+                            return plan_err!("Pivot value condition cannot be empty")
+                        }
                         Some(cond) => cond,
                     }
-                },
+                }
             };
 
             for (i, agg_func) in aggregate_functions.iter().enumerate() {
-                let Expr::Alias(Alias { expr, name, metadata, .. }) = agg_func else {
+                let Expr::Alias(Alias {
+                    expr,
+                    name,
+                    metadata,
+                    ..
+                }) = agg_func
+                else {
                     return plan_err!("Aggregate function must has an alias");
                 };
-                let expr = expr.clone().transform(|nested_expr| {
-                    match &nested_expr {
+                let expr = expr
+                    .clone()
+                    .transform(|nested_expr| match &nested_expr {
                         Expr::AggregateFunction(func) => {
                             let filter = match &func.params.filter {
-                                Some(filter) => and(filter.as_ref().clone(), condition.clone()),
+                                Some(filter) => {
+                                    and(filter.as_ref().clone(), condition.clone())
+                                }
                                 None => condition.clone(),
                             };
                             let mut func = func.clone();
                             func.params.filter = Some(Box::new(filter));
                             Ok(Transformed::yes(Expr::AggregateFunction(func)))
                         }
-                        _ => {
-                            Ok(Transformed::no(nested_expr))
-                        }
-                    }
-                })?.data;
+                        _ => Ok(Transformed::no(nested_expr)),
+                    })?
+                    .data;
 
                 let expr = match default_on_null.as_ref() {
                     Some(default_values) => {
-                        when(expr.clone().is_null(), default_values[i].clone()).otherwise(expr)?
-                    },
-                    None => expr
+                        when(expr.clone().is_null(), default_values[i].clone())
+                            .otherwise(expr)?
+                    }
+                    None => expr,
                 };
-                let pivot_col_name = format!("{}_{}", value_alias.replace("\"", "").replace("'", ""), name);
-                aggr_exprs.push(expr.alias_with_metadata(pivot_col_name, metadata.clone()));
+                let pivot_col_name = format!(
+                    "{}_{}",
+                    value_alias.replace("\"", "").replace("'", ""),
+                    name
+                );
+                aggr_exprs
+                    .push(expr.alias_with_metadata(pivot_col_name, metadata.clone()));
             }
         }
-        
+
         let aggregate_plan = self.aggregate(group_by_columns, aggr_exprs)?;
-        
+
         Ok(aggregate_plan)
     }
 }

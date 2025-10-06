@@ -2402,13 +2402,20 @@ impl DataFrame {
     ///     None
     /// ).unwrap();
     /// ```
-    pub fn pivot(self, 
-        aggregate_functions: Vec<Expr>, 
-        value_column: Vec<Column>, 
+    pub fn pivot(
+        self,
+        aggregate_functions: Vec<Expr>,
+        value_column: Vec<Column>,
         value_source: Vec<Expr>,
-        default_on_null: Option<Vec<Expr>>) -> Result<Self> {
+        default_on_null: Option<Vec<Expr>>,
+    ) -> Result<Self> {
         let plan = LogicalPlanBuilder::from(self.plan)
-            .pivot(aggregate_functions, value_column, value_source, default_on_null)?
+            .pivot(
+                aggregate_functions,
+                value_column,
+                value_source,
+                default_on_null,
+            )?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
