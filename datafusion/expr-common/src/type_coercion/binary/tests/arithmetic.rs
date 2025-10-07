@@ -37,8 +37,8 @@ fn test_date_timestamp_arithmetic_error() -> Result<()> {
         &DataType::Timestamp(TimeUnit::Millisecond, None),
     )
     .get_input_types()?;
-    assert_eq!(lhs.to_string(), "Timestamp(Millisecond, None)");
-    assert_eq!(rhs.to_string(), "Timestamp(Millisecond, None)");
+    assert_eq!(lhs, DataType::Timestamp(TimeUnit::Millisecond, None));
+    assert_eq!(rhs, DataType::Timestamp(TimeUnit::Millisecond, None));
 
     let err =
         BinaryTypeCoercer::new(&DataType::Date32, &Operator::Plus, &DataType::Date64)
