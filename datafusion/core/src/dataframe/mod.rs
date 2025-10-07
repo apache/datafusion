@@ -2380,24 +2380,16 @@ impl DataFrame {
     /// # Example
     /// ```
     /// # use datafusion::prelude::*;
-    /// # use datafusion::arrow::array::{Int32Array, StringArray};
+    /// # use arrow::array::{ArrayRef, Int32Array, StringArray};
+    /// # use datafusion::functions_aggregate::expr_fn::sum;
     /// # use std::sync::Arc;
     /// # let ctx = SessionContext::new();
-    /// # let batch = RecordBatch::try_new(
-    /// #     Arc::new(Schema::new(vec![
-    /// #         Field::new("category", DataType::Utf8, false),
-    /// #         Field::new("value", DataType::Int32, false),
-    /// #     ])),
-    /// #     vec![
-    /// #         Arc::new(StringArray::from(vec!["A", "B", "A"])),
-    /// #         Arc::new(Int32Array::from(vec![1, 2, 3]))
-    /// #     ]
-    /// # ).unwrap();
-    /// # let df = ctx.read_batch(batch).unwrap();
-    /// // Pivot the DataFrame so each unique category becomes a column
+    /// let value: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    /// let category: ArrayRef = Arc::new(StringArray::from(vec!["A", "B", "A"]));
+    /// let df = DataFrame::from_columns(vec![("value", value), ("category", category)]).unwrap();
     /// let pivoted = df.pivot(
     ///     vec![sum(col("value"))],
-    ///     vec![col("category")],
+    ///     vec![Column::from("category")],
     ///     vec![col("value")],
     ///     None
     /// ).unwrap();
@@ -2435,13 +2427,25 @@ impl DataFrame {
     ///
     /// # Example
     /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::array::{ArrayRef, Int32Array};
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// // Assume we have a DataFrame with columns: id, jan, feb, mar
-    /// // We want to unpivot jan, feb, mar into month/value columns
+    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    /// let jan: ArrayRef = Arc::new(Int32Array::from(vec![100, 110]));
+    /// let feb: ArrayRef = Arc::new(Int32Array::from(vec![200, 210]));
+    /// let mar: ArrayRef = Arc::new(Int32Array::from(vec![300, 310]));
+    /// let df = DataFrame::from_columns(vec![("id", id), ("jan", jan), ("feb", feb), ("mar", mar)]).unwrap();
+    /// let unpivoted = df.unpivot(
+    ///     vec!["jan".to_string(), "feb".to_string(), "mar".to_string()],
+    ///     "month".to_string(),
+    ///     vec![(vec!["jan".to_string(), "feb".to_string(), "mar".to_string()], None)],
+    ///     None,
+    ///     false
+    /// ).unwrap();
     /// # Ok(())
     /// # }
     /// ```
