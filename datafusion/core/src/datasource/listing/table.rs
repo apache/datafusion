@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     datasource::file_format::{file_compression_type::FileCompressionType, FileFormat},
-    datasource::{create_ordering, physical_plan::FileSinkConfig},
+    datasource::physical_plan::FileSinkConfig,
     execution::context::SessionState,
 };
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
@@ -31,8 +31,8 @@ use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::{
-    config_datafusion_err, config_err, internal_err, plan_err, project_schema,
-    stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
+    config_datafusion_err, config_err, internal_datafusion_err, internal_err, plan_err,
+    project_schema, stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
 };
 use datafusion_datasource::{
     compute_all_files_statistics,
@@ -45,9 +45,11 @@ use datafusion_execution::{
     cache::{cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache},
     config::SessionConfig,
 };
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
+use datafusion_physical_expr::create_lex_ordering;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
@@ -55,6 +57,7 @@ use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
 use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
+
 /// Indicates the source of the schema for a [`ListingTable`]
 // PartialEq required for assert_eq! in tests
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -246,7 +249,7 @@ impl ListingTableConfig {
             .await?
             .next()
             .await
-            .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
+            .ok_or_else(|| internal_datafusion_err!("No files for table"))??;
 
         let (file_extension, maybe_compression_type) =
             ListingTableConfig::infer_file_extension_and_compression_type(
@@ -981,11 +984,11 @@ impl ListingTable {
 
         let file_schema = config
             .file_schema
-            .ok_or_else(|| DataFusionError::Internal("No schema provided.".into()))?;
+            .ok_or_else(|| internal_datafusion_err!("No schema provided."))?;
 
-        let options = config.options.ok_or_else(|| {
-            DataFusionError::Internal("No ListingOptions provided".into())
-        })?;
+        let options = config
+            .options
+            .ok_or_else(|| internal_datafusion_err!("No ListingOptions provided"))?;
 
         // Add the partition columns to the file schema
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
@@ -1129,8 +1132,15 @@ impl ListingTable {
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
-    fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
-        create_ordering(&self.table_schema, &self.options.file_sort_order)
+    fn try_create_output_ordering(
+        &self,
+        execution_props: &ExecutionProps,
+    ) -> Result<Vec<LexOrdering>> {
+        create_lex_ordering(
+            &self.table_schema,
+            &self.options.file_sort_order,
+            execution_props,
+        )
     }
 }
 
@@ -1219,7 +1229,7 @@ impl TableProvider for ListingTable {
             return Ok(ScanResult::new(Arc::new(EmptyExec::new(projected_schema))));
         }
 
-        let output_ordering = self.try_create_output_ordering()?;
+        let output_ordering = self.try_create_output_ordering(state.execution_props())?;
         match state
             .config_options()
             .execution
@@ -1359,7 +1369,7 @@ impl TableProvider for ListingTable {
             file_extension: self.options().format.get_ext(),
         };
 
-        let orderings = self.try_create_output_ordering()?;
+        let orderings = self.try_create_output_ordering(state.execution_props())?;
         // It is sufficient to pass only one of the equivalent orderings:
         let order_requirements = orderings.into_iter().next().map(Into::into);
 
@@ -1587,6 +1597,7 @@ mod tests {
         SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
+    use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::{collect, ExecutionPlanProperties};
     use rstest::rstest;
@@ -1719,29 +1730,44 @@ mod tests {
 
         use crate::datasource::file_format::parquet::ParquetFormat;
         use datafusion_physical_plan::expressions::col as physical_col;
+        use datafusion_physical_plan::expressions::lit as physical_lit;
         use std::ops::Add;
 
         // (file_sort_order, expected_result)
         let cases = vec![
-            (vec![], Ok(Vec::<LexOrdering>::new())),
+            (
+                vec![],
+                Ok::<Vec<LexOrdering>, DataFusionError>(Vec::<LexOrdering>::new()),
+            ),
             // sort expr, but non column
             (
-                vec![vec![
-                    col("int_col").add(lit(1)).sort(true, true),
-                ]],
-                Err("Expected single column reference in sort_order[0][0], got int_col + Int32(1)"),
+                vec![vec![col("int_col").add(lit(1)).sort(true, true)]],
+                Ok(vec![[PhysicalSortExpr {
+                    expr: binary(
+                        physical_col("int_col", &schema).unwrap(),
+                        Operator::Plus,
+                        physical_lit(1),
+                        &schema,
+                    )
+                    .unwrap(),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: true,
+                    },
+                }]
+                .into()]),
             ),
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
                 Ok(vec![[PhysicalSortExpr {
-                            expr: physical_col("string_col", &schema).unwrap(),
-                            options: SortOptions {
-                                descending: false,
-                                nulls_first: false,
-                            },
-                        }].into(),
-                ])
+                    expr: physical_col("string_col", &schema).unwrap(),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                }]
+                .into()]),
             ),
             // ok with two columns, different options
             (
@@ -1750,14 +1776,18 @@ mod tests {
                     col("int_col").sort(false, true),
                 ]],
                 Ok(vec![[
-                            PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
-                                        .asc()
-                                        .nulls_last(),
-                            PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
-                                        .desc()
-                                        .nulls_first()
-                        ].into(),
-                ])
+                    PhysicalSortExpr::new_default(
+                        physical_col("string_col", &schema).unwrap(),
+                    )
+                    .asc()
+                    .nulls_last(),
+                    PhysicalSortExpr::new_default(
+                        physical_col("int_col", &schema).unwrap(),
+                    )
+                    .desc()
+                    .nulls_first(),
+                ]
+                .into()]),
             ),
         ];
 
@@ -1770,7 +1800,8 @@ mod tests {
 
             let table =
                 ListingTable::try_new(config.clone()).expect("Creating the table");
-            let ordering_result = table.try_create_output_ordering();
+            let ordering_result =
+                table.try_create_output_ordering(state.execution_props());
 
             match (expected_result, ordering_result) {
                 (Ok(expected), Ok(result)) => {
