@@ -17,6 +17,7 @@
 
 pub mod ascii;
 pub mod char;
+pub mod format_string;
 pub mod ilike;
 pub mod length;
 pub mod like;
@@ -32,6 +33,7 @@ make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(length::SparkLengthFunc, length);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
+make_udf_function!(format_string::FormatStringFunc, format_string);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -66,8 +68,21 @@ pub mod expr_fn {
         "Returns whether the input string of digits is valid according to the Luhn algorithm.",
         arg1
     ));
+    export_functions!((
+        format_string,
+        "Returns a formatted string from printf-style format strings.",
+        strfmt args
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![ascii(), char(), ilike(), length(), like(), luhn_check()]
+    vec![
+        ascii(),
+        char(),
+        ilike(),
+        length(),
+        like(),
+        luhn_check(),
+        format_string(),
+    ]
 }

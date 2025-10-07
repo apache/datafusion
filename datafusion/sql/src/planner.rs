@@ -720,10 +720,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (Some(precision), Some(scale))
                     }
                 };
-                make_decimal_type(precision, scale)
+                make_decimal_type(precision, scale.map(|s| s as u64))
             }
             SQLDataType::Bytea => Ok(DataType::Binary),
-            SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+            SQLDataType::Interval { fields, precision } => {
+                if fields.is_some() || precision.is_some() {
+                    return not_impl_err!("Unsupported SQL type {sql_type}");
+                }
+                Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+            }
             SQLDataType::Struct(fields, _) => {
                 let fields = fields
                     .iter()
@@ -818,7 +823,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::NamedTable { .. }
             | SQLDataType::TsVector
             | SQLDataType::TsQuery
-            | SQLDataType::GeometricType(_) => {
+            | SQLDataType::GeometricType(_)
+            | SQLDataType::DecimalUnsigned(_) // deprecated mysql type
+            | SQLDataType::FloatUnsigned(_) // deprecated mysql type
+            | SQLDataType::RealUnsigned // deprecated mysql type
+            | SQLDataType::DecUnsigned(_) // deprecated mysql type
+            | SQLDataType::DoubleUnsigned(_) // deprecated mysql type
+            | SQLDataType::DoublePrecisionUnsigned // deprecated mysql type
+            => {
                 not_impl_err!("Unsupported SQL type {sql_type}")
             }
         }

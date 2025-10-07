@@ -1251,7 +1251,7 @@ impl Unparser<'_> {
                 ast::JoinConstraint::None => {
                     // Inner joins with no conditions or filters are not valid SQL in most systems,
                     // return a CROSS JOIN instead
-                    ast::JoinOperator::CrossJoin
+                    ast::JoinOperator::CrossJoin(constraint)
                 }
             },
             JoinType::Left => ast::JoinOperator::LeftOuter(constraint),

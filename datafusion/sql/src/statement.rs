@@ -302,6 +302,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 storage_serialization_policy,
                 inherits,
                 table_options: CreateTableOptions::None,
+                dynamic,
+                version,
+                target_lag,
+                warehouse,
+                refresh_mode,
+                initialize,
+                require_user,
             }) => {
                 if temporary {
                     return not_impl_err!("Temporary tables not supported")?;
@@ -428,7 +435,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if inherits.is_some() {
                     return not_impl_err!("Table inheritance not supported")?;
                 }
-
+                if dynamic {
+                    return not_impl_err!("Dynamic tables not supported")?;
+                }
+                if version.is_some() {
+                    return not_impl_err!("Version not supported")?;
+                }
+                if target_lag.is_some() {
+                    return not_impl_err!("Target lag not supported")?;
+                }
+                if warehouse.is_some() {
+                    return not_impl_err!("Warehouse not supported")?;
+                }
+                if refresh_mode.is_some() {
+                    return not_impl_err!("Refresh mode not supported")?;
+                }
+                if initialize.is_some() {
+                    return not_impl_err!("Initialize not supported")?;
+                }
+                if require_user {
+                    return not_impl_err!("Require user not supported")?;
+                }
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
@@ -534,6 +561,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 to,
                 params,
                 or_alter,
+                secure,
+                name_before_not_exists,
             } => {
                 if materialized {
                     return not_impl_err!("Materialized views not supported")?;
@@ -571,6 +600,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     to,
                     params,
                     or_alter,
+                    secure,
+                    name_before_not_exists,
                 };
                 let sql = stmt.to_string();
                 let Statement::CreateView {
@@ -975,6 +1006,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 selection,
                 returning,
                 or,
+                limit,
             } => {
                 let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
@@ -991,6 +1023,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if or.is_some() {
                     plan_err!("ON conflict not supported")?;
+                }
+                if limit.is_some() {
+                    return not_impl_err!("Update-limit clause not supported")?;
                 }
                 self.update_to_plan(table, assignments, update_from, selection)
             }
