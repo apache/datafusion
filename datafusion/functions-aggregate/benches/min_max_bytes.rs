@@ -121,6 +121,32 @@ fn min_bytes_dense_reused_batches(c: &mut Criterion) {
     });
 }
 
+fn min_bytes_dense_duplicate_groups(c: &mut Criterion) {
+    let unique_groups = BATCH_SIZE / 2;
+    let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i / 2)),
+    ));
+    let group_indices: Vec<usize> = (0..unique_groups).flat_map(|i| [i, i]).collect();
+
+    c.bench_function("min bytes dense duplicate groups", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
+            for _ in 0..MONOTONIC_BATCHES {
+                black_box(
+                    accumulator
+                        .update_batch(
+                            std::slice::from_ref(&values),
+                            &group_indices,
+                            None,
+                            unique_groups,
+                        )
+                        .expect("update batch"),
+                );
+            }
+        })
+    });
+}
+
 fn min_bytes_monotonic_group_ids(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
         (0..BATCH_SIZE).map(|i| format!("value_{:04}", i % 1024)),
@@ -178,6 +204,7 @@ criterion_group!(
     benches,
     min_bytes_dense_first_batch,
     min_bytes_dense_reused_batches,
+    min_bytes_dense_duplicate_groups,
     min_bytes_sparse_groups,
     min_bytes_monotonic_group_ids,
     min_bytes_large_dense_groups

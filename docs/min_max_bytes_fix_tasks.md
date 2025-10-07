@@ -74,6 +74,28 @@ However, it **over-optimized for the wrong case**:
 
 The fix requires **fundamentally rethinking the optimization**, not just tweaking heuristics. The current approach cannot be salvaged without major changes.
 
+### Implementation Update (Hybrid Mode)
+
+DataFusion now ships with a **hybrid min/max accumulator** that routes each
+workload through one of two clearly separated paths:
+
+* **Simple mode** restores the original dense `Vec<MinMaxLocation>` loop for the
+  common case where group identifiers are compact and frequently reused. The
+  accumulator classifies workloads after the first non-null batch and continues
+  using the dense path whenever the observed density is at least 10% and the
+  total number of groups in the batch stays below `100_000`.
+* **Sparse-optimised mode** retains the scratch-table implementation for
+  high-cardinality workloads. Once a workload is classified as sparse the
+  accumulator avoids dense allocations and keeps using the sparse machinery
+  between batches.
+
+The accumulator also tracks its lifetime statistics (batches processed, groups
+populated, and the maximum group index). If a workload that started dense later
+touches more than `100_000` groups with less than 1% density, the accumulator
+switches to the sparse path **between batches**. This design keeps dense
+workloads fast, while still protecting genuinely sparse workloads from the
+quadratic allocation costs addressed by the original optimisation.
+
 ### Recommended Approach: Hybrid Strategy with Early Classification
 
 1. **Restore the original fast path for common dense cases**
