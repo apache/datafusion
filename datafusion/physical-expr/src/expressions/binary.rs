@@ -160,7 +160,7 @@ fn boolean_op(
     left: &dyn Array,
     right: &dyn Array,
     op: impl FnOnce(&BooleanArray, &BooleanArray) -> Result<BooleanArray, ArrowError>,
-) -> Result<Arc<(dyn Array + 'static)>, ArrowError> {
+) -> Result<Arc<dyn Array + 'static>, ArrowError> {
     let ll = as_boolean_array(left).expect("boolean_op failed to downcast left array");
     let rr = as_boolean_array(right).expect("boolean_op failed to downcast right array");
     op(ll, rr).map(|t| Arc::new(t) as _)
@@ -179,7 +179,7 @@ macro_rules! binary_string_array_flag_op {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
             other => internal_err!(
-                "Data type {:?} not supported for binary_string_array_flag_op operation '{}' on string array",
+                "Data type {} not supported for binary_string_array_flag_op operation '{}' on string array",
                 other, stringify!($OP)
             ),
         }
@@ -258,7 +258,7 @@ macro_rules! binary_string_array_flag_op_scalar {
                     DataType::Utf8View => compute_utf8view_flag_op_scalar!(values, $RIGHT, $OP, StringViewArray, $NOT, $FLAG),
                     DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
                     other => internal_err!(
-                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
+                        "Data type {} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
                         other, stringify!($OP)
                     ),
                 }.map(
@@ -273,7 +273,7 @@ macro_rules! binary_string_array_flag_op_scalar {
                 )
             },
             other => internal_err!(
-                "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
+                "Data type {} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
                 other, stringify!($OP)
             ),
         };
@@ -731,7 +731,7 @@ fn to_result_type_array(
                     Ok(cast(&array, result_type)?)
                 } else {
                     internal_err!(
-                            "Incompatible Dictionary value type {value_type:?} with result type {result_type:?} of Binary operator {op:?}"
+                            "Incompatible Dictionary value type {value_type} with result type {result_type} of Binary operator {op:?}"
                         )
                 }
             }

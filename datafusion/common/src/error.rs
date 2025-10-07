@@ -455,12 +455,13 @@ impl DataFusionError {
     /// If backtrace enabled then error has a format "message" [`Self::BACK_TRACE_SEP`] "backtrace"
     /// The method strips the backtrace and outputs "message"
     pub fn strip_backtrace(&self) -> String {
-        self.to_string()
+        (*self
+            .to_string()
             .split(Self::BACK_TRACE_SEP)
             .collect::<Vec<&str>>()
             .first()
-            .unwrap_or(&"")
-            .to_string()
+            .unwrap_or(&""))
+        .to_string()
     }
 
     /// To enable optional rust backtrace in DataFusion:

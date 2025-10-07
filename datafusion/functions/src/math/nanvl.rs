@@ -36,6 +36,14 @@ use datafusion_macros::user_doc;
     description = r#"Returns the first argument if it's not _NaN_.
 Returns the second argument otherwise."#,
     syntax_example = "nanvl(expression_x, expression_y)",
+    sql_example = r#"```sql
+> SELECT nanvl(0, 5);
++------------+
+| nanvl(0,5) |
++------------+
+| 0          |
++------------+
+```"#,
     argument(
         name = "expression_x",
         description = "Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators."

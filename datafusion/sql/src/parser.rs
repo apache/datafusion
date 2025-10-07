@@ -188,7 +188,9 @@ pub(crate) type LexOrdering = Vec<OrderByExpr>;
 /// Syntax:
 ///
 /// ```text
-/// CREATE EXTERNAL TABLE
+/// CREATE
+/// [ OR REPLACE ]
+/// EXTERNAL TABLE
 /// [ IF NOT EXISTS ]
 /// <TABLE_NAME>[ (<column_definition>) ]
 /// STORED AS <file_type>
@@ -221,6 +223,8 @@ pub struct CreateExternalTable {
     pub order_exprs: Vec<LexOrdering>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// Option to replace table content if table already exists
+    pub or_replace: bool,
     /// Whether the table is a temporary table
     pub temporary: bool,
     /// Infinite streams?
@@ -724,11 +728,26 @@ impl<'a> DFParser<'a> {
 
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, DataFusionError> {
-        if self.parser.parse_keyword(Keyword::EXTERNAL) {
-            self.parse_create_external_table(false)
-        } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
-            self.parser.expect_keyword(Keyword::EXTERNAL)?;
-            self.parse_create_external_table(true)
+        // TODO: Change sql parser to take in `or_replace: bool` inside parse_create()
+        if self
+            .parser
+            .parse_keywords(&[Keyword::OR, Keyword::REPLACE, Keyword::EXTERNAL])
+        {
+            self.parse_create_external_table(false, true)
+        } else if self.parser.parse_keywords(&[
+            Keyword::OR,
+            Keyword::REPLACE,
+            Keyword::UNBOUNDED,
+            Keyword::EXTERNAL,
+        ]) {
+            self.parse_create_external_table(true, true)
+        } else if self.parser.parse_keyword(Keyword::EXTERNAL) {
+            self.parse_create_external_table(false, false)
+        } else if self
+            .parser
+            .parse_keywords(&[Keyword::UNBOUNDED, Keyword::EXTERNAL])
+        {
+            self.parse_create_external_table(true, false)
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
@@ -876,15 +895,22 @@ impl<'a> DFParser<'a> {
     fn parse_create_external_table(
         &mut self,
         unbounded: bool,
+        or_replace: bool,
     ) -> Result<Statement, DataFusionError> {
         let temporary = self
             .parser
             .parse_one_of_keywords(&[Keyword::TEMP, Keyword::TEMPORARY])
             .is_some();
+
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
+
+        if if_not_exists && or_replace {
+            return parser_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'");
+        }
+
         let table_name = self.parser.parse_object_name(true)?;
         let (mut columns, constraints) = self.parse_columns()?;
 
@@ -1000,6 +1026,7 @@ impl<'a> DFParser<'a> {
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
             if_not_exists,
+            or_replace,
             temporary,
             unbounded,
             options: builder.options.unwrap_or(Vec::new()),
@@ -1049,7 +1076,9 @@ mod tests {
     use super::*;
     use datafusion_common::assert_contains;
     use sqlparser::ast::Expr::Identifier;
-    use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident, ValueWithSpan};
+    use sqlparser::ast::{
+        BinaryOperator, DataType, ExactNumberInfo, Expr, Ident, ValueWithSpan,
+    };
     use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::Span;
 
@@ -1108,6 +1137,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1125,6 +1155,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1143,6 +1174,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1161,6 +1193,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![(
@@ -1182,6 +1215,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1210,6 +1244,7 @@ mod tests {
                 table_partition_cols: vec![],
                 order_exprs: vec![],
                 if_not_exists: false,
+                or_replace: false,
                 temporary: false,
                 unbounded: false,
                 options: vec![(
@@ -1231,6 +1266,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1248,6 +1284,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1265,6 +1302,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1283,6 +1321,26 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: true,
+            or_replace: false,
+            temporary: false,
+            unbounded: false,
+            options: vec![],
+            constraints: vec![],
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: or replace
+        let sql =
+            "CREATE OR REPLACE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: name.clone(),
+            columns: vec![],
+            file_type: "PARQUET".to_string(),
+            location: "foo.parquet".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![],
+            if_not_exists: false,
+            or_replace: true,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1304,6 +1362,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string()],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1335,6 +1394,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![("k1".into(), Value::SingleQuotedString("v1".into()))],
@@ -1353,6 +1413,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![
@@ -1401,6 +1462,7 @@ mod tests {
                     with_fill: None,
                 }]],
                 if_not_exists: false,
+                or_replace: false,
                 temporary: false,
                 unbounded: false,
                 options: vec![],
@@ -1448,6 +1510,7 @@ mod tests {
                 },
             ]],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1488,6 +1551,7 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1495,7 +1559,7 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // Most complete CREATE EXTERNAL TABLE statement possible
+        // Most complete CREATE EXTERNAL TABLE statement possible (using IF NOT EXISTS)
         let sql = "
             CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS t (c1 int, c2 float)
             STORED AS PARQUET
@@ -1511,7 +1575,7 @@ mod tests {
             name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
-                make_column_def("c2", DataType::Float(None)),
+                make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),
@@ -1537,6 +1601,75 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: true,
+            or_replace: false,
+            temporary: false,
+            unbounded: true,
+            options: vec![
+                (
+                    "format.compression".into(),
+                    Value::SingleQuotedString("zstd".into()),
+                ),
+                (
+                    "format.delimiter".into(),
+                    Value::SingleQuotedString("*".into()),
+                ),
+                (
+                    "ROW_GROUP_SIZE".into(),
+                    Value::SingleQuotedString("1024".into()),
+                ),
+                ("TRUNCATE".into(), Value::SingleQuotedString("NO".into())),
+                (
+                    "format.has_header".into(),
+                    Value::SingleQuotedString("true".into()),
+                ),
+            ],
+            constraints: vec![],
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // Most complete CREATE EXTERNAL TABLE statement possible (using OR REPLACE)
+        let sql = "
+            CREATE OR REPLACE UNBOUNDED EXTERNAL TABLE t (c1 int, c2 float)
+            STORED AS PARQUET
+            WITH ORDER (c1 - c2 ASC)
+            PARTITIONED BY (c1)
+            LOCATION 'foo.parquet'
+            OPTIONS ('format.compression' 'zstd',
+                     'format.delimiter' '*',
+                     'ROW_GROUP_SIZE' '1024',
+                     'TRUNCATE' 'NO',
+                     'format.has_header' 'true')";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: name.clone(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(None)),
+                make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
+            ],
+            file_type: "PARQUET".to_string(),
+            location: "foo.parquet".into(),
+            table_partition_cols: vec!["c1".into()],
+            order_exprs: vec![vec![OrderByExpr {
+                expr: Expr::BinaryOp {
+                    left: Box::new(Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                        span: Span::empty(),
+                    })),
+                    op: BinaryOperator::Minus,
+                    right: Box::new(Identifier(Ident {
+                        value: "c2".to_owned(),
+                        quote_style: None,
+                        span: Span::empty(),
+                    })),
+                },
+                options: OrderByOptions {
+                    asc: Some(true),
+                    nulls_first: None,
+                },
+                with_fill: None,
+            }]],
+            if_not_exists: false,
+            or_replace: true,
             temporary: false,
             unbounded: true,
             options: vec![

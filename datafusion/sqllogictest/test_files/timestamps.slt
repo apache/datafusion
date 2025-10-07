@@ -3616,3 +3616,36 @@ SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Second, None)') AS a FR
 ----
 1970-01-01T00:00:01
 1970-01-01T00:00:01
+
+query TTTTT
+SELECT
+    arrow_typeof(a),
+    CAST(a AS varchar),
+    arrow_cast(a, 'Utf8'),
+    arrow_cast(a, 'Utf8View'),
+    arrow_cast(a, 'LargeUtf8')
+FROM (SELECT DATE '2005-09-10' AS a)
+----
+Date32 2005-09-10 2005-09-10 2005-09-10 2005-09-10
+
+query TTTTT
+SELECT
+    arrow_typeof(a),
+    CAST(a AS varchar),
+    arrow_cast(a, 'Utf8'),
+    arrow_cast(a, 'Utf8View'),
+    arrow_cast(a, 'LargeUtf8')
+FROM (SELECT TIMESTAMP '2005-09-10 13:31:00' AS a)
+----
+Timestamp(Nanosecond, None) 2005-09-10T13:31:00 2005-09-10T13:31:00 2005-09-10T13:31:00 2005-09-10T13:31:00
+
+query TTTTT
+SELECT
+    arrow_typeof(a),
+    CAST(a AS varchar),
+    arrow_cast(a, 'Utf8'),
+    arrow_cast(a, 'Utf8View'),
+    arrow_cast(a, 'LargeUtf8')
+FROM (SELECT CAST('2005-09-10 13:31:00 +02:00' AS timestamp with time zone) AS a)
+----
+Timestamp(Nanosecond, Some("+00")) 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z

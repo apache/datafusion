@@ -19,6 +19,7 @@
 name = "datafusion-macros"
 description = "Procedural macros for DataFusion query engine"
 keywords = ["datafusion", "query", "sql"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -40,6 +41,6 @@ path = "src/user_doc.rs"
 proc-macro = true
 
 [dependencies]
-datafusion-expr = { workspace = true }
-quote = "1.0.40"
+datafusion-doc = { workspace = true }
+quote = "1.0.41"
 syn = { version = "2.0.106", features = ["full"] }

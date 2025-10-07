@@ -59,4 +59,12 @@ impl FunctionRegistry for NoRegistry {
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
     }
+
+    fn udafs(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+
+    fn udwfs(&self) -> HashSet<String> {
+        HashSet::new()
+    }
 }

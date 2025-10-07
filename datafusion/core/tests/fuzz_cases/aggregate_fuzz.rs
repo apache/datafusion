@@ -337,7 +337,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         ];
     let expr = group_by_columns
         .iter()
-        .map(|elem| (col(elem, &schema).unwrap(), elem.to_string()))
+        .map(|elem| (col(elem, &schema).unwrap(), (*elem).to_string()))
         .collect::<Vec<_>>();
     let group_by = PhysicalGroupBy::new_single(expr);
 

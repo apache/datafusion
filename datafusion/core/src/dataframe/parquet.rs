@@ -102,6 +102,7 @@ impl DataFrame {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -205,7 +206,7 @@ mod tests {
             &HashMap::from_iter(
                 [("datafusion.execution.batch_size", "10")]
                     .iter()
-                    .map(|(s1, s2)| (s1.to_string(), s2.to_string())),
+                    .map(|(s1, s2)| ((*s1).to_string(), (*s2).to_string())),
             ),
         )?);
         register_aggregate_csv(&ctx, "aggregate_test_100").await?;
@@ -247,9 +248,12 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[cfg(feature = "parquet_encryption")]
     #[tokio::test]
-    async fn roundtrip_parquet_with_encryption() -> Result<()> {
+    async fn roundtrip_parquet_with_encryption(
+        #[values(false, true)] allow_single_file_parallelism: bool,
+    ) -> Result<()> {
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
 
@@ -278,6 +282,7 @@ mod tests {
         // Write encrypted parquet using write_parquet
         let mut options = TableParquetOptions::default();
         options.crypto.file_encryption = Some((&encrypt).into());
+        options.global.allow_single_file_parallelism = allow_single_file_parallelism;
 
         df.write_parquet(
             tempfile_str.as_str(),

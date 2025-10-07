@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_schema::SchemaRef;
-use datafusion_common::DataFusionError;
+use datafusion_common::internal_datafusion_err;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -108,8 +108,6 @@ impl ExecutionPlan for OnceExec {
 
         let stream = self.stream.lock().unwrap().take();
 
-        stream.ok_or(DataFusionError::Internal(
-            "Stream already consumed".to_string(),
-        ))
+        stream.ok_or_else(|| internal_datafusion_err!("Stream already consumed"))
     }
 }

@@ -19,15 +19,15 @@
 
 use arrow::array::{
     ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
-    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray,
-    FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-    IntervalYearMonthArray, LargeBinaryArray, LargeStringArray, StringArray,
-    StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
+    LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
@@ -144,6 +144,32 @@ macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         Ok(match ($VALUE, $DELTA) {
             (ScalarValue::Null, ScalarValue::Null) => ScalarValue::Null,
+            (
+                lhs @ ScalarValue::Decimal32(lhsv, lhsp, lhss),
+                rhs @ ScalarValue::Decimal32(rhsv, rhsp, rhss)
+            ) => {
+                if lhsp.eq(rhsp) && lhss.eq(rhss) {
+                    typed_min_max!(lhsv, rhsv, Decimal32, $OP, lhsp, lhss)
+                } else {
+                    return internal_err!(
+                    "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
+                    (lhs, rhs)
+                );
+                }
+            }
+            (
+                lhs @ ScalarValue::Decimal64(lhsv, lhsp, lhss),
+                rhs @ ScalarValue::Decimal64(rhsv, rhsp, rhss)
+            ) => {
+                if lhsp.eq(rhsp) && lhss.eq(rhss) {
+                    typed_min_max!(lhsv, rhsv, Decimal64, $OP, lhsp, lhss)
+                } else {
+                    return internal_err!(
+                    "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
+                    (lhs, rhs)
+                );
+                }
+            }
             (
                 lhs @ ScalarValue::Decimal128(lhsv, lhsp, lhss),
                 rhs @ ScalarValue::Decimal128(rhsv, rhsp, rhss)
@@ -513,6 +539,26 @@ macro_rules! min_max_batch {
     ($VALUES:expr, $OP:ident) => {{
         match $VALUES.data_type() {
             DataType::Null => ScalarValue::Null,
+            DataType::Decimal32(precision, scale) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    Decimal32Array,
+                    Decimal32,
+                    $OP,
+                    precision,
+                    scale
+                )
+            }
+            DataType::Decimal64(precision, scale) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    Decimal64Array,
+                    Decimal64,
+                    $OP,
+                    precision,
+                    scale
+                )
+            }
             DataType::Decimal128(precision, scale) => {
                 typed_min_max_batch!(
                     $VALUES,
@@ -659,7 +705,7 @@ macro_rules! min_max_batch {
             other => {
                 // This should have been handled before
                 return datafusion_common::internal_err!(
-                    "Min/Max accumulator not implemented for type {:?}",
+                    "Min/Max accumulator not implemented for type {}",
                     other
                 );
             }

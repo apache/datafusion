@@ -4664,7 +4664,7 @@ fn test_custom_type_plan() -> Result<()> {
     let err = planner.statement_to_plan(ast.pop_front().unwrap());
     assert_contains!(
         err.unwrap_err().to_string(),
-        "This feature is not implemented: Unsupported SQL type Datetime(None)"
+        "This feature is not implemented: Unsupported SQL type DATETIME"
     );
 
     fn plan_sql(sql: &str) -> LogicalPlan {

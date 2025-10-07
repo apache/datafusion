@@ -236,7 +236,7 @@ pub fn hash_join_exec(
         join_type,
         None,
         PartitionMode::Partitioned,
-        NullEquality::NullEqualsNull,
+        NullEquality::NullEqualsNothing,
     )?))
 }
 
@@ -263,7 +263,7 @@ pub fn bounded_window_exec_with_partition(
         partition_by,
         &sort_exprs,
         Arc::new(WindowFrame::new(Some(false))),
-        schema.as_ref(),
+        schema,
         false,
         false,
         None,
