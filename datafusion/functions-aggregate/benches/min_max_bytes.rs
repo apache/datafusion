@@ -73,13 +73,13 @@ fn min_bytes_sparse_groups(c: &mut Criterion) {
     });
 }
 
-fn min_bytes_dense_groups(c: &mut Criterion) {
+fn min_bytes_dense_first_batch(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
         (0..BATCH_SIZE).map(|i| format!("value_{:04}", i)),
     ));
     let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
 
-    c.bench_function("min bytes dense groups", |b| {
+    c.bench_function("min bytes dense first batch", |b| {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
             black_box(
@@ -176,7 +176,7 @@ fn min_bytes_large_dense_groups(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    min_bytes_dense_groups,
+    min_bytes_dense_first_batch,
     min_bytes_dense_reused_batches,
     min_bytes_sparse_groups,
     min_bytes_monotonic_group_ids,
