@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, mem::size_of, sync::Arc};
 
 use arrow::{
     array::{
@@ -169,14 +169,37 @@ struct MinMaxStructState {
     /// The total bytes of the string data (for pre-allocating the final array,
     /// and tracking memory usage)
     total_data_bytes: usize,
+    /// Tracks the groups that were updated in the current batch so that we only
+    /// touch entries that actually changed. This avoids clearing dense scratch
+    /// structures across batches.
+    scratch_touched_groups: Vec<usize>,
+    /// Dense scratch entries reused across batches. Each entry stores the epoch
+    /// of the last batch that touched it together with the location of the
+    /// candidate value for the group.
+    scratch_entries: Vec<ScratchEntry>,
+    /// Epoch identifying the current batch. When the epoch wraps we reset the
+    /// scratch entries eagerly to maintain correctness.
+    scratch_epoch: u64,
+    /// Reusable buffer storing candidate values taken from the current batch.
+    scratch_batch_inputs: Vec<StructArray>,
 }
 
-#[derive(Debug, Clone)]
-enum MinMaxLocation {
-    /// the min/max value is stored in the existing `min_max` array
-    ExistingMinMax,
-    /// the min/max value is stored in the input array at the given index
-    Input(StructArray),
+#[derive(Debug, Default, Clone)]
+struct ScratchEntry {
+    epoch: u64,
+    location: ScratchLocation,
+}
+
+#[derive(Debug, Clone, Default)]
+enum ScratchLocation {
+    /// No value from the current batch has been observed for the group yet.
+    #[default]
+    Untouched,
+    /// The group should keep the previously materialised min/max value.
+    Existing,
+    /// The min/max candidate for the group resides in the current batch at the
+    /// provided index within `scratch_batch_inputs`.
+    Batch(usize),
 }
 
 /// Implement the MinMaxStructState with a comparison function
@@ -191,6 +214,10 @@ impl MinMaxStructState {
             min_max: vec![],
             data_type,
             total_data_bytes: 0,
+            scratch_touched_groups: vec![],
+            scratch_entries: vec![],
+            scratch_epoch: 0,
+            scratch_batch_inputs: vec![],
         }
     }
 
@@ -226,45 +253,85 @@ impl MinMaxStructState {
         F: FnMut(&StructArray, &StructArray) -> bool + Send + Sync,
     {
         self.min_max.resize(total_num_groups, None);
-        // Minimize value copies by calculating the new min/maxes for each group
-        // in this batch (either the existing min/max or the new input value)
-        // and updating the owned values in `self.min_maxes` at most once
-        let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
 
-        // Figure out the new min value for each group
+        if self.scratch_entries.len() < total_num_groups {
+            self.scratch_entries
+                .resize_with(total_num_groups, ScratchEntry::default);
+        }
+
+        self.scratch_epoch = self.scratch_epoch.wrapping_add(1);
+        if self.scratch_epoch == 0 {
+            for entry in &mut self.scratch_entries {
+                entry.epoch = 0;
+                entry.location = ScratchLocation::Untouched;
+            }
+            self.scratch_epoch = 1;
+        }
+
+        let mut touched_groups = std::mem::take(&mut self.scratch_touched_groups);
+        touched_groups.clear();
+        let mut batch_inputs = std::mem::take(&mut self.scratch_batch_inputs);
+        batch_inputs.clear();
+
         for (index, group_index) in (0..array.len()).zip(group_indices.iter()) {
             let group_index = *group_index;
             if array.is_null(index) {
                 continue;
             }
+
+            if group_index >= total_num_groups {
+                return internal_err!(
+                    "group index {group_index} out of bounds for {total_num_groups} groups"
+                );
+            }
+
             let new_val = array.slice(index, 1);
 
-            let existing_val = match &locations[group_index] {
-                // previous input value was the min/max, so compare it
-                MinMaxLocation::Input(existing_val) => existing_val,
-                MinMaxLocation::ExistingMinMax => {
-                    let Some(existing_val) = self.min_max[group_index].as_ref() else {
-                        // no existing min/max, so this is the new min/max
-                        locations[group_index] = MinMaxLocation::Input(new_val);
+            let entry = &mut self.scratch_entries[group_index];
+            if entry.epoch != self.scratch_epoch {
+                entry.epoch = self.scratch_epoch;
+                entry.location = ScratchLocation::Untouched;
+                touched_groups.push(group_index);
+            }
+
+            let existing_val = match &entry.location {
+                ScratchLocation::Untouched => {
+                    if let Some(existing_val) = self.min_max[group_index].as_ref() {
+                        entry.location = ScratchLocation::Existing;
+                        existing_val
+                    } else {
+                        let batch_index = batch_inputs.len();
+                        batch_inputs.push(new_val);
+                        entry.location = ScratchLocation::Batch(batch_index);
                         continue;
-                    };
-                    existing_val
+                    }
                 }
+                ScratchLocation::Existing => self.min_max[group_index]
+                    .as_ref()
+                    .expect("existing value must be present"),
+                ScratchLocation::Batch(existing_index) => &batch_inputs[*existing_index],
             };
 
-            // Compare the new value to the existing value, replacing if necessary
             if cmp(&new_val, existing_val) {
-                locations[group_index] = MinMaxLocation::Input(new_val);
+                let batch_index = batch_inputs.len();
+                batch_inputs.push(new_val);
+                entry.location = ScratchLocation::Batch(batch_index);
             }
         }
 
-        // Update self.min_max with any new min/max values we found in the input
-        for (group_index, location) in locations.iter().enumerate() {
-            match location {
-                MinMaxLocation::ExistingMinMax => {}
-                MinMaxLocation::Input(new_val) => self.set_value(group_index, new_val),
+        for &group_index in &touched_groups {
+            if let ScratchLocation::Batch(batch_index) =
+                &self.scratch_entries[group_index].location
+            {
+                let value = &batch_inputs[*batch_index];
+                self.set_value(group_index, value);
             }
         }
+
+        batch_inputs.clear();
+        self.scratch_batch_inputs = batch_inputs;
+        touched_groups.clear();
+        self.scratch_touched_groups = touched_groups;
         Ok(())
     }
 
@@ -295,7 +362,11 @@ impl MinMaxStructState {
     }
 
     fn size(&self) -> usize {
-        self.total_data_bytes + self.min_max.len() * size_of::<Option<StructArray>>()
+        self.total_data_bytes
+            + self.min_max.len() * size_of::<Option<StructArray>>()
+            + self.scratch_entries.len() * size_of::<ScratchEntry>()
+            + self.scratch_touched_groups.capacity() * size_of::<usize>()
+            + self.scratch_batch_inputs.capacity() * size_of::<StructArray>()
     }
 }
 
@@ -540,5 +611,47 @@ mod tests {
         let str_array = max_result.column(1).as_string::<i32>();
         assert_eq!(int_array.value(0), 4);
         assert_eq!(str_array.value(0), "d");
+    }
+
+    #[test]
+    fn test_min_max_sparse_multi_batch() {
+        let batch_len = 128;
+        let total_groups = 1024;
+        let group_indices: Vec<usize> = (0..batch_len).map(|i| i * 8).collect();
+
+        let batch_one = create_test_struct_array(
+            (0..batch_len).map(|i| Some(1000_i32 - i as i32)).collect(),
+            vec![Some("batch_one"); batch_len],
+        );
+
+        let mut accumulator =
+            MinMaxStructAccumulator::new_min(batch_one.data_type().clone());
+        let values_one = vec![Arc::new(batch_one) as ArrayRef];
+
+        accumulator
+            .update_batch(&values_one, &group_indices, None, total_groups)
+            .unwrap();
+
+        let batch_two = create_test_struct_array(
+            (0..batch_len).map(|i| Some(-(i as i32))).collect(),
+            vec![Some("batch_two"); batch_len],
+        );
+        let values_two = vec![Arc::new(batch_two) as ArrayRef];
+
+        accumulator
+            .update_batch(&values_two, &group_indices, None, total_groups)
+            .unwrap();
+
+        let result = accumulator.evaluate(EmitTo::All).unwrap();
+        let result = result.as_struct();
+
+        let int_array = result.column(0).as_primitive::<Int32Type>();
+
+        for (i, group_index) in group_indices.iter().copied().enumerate() {
+            assert!(result.is_valid(group_index));
+            assert_eq!(int_array.value(group_index), -(i as i32));
+        }
+
+        assert!(result.is_null(total_groups - 1));
     }
 }

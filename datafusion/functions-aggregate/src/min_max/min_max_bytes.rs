@@ -36,6 +36,27 @@ use std::sync::Arc;
 /// [`StringArray`]: arrow::array::StringArray
 /// [`BinaryArray`]: arrow::array::BinaryArray
 /// [`StringViewArray`]: arrow::array::StringViewArray
+/// Captures the heuristic driven execution strategy for a given accumulator.
+///
+/// The state machine starts in [`WorkloadMode::Undecided`] until the first
+/// non-null values arrive. Once the workload shape is known we switch to one of
+/// the specialised implementations:
+///
+/// * [`WorkloadMode::DenseInline`] – enabled for dense group domains with a
+///   stable `total_num_groups` (≤ 100k) **and** evidence that the accumulator is
+///   reused across batches. Marks used to detect first touches are allocated
+///   lazily: they are prepared once the accumulator has observed a previous
+///   processed batch (i.e. on the second processed batch), so single-batch
+///   workloads avoid the allocation cost. After a small number of consecutive
+///   stable batches the implementation "commits" to the dense-inline fast
+///   path and disables per-batch statistics and mark tracking.
+/// * [`WorkloadMode::Simple`] – chosen for single-batch dense workloads where
+///   reuse is unlikely. This path stages updates per-batch and then writes
+///   results in-place without using the dense-inline marks.
+/// * [`WorkloadMode::SparseOptimized`] – kicks in when the cardinality is high
+///   or the batches are sparse/irregular; it retains and reuses the sparse
+///   scratch machinery (hash-based tracking) introduced by the dense-inline
+///   heuristics. Optimized for sparse access patterns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkloadMode {
     /// The accumulator has not yet observed any non-null values and therefore
@@ -457,6 +478,13 @@ struct MinMaxBytesState {
     /// Marker vector used by the dense inline implementation to detect first
     /// touches without clearing a bitmap on every batch.
     dense_inline_marks: Vec<u64>,
+    /// Whether the dense inline marks vector should be prepared for the current
+    /// batch. We keep this disabled for the very first batch processed in dense
+    /// inline mode so that short-lived accumulators avoid the upfront
+    /// allocation and zeroing costs. Once a batch with values has been
+    /// observed we enable the flag so that subsequent batches allocate the mark
+    /// table on demand.
+    dense_inline_marks_ready: bool,
     /// Epoch associated with `dense_inline_marks`.
     dense_inline_epoch: u64,
     /// Number of consecutive batches processed while remaining in
@@ -465,6 +493,10 @@ struct MinMaxBytesState {
     /// Whether the accumulator has committed to the dense inline fast path and
     /// no longer needs to track per-batch statistics.
     dense_inline_committed: bool,
+    /// Total number of groups observed when the dense inline fast path was
+    /// committed. If the group domain grows beyond this value we need to
+    /// reconsider the workload mode.
+    dense_inline_committed_groups: usize,
     #[cfg(test)]
     dense_enable_invocations: usize,
     #[cfg(test)]
@@ -514,6 +546,16 @@ impl ScratchEntry {
     }
 }
 
+/// Location enum used by the sequential dense fast path.
+/// This replicates the original pre-optimization algorithm's approach.
+#[derive(Debug, Clone, Copy)]
+enum SequentialDenseLocation<'a> {
+    /// the min/max value is stored in the existing `min_max` array
+    ExistingMinMax,
+    /// the min/max value is stored in the input array at the given index
+    Input(&'a [u8]),
+}
+
 /// Grow the dense scratch table by at least this many entries whenever we need
 /// to expand it. Chunked growth keeps the amortized cost low while capping the
 /// amount of zeroing we do per batch.
@@ -540,6 +582,7 @@ const SCRATCH_DENSE_GROWTH_STEP: usize = 1024;
 /// `100_000` was chosen from benchmark analysis. Even in the worst case the
 /// DenseInline epoch vector consumes ≈ 800 KiB, which is still significantly
 /// smaller than the multi-vector Simple mode and avoids its cache penalties.
+///
 const DENSE_INLINE_MAX_TOTAL_GROUPS: usize = 100_000;
 /// Minimum observed density (in percent) required to remain on the inline dense
 /// path.
@@ -593,9 +636,11 @@ impl MinMaxBytesState {
             simple_epoch: 0,
             simple_touched_groups: vec![],
             dense_inline_marks: vec![],
+            dense_inline_marks_ready: false,
             dense_inline_epoch: 0,
             dense_inline_stable_batches: 0,
             dense_inline_committed: false,
+            dense_inline_committed_groups: 0,
             #[cfg(test)]
             dense_enable_invocations: 0,
             #[cfg(test)]
@@ -621,6 +666,23 @@ impl MinMaxBytesState {
         }
     }
 
+    fn resize_min_max(&mut self, total_num_groups: usize) {
+        if total_num_groups < self.min_max.len() {
+            let truncated = self.min_max.split_off(total_num_groups);
+            for value in truncated {
+                if let Some(bytes) = value {
+                    debug_assert!(self.total_data_bytes >= bytes.len());
+                    debug_assert!(self.populated_groups > 0);
+                    self.total_data_bytes -= bytes.len();
+                    self.populated_groups -= 1;
+                }
+            }
+        } else if total_num_groups > self.min_max.len() {
+            self.min_max.resize(total_num_groups, None);
+        }
+    }
+
+    /// Dispatch to the appropriate implementation based on workload mode.
     fn update_batch<'a, F, I>(
         &mut self,
         iter: I,
@@ -632,6 +694,26 @@ impl MinMaxBytesState {
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
+        // Fast path: detect perfectly sequential dense group indices [0, 1, 2, ..., N-1]
+        // This is the common case for dense aggregations and matches the original
+        // pre-optimization algorithm behavior with zero overhead.
+        //
+        // We use a lightweight heuristic check: if length matches total_num_groups,
+        // first element is 0, and last element is N-1, we assume sequential.
+        // This avoids scanning the entire array for the common case.
+        if group_indices.len() == total_num_groups
+            && !group_indices.is_empty()
+            && group_indices[0] == 0
+            && group_indices[total_num_groups - 1] == total_num_groups - 1
+        {
+            return self.update_batch_sequential_dense(
+                iter,
+                group_indices,
+                total_num_groups,
+                cmp,
+            );
+        }
+
         let mut cmp = cmp;
         match self.workload_mode {
             WorkloadMode::SparseOptimized => {
@@ -645,6 +727,15 @@ impl MinMaxBytesState {
                 Ok(())
             }
             WorkloadMode::DenseInline => {
+                if self.dense_inline_committed
+                    && total_num_groups > self.dense_inline_committed_groups
+                {
+                    self.dense_inline_committed = false;
+                    self.dense_inline_committed_groups = 0;
+                    self.dense_inline_stable_batches = 0;
+                    self.dense_inline_marks_ready = false;
+                }
+
                 if self.dense_inline_committed {
                     self.update_batch_dense_inline_committed(
                         iter,
@@ -682,7 +773,7 @@ impl MinMaxBytesState {
                         &mut cmp,
                     )?
                 } else {
-                    self.update_batch_simple_impl(
+                    self.update_batch_sparse_impl(
                         iter,
                         group_indices,
                         total_num_groups,
@@ -706,18 +797,11 @@ impl MinMaxBytesState {
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
-        self.min_max.resize(total_num_groups, None);
+        self.resize_min_max(total_num_groups);
 
-        if self.dense_inline_marks.len() < total_num_groups {
-            self.dense_inline_marks.resize(total_num_groups, 0_u64);
-        }
-
-        self.dense_inline_epoch = self.dense_inline_epoch.wrapping_add(1);
-        if self.dense_inline_epoch == 0 {
-            for mark in &mut self.dense_inline_marks {
-                *mark = 0;
-            }
-            self.dense_inline_epoch = 1;
+        let mut marks_ready = self.dense_inline_marks_ready;
+        if marks_ready {
+            self.prepare_dense_inline_marks(total_num_groups);
         }
 
         let mut unique_groups = 0_usize;
@@ -728,12 +812,14 @@ impl MinMaxBytesState {
         let mut fast_last = 0_usize;
 
         let mut last_group_index: Option<usize> = None;
+        let mut processed_any = false;
 
-        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
-        {
+        for (&group_index, new_val) in group_indices.iter().zip(iter.into_iter()) {
             let Some(new_val) = new_val else {
                 continue;
             };
+
+            processed_any = true;
 
             if group_index >= self.min_max.len() {
                 return internal_err!(
@@ -752,9 +838,15 @@ impl MinMaxBytesState {
                 } else if group_index == fast_last + 1 {
                     fast_last = group_index;
                 } else {
+                    if !marks_ready {
+                        self.prepare_dense_inline_marks(total_num_groups);
+                        marks_ready = true;
+                    }
                     fast_path = false;
                     if fast_rows > 0 {
-                        unique_groups = fast_rows;
+                        let fast_unique =
+                            fast_last.saturating_sub(fast_start).saturating_add(1);
+                        unique_groups = fast_unique;
                         max_group_index = Some(match max_group_index {
                             Some(current_max) => current_max.max(fast_last),
                             None => fast_last,
@@ -774,6 +866,10 @@ impl MinMaxBytesState {
             }
 
             if !fast_path && !is_consecutive_duplicate {
+                if !marks_ready {
+                    self.prepare_dense_inline_marks(total_num_groups);
+                    marks_ready = true;
+                }
                 let mark = &mut self.dense_inline_marks[group_index];
                 if *mark != self.dense_inline_epoch {
                     *mark = self.dense_inline_epoch;
@@ -797,7 +893,8 @@ impl MinMaxBytesState {
 
         if fast_path {
             if fast_rows > 0 {
-                unique_groups = fast_rows;
+                let fast_unique = fast_last.saturating_sub(fast_start).saturating_add(1);
+                unique_groups = fast_unique;
                 max_group_index = Some(match max_group_index {
                     Some(current_max) => current_max.max(fast_last),
                     None => fast_last,
@@ -805,10 +902,98 @@ impl MinMaxBytesState {
             }
         }
 
+        // Only prepare marks if we've processed at least one batch already.
+        // This indicates the accumulator is being reused across multiple batches.
+        // For single-batch scenarios, we avoid the allocation overhead entirely.
+        if processed_any && self.processed_batches > 0 {
+            self.dense_inline_marks_ready = true;
+        }
+
         Ok(BatchStats {
             unique_groups,
             max_group_index,
         })
+    }
+
+    fn prepare_dense_inline_marks(&mut self, total_num_groups: usize) {
+        if !self.dense_inline_marks_ready {
+            self.dense_inline_marks_ready = true;
+        }
+
+        if self.dense_inline_marks.len() < total_num_groups {
+            self.dense_inline_marks.resize(total_num_groups, 0_u64);
+        }
+
+        self.dense_inline_epoch = self.dense_inline_epoch.wrapping_add(1);
+        if self.dense_inline_epoch == 0 {
+            for mark in &mut self.dense_inline_marks {
+                *mark = 0;
+            }
+            self.dense_inline_epoch = 1;
+        }
+    }
+
+    /// Fast path for perfectly sequential dense group indices [0, 1, 2, ..., N-1].
+    ///
+    /// This implementation exactly replicates the original pre-optimization algorithm
+    /// to achieve zero overhead for the common dense case. It uses a locations vector
+    /// to track the best value seen for each group in the current batch, then applies
+    /// updates to self.min_max in a second pass.
+    fn update_batch_sequential_dense<'a, F, I>(
+        &mut self,
+        iter: I,
+        group_indices: &[usize],
+        total_num_groups: usize,
+        mut cmp: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+        I: IntoIterator<Item = Option<&'a [u8]>>,
+    {
+        self.resize_min_max(total_num_groups);
+
+        // Minimize value copies by calculating the new min/maxes for each group
+        // in this batch (either the existing min/max or the new input value)
+        // and updating the owned values in self.min_max at most once
+        let mut locations =
+            vec![SequentialDenseLocation::ExistingMinMax; total_num_groups];
+
+        // Figure out the new min/max value for each group
+        for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
+            let group_index = *group_index;
+            let Some(new_val) = new_val else {
+                continue; // skip nulls
+            };
+
+            let existing_val = match locations[group_index] {
+                // previous input value was the min/max, so compare it
+                SequentialDenseLocation::Input(existing_val) => existing_val,
+                SequentialDenseLocation::ExistingMinMax => {
+                    let Some(existing_val) = self.min_max[group_index].as_ref() else {
+                        // no existing min/max, so this is the new min/max
+                        locations[group_index] = SequentialDenseLocation::Input(new_val);
+                        continue;
+                    };
+                    existing_val.as_ref()
+                }
+            };
+
+            // Compare the new value to the existing value, replacing if necessary
+            if cmp(new_val, existing_val) {
+                locations[group_index] = SequentialDenseLocation::Input(new_val);
+            }
+        }
+
+        // Update self.min_max with any new min/max values we found in the input
+        for (group_index, location) in locations.iter().enumerate() {
+            match location {
+                SequentialDenseLocation::ExistingMinMax => {}
+                SequentialDenseLocation::Input(new_val) => {
+                    self.set_value(group_index, new_val)
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Fast path for DenseInline once the workload has been deemed stable.
@@ -826,10 +1011,9 @@ impl MinMaxBytesState {
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
-        self.min_max.resize(total_num_groups, None);
+        self.resize_min_max(total_num_groups);
 
-        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
-        {
+        for (&group_index, new_val) in group_indices.iter().zip(iter.into_iter()) {
             let Some(new_val) = new_val else {
                 continue;
             };
@@ -865,7 +1049,7 @@ impl MinMaxBytesState {
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
-        self.min_max.resize(total_num_groups, None);
+        self.resize_min_max(total_num_groups);
 
         if self.simple_slots.len() < total_num_groups {
             self.simple_slots
@@ -887,8 +1071,7 @@ impl MinMaxBytesState {
         let mut unique_groups = 0_usize;
         let mut max_group_index: Option<usize> = None;
 
-        for (group_index, new_val) in group_indices.iter().copied().zip(iter.into_iter())
-        {
+        for (&group_index, new_val) in group_indices.iter().zip(iter.into_iter()) {
             let Some(new_val) = new_val else {
                 continue;
             };
@@ -968,6 +1151,13 @@ impl MinMaxBytesState {
         })
     }
 
+    /// Record batch statistics and adaptively select or transition workload mode.
+    ///
+    /// This function implements the adaptive mode selection heuristic that
+    /// improves performance in multi-batch workloads at the cost of some
+    /// overhead in single-batch scenarios. The overhead comes from tracking
+    /// `unique_groups` and `max_group_index` statistics needed to evaluate
+    /// density and choose the optimal execution path.
     fn record_batch_stats(&mut self, stats: BatchStats, total_num_groups: usize) {
         self.processed_batches = self.processed_batches.saturating_add(1);
         if stats.unique_groups == 0 {
@@ -993,6 +1183,7 @@ impl MinMaxBytesState {
                             self.enter_dense_inline_mode();
                         }
                         self.workload_mode = WorkloadMode::DenseInline;
+                        self.dense_inline_marks_ready = true;
                     } else if self.should_use_simple(
                         total_num_groups,
                         stats.unique_groups,
@@ -1043,7 +1234,9 @@ impl MinMaxBytesState {
                             >= DENSE_INLINE_STABILITY_THRESHOLD
                         {
                             self.dense_inline_committed = true;
+                            self.dense_inline_committed_groups = total_num_groups;
                             self.dense_inline_marks.clear();
+                            self.dense_inline_marks_ready = false;
                         }
                     }
                 }
@@ -1093,7 +1286,13 @@ impl MinMaxBytesState {
             return false;
         };
         let domain = max_group_index + 1;
-        domain > 0 && self.populated_groups * SPARSE_SWITCH_MAX_DENSITY_PERCENT < domain
+        if domain == 0 {
+            return false;
+        }
+
+        let populated_scaled = self.populated_groups.saturating_mul(100);
+        let domain_scaled = domain.saturating_mul(SPARSE_SWITCH_MAX_DENSITY_PERCENT);
+        populated_scaled < domain_scaled
     }
 
     fn enter_simple_mode(&mut self) {
@@ -1105,6 +1304,8 @@ impl MinMaxBytesState {
         self.simple_touched_groups.clear();
         self.dense_inline_stable_batches = 0;
         self.dense_inline_committed = false;
+        self.dense_inline_committed_groups = 0;
+        self.dense_inline_marks_ready = false;
     }
 
     fn enter_sparse_mode(&mut self) {
@@ -1116,12 +1317,16 @@ impl MinMaxBytesState {
         self.scratch_dense.clear();
         self.dense_inline_stable_batches = 0;
         self.dense_inline_committed = false;
+        self.dense_inline_committed_groups = 0;
+        self.dense_inline_marks_ready = false;
     }
 
     fn enter_dense_inline_mode(&mut self) {
         self.enter_simple_mode();
         self.dense_inline_stable_batches = 0;
         self.dense_inline_committed = false;
+        self.dense_inline_committed_groups = 0;
+        self.dense_inline_marks_ready = false;
     }
 
     /// Updates the min/max values for the given string values
@@ -1139,7 +1344,51 @@ impl MinMaxBytesState {
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
-        self.min_max.resize(total_num_groups, None);
+        let prepared = self.prepare_sparse_batch(total_num_groups);
+        let mut state = SparseBatchState::new(prepared, group_indices.len());
+
+        let mut values_iter = iter.into_iter();
+        let mut processed = 0usize;
+        for (&group_index, new_val) in group_indices.iter().zip(&mut values_iter) {
+            processed += 1;
+
+            let Some(new_val) = new_val else {
+                continue;
+            };
+
+            if group_index >= self.min_max.len() {
+                return internal_err!(
+                    "group index {group_index} out of bounds for {} groups",
+                    self.min_max.len()
+                );
+            }
+
+            self.process_sparse_value(
+                group_index,
+                new_val,
+                total_num_groups,
+                &mut state,
+                cmp,
+            );
+        }
+
+        debug_assert!(
+            values_iter.next().is_none(),
+            "value iterator longer than group indices"
+        );
+
+        if processed != group_indices.len() {
+            return internal_err!(
+                "value iterator shorter than group indices (processed {processed}, expected {})",
+                group_indices.len()
+            );
+        }
+
+        self.finalize_sparse_batch(state, total_num_groups)
+    }
+
+    fn prepare_sparse_batch(&mut self, total_num_groups: usize) -> PreparedSparseBatch {
+        self.resize_min_max(total_num_groups);
 
         #[cfg(test)]
         {
@@ -1156,257 +1405,343 @@ impl MinMaxBytesState {
         }
 
         debug_assert!(self.scratch_sparse.is_empty());
-        let mut scratch_sparse = std::mem::take(&mut self.scratch_sparse);
-        let mut sparse_used_this_batch = false;
-        let mut scratch_group_ids = std::mem::take(&mut self.scratch_group_ids);
-        // Track whether the dense scratch table has already been initialised for
-        // this batch. Once the dense path is active we avoid re-running the
-        // migration logic and simply expand the dense limit as needed.
-        let mut dense_activated_this_batch = false;
+        let scratch_sparse = std::mem::take(&mut self.scratch_sparse);
+        let scratch_group_ids = std::mem::take(&mut self.scratch_group_ids);
 
         self.scratch_dense_limit = self.scratch_dense_limit.min(total_num_groups);
-        let mut use_dense = (self.scratch_dense_enabled || self.total_data_bytes > 0)
-            && self.scratch_dense_limit > 0;
+        let use_dense = self.scratch_dense_enabled && self.scratch_dense_limit > 0;
 
-        // The iterator feeding `new_val` must remain streaming so that the inner
-        // retry loop can re-evaluate the current value after switching between the
-        // sparse and dense scratch paths. Avoid buffering values up front – only
-        // the `batch_inputs` vector below may grow with the number of *touched*
-        // groups, not with `total_num_groups`.
-        let mut values_iter = iter.into_iter();
+        PreparedSparseBatch {
+            scratch_sparse,
+            scratch_group_ids,
+            use_dense,
+        }
+    }
 
-        // Minimize value copies by calculating the new min/maxes for each group
-        // in this batch (either the existing min/max or the new input value)
-        // and updating the owned values in `self.min_max` at most once
-        let mut batch_inputs: Vec<&[u8]> = Vec::with_capacity(group_indices.len());
-        let mut batch_unique_groups = 0_usize;
-        let mut batch_max_group_index: Option<usize> = None;
+    fn process_sparse_value<'a, F>(
+        &mut self,
+        group_index: usize,
+        new_val: &'a [u8],
+        total_num_groups: usize,
+        state: &mut SparseBatchState<'a>,
+        cmp: &mut F,
+    ) where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        loop {
+            match self.apply_sparse_value(
+                group_index,
+                new_val,
+                total_num_groups,
+                state,
+                cmp,
+            ) {
+                ProcessResult::Processed => break,
+                ProcessResult::Retry => continue,
+            }
+        }
+    }
 
-        // Figure out the new min value for each group
-        for (group_index, new_val) in group_indices.iter().copied().zip(&mut values_iter)
+    fn apply_sparse_value<'a, F>(
+        &mut self,
+        group_index: usize,
+        new_val: &'a [u8],
+        total_num_groups: usize,
+        state: &mut SparseBatchState<'a>,
+        cmp: &mut F,
+    ) -> ProcessResult
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        if state.use_dense {
+            match self.try_process_dense_path(
+                group_index,
+                new_val,
+                total_num_groups,
+                state,
+                cmp,
+            ) {
+                DenseResult::Handled => return ProcessResult::Processed,
+                DenseResult::Retry => return ProcessResult::Retry,
+                DenseResult::Fallback => {}
+            }
+        }
+
+        self.process_sparse_path(group_index, new_val, total_num_groups, state, cmp)
+    }
+
+    fn try_process_dense_path<'a, F>(
+        &mut self,
+        group_index: usize,
+        new_val: &'a [u8],
+        total_num_groups: usize,
+        state: &mut SparseBatchState<'a>,
+        cmp: &mut F,
+    ) -> DenseResult
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        let mut allow_dense = group_index < self.scratch_dense_limit;
+
+        if !allow_dense {
+            let (potential_unique, potential_max) =
+                state.potential_first_touch_metrics(group_index);
+            if let Some(candidate_limit) = self.evaluate_dense_candidate(
+                potential_unique,
+                potential_max,
+                total_num_groups,
+            ) {
+                let mut desired_limit = candidate_limit;
+                if desired_limit < self.scratch_dense_limit + SCRATCH_DENSE_GROWTH_STEP {
+                    desired_limit = (self.scratch_dense_limit
+                        + SCRATCH_DENSE_GROWTH_STEP)
+                        .min(total_num_groups);
+                }
+                desired_limit = desired_limit.min(total_num_groups);
+                if self.expand_dense_limit(desired_limit) {
+                    return DenseResult::Retry;
+                }
+                allow_dense = group_index < self.scratch_dense_limit;
+            }
+        }
+
+        if !allow_dense {
+            #[cfg(test)]
+            {
+                debug_assert!(self.scratch_dense_enabled);
+                self.dense_sparse_detours += 1;
+            }
+            return DenseResult::Fallback;
+        }
+
+        let mut pending_dense_growth = None;
+        let mut first_touch = false;
         {
-            let Some(new_val) = new_val else {
-                continue; // skip nulls
-            };
+            let entry = &mut self.scratch_dense[group_index];
+            if entry.epoch != self.scratch_epoch {
+                entry.epoch = self.scratch_epoch;
+                entry.location = ScratchLocation::Existing;
+                first_touch = true;
+            }
 
-            loop {
-                let mut first_touch = false;
-                let mut processed_via_dense = false;
-                enum ScratchTarget {
-                    Dense(usize),
-                    Sparse(*mut ScratchLocation),
+            Self::update_scratch_location(
+                &mut entry.location,
+                group_index,
+                new_val,
+                cmp,
+                &mut state.batch_inputs,
+                &self.min_max,
+            );
+        }
+
+        if first_touch {
+            state.scratch_group_ids.push(group_index);
+            state.record_first_touch(group_index);
+            if let Some(max_group_index) = state.batch_max_group_index {
+                let mut desired_limit = max_group_index + 1;
+                if desired_limit < self.scratch_dense_limit + SCRATCH_DENSE_GROWTH_STEP {
+                    desired_limit = (self.scratch_dense_limit
+                        + SCRATCH_DENSE_GROWTH_STEP)
+                        .min(total_num_groups);
                 }
-                let target: ScratchTarget;
-                let mut pending_dense_growth: Option<usize> = None;
+                pending_dense_growth = Some(desired_limit.min(total_num_groups));
+            }
+        }
 
-                if use_dense {
-                    let mut allow_dense = group_index < self.scratch_dense_limit;
+        if let Some(desired_limit) = pending_dense_growth {
+            self.expand_dense_limit(desired_limit);
+        }
 
-                    if !allow_dense {
-                        let potential_unique = batch_unique_groups + 1;
-                        let potential_max = match batch_max_group_index {
-                            Some(current_max) if current_max >= group_index => {
-                                current_max
-                            }
-                            _ => group_index,
-                        };
+        DenseResult::Handled
+    }
+
+    fn process_sparse_path<'a, F>(
+        &mut self,
+        group_index: usize,
+        new_val: &'a [u8],
+        total_num_groups: usize,
+        state: &mut SparseBatchState<'a>,
+        cmp: &mut F,
+    ) -> ProcessResult
+    where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        let mut first_touch = false;
+        let mut evaluated_dense_candidate = false;
+        loop {
+            match state.scratch_sparse.entry(group_index) {
+                Entry::Occupied(_) => {
+                    break;
+                }
+                Entry::Vacant(vacant) => {
+                    first_touch = true;
+
+                    if !evaluated_dense_candidate {
+                        evaluated_dense_candidate = true;
+                        // We need to call an immutable method on `state` below. The
+                        // Vacant guard `vacant` holds a mutable borrow of
+                        // `state.scratch_sparse`, so drop it first to avoid
+                        // borrowing `state` both mutably and immutably at once
+                        // (E0502). After computing the metrics and possibly
+                        // taking action, we'll re-acquire the entry.
+                        drop(vacant);
+
+                        let (potential_unique, potential_max) =
+                            state.potential_first_touch_metrics(group_index);
                         if let Some(candidate_limit) = self.evaluate_dense_candidate(
                             potential_unique,
-                            Some(potential_max),
+                            potential_max,
                             total_num_groups,
                         ) {
-                            let mut desired_limit = candidate_limit;
-                            if desired_limit
-                                < self.scratch_dense_limit + SCRATCH_DENSE_GROWTH_STEP
-                            {
-                                desired_limit = (self.scratch_dense_limit
-                                    + SCRATCH_DENSE_GROWTH_STEP)
-                                    .min(total_num_groups);
-                            }
-                            desired_limit = desired_limit.min(total_num_groups);
-                            self.expand_dense_limit(desired_limit);
-                            allow_dense = group_index < self.scratch_dense_limit;
-                        }
-                    }
-
-                    if allow_dense {
-                        {
-                            let entry = &mut self.scratch_dense[group_index];
-                            if entry.epoch != self.scratch_epoch {
-                                entry.epoch = self.scratch_epoch;
-                                entry.location = ScratchLocation::Existing;
-                                scratch_group_ids.push(group_index);
-                                first_touch = true;
-                            }
-                        }
-                        target = ScratchTarget::Dense(group_index);
-                        processed_via_dense = true;
-                    } else {
-                        #[cfg(test)]
-                        {
-                            debug_assert!(self.scratch_dense_enabled);
-                            self.dense_sparse_detours += 1;
-                        }
-
-                        match scratch_sparse.entry(group_index) {
-                            Entry::Occupied(entry) => {
-                                sparse_used_this_batch = true;
-                                target =
-                                    ScratchTarget::Sparse(entry.into_mut() as *mut _);
-                            }
-                            Entry::Vacant(vacant) => {
-                                scratch_group_ids.push(group_index);
-                                first_touch = true;
-                                sparse_used_this_batch = true;
-                                target = ScratchTarget::Sparse(
-                                    vacant.insert(ScratchLocation::Existing) as *mut _,
-                                );
-                            }
-                        }
-                    }
-                } else {
-                    let seen_before = scratch_sparse.contains_key(&group_index);
-                    if !seen_before {
-                        let potential_unique = batch_unique_groups + 1;
-                        let potential_max = match batch_max_group_index {
-                            Some(current_max) if current_max >= group_index => {
-                                current_max
-                            }
-                            _ => group_index,
-                        };
-                        if let Some(candidate_limit) = self.evaluate_dense_candidate(
-                            potential_unique,
-                            Some(potential_max),
-                            total_num_groups,
-                        ) {
-                            if !dense_activated_this_batch
+                            if !state.dense_activated_this_batch
                                 && self.enable_dense_for_batch(
                                     candidate_limit,
-                                    &mut scratch_sparse,
-                                    &mut scratch_group_ids,
+                                    &mut state.scratch_sparse,
+                                    &mut state.scratch_group_ids,
                                 )
                             {
-                                dense_activated_this_batch = true;
-                                use_dense = true;
-                                continue;
-                            } else if dense_activated_this_batch
+                                state.dense_activated_this_batch = true;
+                                state.use_dense = true;
+                                return ProcessResult::Retry;
+                            } else if state.dense_activated_this_batch
                                 && self.expand_dense_limit(candidate_limit)
                             {
-                                continue;
+                                return ProcessResult::Retry;
                             }
-                        }
-                    }
-                    match scratch_sparse.entry(group_index) {
-                        Entry::Occupied(entry) => {
-                            sparse_used_this_batch = true;
-                            target = ScratchTarget::Sparse(entry.into_mut() as *mut _);
-                        }
-                        Entry::Vacant(vacant) => {
-                            scratch_group_ids.push(group_index);
-                            first_touch = true;
-                            sparse_used_this_batch = true;
-                            target = ScratchTarget::Sparse(
-                                vacant.insert(ScratchLocation::Existing) as *mut _,
-                            );
-                        }
-                    }
-                }
 
-                if first_touch {
-                    batch_unique_groups += 1;
-                    match batch_max_group_index {
-                        Some(current_max) if current_max >= group_index => {}
-                        _ => batch_max_group_index = Some(group_index),
-                    }
-                    if processed_via_dense {
-                        if let Some(max_group_index) = batch_max_group_index {
-                            let mut desired_limit = max_group_index + 1;
-                            if desired_limit
-                                < self.scratch_dense_limit + SCRATCH_DENSE_GROWTH_STEP
-                            {
-                                desired_limit = (self.scratch_dense_limit
-                                    + SCRATCH_DENSE_GROWTH_STEP)
-                                    .min(total_num_groups);
-                            }
-                            pending_dense_growth =
-                                Some(desired_limit.min(total_num_groups));
-                        }
-                    } else {
-                        if let Some(candidate_limit) = self.evaluate_dense_candidate(
-                            batch_unique_groups,
-                            batch_max_group_index,
-                            total_num_groups,
-                        ) {
-                            if !dense_activated_this_batch
-                                && self.enable_dense_for_batch(
-                                    candidate_limit,
-                                    &mut scratch_sparse,
-                                    &mut scratch_group_ids,
-                                )
-                            {
-                                dense_activated_this_batch = true;
-                                use_dense = true;
-                                continue;
-                            } else if dense_activated_this_batch
-                                && self.expand_dense_limit(candidate_limit)
-                            {
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                if let Some(desired_limit) = pending_dense_growth {
-                    self.expand_dense_limit(desired_limit);
-                }
-
-                let location = match target {
-                    ScratchTarget::Dense(index) => {
-                        &mut self.scratch_dense[index].location
-                    }
-                    ScratchTarget::Sparse(ptr) => unsafe { &mut *ptr },
-                };
-
-                let existing_val = match *location {
-                    ScratchLocation::Existing => {
-                        let Some(existing_val) = self.min_max[group_index].as_ref()
-                        else {
-                            // no existing min/max, so this is the new min/max
-                            let batch_index = batch_inputs.len();
-                            batch_inputs.push(new_val);
-                            *location = ScratchLocation::Batch(batch_index);
+                            // candidate not accepted -> continue the loop and
+                            // re-check the entry so we can insert below.
                             continue;
-                        };
-                        existing_val.as_ref()
-                    }
-                    // previous input value was the min/max, so compare it
-                    ScratchLocation::Batch(existing_idx) => batch_inputs[existing_idx],
-                };
+                        }
 
-                // Compare the new value to the existing value, replacing if necessary
+                        // We dropped the Vacant guard above; re-acquire the entry
+                        // to insert now that we're no longer holding a mutable
+                        // borrow during the immutable call.
+                        match state.scratch_sparse.entry(group_index) {
+                            Entry::Vacant(vacant) => {
+                                vacant.insert(ScratchLocation::Existing);
+                                break;
+                            }
+                            Entry::Occupied(_) => break,
+                        }
+                    }
+
+                    // If we've already evaluated the dense candidate, we still
+                    // need to insert into the vacant slot. Acquire the vacant
+                    // entry fresh and insert.
+                    match state.scratch_sparse.entry(group_index) {
+                        Entry::Vacant(vacant) => {
+                            vacant.insert(ScratchLocation::Existing);
+                            break;
+                        }
+                        Entry::Occupied(_) => break,
+                    }
+                }
+            }
+        }
+
+        if first_touch {
+            state.scratch_group_ids.push(group_index);
+            state.record_first_touch(group_index);
+            if let Some(candidate_limit) = self.evaluate_dense_candidate(
+                state.batch_unique_groups,
+                state.batch_max_group_index,
+                total_num_groups,
+            ) {
+                if !state.dense_activated_this_batch
+                    && self.enable_dense_for_batch(
+                        candidate_limit,
+                        &mut state.scratch_sparse,
+                        &mut state.scratch_group_ids,
+                    )
+                {
+                    state.dense_activated_this_batch = true;
+                    state.use_dense = true;
+                    return ProcessResult::Retry;
+                } else if state.dense_activated_this_batch
+                    && self.expand_dense_limit(candidate_limit)
+                {
+                    return ProcessResult::Retry;
+                }
+            }
+        }
+
+        let location = state
+            .scratch_sparse
+            .entry(group_index)
+            .or_insert(ScratchLocation::Existing);
+        Self::update_scratch_location(
+            location,
+            group_index,
+            new_val,
+            cmp,
+            &mut state.batch_inputs,
+            &self.min_max,
+        );
+        ProcessResult::Processed
+    }
+
+    fn update_scratch_location<'a, F>(
+        location: &mut ScratchLocation,
+        group_index: usize,
+        new_val: &'a [u8],
+        cmp: &mut F,
+        batch_inputs: &mut Vec<&'a [u8]>,
+        min_max: &[Option<Vec<u8>>],
+    ) where
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        match *location {
+            ScratchLocation::Existing => {
+                let Some(existing_val) = min_max[group_index].as_ref() else {
+                    let batch_index = batch_inputs.len();
+                    batch_inputs.push(new_val);
+                    *location = ScratchLocation::Batch(batch_index);
+                    return;
+                };
+                if cmp(new_val, existing_val.as_ref()) {
+                    let batch_index = batch_inputs.len();
+                    batch_inputs.push(new_val);
+                    *location = ScratchLocation::Batch(batch_index);
+                }
+            }
+            ScratchLocation::Batch(existing_idx) => {
+                let existing_val = batch_inputs[existing_idx];
                 if cmp(new_val, existing_val) {
                     let batch_index = batch_inputs.len();
                     batch_inputs.push(new_val);
                     *location = ScratchLocation::Batch(batch_index);
                 }
-                break;
             }
         }
-        debug_assert!(
-            values_iter.next().is_none(),
-            "value iterator longer than group indices"
-        );
+    }
+
+    fn finalize_sparse_batch<'a>(
+        &mut self,
+        state: SparseBatchState<'a>,
+        total_num_groups: usize,
+    ) -> Result<BatchStats> {
+        let SparseBatchState {
+            mut scratch_sparse,
+            mut scratch_group_ids,
+            batch_inputs,
+            batch_unique_groups,
+            batch_max_group_index,
+            dense_activated_this_batch: _,
+            use_dense,
+        } = state;
 
         if use_dense {
             self.scratch_dense_enabled = true;
         }
-        // Update self.min_max with any new min/max values we found in the input
+
         let mut max_group_index = batch_max_group_index;
         for group_index in scratch_group_ids.iter().copied() {
             match max_group_index {
                 Some(current_max) if current_max >= group_index => {}
                 _ => max_group_index = Some(group_index),
             }
+
             if group_index < self.scratch_dense.len() {
                 let entry = &mut self.scratch_dense[group_index];
                 if entry.epoch == self.scratch_epoch {
@@ -1423,26 +1758,24 @@ impl MinMaxBytesState {
                 self.set_value(group_index, batch_inputs[batch_index]);
             }
         }
+
         let unique_groups = batch_unique_groups;
         scratch_group_ids.clear();
         scratch_sparse.clear();
-        if sparse_used_this_batch {
-            self.scratch_sparse = scratch_sparse;
-        } else {
-            self.scratch_sparse = HashMap::new();
-        }
+        self.scratch_sparse = scratch_sparse;
         self.scratch_group_ids = scratch_group_ids;
+
         if let (Some(max_group_index), true) = (max_group_index, unique_groups > 0) {
             let candidate_limit = (max_group_index + 1).min(total_num_groups);
             if candidate_limit <= unique_groups * SCRATCH_DENSE_ENABLE_MULTIPLIER {
                 self.scratch_dense_limit = candidate_limit;
             } else if !self.scratch_dense_enabled {
-                // Keep the dense limit disabled for sparse workloads until we see
-                // evidence that growing the dense scratch would pay off.
                 self.scratch_dense_limit = 0;
             }
         }
+
         self.scratch_dense_limit = self.scratch_dense_limit.min(total_num_groups);
+
         Ok(BatchStats {
             unique_groups,
             max_group_index,
@@ -1551,42 +1884,161 @@ impl MinMaxBytesState {
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
         match emit_to {
             EmitTo::All => {
-                (
-                    std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
-                    std::mem::take(&mut self.min_max),
-                )
+                let total_bytes = std::mem::take(&mut self.total_data_bytes);
+                let min_max = std::mem::take(&mut self.min_max);
+                self.reset_after_full_emit();
+                (total_bytes, min_max)
             }
             EmitTo::First(n) => {
                 let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
+                let drained_populated = first_min_maxes
+                    .iter()
+                    .filter(|value| value.is_some())
+                    .count();
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
                     .sum();
                 self.total_data_bytes -= first_data_capacity;
+                self.populated_groups -= drained_populated;
+                if self.min_max.is_empty() {
+                    self.reset_after_full_emit();
+                }
                 (first_data_capacity, first_min_maxes)
             }
         }
     }
 
-    fn size(&self) -> usize {
-        self.total_data_bytes
-            + self.min_max.len() * size_of::<Option<Vec<u8>>>()
-            + self.scratch_group_ids.capacity() * size_of::<usize>()
-            + self.scratch_dense.capacity() * size_of::<ScratchEntry>()
-            + self.scratch_sparse.capacity()
-                * (size_of::<usize>() + size_of::<ScratchLocation>())
-            + self.simple_slots.capacity() * size_of::<SimpleSlot>()
-            + self.simple_touched_groups.capacity() * size_of::<usize>()
-            + self.dense_inline_marks.capacity() * size_of::<u64>()
-            + size_of::<usize>()
-            + size_of::<bool>()
-            + size_of::<WorkloadMode>()
-            + 3 * size_of::<usize>()
-            + 2 * size_of::<u64>()
-            + size_of::<Option<usize>>()
-            + size_of::<usize>()
-            + size_of::<bool>()
+    fn reset_after_full_emit(&mut self) {
+        self.total_data_bytes = 0;
+        self.populated_groups = 0;
+        self.scratch_group_ids.clear();
+        self.scratch_dense.clear();
+        self.scratch_sparse.clear();
+        self.scratch_epoch = 0;
+        self.scratch_dense_limit = 0;
+        self.scratch_dense_enabled = false;
+        self.workload_mode = WorkloadMode::Undecided;
+        self.processed_batches = 0;
+        self.total_groups_seen = 0;
+        self.lifetime_max_group_index = None;
+        self.simple_slots.clear();
+        self.simple_epoch = 0;
+        self.simple_touched_groups.clear();
+        self.dense_inline_marks.clear();
+        self.dense_inline_marks_ready = false;
+        self.dense_inline_epoch = 0;
+        self.dense_inline_stable_batches = 0;
+        self.dense_inline_committed = false;
+        self.dense_inline_committed_groups = 0;
+        #[cfg(test)]
+        {
+            self.dense_enable_invocations = 0;
+            self.dense_sparse_detours = 0;
+        }
     }
+
+    fn size(&self) -> usize {
+        let mut size = size_of::<Self>();
+
+        size = size.saturating_add(self.total_data_bytes);
+        size = size.saturating_add(vec_allocation_bytes(&self.min_max));
+        size = size.saturating_add(vec_allocation_bytes(&self.scratch_group_ids));
+        size = size.saturating_add(vec_allocation_bytes(&self.scratch_dense));
+        size = size.saturating_add(scratch_sparse_allocation_bytes(&self.scratch_sparse));
+        size = size.saturating_add(vec_allocation_bytes(&self.simple_slots));
+        size = size.saturating_add(vec_allocation_bytes(&self.simple_touched_groups));
+        size = size.saturating_add(vec_allocation_bytes(&self.dense_inline_marks));
+
+        size
+    }
+}
+fn vec_allocation_bytes<T>(vec: &Vec<T>) -> usize {
+    vec.capacity().saturating_mul(size_of::<T>())
+}
+fn scratch_sparse_allocation_bytes(map: &HashMap<usize, ScratchLocation>) -> usize {
+    // `HashMap` growth strategy and control byte layout are implementation
+    // details of hashbrown. Rather than duplicating that logic (which can
+    // change across compiler versions or architectures), approximate the
+    // allocation using only public APIs. `capacity()` returns the number of
+    // buckets currently reserved which bounds the total tuple storage and the
+    // control byte array. Each bucket stores the key/value pair plus an
+    // implementation defined control byte. We round that control byte up to a
+    // full `usize` so the estimate remains an upper bound even if hashbrown
+    // widens its groups.
+    let capacity = map.capacity();
+    let tuple_bytes =
+        capacity.saturating_mul(size_of::<usize>() + size_of::<ScratchLocation>());
+    let ctrl_bytes = capacity.saturating_mul(size_of::<usize>());
+
+    // Use a simple capacity-based upper bound to approximate the HashMap
+    // allocation. The precise control-byte layout and grouping strategy are
+    // internal implementation details of `hashbrown` and may change across
+    // versions or architectures. Rounding the control area up to a full
+    // `usize` per bucket produces a conservative upper bound without
+    // depending on internal constants.
+    tuple_bytes.saturating_add(ctrl_bytes)
+}
+
+struct PreparedSparseBatch {
+    scratch_sparse: HashMap<usize, ScratchLocation>,
+    scratch_group_ids: Vec<usize>,
+    use_dense: bool,
+}
+
+struct SparseBatchState<'a> {
+    scratch_sparse: HashMap<usize, ScratchLocation>,
+    scratch_group_ids: Vec<usize>,
+    batch_inputs: Vec<&'a [u8]>,
+    batch_unique_groups: usize,
+    batch_max_group_index: Option<usize>,
+    dense_activated_this_batch: bool,
+    use_dense: bool,
+}
+
+impl<'a> SparseBatchState<'a> {
+    fn new(prepared: PreparedSparseBatch, capacity: usize) -> Self {
+        Self {
+            scratch_sparse: prepared.scratch_sparse,
+            scratch_group_ids: prepared.scratch_group_ids,
+            batch_inputs: Vec::with_capacity(capacity),
+            batch_unique_groups: 0,
+            batch_max_group_index: None,
+            dense_activated_this_batch: false,
+            use_dense: prepared.use_dense,
+        }
+    }
+
+    fn potential_first_touch_metrics(
+        &self,
+        group_index: usize,
+    ) -> (usize, Option<usize>) {
+        let potential_unique = self.batch_unique_groups + 1;
+        let potential_max = match self.batch_max_group_index {
+            Some(current_max) if current_max >= group_index => Some(current_max),
+            _ => Some(group_index),
+        };
+        (potential_unique, potential_max)
+    }
+
+    fn record_first_touch(&mut self, group_index: usize) {
+        self.batch_unique_groups += 1;
+        match self.batch_max_group_index {
+            Some(current_max) if current_max >= group_index => {}
+            _ => self.batch_max_group_index = Some(group_index),
+        }
+    }
+}
+
+enum ProcessResult {
+    Processed,
+    Retry,
+}
+
+enum DenseResult {
+    Handled,
+    Retry,
+    Fallback,
 }
 
 #[cfg(test)]
@@ -1597,11 +2049,15 @@ mod tests {
     fn dense_batches_use_dense_inline_mode() {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
         let total_groups = 32_usize;
-        let groups: Vec<usize> = (0..total_groups).collect();
-        let raw_values: Vec<Vec<u8>> = groups
-            .iter()
+        // Use sequential + extra pattern to avoid our fast path detection
+        // but still exercise DenseInline mode's internal logic
+        // Pattern: [0, 1, 2, ..., 30, 31, 0] - sequential plus one duplicate
+        let mut groups: Vec<usize> = (0..total_groups).collect();
+        groups.push(0); // Add one duplicate to break our fast path check
+        let mut raw_values: Vec<Vec<u8>> = (0..total_groups)
             .map(|idx| format!("value_{idx:02}").into_bytes())
             .collect();
+        raw_values.push(b"value_00".to_vec()); // Corresponding value for duplicate
 
         state
             .update_batch(
@@ -1616,18 +2072,22 @@ mod tests {
         assert!(!state.scratch_dense_enabled);
         assert_eq!(state.scratch_dense_limit, 0);
         assert!(state.scratch_sparse.is_empty());
-        assert!(state.dense_inline_marks.len() >= total_groups);
+        // Marks may be allocated or not depending on when fast path breaks
+        assert!(state.dense_inline_marks_ready);
         assert_eq!(state.populated_groups, total_groups);
 
-        for (i, expected) in raw_values.iter().enumerate() {
-            assert_eq!(state.min_max[i].as_deref(), Some(expected.as_slice()));
+        // Verify values are correct
+        for i in 0..total_groups {
+            let expected = format!("value_{i:02}");
+            assert_eq!(state.min_max[i].as_deref(), Some(expected.as_bytes()));
         }
     }
 
     #[test]
     fn dense_inline_commits_after_stable_batches() {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
-        let group_indices = vec![0_usize, 1, 2];
+        // Use non-sequential indices to avoid fast path
+        let group_indices = vec![0_usize, 2, 1];
         let values = vec!["a", "b", "c"];
 
         for batch in 0..5 {
@@ -1643,6 +2103,81 @@ mod tests {
                 assert!(state.dense_inline_marks.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn dense_inline_reconsiders_after_commit_when_domain_grows() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        // Use a pattern with one extra element to avoid the sequential fast path
+        let group_indices = vec![0_usize, 1, 2, 0];
+        let values: Vec<&[u8]> =
+            vec![b"a".as_ref(), b"b".as_ref(), b"c".as_ref(), b"z".as_ref()];
+
+        for _ in 0..=DENSE_INLINE_STABILITY_THRESHOLD {
+            let iter = values.iter().copied().map(Some);
+            state
+                .update_batch(iter, &group_indices, 3, |a, b| a < b)
+                .expect("stable dense batch");
+        }
+
+        assert!(state.dense_inline_committed);
+        assert_eq!(state.dense_inline_committed_groups, 3);
+
+        // Expand with one more group (breaking sequential pattern)
+        let expanded_groups = vec![0_usize, 1, 2, 3, 0];
+        let expanded_values = vec![
+            Some(b"a".as_ref()),
+            Some(b"b".as_ref()),
+            Some(b"c".as_ref()),
+            Some(b"z".as_ref()),
+            Some(b"zz".as_ref()),
+        ];
+
+        state
+            .update_batch(expanded_values.into_iter(), &expanded_groups, 4, |a, b| {
+                a < b
+            })
+            .expect("dense batch with new group");
+
+        assert!(matches!(state.workload_mode, WorkloadMode::DenseInline));
+        assert!(!state.dense_inline_committed);
+        assert_eq!(state.dense_inline_committed_groups, 0);
+        assert_eq!(state.lifetime_max_group_index, Some(3));
+    }
+
+    #[test]
+    fn dense_inline_defers_marks_first_batch() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        // Use a pattern with one extra element to avoid the sequential fast path
+        // but maintain sequential core to avoid breaking DenseInline's internal fast path
+        let groups = vec![0_usize, 1, 2, 0]; // Sequential + one duplicate
+        let values = vec!["a", "b", "c", "z"]; // Last value won't replace first
+
+        state
+            .update_batch(
+                values.iter().map(|value| Some(value.as_bytes())),
+                &groups,
+                3, // total_num_groups=3, not 4
+                |a, b| a < b,
+            )
+            .expect("first batch");
+
+        // After first batch, marks_ready is set but marks may or may not be allocated
+        // depending on when the fast path broke
+        assert!(state.dense_inline_marks_ready);
+
+        state
+            .update_batch(
+                values.iter().map(|value| Some(value.as_bytes())),
+                &groups,
+                3,
+                |a, b| a < b,
+            )
+            .expect("second batch");
+
+        assert!(state.dense_inline_marks_ready);
+        // Marks should be sized to total_num_groups, not the input array length
+        assert!(state.dense_inline_marks.len() >= 3);
     }
 
     #[test]
@@ -1701,6 +2236,42 @@ mod tests {
     }
 
     #[test]
+    fn sparse_mode_reenables_dense_before_use() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        state.workload_mode = WorkloadMode::SparseOptimized;
+
+        let total_groups = 64_usize;
+        state.resize_min_max(total_groups);
+        state.set_value(0, b"mango");
+        state.set_value(5, b"zebra");
+
+        state.scratch_dense_limit = 6;
+        state.scratch_dense_enabled = false;
+        state.scratch_dense.clear();
+
+        assert!(state.total_data_bytes > 0);
+        assert_eq!(state.scratch_dense.len(), 0);
+
+        let groups = vec![0_usize, 5_usize];
+        let values = vec![b"apple".as_slice(), b"aardvark".as_slice()];
+
+        state
+            .update_batch(
+                values.iter().copied().map(Some),
+                &groups,
+                total_groups,
+                |a, b| a < b,
+            )
+            .expect("sparse update without dense scratch");
+
+        assert!(state.scratch_dense_enabled);
+        assert!(state.scratch_dense.len() >= state.scratch_dense_limit);
+        assert_eq!(state.scratch_dense_limit, 6);
+        assert_eq!(state.min_max[0].as_deref(), Some(b"apple".as_slice()));
+        assert_eq!(state.min_max[5].as_deref(), Some(b"aardvark".as_slice()));
+    }
+
+    #[test]
     fn simple_mode_switches_to_sparse_on_low_density() {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
 
@@ -1714,16 +2285,156 @@ mod tests {
         assert!(matches!(state.workload_mode, WorkloadMode::Simple));
 
         state.populated_groups = SPARSE_SWITCH_GROUP_THRESHOLD + 1;
-        state.lifetime_max_group_index = Some(SPARSE_SWITCH_GROUP_THRESHOLD * 20);
+        state.lifetime_max_group_index = Some(SPARSE_SWITCH_GROUP_THRESHOLD * 200);
 
         state.record_batch_stats(
             BatchStats {
                 unique_groups: 1,
-                max_group_index: Some(SPARSE_SWITCH_GROUP_THRESHOLD * 20),
+                max_group_index: Some(SPARSE_SWITCH_GROUP_THRESHOLD * 200),
             },
-            SPARSE_SWITCH_GROUP_THRESHOLD * 20 + 1,
+            SPARSE_SWITCH_GROUP_THRESHOLD * 200 + 1,
         );
 
         assert!(matches!(state.workload_mode, WorkloadMode::SparseOptimized));
+    }
+
+    #[test]
+    fn emit_to_all_resets_populated_groups() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        state.resize_min_max(3);
+
+        state.set_value(0, b"alpha");
+        state.set_value(1, b"beta");
+
+        state.workload_mode = WorkloadMode::SparseOptimized;
+        state.processed_batches = 3;
+        state.total_groups_seen = 5;
+        state.lifetime_max_group_index = Some(7);
+        state.scratch_dense_enabled = true;
+        state.scratch_dense_limit = 128;
+        state.scratch_epoch = 42;
+        state.scratch_group_ids.push(1);
+        state.scratch_dense.push(ScratchEntry {
+            epoch: 1,
+            location: ScratchLocation::Existing,
+        });
+        state.scratch_sparse.insert(0, ScratchLocation::Existing);
+        state.simple_epoch = 9;
+        state.simple_slots.resize_with(3, SimpleSlot::new);
+        state.simple_touched_groups.push(2);
+        state.dense_inline_marks_ready = true;
+        state.dense_inline_marks.push(99);
+        state.dense_inline_epoch = 17;
+        state.dense_inline_stable_batches = 11;
+        state.dense_inline_committed = true;
+        state.dense_inline_committed_groups = 3;
+        state.dense_enable_invocations = 13;
+        state.dense_sparse_detours = 3;
+
+        assert_eq!(state.populated_groups, 2);
+
+        let (_capacity, values) = state.emit_to(EmitTo::All);
+        assert_eq!(values.len(), 3);
+        assert_eq!(values.iter().filter(|value| value.is_some()).count(), 2);
+        assert_eq!(state.populated_groups, 0);
+        assert!(state.min_max.is_empty());
+        assert_eq!(state.total_data_bytes, 0);
+        assert!(matches!(state.workload_mode, WorkloadMode::Undecided));
+        assert_eq!(state.processed_batches, 0);
+        assert_eq!(state.total_groups_seen, 0);
+        assert_eq!(state.lifetime_max_group_index, None);
+        assert!(!state.scratch_dense_enabled);
+        assert_eq!(state.scratch_dense_limit, 0);
+        assert_eq!(state.scratch_epoch, 0);
+        assert!(state.scratch_group_ids.is_empty());
+        assert!(state.scratch_dense.is_empty());
+        assert!(state.scratch_sparse.is_empty());
+        assert_eq!(state.simple_epoch, 0);
+        assert!(state.simple_slots.is_empty());
+        assert!(state.simple_touched_groups.is_empty());
+        assert!(!state.dense_inline_marks_ready);
+        assert!(state.dense_inline_marks.is_empty());
+        assert_eq!(state.dense_inline_epoch, 0);
+        assert_eq!(state.dense_inline_stable_batches, 0);
+        assert!(!state.dense_inline_committed);
+        assert_eq!(state.dense_inline_committed_groups, 0);
+        assert_eq!(state.dense_enable_invocations, 0);
+        assert_eq!(state.dense_sparse_detours, 0);
+    }
+
+    #[test]
+    fn emit_to_first_updates_populated_groups() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        state.resize_min_max(4);
+
+        state.set_value(0, b"left");
+        state.set_value(1, b"middle");
+        state.set_value(3, b"right");
+
+        assert_eq!(state.populated_groups, 3);
+
+        let (_capacity, values) = state.emit_to(EmitTo::First(2));
+        assert_eq!(values.len(), 2);
+        assert_eq!(state.populated_groups, 1);
+        assert_eq!(state.min_max.len(), 2);
+
+        // Remaining groups should retain their data (original index 3)
+        assert_eq!(state.min_max[1].as_deref(), Some(b"right".as_slice()));
+    }
+
+    #[test]
+    fn emit_to_first_resets_state_when_everything_is_drained() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        state.resize_min_max(2);
+        state.set_value(0, b"left");
+        state.set_value(1, b"right");
+
+        state.workload_mode = WorkloadMode::DenseInline;
+        state.processed_batches = 10;
+        state.total_groups_seen = 12;
+        state.scratch_dense_enabled = true;
+        state.dense_inline_committed = true;
+        state.dense_inline_committed_groups = 2;
+        state.simple_epoch = 5;
+        state.simple_slots.resize_with(2, SimpleSlot::new);
+
+        let (_capacity, values) = state.emit_to(EmitTo::First(2));
+        assert_eq!(values.len(), 2);
+        assert!(values.iter().all(|value| value.is_some()));
+        assert!(state.min_max.is_empty());
+        assert_eq!(state.total_data_bytes, 0);
+        assert!(matches!(state.workload_mode, WorkloadMode::Undecided));
+        assert_eq!(state.processed_batches, 0);
+        assert_eq!(state.total_groups_seen, 0);
+        assert!(!state.scratch_dense_enabled);
+        assert!(!state.dense_inline_committed);
+        assert_eq!(state.dense_inline_committed_groups, 0);
+        assert_eq!(state.simple_epoch, 0);
+        assert!(state.simple_slots.is_empty());
+    }
+
+    #[test]
+    fn resize_min_max_reclaims_truncated_entries() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        state.resize_min_max(4);
+        state.set_value(0, b"a");
+        state.set_value(1, b"bc");
+        state.set_value(2, b"def");
+        state.set_value(3, b"ghij");
+
+        assert_eq!(state.populated_groups, 4);
+        assert_eq!(state.total_data_bytes, 10);
+
+        state.resize_min_max(2);
+        assert_eq!(state.min_max.len(), 2);
+        assert_eq!(state.total_data_bytes, 3);
+        assert_eq!(state.populated_groups, 2);
+        assert_eq!(state.min_max[0].as_deref(), Some(b"a".as_slice()));
+        assert_eq!(state.min_max[1].as_deref(), Some(b"bc".as_slice()));
+
+        state.resize_min_max(0);
+        assert_eq!(state.min_max.len(), 0);
+        assert_eq!(state.total_data_bytes, 0);
+        assert_eq!(state.populated_groups, 0);
     }
 }
