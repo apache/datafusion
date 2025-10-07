@@ -18,7 +18,7 @@
 //! Structs and traits to provide the information needed for expression simplification.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, DFSchemaRef, Result};
 
 use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
 
@@ -86,9 +86,7 @@ impl SimplifyInfo for SimplifyContext<'_> {
     /// Returns true if expr is nullable
     fn nullable(&self, expr: &Expr) -> Result<bool> {
         let schema = self.schema.as_ref().ok_or_else(|| {
-            DataFusionError::Internal(
-                "attempt to get nullability without schema".to_string(),
-            )
+            internal_datafusion_err!("attempt to get nullability without schema")
         })?;
         expr.nullable(schema.as_ref())
     }
@@ -96,9 +94,7 @@ impl SimplifyInfo for SimplifyContext<'_> {
     /// Returns data type of this expr needed for determining optimized int type of a value
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
         let schema = self.schema.as_ref().ok_or_else(|| {
-            DataFusionError::Internal(
-                "attempt to get data type without schema".to_string(),
-            )
+            internal_datafusion_err!("attempt to get data type without schema")
         })?;
         expr.get_type(schema)
     }
