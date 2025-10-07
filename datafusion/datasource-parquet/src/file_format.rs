@@ -1407,8 +1407,10 @@ fn spawn_column_parallel_row_group_writer(
             mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);
 
-        let reservation = parent_reservation
-            .new_child_reservation(format!("ParquetSink(ArrowColumnWriter(col={i}))"));
+        let reservation = parent_reservation.new_child_reservation(
+            format!("ParquetSink(ArrowColumnWriter(col={i}))"),
+            false,
+        );
         let task = SpawnedTask::spawn(column_serializer_task(
             receive_array,
             writer,
@@ -1497,11 +1499,11 @@ fn spawn_parquet_parallel_serialization_task(
     parallel_options: ParallelParquetWriterOptions,
     parent_reservation: &MemoryReservation,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
-    let cols_reservation =
-        parent_reservation.new_child_reservation("ParquetSink(ParallelColumnWriters)");
+    let cols_reservation = parent_reservation
+        .new_child_reservation("ParquetSink(ParallelColumnWriters)", false);
 
-    let rg_reservation =
-        parent_reservation.new_child_reservation("ParquetSink(SerializedRowGroupWriter)");
+    let rg_reservation = parent_reservation
+        .new_child_reservation("ParquetSink(SerializedRowGroupWriter)", false);
 
     SpawnedTask::spawn(async move {
         let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
@@ -1602,8 +1604,8 @@ async fn concatenate_parallel_row_groups(
     mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     parent_reservation: &MemoryReservation,
 ) -> Result<FileMetaData> {
-    let mut file_reservation =
-        parent_reservation.new_child_reservation("ParquetSink(SerializedFileWriter)");
+    let mut file_reservation = parent_reservation
+        .new_child_reservation("ParquetSink(SerializedFileWriter)", false);
 
     while let Some(task) = serialize_rx.recv().await {
         let result = task.join_unwind().await;

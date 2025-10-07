@@ -486,8 +486,13 @@ impl MemoryReservation {
     /// is a child of this reservation's consumer.
     ///
     /// This is useful for creating memory consumers with lineage tracking.
-    pub fn new_child_reservation(&self, name: impl Into<String>) -> MemoryReservation {
+    pub fn new_child_reservation(
+        &self,
+        name: impl Into<String>,
+        can_spill: bool,
+    ) -> MemoryReservation {
         MemoryConsumer::new_with_parent(name, self.consumer().id())
+            .with_can_spill(can_spill)
             .register(&self.registration.pool)
     }
 
