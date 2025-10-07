@@ -377,16 +377,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::ListingScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
 
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| schema.index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
-
                 let filters =
                     from_proto::parse_exprs(&scan.filters, ctx, extension_codec)?;
 
@@ -493,6 +483,16 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ListingTableScan")?;
+
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| provider.schema().index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
 
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
