@@ -885,7 +885,7 @@ impl PhysicalExpr for GroupingExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}", self))
+        f.write_fmt(format_args!("{self}"))
     }
     
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
@@ -1090,4 +1090,4 @@ impl From<Arc<GroupingExpr>> for AggregateExpr {
 /// This internal column is necessary because excluded columns are replaced
 /// with `NULL` values. To handle these cases correctly, we must distinguish
 /// between an actual `NULL` value in a column and a column being excluded from the set.
-pub const INTERNAL_GROUPING_ID: &'static str = "__grouping_id";
+pub const INTERNAL_GROUPING_ID: &str = "__grouping_id";

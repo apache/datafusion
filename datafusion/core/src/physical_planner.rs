@@ -84,7 +84,7 @@ use datafusion_expr::{
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExpr, AggregateExprBuilder, GroupingExpr};
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
@@ -742,16 +742,26 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let (mut aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
-                    multiunzip(agg_filter);
+                let no_grouping_agg = agg_filter.iter().filter_map(|(e, filters, order_bys)| {
+                    if matches!(e, AggregateExpr::AggregateFunctionExpr(_)) {
+                        Some((e.clone(), filters.clone(), order_bys.clone()))
+                    } else {
+                        None
+                    }
+                }).collect::<Vec<_>>();
+
+                let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
+                    multiunzip(no_grouping_agg);
+
+                let mut aggregates = aggregates.into_iter().map(|e| match e {
+                    AggregateExpr::AggregateFunctionExpr(e) => e,
+                    _ => unreachable!(),
+                }).collect::<Vec<_>>();
 
                 let mut async_exprs = Vec::new();
                 let num_input_columns = physical_input_schema.fields().len();
 
                 for agg_func in &mut aggregates {
-                    let AggregateExpr::AggregateFunctionExpr(agg_func) = agg_func else {
-                        continue;
-                    };
                     match self.try_plan_async_exprs(
                         num_input_columns,
                         PlannedExprResult::Expr(agg_func.expressions()),
@@ -824,14 +834,59 @@ impl DefaultPhysicalPlanner {
 
                 let final_grouping_set = initial_aggr.group_expr().as_final();
 
-                Arc::new(AggregateExec::try_new(
+                let final_agg = Arc::new(AggregateExec::try_new(
                     next_partition_mode,
                     final_grouping_set,
                     updated_aggregates,
                     filters,
                     initial_aggr,
                     Arc::clone(&physical_input_schema),
-                )?)
+                )?);
+
+                if groups.is_single() && !agg_filter.iter().any(|(e, _, _)| matches!(e, AggregateExpr::GroupingExpr(_))) {
+                    final_agg
+                } else {
+                    // Need to project out __grouping_id column and compute GROUPING expressions
+                    let mut proj_exprs = Vec::new();
+                    let num_group_exprs = groups.expr().len();
+
+                    let schema = final_agg.schema();
+
+                    // Add group columns
+                    for i in 0..num_group_exprs {
+                        let field = schema.field(i);
+                        proj_exprs.push(ProjectionExpr {
+                            expr: Arc::new(Column::new(field.name(), i)),
+                            alias: field.name().to_string(),
+                        });
+                    }
+
+                    // Skip __grouping_id at position num_group_exprs
+                    // Add aggregate expressions (either computed GROUPING or column references)
+                    let mut agg_col_idx = num_group_exprs + 1; // Start after __grouping_id
+
+                    for (agg_expr, _, _) in &agg_filter {
+                        match agg_expr {
+                            AggregateExpr::GroupingExpr(grouping_expr) => {
+                                // Use the GroupingExpr directly as a physical expression
+                                proj_exprs.push(ProjectionExpr {
+                                    expr: Arc::clone(grouping_expr) as Arc<dyn PhysicalExpr>,
+                                    alias: agg_expr.name().to_string(),
+                                });
+                            }
+                            AggregateExpr::AggregateFunctionExpr(_) => {
+                                // Reference the aggregate function column
+                                let field = schema.field(agg_col_idx);
+                                proj_exprs.push(ProjectionExpr {
+                                    expr: Arc::new(Column::new(field.name(), agg_col_idx)),
+                                    alias: field.name().to_string(),
+                                });
+                                agg_col_idx += 1;
+                            }
+                        }
+                    }
+                    Arc::new(ProjectionExec::try_new(proj_exprs, final_agg)?)
+                }
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => {
                 let child = children.one()?;

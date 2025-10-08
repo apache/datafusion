@@ -23,7 +23,7 @@ use std::sync::Arc;
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
-    topk_stream::GroupedTopKAggregateStream, grouping::GroupingStream,
+    topk_stream::GroupedTopKAggregateStream
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -41,7 +41,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
-use datafusion_physical_expr::aggregate::{AggregateExpr, AggregateFunctionExpr, INTERNAL_GROUPING_ID};
+use datafusion_physical_expr::aggregate::{AggregateFunctionExpr, INTERNAL_GROUPING_ID};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -61,7 +61,6 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
-mod grouping;
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: ahash::RandomState =
