@@ -34,7 +34,7 @@ use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 /// is the main unit of calculus when evaluating expressions in a statistical
 /// context. Notions like column and table statistics are built on top of this
 /// object and the operations it supports.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd)]
 pub enum Distribution {
     Uniform(UniformDistribution),
     Exponential(ExponentialDistribution),
@@ -205,15 +205,13 @@ impl Distribution {
     }
 }
 
-impl Eq for Distribution {}
-
 /// Uniform distribution, represented by its range. If the given range extends
 /// towards infinity, the distribution will be improper -- which is OK. For a
 /// more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
 /// <https://en.wikipedia.org/wiki/Prior_probability#Improper_priors>
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd)]
 pub struct UniformDistribution {
     interval: Interval,
 }
@@ -235,7 +233,7 @@ pub struct UniformDistribution {
 /// For more information, see:
 ///
 /// <https://en.wikipedia.org/wiki/Exponential_distribution>
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd)]
 pub struct ExponentialDistribution {
     rate: ScalarValue,
     offset: ScalarValue,
@@ -248,7 +246,7 @@ pub struct ExponentialDistribution {
 /// For a more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Normal_distribution>
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd)]
 pub struct GaussianDistribution {
     mean: ScalarValue,
     variance: ScalarValue,
@@ -258,7 +256,7 @@ pub struct GaussianDistribution {
 /// the success probability is unknown. For a more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Bernoulli_distribution>
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd)]
 pub struct BernoulliDistribution {
     p: ScalarValue,
 }
@@ -267,7 +265,7 @@ pub struct BernoulliDistribution {
 /// approximated via some summary statistics. For a more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Summary_statistics>
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd)]
 pub struct GenericDistribution {
     mean: ScalarValue,
     median: ScalarValue,

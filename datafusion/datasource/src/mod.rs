@@ -94,13 +94,84 @@ pub struct ColumnDistributionStatistics {
     /// Number of null values on column
     pub null_count: Precision<usize>,
     /// Distribution of values within the column
-    pub distribution: Distribution,
+    pub distribution: Precision<Distribution>,
     /// Sum value of a column
     pub sum_value: Precision<ScalarValue>,
     /// Number of distinct values
     pub distinct_count: Precision<usize>,
     /// Size of each value in the column, in bytes.
-    pub row_size: Distribution,
+    pub row_size: Precision<Distribution>,
+}
+
+impl ColumnDistributionStatistics {
+    /// Returns a [`ColumnDistributionStatistics`] instance having all [`Precision::Absent`] parameters.
+    pub fn new_unknown() -> Self {
+        Self {
+            null_count: Precision::Absent,
+            distribution: Precision::Absent,
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            row_size: Precision::Absent,
+        }
+    }
+
+    /// Set the null count
+    pub fn with_null_count(mut self, null_count: Precision<usize>) -> Self {
+        self.null_count = null_count;
+        self
+    }
+
+    /// Set the distribution
+    pub fn with_distribution(mut self, distribution: Precision<Distribution>) -> Self {
+        self.distribution = distribution;
+        self
+    }
+
+    /// Set the sum value
+    pub fn with_sum_value(mut self, sum_value: Precision<ScalarValue>) -> Self {
+        self.sum_value = sum_value;
+        self
+    }
+
+    /// Set the distinct count
+    pub fn with_distinct_count(mut self, distinct_count: Precision<usize>) -> Self {
+        self.distinct_count = distinct_count;
+        self
+    }
+
+    /// Set the row size
+    pub fn with_row_size(mut self, row_size: Precision<Distribution>) -> Self {
+        self.row_size = row_size;
+        self
+    }
+
+    /// If the exactness of a [`ColumnDistributionStatistics`] instance is lost, this
+    /// function relaxes the exactness of all information by converting them to
+    /// [`Precision::Inexact`].
+    pub fn to_inexact(mut self) -> Self {
+        self.null_count = self.null_count.to_inexact();
+        self.distribution = self.distribution.to_inexact();
+        self.sum_value = self.sum_value.to_inexact();
+        self.distinct_count = self.distinct_count.to_inexact();
+        self.row_size = self.row_size.to_inexact();
+        self
+    }
+
+    /// Check if the distribution represents a single value (singleton).
+    /// This is true when the distribution's range is a point (lower == upper).
+    pub fn is_singleton(&self) -> bool {
+        match &self.distribution {
+            Precision::Exact(dist) | Precision::Inexact(dist) => {
+                if let Ok(range) = dist.range() {
+                    let (lower, upper) = (range.lower(), range.upper());
+                    !lower.is_null() && !upper.is_null() && lower == upper
+                } else {
+                    false
+                }
+            }
+            Precision::Absent => false,
+        }
+    }
 }
 
 /// Statistics for a file or a group of files.
@@ -117,6 +188,282 @@ pub struct FileStatistics {
     /// Each entry in the vector corresponds to a column in the source schema.
     /// None entries are possible if statistics are not available for a column.
     pub column_statistics: Vec<Option<ColumnDistributionStatistics>>,
+}
+
+impl Default for FileStatistics {
+    /// Returns a new [`FileStatistics`] instance with all fields set to unknown
+    /// and no columns.
+    fn default() -> Self {
+        Self {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![],
+        }
+    }
+}
+
+impl FileStatistics {
+    /// Returns a [`FileStatistics`] instance for the given schema by assigning
+    /// unknown statistics to each column in the schema.
+    pub fn new_unknown(schema: &arrow::datatypes::Schema) -> Self {
+        Self {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: schema
+                .fields()
+                .iter()
+                .map(|_| Some(ColumnDistributionStatistics::new_unknown()))
+                .collect(),
+        }
+    }
+
+    /// Set the number of rows
+    pub fn with_num_rows(mut self, num_rows: Precision<usize>) -> Self {
+        self.num_rows = num_rows;
+        self
+    }
+
+    /// Set the total size, in bytes
+    pub fn with_total_byte_size(mut self, total_byte_size: Precision<usize>) -> Self {
+        self.total_byte_size = total_byte_size;
+        self
+    }
+
+    /// Add a column to the column statistics
+    pub fn add_column_statistics(
+        mut self,
+        column_stats: Option<ColumnDistributionStatistics>,
+    ) -> Self {
+        self.column_statistics.push(column_stats);
+        self
+    }
+
+    /// If the exactness of a [`FileStatistics`] instance is lost, this function relaxes
+    /// the exactness of all information by converting them to [`Precision::Inexact`].
+    pub fn to_inexact(mut self) -> Self {
+        self.num_rows = self.num_rows.to_inexact();
+        self.total_byte_size = self.total_byte_size.to_inexact();
+        self.column_statistics = self
+            .column_statistics
+            .into_iter()
+            .map(|s| s.map(|stats| stats.to_inexact()))
+            .collect();
+        self
+    }
+
+    /// Project the statistics to the given column indices.
+    ///
+    /// For example, if we had statistics for columns `{"a", "b", "c"}`,
+    /// projecting to `vec![2, 1]` would return statistics for columns `{"c",
+    /// "b"}`.
+    pub fn project(mut self, projection: Option<&Vec<usize>>) -> Self {
+        let Some(projection) = projection else {
+            return self;
+        };
+
+        #[allow(clippy::large_enum_variant)]
+        enum Slot {
+            /// The column is taken and put into the specified statistics location
+            Taken(usize),
+            /// The original column is present
+            Present(Option<ColumnDistributionStatistics>),
+        }
+
+        // Convert to Vec<Slot> so we can avoid copying the statistics
+        let mut columns: Vec<_> = std::mem::take(&mut self.column_statistics)
+            .into_iter()
+            .map(Slot::Present)
+            .collect();
+
+        for idx in projection {
+            let next_idx = self.column_statistics.len();
+            let slot = std::mem::replace(
+                columns.get_mut(*idx).expect("projection out of bounds"),
+                Slot::Taken(next_idx),
+            );
+            match slot {
+                // The column was there, so just move it
+                Slot::Present(col) => self.column_statistics.push(col),
+                // The column was taken, so copy from the previous location
+                Slot::Taken(prev_idx) => self
+                    .column_statistics
+                    .push(self.column_statistics[prev_idx].clone()),
+            }
+        }
+
+        self
+    }
+
+    /// Summarize zero or more statistics into a single `FileStatistics` instance.
+    ///
+    /// The method assumes that all statistics are for the same schema.
+    ///
+    /// Returns an error if the statistics do not match the specified schema.
+    pub fn try_merge_iter<'a, I>(
+        items: I,
+        schema: &arrow::datatypes::Schema,
+    ) -> Result<FileStatistics>
+    where
+        I: IntoIterator<Item = &'a FileStatistics>,
+    {
+        let mut items = items.into_iter();
+
+        let Some(init) = items.next() else {
+            return Ok(FileStatistics::new_unknown(schema));
+        };
+        items.try_fold(
+            init.clone(),
+            |acc: FileStatistics, item_stats: &FileStatistics| acc.try_merge(item_stats),
+        )
+    }
+
+    /// Merge this FileStatistics value with another FileStatistics value.
+    ///
+    /// Returns an error if the statistics do not match (different schemas).
+    pub fn try_merge(self, other: &FileStatistics) -> Result<Self> {
+        let Self {
+            mut num_rows,
+            mut total_byte_size,
+            mut column_statistics,
+        } = self;
+
+        // Accumulate statistics
+        num_rows = num_rows.add(&other.num_rows);
+        total_byte_size = total_byte_size.add(&other.total_byte_size);
+
+        if column_statistics.len() != other.column_statistics.len() {
+            return Err(exec_datafusion_err!(
+                "Cannot merge statistics with different number of columns: {} vs {}",
+                column_statistics.len(),
+                other.column_statistics.len()
+            ));
+        }
+
+        for (item_col_stats, col_stats) in other
+            .column_statistics
+            .iter()
+            .zip(column_statistics.iter_mut())
+        {
+            *col_stats =
+                Self::merge_column_distribution_stats(col_stats, item_col_stats)?;
+        }
+
+        Ok(FileStatistics {
+            num_rows,
+            total_byte_size,
+            column_statistics,
+        })
+    }
+
+    /// Merge two optional column distribution statistics.
+    /// Returns None if either input is None.
+    fn merge_column_distribution_stats(
+        left: &Option<ColumnDistributionStatistics>,
+        right: &Option<ColumnDistributionStatistics>,
+    ) -> Result<Option<ColumnDistributionStatistics>> {
+        match (left, right) {
+            (Some(l), Some(r)) => {
+                let null_count = l.null_count.add(&r.null_count);
+                let distribution =
+                    Self::merge_distributions(&l.distribution, &r.distribution)?;
+                let sum_value = l.sum_value.add(&r.sum_value);
+                // distinct_count cannot be accurately merged without additional info
+                let distinct_count = Precision::Absent;
+                let row_size = Self::merge_distributions(&l.row_size, &r.row_size)?;
+
+                Ok(Some(ColumnDistributionStatistics {
+                    null_count,
+                    distribution,
+                    sum_value,
+                    distinct_count,
+                    row_size,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Merge two distributions by taking the union of their ranges.
+    fn merge_distributions(
+        left: &Precision<Distribution>,
+        right: &Precision<Distribution>,
+    ) -> Result<Precision<Distribution>> {
+        match (left, right) {
+            (Precision::Exact(l), Precision::Exact(r)) => {
+                let l_range = l.range()?;
+                let r_range = r.range()?;
+                let merged_range = l_range.union(&r_range)?;
+                Ok(Precision::Exact(Distribution::new_from_interval(
+                    merged_range,
+                )?))
+            }
+            (Precision::Inexact(l), Precision::Exact(r))
+            | (Precision::Exact(l), Precision::Inexact(r))
+            | (Precision::Inexact(l), Precision::Inexact(r)) => {
+                let l_range = l.range()?;
+                let r_range = r.range()?;
+                let merged_range = l_range.union(&r_range)?;
+                Ok(Precision::Inexact(Distribution::new_from_interval(
+                    merged_range,
+                )?))
+            }
+            _ => Ok(Precision::Absent),
+        }
+    }
+}
+
+impl std::fmt::Display for FileStatistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // String of column statistics
+        let column_stats = self
+            .column_statistics
+            .iter()
+            .enumerate()
+            .map(|(i, cs)| {
+                let s = format!("(Col[{i}]:");
+                match cs {
+                    Some(stats) => {
+                        let s = if stats.distribution != Precision::Absent {
+                            format!("{} Dist={}", s, stats.distribution)
+                        } else {
+                            s
+                        };
+                        let s = if stats.sum_value != Precision::Absent {
+                            format!("{} Sum={}", s, stats.sum_value)
+                        } else {
+                            s
+                        };
+                        let s = if stats.null_count != Precision::Absent {
+                            format!("{} Null={}", s, stats.null_count)
+                        } else {
+                            s
+                        };
+                        let s = if stats.distinct_count != Precision::Absent {
+                            format!("{} Distinct={}", s, stats.distinct_count)
+                        } else {
+                            s
+                        };
+                        let s = if stats.row_size != Precision::Absent {
+                            format!("{} RowSize={}", s, stats.row_size)
+                        } else {
+                            s
+                        };
+                        s + ")"
+                    }
+                    None => format!("{s} None)"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+
+        write!(
+            f,
+            "Rows={}, Bytes={}, [{}]",
+            self.num_rows, self.total_byte_size, column_stats
+        )?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -638,5 +985,253 @@ mod tests {
 
         // testing an empty path with `ignore_subdirectory` set to false
         assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), false));
+    }
+
+    #[test]
+    fn test_column_distribution_statistics_builders() {
+        use super::ColumnDistributionStatistics;
+        use datafusion_common::stats::Precision;
+        use datafusion_common::ScalarValue;
+
+        let stats = ColumnDistributionStatistics::new_unknown()
+            .with_null_count(Precision::Exact(5))
+            .with_sum_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+            .with_distinct_count(Precision::Inexact(10));
+
+        assert_eq!(stats.null_count, Precision::Exact(5));
+        assert_eq!(
+            stats.sum_value,
+            Precision::Exact(ScalarValue::Int32(Some(100)))
+        );
+        assert_eq!(stats.distinct_count, Precision::Inexact(10));
+        assert_eq!(stats.distribution, Precision::Absent);
+    }
+
+    #[test]
+    fn test_column_distribution_statistics_to_inexact() {
+        use super::ColumnDistributionStatistics;
+        use datafusion_common::stats::Precision;
+        use datafusion_common::ScalarValue;
+
+        let stats = ColumnDistributionStatistics::new_unknown()
+            .with_null_count(Precision::Exact(5))
+            .with_sum_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+            .with_distinct_count(Precision::Exact(10));
+
+        let inexact = stats.to_inexact();
+
+        assert_eq!(inexact.null_count, Precision::Inexact(5));
+        assert_eq!(
+            inexact.sum_value,
+            Precision::Inexact(ScalarValue::Int32(Some(100)))
+        );
+        assert_eq!(inexact.distinct_count, Precision::Inexact(10));
+    }
+
+    #[test]
+    fn test_column_distribution_statistics_is_singleton() {
+        use super::ColumnDistributionStatistics;
+        use datafusion_common::stats::Precision;
+        use datafusion_common::ScalarValue;
+        use datafusion_expr::statistics::Distribution;
+
+        // Create a uniform distribution with a point range (singleton)
+        let point_dist = Distribution::new_uniform(
+            datafusion_expr::interval_arithmetic::Interval::try_new(
+                ScalarValue::Int32(Some(5)),
+                ScalarValue::Int32(Some(5)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let singleton_stats = ColumnDistributionStatistics::new_unknown()
+            .with_distribution(Precision::Exact(point_dist));
+
+        assert!(singleton_stats.is_singleton());
+
+        // Create a uniform distribution with a range (not singleton)
+        let range_dist = Distribution::new_uniform(
+            datafusion_expr::interval_arithmetic::Interval::try_new(
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Int32(Some(10)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let range_stats = ColumnDistributionStatistics::new_unknown()
+            .with_distribution(Precision::Exact(range_dist));
+
+        assert!(!range_stats.is_singleton());
+
+        // Test with absent distribution
+        let absent_stats = ColumnDistributionStatistics::new_unknown();
+        assert!(!absent_stats.is_singleton());
+    }
+
+    #[test]
+    fn test_file_statistics_builders() {
+        use super::FileStatistics;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::stats::Precision;
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+
+        let stats = FileStatistics::new_unknown(&schema)
+            .with_num_rows(Precision::Exact(100))
+            .with_total_byte_size(Precision::Inexact(1024));
+
+        assert_eq!(stats.num_rows, Precision::Exact(100));
+        assert_eq!(stats.total_byte_size, Precision::Inexact(1024));
+        assert_eq!(stats.column_statistics.len(), 2);
+    }
+
+    #[test]
+    fn test_file_statistics_to_inexact() {
+        use super::{ColumnDistributionStatistics, FileStatistics};
+        use datafusion_common::stats::Precision;
+
+        let stats = FileStatistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .with_total_byte_size(Precision::Exact(1024))
+            .add_column_statistics(Some(
+                ColumnDistributionStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(5)),
+            ));
+
+        let inexact = stats.to_inexact();
+
+        assert_eq!(inexact.num_rows, Precision::Inexact(100));
+        assert_eq!(inexact.total_byte_size, Precision::Inexact(1024));
+        assert_eq!(
+            inexact.column_statistics[0].as_ref().unwrap().null_count,
+            Precision::Inexact(5)
+        );
+    }
+
+    #[test]
+    fn test_file_statistics_project() {
+        use super::{ColumnDistributionStatistics, FileStatistics};
+        use datafusion_common::stats::Precision;
+
+        let stats = FileStatistics::default()
+            .add_column_statistics(Some(
+                ColumnDistributionStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(1)),
+            ))
+            .add_column_statistics(Some(
+                ColumnDistributionStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(2)),
+            ))
+            .add_column_statistics(Some(
+                ColumnDistributionStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(3)),
+            ));
+
+        // Project to columns [2, 0]
+        let projection = vec![2, 0];
+        let projected = stats.project(Some(&projection));
+
+        assert_eq!(projected.column_statistics.len(), 2);
+        assert_eq!(
+            projected.column_statistics[0].as_ref().unwrap().null_count,
+            Precision::Exact(3)
+        );
+        assert_eq!(
+            projected.column_statistics[1].as_ref().unwrap().null_count,
+            Precision::Exact(1)
+        );
+    }
+
+    #[test]
+    fn test_file_statistics_merge() {
+        use super::{ColumnDistributionStatistics, FileStatistics};
+        use datafusion_common::stats::Precision;
+        use datafusion_common::ScalarValue;
+        use datafusion_expr::statistics::Distribution;
+
+        // Create two file statistics to merge
+        let dist1 = Distribution::new_uniform(
+            datafusion_expr::interval_arithmetic::Interval::try_new(
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Int32(Some(10)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let dist2 = Distribution::new_uniform(
+            datafusion_expr::interval_arithmetic::Interval::try_new(
+                ScalarValue::Int32(Some(5)),
+                ScalarValue::Int32(Some(15)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let stats1 = FileStatistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .with_total_byte_size(Precision::Exact(1000))
+            .add_column_statistics(Some(
+                ColumnDistributionStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(5))
+                    .with_distribution(Precision::Exact(dist1))
+                    .with_sum_value(Precision::Exact(ScalarValue::Int32(Some(500)))),
+            ));
+
+        let stats2 = FileStatistics::default()
+            .with_num_rows(Precision::Exact(200))
+            .with_total_byte_size(Precision::Inexact(2000))
+            .add_column_statistics(Some(
+                ColumnDistributionStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(10))
+                    .with_distribution(Precision::Exact(dist2))
+                    .with_sum_value(Precision::Exact(ScalarValue::Int32(Some(1000)))),
+            ));
+
+        let merged = stats1.try_merge(&stats2).unwrap();
+
+        // Check merged values
+        assert_eq!(merged.num_rows, Precision::Exact(300));
+        assert_eq!(merged.total_byte_size, Precision::Inexact(3000));
+
+        let col_stats = merged.column_statistics[0].as_ref().unwrap();
+        assert_eq!(col_stats.null_count, Precision::Exact(15));
+        assert_eq!(
+            col_stats.sum_value,
+            Precision::Exact(ScalarValue::Int32(Some(1500)))
+        );
+
+        // Check that the distribution range was merged (union of [1,10] and [5,15] is [1,15])
+        if let Precision::Exact(dist) = &col_stats.distribution {
+            let range = dist.range().unwrap();
+            assert_eq!(range.lower(), &ScalarValue::Int32(Some(1)));
+            assert_eq!(range.upper(), &ScalarValue::Int32(Some(15)));
+        } else {
+            panic!("Expected exact distribution");
+        }
+    }
+
+    #[test]
+    fn test_file_statistics_display() {
+        use super::{ColumnDistributionStatistics, FileStatistics};
+        use datafusion_common::stats::Precision;
+
+        let stats = FileStatistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .with_total_byte_size(Precision::Inexact(1024))
+            .add_column_statistics(Some(
+                ColumnDistributionStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(5)),
+            ));
+
+        let display_str = format!("{}", stats);
+        assert!(display_str.contains("Rows=Exact(100)"));
+        assert!(display_str.contains("Bytes=Inexact(1024)"));
+        assert!(display_str.contains("Null=Exact(5)"));
     }
 }

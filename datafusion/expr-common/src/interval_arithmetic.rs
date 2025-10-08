@@ -175,7 +175,7 @@ macro_rules! value_transition {
 ///      ensure consistency, with other data types.
 ///    - `NaN` (Not a Number) results are conservatively result in unbounded
 ///      endpoints.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub struct Interval {
     lower: ScalarValue,
     upper: ScalarValue,
