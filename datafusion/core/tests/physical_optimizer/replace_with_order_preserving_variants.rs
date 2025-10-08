@@ -55,35 +55,47 @@ use object_store::ObjectStore;
 use rstest::rstest;
 use url::Url;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Boundedness {
+    Unbounded,
+    Bounded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortPreference {
+    PreserveOrder,
+    MaximizeParallelism,
+}
+
 struct ReplaceTest {
     plan: Arc<dyn ExecutionPlan>,
-    source_unbounded: bool,
-    prefer_existing_sort: bool,
+    boundedness: Boundedness,
+    sort_preference: SortPreference,
 }
 
 impl ReplaceTest {
     fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             plan,
-            source_unbounded: false,
-            prefer_existing_sort: false,
+            boundedness: Boundedness::Bounded,
+            sort_preference: SortPreference::MaximizeParallelism,
         }
     }
 
-    // Set whether the source is unbounded
-    fn with_source_unbounded(mut self, source_unbounded: bool) -> Self {
-        self.source_unbounded = source_unbounded;
+    fn with_boundedness(mut self, boundedness: Boundedness) -> Self {
+        self.boundedness = boundedness;
         self
     }
 
-    fn with_prefer_existing_sort(mut self, prefer_existing_sort: bool) -> Self {
-        self.prefer_existing_sort = prefer_existing_sort;
+    fn with_sort_preference(mut self, sort_preference: SortPreference) -> Self {
+        self.sort_preference = sort_preference;
         self
     }
 
     async fn execute_plan(&self) -> String {
         let mut config = ConfigOptions::new();
-        config.optimizer.prefer_existing_sort = self.prefer_existing_sort;
+        config.optimizer.prefer_existing_sort =
+            self.sort_preference == SortPreference::PreserveOrder;
 
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(
             self.plan.clone().reset_state().unwrap(),
@@ -107,7 +119,7 @@ impl ReplaceTest {
             .indent(true)
             .to_string();
 
-        if !self.source_unbounded {
+        if self.boundedness == Boundedness::Bounded {
             let ctx = SessionContext::new();
             let object_store = InMemory::new();
             object_store
@@ -150,12 +162,13 @@ impl ReplaceTest {
 #[tokio::test]
 // Searches for a simple sort and a repartition just after it, the second repartition with 1 input partition should not be affected
 async fn test_replace_multiple_input_repartition_1(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let sort_exprs: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, sort_exprs.clone())
     } else {
         memory_exec_sorted(&schema, sort_exprs.clone())
@@ -165,14 +178,14 @@ async fn test_replace_multiple_input_repartition_1(
     let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (false, false) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -182,7 +195,7 @@ async fn test_replace_multiple_input_repartition_1(
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (true, _) => {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -198,7 +211,7 @@ async fn test_replace_multiple_input_repartition_1(
                   StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -223,12 +236,13 @@ async fn test_replace_multiple_input_repartition_1(
 #[rstest]
 #[tokio::test]
 async fn test_with_inter_children_change_only(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr_default("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
         memory_exec_sorted(&schema, ordering.clone())
@@ -245,14 +259,14 @@ async fn test_with_inter_children_change_only(
     let physical_plan = sort_preserving_merge_exec(ordering, sort2);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC]
@@ -277,7 +291,7 @@ async fn test_with_inter_children_change_only(
                           StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC]
@@ -292,7 +306,7 @@ async fn test_with_inter_children_change_only(
                               DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC]
@@ -326,12 +340,13 @@ async fn test_with_inter_children_change_only(
 #[rstest]
 #[tokio::test]
 async fn test_replace_multiple_input_repartition_2(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
         memory_exec_sorted(&schema, ordering.clone())
@@ -343,14 +358,14 @@ async fn test_replace_multiple_input_repartition_2(
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -368,7 +383,7 @@ async fn test_replace_multiple_input_repartition_2(
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -379,7 +394,7 @@ async fn test_replace_multiple_input_repartition_2(
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -406,12 +421,13 @@ async fn test_replace_multiple_input_repartition_2(
 #[rstest]
 #[tokio::test]
 async fn test_replace_multiple_input_repartition_with_extra_steps(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
         memory_exec_sorted(&schema, ordering.clone())
@@ -425,14 +441,14 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -452,7 +468,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
                       StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -464,7 +480,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -493,12 +509,13 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
 #[rstest]
 #[tokio::test]
 async fn test_replace_multiple_input_repartition_with_extra_steps_2(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
         memory_exec_sorted(&schema, ordering.clone())
@@ -513,14 +530,14 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -542,7 +559,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -555,7 +572,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -586,12 +603,13 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
 #[rstest]
 #[tokio::test]
 async fn test_not_replacing_when_no_need_to_preserve_sorting(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering)
     } else {
         memory_exec_sorted(&schema, ordering)
@@ -603,14 +621,14 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
     let physical_plan = coalesce_partitions_exec(coalesce_batches_exec);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             CoalescePartitionsExec
@@ -621,7 +639,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
                       StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             CoalescePartitionsExec
@@ -632,7 +650,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             CoalescePartitionsExec
@@ -652,12 +670,13 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
 #[rstest]
 #[tokio::test]
 async fn test_with_multiple_replaceable_repartitions(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
         memory_exec_sorted(&schema, ordering.clone())
@@ -671,14 +690,14 @@ async fn test_with_multiple_replaceable_repartitions(
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -700,7 +719,7 @@ async fn test_with_multiple_replaceable_repartitions(
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -713,7 +732,7 @@ async fn test_with_multiple_replaceable_repartitions(
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
@@ -744,14 +763,15 @@ async fn test_with_multiple_replaceable_repartitions(
 #[rstest]
 #[tokio::test]
 async fn test_not_replace_with_different_orderings(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     use datafusion_physical_expr::LexOrdering;
 
     let schema = create_test_schema()?;
     let ordering_a = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering_a)
     } else {
         memory_exec_sorted(&schema, ordering_a)
@@ -764,14 +784,14 @@ async fn test_not_replace_with_different_orderings(
     let physical_plan = sort_preserving_merge_exec(ordering_c, sort);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [c@1 ASC]
@@ -781,7 +801,7 @@ async fn test_not_replace_with_different_orderings(
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [c@1 ASC]
@@ -791,7 +811,7 @@ async fn test_not_replace_with_different_orderings(
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [c@1 ASC]
@@ -810,12 +830,13 @@ async fn test_not_replace_with_different_orderings(
 #[rstest]
 #[tokio::test]
 async fn test_with_lost_ordering(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
         memory_exec_sorted(&schema, ordering.clone())
@@ -826,14 +847,14 @@ async fn test_with_lost_ordering(
     let physical_plan = sort_exec(ordering, coalesce_partitions);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -849,7 +870,7 @@ async fn test_with_lost_ordering(
                   StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -859,7 +880,7 @@ async fn test_with_lost_ordering(
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -884,14 +905,15 @@ async fn test_with_lost_ordering(
 #[rstest]
 #[tokio::test]
 async fn test_with_lost_and_kept_ordering(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     use datafusion_physical_expr::LexOrdering;
 
     let schema = create_test_schema()?;
     let ordering_a = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
+    let source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, ordering_a)
     } else {
         memory_exec_sorted(&schema, ordering_a)
@@ -909,14 +931,14 @@ async fn test_with_lost_and_kept_ordering(
     let physical_plan = sort_preserving_merge_exec(ordering_c, sort2);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [c@1 ASC]
@@ -942,7 +964,7 @@ async fn test_with_lost_and_kept_ordering(
                             StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, false) => {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [c@1 ASC]
@@ -957,7 +979,7 @@ async fn test_with_lost_and_kept_ordering(
                               DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
-        (false, true) => {
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
             Input:
             SortPreservingMergeExec: [c@1 ASC]
@@ -992,13 +1014,14 @@ async fn test_with_lost_and_kept_ordering(
 #[rstest]
 #[tokio::test]
 async fn test_with_multiple_child_trees(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
 
     let left_ordering = [sort_expr("a", &schema)].into();
-    let left_source = if source_unbounded {
+    let left_source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, left_ordering)
     } else {
         memory_exec_sorted(&schema, left_ordering)
@@ -1009,7 +1032,7 @@ async fn test_with_multiple_child_trees(
         Arc::new(CoalesceBatchesExec::new(left_repartition_hash, 4096));
 
     let right_ordering = [sort_expr("a", &schema)].into();
-    let right_source = if source_unbounded {
+    let right_source = if boundedness == Boundedness::Unbounded {
         stream_exec_ordered_with_projection(&schema, right_ordering)
     } else {
         memory_exec_sorted(&schema, right_ordering)
@@ -1026,14 +1049,14 @@ async fn test_with_multiple_child_trees(
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     let run = ReplaceTest::new(physical_plan)
-        .with_source_unbounded(source_unbounded)
-        .with_prefer_existing_sort(prefer_existing_sort);
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
 
     let physical_plan = run.run().await;
 
     allow_duplicates! {
-    match (source_unbounded, prefer_existing_sort) {
-        (true, _) => {
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC]
@@ -1049,7 +1072,7 @@ async fn test_with_multiple_child_trees(
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
-        (false, _) => {
+        (Boundedness::Bounded, _) => {
             assert_snapshot!(physical_plan, @r"
             Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC]
