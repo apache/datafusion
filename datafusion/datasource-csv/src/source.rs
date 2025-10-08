@@ -341,7 +341,7 @@ impl FileOpener for CsvOpener {
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line
         let mut csv_has_header = self.config.has_header;
-        if let Some(FileRange { start, .. }) = file.range {
+        if let Some(FileRange { start, .. }) = partitioned_file.range {
             if start != 0 {
                 csv_has_header = false;
             }
@@ -355,7 +355,7 @@ impl FileOpener for CsvOpener {
 
         let file_compression_type = self.file_compression_type.to_owned();
 
-        if file.range.is_some() {
+        if partitioned_file.range.is_some() {
             assert!(
                 !file_compression_type.is_compressed(),
                 "Reading compressed .csv in parallel is not supported"
@@ -368,7 +368,8 @@ impl FileOpener for CsvOpener {
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
 
-            let calculated_range = calculate_range(&file, &store, terminator).await?;
+            let calculated_range =
+                calculate_range(&partitioned_file, &store, terminator).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
@@ -385,12 +386,14 @@ impl FileOpener for CsvOpener {
                 ..Default::default()
             };
 
-            let result = store.get_opts(&file.object_meta.location, options).await?;
+            let result = store
+                .get_opts(&partitioned_file.object_meta.location, options)
+                .await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
-                    let is_whole_file_scanned = file.range.is_none();
+                    let is_whole_file_scanned = partitioned_file.range.is_none();
                     let decoder = if is_whole_file_scanned {
                         // Don't seek if no range as breaks FIFO files
                         file_compression_type.convert_read(file)?

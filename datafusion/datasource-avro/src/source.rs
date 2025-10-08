@@ -159,7 +159,9 @@ mod private {
             let config = Arc::clone(&self.config);
             let object_store = Arc::clone(&self.object_store);
             Ok(Box::pin(async move {
-                let r = object_store.get(&file.object_meta.location).await?;
+                let r = object_store
+                    .get(&partitioned_file.object_meta.location)
+                    .await?;
                 match r.payload {
                     GetResultPayload::File(file, _) => {
                         let reader = config.open(file)?;

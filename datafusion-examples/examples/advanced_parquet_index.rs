@@ -555,7 +555,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
     fn create_reader(
         &self,
         _partition_index: usize,
-        partitioned_partitioned_file: PartitionedFile,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {

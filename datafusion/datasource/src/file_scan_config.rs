@@ -378,7 +378,7 @@ impl FileScanConfigBuilder {
     ///
     /// See [`Self::with_file_groups`] for more information.
     pub fn with_file(self, partitioned_file: PartitionedFile) -> Self {
-        self.with_file_group(FileGroup::new(vec![file]))
+        self.with_file_group(FileGroup::new(vec![partitioned_file]))
     }
 
     /// Set the output ordering of the files

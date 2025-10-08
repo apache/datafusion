@@ -182,7 +182,8 @@ impl FileOpener for JsonOpener {
         let file_compression_type = self.file_compression_type.to_owned();
 
         Ok(Box::pin(async move {
-            let calculated_range = calculate_range(&file, &store, None).await?;
+            let calculated_range =
+                calculate_range(&partitioned_file, &store, None).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
@@ -199,12 +200,14 @@ impl FileOpener for JsonOpener {
                 ..Default::default()
             };
 
-            let result = store.get_opts(&file.object_meta.location, options).await?;
+            let result = store
+                .get_opts(&partitioned_file.object_meta.location, options)
+                .await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
-                    let bytes = match file.range {
+                    let bytes = match partitioned_file.range {
                         None => file_compression_type.convert_read(file)?,
                         Some(_) => {
                             file.seek(SeekFrom::Start(result.range.start as _))?;

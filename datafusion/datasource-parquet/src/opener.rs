@@ -113,19 +113,21 @@ pub(super) struct ParquetOpener {
 
 impl FileOpener for ParquetOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
-        let file_range = file.range.clone();
-        let extensions = file.extensions.clone();
-        let file_location = file.object_meta.location.clone();
+        let file_range = partitioned_file.range.clone();
+        let extensions = partitioned_file.extensions.clone();
+        let file_location = partitioned_file.object_meta.location.clone();
         let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
 
-        let metadata_size_hint = file.metadata_size_hint.or(self.metadata_size_hint);
+        let metadata_size_hint = partitioned_file
+            .metadata_size_hint
+            .or(self.metadata_size_hint);
 
         let mut async_file_reader: Box<dyn AsyncFileReader> =
             self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
-                file.clone(),
+                partitioned_file.clone(),
                 metadata_size_hint,
                 &self.metrics,
             )?;
@@ -177,15 +179,14 @@ impl FileOpener for ParquetOpener {
                 .as_ref()
                 .map(|p| {
                     Ok::<_, DataFusionError>(
-                        (is_dynamic_physical_expr(p) | file.has_statistics()).then_some(
-                            FilePruner::new(
+                        (is_dynamic_physical_expr(p) | partitioned_file.has_statistics())
+                            .then_some(FilePruner::new(
                                 Arc::clone(p),
                                 &logical_file_schema,
                                 partition_fields.clone(),
-                                file.clone(),
+                                partitioned_file.clone(),
                                 predicate_creation_errors.clone(),
-                            )?,
-                        ),
+                            )?),
                     )
                 })
                 .transpose()?
@@ -265,7 +266,7 @@ impl FileOpener for ParquetOpener {
                         let partition_values = partition_fields
                             .iter()
                             .cloned()
-                            .zip(file.partition_values)
+                            .zip(partitioned_file.partition_values)
                             .collect_vec();
                         let expr = expr_adapter_factory
                             .create(

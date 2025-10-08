@@ -42,7 +42,7 @@ pub struct FilePruner {
     /// Schema used for pruning, which combines the file schema and partition fields.
     /// Partition fields are always at the end, as they are during scans.
     pruning_schema: Arc<Schema>,
-    partitioned_partitioned_file: PartitionedFile,
+    partitioned_file: PartitionedFile,
     partition_fields: Vec<FieldRef>,
     predicate_creation_errors: Count,
 }
@@ -52,7 +52,7 @@ impl FilePruner {
         predicate: Arc<dyn PhysicalExpr>,
         logical_file_schema: &SchemaRef,
         partition_fields: Vec<FieldRef>,
-        partitioned_partitioned_file: PartitionedFile,
+        partitioned_file: PartitionedFile,
         predicate_creation_errors: Count,
     ) -> Result<Self> {
         // Build a pruning schema that combines the file fields and partition fields.
@@ -75,7 +75,7 @@ impl FilePruner {
             predicate_generation: None,
             predicate,
             pruning_schema,
-            file,
+            partitioned_file,
             partition_fields,
             predicate_creation_errors,
         })
@@ -99,10 +99,10 @@ impl FilePruner {
         if let Some(pruning_predicate) = pruning_predicate {
             // The partition column schema is the schema of the table - the schema of the file
             let mut pruning = Box::new(PartitionPruningStatistics::try_new(
-                vec![self.file.partition_values.clone()],
+                vec![self.partitioned_file.partition_values.clone()],
                 self.partition_fields.clone(),
             )?) as Box<dyn PruningStatistics>;
-            if let Some(stats) = &self.file.statistics {
+            if let Some(stats) = &self.partitioned_file.statistics {
                 let stats_pruning = Box::new(PrunableStatistics::new(
                     vec![Arc::clone(stats)],
                     Arc::clone(&self.pruning_schema),
