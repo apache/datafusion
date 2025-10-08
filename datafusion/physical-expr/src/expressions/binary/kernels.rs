@@ -23,11 +23,13 @@ use arrow::compute::kernels::bitwise::{
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
     bitwise_xor, bitwise_xor_scalar,
 };
+use arrow::compute::kernels::boolean::not;
+use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::datatypes::DataType;
-use datafusion_common::plan_err;
+use arrow::error::ArrowError;
+use datafusion_common::{internal_err, plan_err};
 use datafusion_common::{Result, ScalarValue};
 
-use arrow::error::ArrowError;
 use std::sync::Arc;
 
 /// Downcasts $LEFT and $RIGHT to $ARRAY_TYPE and then calls $KERNEL($LEFT, $RIGHT)
@@ -169,4 +171,130 @@ pub fn concat_elements_utf8view(
         }
     }
     Ok(result.finish())
+}
+
+/// Invoke a compute kernel on a pair of binary data arrays with flags
+macro_rules! regexp_is_match_flag {
+    ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("failed to downcast array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("failed to downcast array");
+
+        let flag = if $FLAG {
+            Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
+        } else {
+            None
+        };
+        let mut array = regexp_is_match(ll, rr, flag.as_ref())?;
+        if $NOT {
+            array = not(&array).unwrap();
+        }
+        Ok(Arc::new(array))
+    }};
+}
+
+pub(crate) fn regex_match_dyn(
+    left: ArrayRef,
+    right: ArrayRef,
+    not_match: bool,
+    flag: bool,
+) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Utf8 => {
+            regexp_is_match_flag!(left, right, StringArray, not_match, flag)
+        },
+        DataType::Utf8View => {
+            regexp_is_match_flag!(left, right, StringViewArray, not_match, flag)
+        }
+        DataType::LargeUtf8 => {
+            regexp_is_match_flag!(left, right, LargeStringArray, not_match, flag)
+        },
+        other => internal_err!(
+            "Data type {} not supported for binary_string_array_flag_op operation regexp_is_match on string array",
+            other
+        ),
+    }
+}
+
+/// Invoke a compute kernel on a data array and a scalar value with flag
+macro_rules! regexp_is_match_flag_scalar {
+    ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("failed to downcast array");
+
+        let string_value = match $RIGHT.try_as_str() {
+            Some(Some(string_value)) => string_value,
+            // null literal or non string
+            _ => {
+                return Some(internal_err!(
+                    "failed to cast literal value {} for operation 'regexp_is_match_scalar'",
+                    $RIGHT
+                ))
+            }
+        };
+
+        let flag = $FLAG.then_some("i");
+        match regexp_is_match_scalar(ll, &string_value, flag) {
+            Ok(mut array) => {
+                if $NOT {
+                    array = not(&array).unwrap();
+                }
+                Ok(Arc::new(array))
+            }
+            Err(e) => internal_err!("failed to call regexp_is_match_scalar {}", e),
+        }
+    }};
+}
+
+pub(crate) fn regex_match_dyn_scalar(
+    left: &dyn Array,
+    right: ScalarValue,
+    not_match: bool,
+    flag: bool,
+) -> Option<Result<ArrayRef>> {
+    let result: Result<ArrayRef> = match left.data_type() {
+        DataType::Utf8 => {
+            regexp_is_match_flag_scalar!(left, right, StringArray, not_match, flag)
+        },
+        DataType::Utf8View => {
+            regexp_is_match_flag_scalar!(left, right, StringViewArray, not_match, flag)
+        }
+        DataType::LargeUtf8 => {
+            regexp_is_match_flag_scalar!(left, right, LargeStringArray, not_match, flag)
+        },
+        DataType::Dictionary(_, _) => {
+            let values = left.as_any_dictionary().values();
+
+            match values.data_type() {
+                DataType::Utf8 => regexp_is_match_flag_scalar!(values, right, StringArray, not_match, flag),
+                DataType::Utf8View => regexp_is_match_flag_scalar!(values, right, StringViewArray, not_match, flag),
+                DataType::LargeUtf8 => regexp_is_match_flag_scalar!(values, right, LargeStringArray, not_match, flag),
+                other => internal_err!(
+                    "Data type {} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation 'regexp_is_match_scalar' on string array",
+                    other
+                ),
+            }.map(
+                // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
+                |evaluated_values| downcast_dictionary_array! {
+                    left => {
+                        let unpacked_dict = evaluated_values.take_iter(left.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
+                        Arc::new(unpacked_dict) as ArrayRef
+                    },
+                    _ => unreachable!(),
+                }
+            )
+        },
+        other => internal_err!(
+                "Data type {} not supported for binary_string_array_flag_op_scalar operation 'regexp_is_match_scalar' on string array",
+                other
+        ),
+    };
+    Some(result)
 }
