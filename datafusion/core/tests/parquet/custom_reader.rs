@@ -123,7 +123,10 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
-        let metadata = file.extensions.as_ref().expect("has user defined metadata");
+        let metadata = partitioned_file
+            .extensions
+            .as_ref()
+            .expect("has user defined metadata");
         let metadata = metadata
             .downcast_ref::<String>()
             .expect("has string metadata");
@@ -132,13 +135,13 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
 
         let parquet_file_metrics = ParquetFileMetrics::new(
             partition_index,
-            file.object_meta.location.as_ref(),
+            partitioned_file.object_meta.location.as_ref(),
             metrics,
         );
 
         Ok(Box::new(ParquetFileReader {
             store: Arc::clone(&self.0),
-            meta: file.object_meta,
+            meta: partitioned_file.object_meta,
             metrics: parquet_file_metrics,
             metadata_size_hint,
         }))
