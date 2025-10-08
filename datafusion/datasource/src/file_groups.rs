@@ -417,7 +417,7 @@ impl FileGroup {
     }
 
     /// Adds a file to the group
-    pub fn push(&mut self, file: PartitionedFile) {
+    pub fn push(&mut self, partitioned_file: PartitionedFile) {
         self.files.push(file);
     }
 

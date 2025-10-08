@@ -377,7 +377,7 @@ impl FileScanConfigBuilder {
     /// Add a file as a single group
     ///
     /// See [`Self::with_file_groups`] for more information.
-    pub fn with_file(self, file: PartitionedFile) -> Self {
+    pub fn with_file(self, partitioned_file: PartitionedFile) -> Self {
         self.with_file_group(FileGroup::new(vec![file]))
     }
 

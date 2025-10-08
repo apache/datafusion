@@ -122,7 +122,10 @@ pub struct ArrowOpener {
 }
 
 impl FileOpener for ArrowOpener {
-    fn open(&self, partition_file: PartitionedFile) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        partition_partitioned_file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
         Ok(Box::pin(async move {

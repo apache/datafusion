@@ -119,7 +119,7 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
     fn create_reader(
         &self,
         partition_index: usize,
-        partitioned_file: PartitionedFile,
+        partitioned_partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {

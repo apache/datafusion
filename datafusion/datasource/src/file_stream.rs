@@ -358,7 +358,7 @@ impl Default for OnError {
 pub trait FileOpener: Unpin + Send + Sync {
     /// Asynchronously open the specified file and return a stream
     /// of [`RecordBatch`]
-    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture>;
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture>;
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll
@@ -544,7 +544,7 @@ mod tests {
     }
 
     impl FileOpener for TestOpener {
-        fn open(&self, _file: PartitionedFile) -> Result<FileOpenFuture> {
+        fn open(&self, _partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let idx = self.current_idx.fetch_add(1, Ordering::SeqCst);
 
             if self.error_opening_idx.contains(&idx) {

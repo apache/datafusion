@@ -336,7 +336,7 @@ impl FileOpener for CsvOpener {
     ///  A,1,2,3,4,5,6,7,8,9\n
     ///  A},1,2,3,4,5,6,7,8,9\n
     ///  The lines read would be: [1, 2]
-    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         // `self.config.has_header` controls whether to skip reading the 1st line header
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line

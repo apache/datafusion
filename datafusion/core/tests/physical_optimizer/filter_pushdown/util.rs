@@ -58,7 +58,7 @@ pub struct TestOpener {
 }
 
 impl FileOpener for TestOpener {
-    fn open(&self, _file: PartitionedFile) -> Result<FileOpenFuture> {
+    fn open(&self, _partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let mut batches = self.batches.clone();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;

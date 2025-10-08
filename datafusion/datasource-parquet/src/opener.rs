@@ -112,7 +112,7 @@ pub(super) struct ParquetOpener {
 }
 
 impl FileOpener for ParquetOpener {
-    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let file_range = file.range.clone();
         let extensions = file.extensions.clone();
         let file_location = file.object_meta.location.clone();
