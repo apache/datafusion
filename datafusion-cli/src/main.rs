@@ -27,11 +27,13 @@ use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
+use datafusion::execution::object_store::DefaultObjectStoreRegistry;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
+use datafusion_cli::object_storage::instrumented::InstrumentedObjectStoreRegistry;
 use datafusion_cli::{
     exec,
     pool_type::PoolType,
@@ -205,6 +207,11 @@ async fn main_inner() -> Result<()> {
             .with_max_temp_directory_size(disk_limit.try_into().unwrap());
         rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
+
+    let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(Arc::new(
+        DefaultObjectStoreRegistry::new(),
+    )));
+    rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
 
     let runtime_env = rt_builder.build_arc()?;
 
