@@ -157,11 +157,14 @@ mod private {
     }
 
     impl FileOpener for AvroOpener {
-        fn open(
-            &self,
-            file_meta: FileMeta,
-            _file: PartitionedFile,
-        ) -> Result<FileOpenFuture> {
+        fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
+            let file_meta = FileMeta {
+                object_meta: file.object_meta.clone(),
+                range: file.range.clone(),
+                extensions: file.extensions.clone(),
+                metadata_size_hint: file.metadata_size_hint,
+            };
+
             let config = Arc::clone(&self.config);
             let object_store = Arc::clone(&self.object_store);
             Ok(Box::pin(async move {

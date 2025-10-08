@@ -50,7 +50,6 @@ mod tests {
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{assert_contains, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
@@ -2207,7 +2206,7 @@ mod tests {
         fn create_reader(
             &self,
             partition_index: usize,
-            file_meta: FileMeta,
+            file: PartitionedFile,
             metadata_size_hint: Option<usize>,
             metrics: &ExecutionPlanMetricsSet,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
@@ -2216,12 +2215,8 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(metadata_size_hint);
-            self.inner.create_reader(
-                partition_index,
-                file_meta,
-                metadata_size_hint,
-                metrics,
-            )
+            self.inner
+                .create_reader(partition_index, file, metadata_size_hint, metrics)
         }
     }
 

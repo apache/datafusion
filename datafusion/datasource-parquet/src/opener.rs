@@ -24,7 +24,6 @@ use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use arrow::array::RecordBatch;
-use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use std::pin::Pin;
@@ -113,20 +112,20 @@ pub(super) struct ParquetOpener {
 }
 
 impl FileOpener for ParquetOpener {
-    fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
-        let file_range = file_meta.range.clone();
-        let extensions = file_meta.extensions.clone();
-        let file_location = file_meta.location().clone();
+    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
+        let file_range = file.range.clone();
+        let extensions = file.extensions.clone();
+        let file_location = file.object_meta.location.clone();
         let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
 
-        let metadata_size_hint = file_meta.metadata_size_hint.or(self.metadata_size_hint);
+        let metadata_size_hint = file.metadata_size_hint.or(self.metadata_size_hint);
 
         let mut async_file_reader: Box<dyn AsyncFileReader> =
             self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
-                file_meta.clone(),
+                file.clone(),
                 metadata_size_hint,
                 &self.metrics,
             )?;
@@ -734,13 +733,11 @@ mod test {
         datatypes::{DataType, Field, Schema, SchemaRef},
     };
     use bytes::{BufMut, BytesMut};
-    use chrono::Utc;
     use datafusion_common::{
         assert_batches_eq, record_batch, stats::Precision, ColumnStatistics,
         DataFusionError, ScalarValue, Statistics,
     };
     use datafusion_datasource::{
-        file_meta::FileMeta,
         file_stream::FileOpener,
         schema_adapter::{
             DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
@@ -755,7 +752,7 @@ mod test {
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
     use futures::{Stream, StreamExt};
-    use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
+    use object_store::{memory::InMemory, path::Path, ObjectStore};
     use parquet::arrow::ArrowWriter;
 
     use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
@@ -832,7 +829,7 @@ mod test {
 
         let schema = batch.schema();
         let file = PartitionedFile::new(
-            "file.parquet".to_string(),
+            "test.parquet".to_string(),
             u64::try_from(data_size).unwrap(),
         )
         .with_statistics(Arc::new(
@@ -876,28 +873,11 @@ mod test {
             }
         };
 
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("test.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
-
         // A filter on "a" should not exclude any rows even if it matches the data
         let expr = col("a").eq(lit(1));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -906,7 +886,7 @@ mod test {
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -966,30 +946,13 @@ mod test {
             }
         };
 
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("part=1/file.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
-
         // Filter should match the partition value
         let expr = col("part").eq(lit(1));
         // Mark the expression as dynamic even if it's not to force partition pruning to happen
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1000,7 +963,7 @@ mod test {
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1071,28 +1034,12 @@ mod test {
                 max_predicate_cache_size: None,
             }
         };
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("part=1/file.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
 
         // Filter should match the partition value and file statistics
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1101,11 +1048,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1114,11 +1057,7 @@ mod test {
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(7.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1127,7 +1066,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1188,28 +1127,11 @@ mod test {
             }
         };
 
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("part=1/file.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
-
         // Filter should match the partition value and data value
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1218,11 +1140,7 @@ mod test {
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1231,11 +1149,7 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 1);
@@ -1244,7 +1158,7 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1305,28 +1219,11 @@ mod test {
             }
         };
 
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("part=1/file.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
-
         // Filter should NOT match the stats but the file is never attempted to be pruned because the filters are not dynamic
         let expr = col("part").eq(lit(2));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1334,11 +1231,7 @@ mod test {
         // If we make the filter dynamic, it should prune
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1447,19 +1340,6 @@ mod test {
             Field::new("b", DataType::Float64, false),
         ]));
 
-        let file_meta = FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("test.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
-
         let make_opener = |predicate| ParquetOpener {
             partition_index: 0,
             projection: Arc::new([0, 1]),
@@ -1490,11 +1370,7 @@ mod test {
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(file_meta.clone(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let batches = collect_batches(stream).await;
 
         #[rustfmt::skip]

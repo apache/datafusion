@@ -176,11 +176,14 @@ impl FileOpener for JsonOpener {
     /// are applied to determine which lines to read:
     /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
     /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
-    fn open(
-        &self,
-        file_meta: FileMeta,
-        _file: PartitionedFile,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
+        let file_meta = FileMeta {
+            object_meta: file.object_meta.clone(),
+            range: file.range.clone(),
+            extensions: file.extensions.clone(),
+            metadata_size_hint: file.metadata_size_hint,
+        };
+
         let store = Arc::clone(&self.object_store);
         let schema = Arc::clone(&self.projected_schema);
         let batch_size = self.batch_size;

@@ -337,11 +337,14 @@ impl FileOpener for CsvOpener {
     ///  A,1,2,3,4,5,6,7,8,9\n
     ///  A},1,2,3,4,5,6,7,8,9\n
     ///  The lines read would be: [1, 2]
-    fn open(
-        &self,
-        file_meta: FileMeta,
-        _file: PartitionedFile,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
+        let file_meta = FileMeta {
+            object_meta: file.object_meta.clone(),
+            range: file.range.clone(),
+            extensions: file.extensions.clone(),
+            metadata_size_hint: file.metadata_size_hint,
+        };
+
         // `self.config.has_header` controls whether to skip reading the 1st line header
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line
