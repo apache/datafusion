@@ -42,7 +42,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
-use object_store::path::{Path};
+use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 
 /// Check whether the given expression can be resolved using only the columns `col_names`.
@@ -442,6 +442,7 @@ pub async fn pruned_partition_list<'a>(
     let partitions =
         list_partitions(store, table_path, partition_cols.len(), partition_prefix)
             .await?;
+    debug!("Listed {} partitions", partitions.len());
 
     let pruned =
         prune_partitions(table_path, partitions, filters, partition_cols).await?;
