@@ -2219,6 +2219,7 @@ dependencies = [
  "async-ffi",
  "async-trait",
  "datafusion",
+ "datafusion-common",
  "datafusion-functions-aggregate-common",
  "datafusion-proto",
  "datafusion-proto-common",
