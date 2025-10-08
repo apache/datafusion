@@ -600,9 +600,15 @@ pub fn serialize_expr(
                 })),
             }
         }
-        Expr::Placeholder(Placeholder { id, data_type }) => {
-            let data_type = match data_type {
-                Some(data_type) => Some(data_type.try_into()?),
+        Expr::Placeholder(Placeholder { id, field }) => {
+            let data_type = match field {
+                Some(field) => {
+                    if !field.metadata().is_empty() {
+                        return Err(Error::General(format!("Can't serialize placeholder with metadata ('{id}') to protobuf.")));
+                    }
+
+                    Some(field.data_type().try_into()?)
+                }
                 None => None,
             };
             protobuf::LogicalExprNode {

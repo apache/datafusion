@@ -104,9 +104,9 @@ impl ExprSchemable for Expr {
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
+                Expr::Placeholder(Placeholder { field, .. }) => match &field {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
-                    Some(dt) => Ok(dt.clone()),
+                    Some(field) => Ok(field.data_type().clone()),
                 },
                 _ => expr.get_type(schema),
             },
@@ -211,9 +211,9 @@ impl ExprSchemable for Expr {
             )
             .get_result_type(),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
-            Expr::Placeholder(Placeholder { data_type, .. }) => {
-                if let Some(dtype) = data_type {
-                    Ok(dtype.clone())
+            Expr::Placeholder(Placeholder { field, .. }) => {
+                if let Some(field) = field {
+                    Ok(field.data_type().clone())
                 } else {
                     // If the placeholder's type hasn't been specified, treat it as
                     // null (unspecified placeholders generate an error during planning)

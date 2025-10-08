@@ -1998,10 +1998,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         )?;
                         // Update placeholder's datatype to the type of the target column
                         if let Expr::Placeholder(placeholder) = &mut expr {
-                            placeholder.data_type = placeholder
-                                .data_type
+                            placeholder.field = placeholder
+                                .field
                                 .take()
-                                .or_else(|| Some(field.data_type().clone()));
+                                .or_else(|| Some(Arc::clone(field)));
                         }
                         // Cast to target column type, if necessary
                         expr.cast_to(field.data_type(), source.schema())?
