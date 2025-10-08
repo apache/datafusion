@@ -122,18 +122,15 @@ pub struct ArrowOpener {
 }
 
 impl FileOpener for ArrowOpener {
-    fn open(
-        &self,
-        partition_partitioned_file: PartitionedFile,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
         Ok(Box::pin(async move {
-            let range = partition_file.range.clone();
+            let range = partitioned_file.range.clone();
             match range {
                 None => {
                     let r = object_store
-                        .get(&partition_file.object_meta.location)
+                        .get(&partitioned_file.object_meta.location)
                         .await?;
                     match r.payload {
                         #[cfg(not(target_arch = "wasm32"))]
@@ -165,7 +162,7 @@ impl FileOpener for ArrowOpener {
                         ..Default::default()
                     };
                     let get_result = object_store
-                        .get_opts(&partition_file.object_meta.location, get_option)
+                        .get_opts(&partitioned_file.object_meta.location, get_option)
                         .await?;
                     let footer_len_buf = get_result.bytes().await?;
                     let footer_len = arrow_ipc::reader::read_footer_length(
@@ -177,7 +174,7 @@ impl FileOpener for ArrowOpener {
                         ..Default::default()
                     };
                     let get_result = object_store
-                        .get_opts(&partition_file.object_meta.location, get_option)
+                        .get_opts(&partitioned_file.object_meta.location, get_option)
                         .await?;
                     let footer_buf = get_result.bytes().await?;
                     let footer = arrow_ipc::root_as_footer(
@@ -205,7 +202,7 @@ impl FileOpener for ArrowOpener {
                         })
                         .collect_vec();
                     let dict_results = object_store
-                        .get_ranges(&partition_file.object_meta.location, &dict_ranges)
+                        .get_ranges(&partitioned_file.object_meta.location, &dict_ranges)
                         .await?;
                     for (dict_block, dict_result) in
                         footer.dictionaries().iter().flatten().zip(dict_results)
@@ -239,7 +236,7 @@ impl FileOpener for ArrowOpener {
 
                     let recordbatch_results = object_store
                         .get_ranges(
-                            &partition_file.object_meta.location,
+                            &partitioned_file.object_meta.location,
                             &recordbatch_ranges,
                         )
                         .await?;

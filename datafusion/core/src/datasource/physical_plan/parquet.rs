@@ -2217,7 +2217,7 @@ mod tests {
                 .push(metadata_size_hint);
             self.inner.create_reader(
                 partition_index,
-                partition_file,
+                partitioned_file,
                 metadata_size_hint,
                 metrics,
             )
