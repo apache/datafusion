@@ -69,7 +69,7 @@
 //! # async fn stub() -> Result<()> {
 //! // Create a new session context
 //! let mut ctx = SessionContext::new();
-//! // Rgister all Spark functions with the context
+//! // Register all Spark functions with the context
 //! datafusion_spark::register_all(&mut ctx)?;
 //! // Run a query using the `sha2` function which is now available and has Spark semantics
 //! let df = ctx.sql("SELECT sha2('The input String', 256)").await?;
