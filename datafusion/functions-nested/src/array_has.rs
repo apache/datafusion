@@ -142,25 +142,21 @@ impl ScalarUDFImpl for ArrayHas {
                     ScalarValue::convert_array_to_scalar_vec(&array)
                 {
                     assert_eq!(scalar_values.len(), 1);
-                    match &scalar_values[0] {
-                        // Haystack was a single list element as expected
-                        Some(list) => {
-                            let list = list
-                                .iter()
-                                .map(|v| Expr::Literal(v.clone(), None))
-                                .collect();
+                    let list = scalar_values
+                        .into_iter()
+                        // If the vec is a singular null, `list` will be empty due to this flatten().
+                        // It would be more clear if we handled the None separately, but this is more performant,
+                        // and still handles it correctly (see `test_simplify_array_has_with_null_haystack`).
+                        .flatten()
+                        .flatten()
+                        .map(|v| Expr::Literal(v.clone(), None))
+                        .collect();
 
-                            return Ok(ExprSimplifyResult::Simplified(in_list(
-                                std::mem::take(needle),
-                                list,
-                                false,
-                            )));
-                        }
-                        // Haystack was a singular null, should be handled elsewhere
-                        None => {
-                            return Ok(ExprSimplifyResult::Original(args));
-                        }
-                    };
+                    return Ok(ExprSimplifyResult::Simplified(in_list(
+                        std::mem::take(needle),
+                        list,
+                        false,
+                    )));
                 }
             }
             Expr::ScalarFunction(ScalarFunction { func, args })
