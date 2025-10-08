@@ -1370,13 +1370,16 @@ pub struct Placeholder {
     /// The identifier of the parameter, including the leading `$` (e.g, `"$1"` or `"$foo"`)
     pub id: String,
     /// The type the parameter will be filled in with
-    pub data_type: Option<DataType>,
+    pub field: Option<FieldRef>,
 }
 
 impl Placeholder {
     /// Create a new Placeholder expression
     pub fn new(id: String, data_type: Option<DataType>) -> Self {
-        Self { id, data_type }
+        Self {
+            id,
+            field: data_type.map(|dt| Arc::new(Field::new("", dt, true))),
+        }
     }
 }
 
@@ -2888,17 +2891,17 @@ impl HashNode for Expr {
 
 // Modifies expr if it is a placeholder with datatype of right
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
-    if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
-        if data_type.is_none() {
-            let other_dt = other.get_type(schema);
-            match other_dt {
+    if let Expr::Placeholder(Placeholder { id: _, field }) = expr {
+        if field.is_none() {
+            let other_field = other.to_field(schema);
+            match other_field {
                 Err(e) => {
                     Err(e.context(format!(
                         "Can not find type of {other} needed to infer type of {expr}"
                     )))?;
                 }
-                Ok(dt) => {
-                    *data_type = Some(dt);
+                Ok((_, other_field)) => {
+                    *field = Some(other_field);
                 }
             }
         };
@@ -3730,15 +3733,15 @@ mod test {
         let param_placeholders = vec![
             Expr::Placeholder(Placeholder {
                 id: "$1".to_string(),
-                data_type: None,
+                field: None,
             }),
             Expr::Placeholder(Placeholder {
                 id: "$2".to_string(),
-                data_type: None,
+                field: None,
             }),
             Expr::Placeholder(Placeholder {
                 id: "$3".to_string(),
-                data_type: None,
+                field: None,
             }),
         ];
         let in_list = Expr::InList(InList {
@@ -3764,8 +3767,8 @@ mod test {
                     match expr {
                         Expr::Placeholder(placeholder) => {
                             assert_eq!(
-                                placeholder.data_type,
-                                Some(DataType::Int32),
+                                placeholder.field.unwrap().data_type(),
+                                &DataType::Int32,
                                 "Placeholder {} should infer Int32",
                                 placeholder.id
                             );
@@ -3789,7 +3792,7 @@ mod test {
             expr: Box::new(col("name")),
             pattern: Box::new(Expr::Placeholder(Placeholder {
                 id: "$1".to_string(),
-                data_type: None,
+                field: None,
             })),
             negated: false,
             case_insensitive: false,
@@ -3802,7 +3805,7 @@ mod test {
         match inferred_expr {
             Expr::Like(like) => match *like.pattern {
                 Expr::Placeholder(placeholder) => {
-                    assert_eq!(placeholder.data_type, Some(DataType::Utf8));
+                    assert_eq!(placeholder.field.unwrap().data_type(), &DataType::Utf8);
                 }
                 _ => panic!("Expected Placeholder"),
             },
@@ -3817,8 +3820,8 @@ mod test {
             Expr::SimilarTo(like) => match *like.pattern {
                 Expr::Placeholder(placeholder) => {
                     assert_eq!(
-                        placeholder.data_type,
-                        Some(DataType::Utf8),
+                        placeholder.field.unwrap().data_type(),
+                        &DataType::Utf8,
                         "Placeholder {} should infer Utf8",
                         placeholder.id
                     );

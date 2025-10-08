@@ -125,7 +125,7 @@ pub fn ident(name: impl Into<String>) -> Expr {
 pub fn placeholder(id: impl Into<String>) -> Expr {
     Expr::Placeholder(Placeholder {
         id: id.into(),
-        data_type: None,
+        field: None,
     })
 }
 
