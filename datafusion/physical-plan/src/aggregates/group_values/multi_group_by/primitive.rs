@@ -545,7 +545,7 @@ mod tests {
         append(&mut builder, &builder_array, &[0, 1, 2, 3, 4, 5]);
 
         // Define input array
-        let (_nulls, values, _) =
+        let (_, values, _nulls) =
             Int64Array::from(vec![Some(1), Some(2), None, None, Some(1), Some(3)])
                 .into_parts();
 

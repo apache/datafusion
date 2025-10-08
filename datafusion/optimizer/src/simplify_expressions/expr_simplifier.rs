@@ -31,7 +31,9 @@ use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_datafusion_err, internal_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
     Operator, Volatility,
@@ -695,7 +697,7 @@ impl<'a> ConstEvaluator<'a> {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
                     ConstSimplifyResult::SimplifyRuntimeError(
-                        DataFusionError::Execution(format!("Could not evaluate the expression, found a result of length {}", a.len())),
+                        exec_datafusion_err!("Could not evaluate the expression, found a result of length {}", a.len()),
                         expr,
                     )
                 } else if as_list_array(&a).is_ok() {
