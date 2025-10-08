@@ -168,10 +168,11 @@ async fn test_replace_multiple_input_repartition_1(
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let sort_exprs: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs.clone())
-    } else {
-        memory_exec_sorted(&schema, sort_exprs.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, sort_exprs.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, sort_exprs.clone()),
     };
     let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
     let sort = sort_exec_with_preserve_partitioning(sort_exprs.clone(), repartition);
@@ -242,10 +243,11 @@ async fn test_with_inter_children_change_only(
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr_default("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -346,10 +348,11 @@ async fn test_replace_multiple_input_repartition_2(
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let filter = filter_exec(repartition_rr);
@@ -427,10 +430,11 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -515,10 +519,11 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let coalesce_batches_exec_1 = coalesce_batches_exec(repartition_rr, 8192);
@@ -609,10 +614,9 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering)
-    } else {
-        memory_exec_sorted(&schema, ordering)
+    let source = match boundedness {
+        Boundedness::Unbounded => stream_exec_ordered_with_projection(&schema, ordering),
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -676,10 +680,11 @@ async fn test_with_multiple_replaceable_repartitions(
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -771,10 +776,11 @@ async fn test_not_replace_with_different_orderings(
 
     let schema = create_test_schema()?;
     let ordering_a = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering_a)
-    } else {
-        memory_exec_sorted(&schema, ordering_a)
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering_a)
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering_a),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -836,10 +842,11 @@ async fn test_with_lost_ordering(
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -913,10 +920,11 @@ async fn test_with_lost_and_kept_ordering(
 
     let schema = create_test_schema()?;
     let ordering_a = [sort_expr("a", &schema)].into();
-    let source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering_a)
-    } else {
-        memory_exec_sorted(&schema, ordering_a)
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering_a)
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering_a),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -1021,10 +1029,11 @@ async fn test_with_multiple_child_trees(
     let schema = create_test_schema()?;
 
     let left_ordering = [sort_expr("a", &schema)].into();
-    let left_source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, left_ordering)
-    } else {
-        memory_exec_sorted(&schema, left_ordering)
+    let left_source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, left_ordering)
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, left_ordering),
     };
     let left_repartition_rr = repartition_exec_round_robin(left_source);
     let left_repartition_hash = repartition_exec_hash(left_repartition_rr);
@@ -1032,10 +1041,11 @@ async fn test_with_multiple_child_trees(
         Arc::new(CoalesceBatchesExec::new(left_repartition_hash, 4096));
 
     let right_ordering = [sort_expr("a", &schema)].into();
-    let right_source = if boundedness == Boundedness::Unbounded {
-        stream_exec_ordered_with_projection(&schema, right_ordering)
-    } else {
-        memory_exec_sorted(&schema, right_ordering)
+    let right_source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, right_ordering)
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, right_ordering),
     };
     let right_repartition_rr = repartition_exec_round_robin(right_source);
     let right_repartition_hash = repartition_exec_hash(right_repartition_rr);
