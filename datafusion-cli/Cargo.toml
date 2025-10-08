@@ -38,7 +38,7 @@ backtrace = ["datafusion/backtrace"]
 arrow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = "1.8.6"
-aws-credential-types = "1.2.6"
+aws-credential-types = "1.2.7"
 clap = { version = "4.5.47", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",

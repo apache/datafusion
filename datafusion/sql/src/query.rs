@@ -390,7 +390,7 @@ pub(crate) fn to_order_by_exprs_with_select(
                             quote_style: None,
                             span: Span::empty(),
                         }),
-                        options: order_by_options.clone(),
+                        options: order_by_options,
                         with_fill: None,
                     }),
                     // TODO: Support other types of expressions

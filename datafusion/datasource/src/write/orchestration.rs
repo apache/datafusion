@@ -27,7 +27,9 @@ use crate::file_compression_type::FileCompressionType;
 use datafusion_common::error::Result;
 
 use arrow::array::RecordBatch;
-use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
+use datafusion_common::{
+    exec_datafusion_err, internal_datafusion_err, internal_err, DataFusionError,
+};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
 
@@ -117,9 +119,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                     Err(e) => {
                         return SerializedRecordBatchResult::failure(
                             None,
-                            DataFusionError::Execution(format!(
-                                "Error writing to object store: {e}"
-                            )),
+                            exec_datafusion_err!("Error writing to object store: {e}"),
                         )
                     }
                 };
@@ -133,9 +133,9 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                 // Handle task panic or cancellation
                 return SerializedRecordBatchResult::failure(
                     Some(writer),
-                    DataFusionError::Execution(format!(
+                    exec_datafusion_err!(
                         "Serialization task panicked or was cancelled: {e}"
-                    )),
+                    ),
                 );
             }
         }
