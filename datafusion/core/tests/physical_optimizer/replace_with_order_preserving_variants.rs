@@ -47,7 +47,7 @@ use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{
-    collect, displayable, get_plan_string, ExecutionPlan, Partitioning,
+    collect, displayable, ExecutionPlan, Partitioning,
 };
 
 use object_store::memory::InMemory;
@@ -145,134 +145,6 @@ impl ReplaceTest {
         }
     }
 }
-
-/// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
-/// the plan against the original and expected plans.
-///
-/// # Parameters
-///
-/// * `$EXPECTED_PLAN_LINES`: Expected input plan.
-/// * `EXPECTED_OPTIMIZED_PLAN_LINES`: Optimized plan when the flag
-///   `prefer_existing_sort` is `false`.
-/// * `EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: Optimized plan when
-///   the flag `prefer_existing_sort` is `true`.
-/// * `$PLAN`: The plan to optimize.
-macro_rules! assert_optimized_prefer_sort_on_off {
-    ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $PREFER_EXISTING_SORT: expr, $SOURCE_UNBOUNDED: expr) => {
-        if $PREFER_EXISTING_SORT {
-            assert_optimized!(
-                $EXPECTED_PLAN_LINES,
-                $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES,
-                $PLAN,
-                $PREFER_EXISTING_SORT,
-                $SOURCE_UNBOUNDED
-            );
-        } else {
-            assert_optimized!(
-                $EXPECTED_PLAN_LINES,
-                $EXPECTED_OPTIMIZED_PLAN_LINES,
-                $PLAN,
-                $PREFER_EXISTING_SORT,
-                $SOURCE_UNBOUNDED
-            );
-        }
-    };
-}
-
-/// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
-/// the plan against the original and expected plans for both bounded and
-/// unbounded cases.
-///
-/// # Parameters
-///
-/// * `EXPECTED_UNBOUNDED_PLAN_LINES`: Expected input unbounded plan.
-/// * `EXPECTED_BOUNDED_PLAN_LINES`: Expected input bounded plan.
-/// * `EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES`: Optimized plan, which is
-///   the same regardless of the value of the `prefer_existing_sort` flag.
-/// * `EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES`: Optimized plan when the flag
-///   `prefer_existing_sort` is `false` for bounded cases.
-/// * `EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: Optimized plan
-///   when the flag `prefer_existing_sort` is `true` for bounded cases.
-/// * `$PLAN`: The plan to optimize.
-/// * `$SOURCE_UNBOUNDED`: Whether the given plan contains an unbounded source.
-macro_rules! assert_optimized_in_all_boundedness_situations {
-    ($EXPECTED_UNBOUNDED_PLAN_LINES: expr,  $EXPECTED_BOUNDED_PLAN_LINES: expr, $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $SOURCE_UNBOUNDED: expr, $PREFER_EXISTING_SORT: expr) => {
-        if $SOURCE_UNBOUNDED {
-            assert_optimized_prefer_sort_on_off!(
-                $EXPECTED_UNBOUNDED_PLAN_LINES,
-                $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES,
-                $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES,
-                $PLAN,
-                $PREFER_EXISTING_SORT,
-                $SOURCE_UNBOUNDED
-            );
-        } else {
-            assert_optimized_prefer_sort_on_off!(
-                $EXPECTED_BOUNDED_PLAN_LINES,
-                $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES,
-                $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES,
-                $PLAN,
-                $PREFER_EXISTING_SORT,
-                $SOURCE_UNBOUNDED
-            );
-        }
-    };
-}
-
-/// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
-/// the plan against the original and expected plans.
-///
-/// # Parameters
-///
-/// * `$EXPECTED_PLAN_LINES`: Expected input plan.
-/// * `$EXPECTED_OPTIMIZED_PLAN_LINES`: Expected optimized plan.
-/// * `$PLAN`: The plan to optimize.
-/// * `$PREFER_EXISTING_SORT`: Value of the `prefer_existing_sort` flag.
-#[macro_export]
-macro_rules! assert_optimized {
-        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $PREFER_EXISTING_SORT: expr, $SOURCE_UNBOUNDED: expr) => {
-            let physical_plan = $PLAN;
-            let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-            let actual: Vec<&str> = formatted.trim().lines().collect();
-
-            let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
-                .iter().map(|s| *s).collect();
-
-            assert_eq!(
-                expected_plan_lines, actual,
-                "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
-            );
-
-            let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES.iter().map(|s| *s).collect();
-
-            // Run the rule top-down
-            let mut config = ConfigOptions::new();
-            config.optimizer.prefer_existing_sort=$PREFER_EXISTING_SORT;
-            let plan_with_pipeline_fixer = OrderPreservationContext::new_default(physical_plan);
-            let parallel = plan_with_pipeline_fixer.transform_up(|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, &config)).data().and_then(check_integrity)?;
-            let optimized_physical_plan = parallel.plan;
-
-            // Get string representation of the plan
-            let actual = get_plan_string(&optimized_physical_plan);
-            assert_eq!(
-                expected_optimized_lines, actual,
-                "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
-            );
-
-            if !$SOURCE_UNBOUNDED {
-                let ctx = SessionContext::new();
-                let object_store = InMemory::new();
-                object_store.put(&object_store::path::Path::from("file_path"), bytes::Bytes::from("").into()).await?;
-                ctx.register_object_store(&Url::parse("test://").unwrap(), Arc::new(object_store));
-                let task_ctx = Arc::new(TaskContext::from(&ctx));
-                let res = collect(optimized_physical_plan, task_ctx).await;
-                assert!(
-                    res.is_ok(),
-                    "Some errors occurred while executing the optimized physical plan: {:?}", res.unwrap_err()
-                );
-            }
-        };
-    }
 
 #[rstest]
 #[tokio::test]
@@ -372,77 +244,82 @@ async fn test_with_inter_children_change_only(
 
     let physical_plan = sort_preserving_merge_exec(ordering, sort2);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "            CoalescePartitionsExec",
-            "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]",
-        ];
-    let expected_input_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "            CoalescePartitionsExec",
-            "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  FilterExec: c@1 > 3",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        SortPreservingMergeExec: [a@0 ASC]",
-            "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results with and without flag
-    let expected_optimized_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "            CoalescePartitionsExec",
-            "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
-        ];
-    let expected_optimized_bounded_sort_preserve = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  FilterExec: c@1 > 3",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        SortPreservingMergeExec: [a@0 ASC]",
-            "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
-        ];
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                        CoalescePartitionsExec
+                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                              StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC]
+              FilterExec: c@1 > 3
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    SortPreservingMergeExec: [a@0 ASC]
+                      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [a@0 ASC]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                        CoalescePartitionsExec
+                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                        CoalescePartitionsExec
+                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC]
+              FilterExec: c@1 > 3
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    SortPreservingMergeExec: [a@0 ASC]
+                      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
+            ");
+        }
+    }
+    }
+
     Ok(())
 }
 
@@ -465,59 +342,64 @@ async fn test_replace_multiple_input_repartition_2(
     let sort = sort_exec_with_preserve_partitioning(ordering.clone(), repartition_hash);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded =  [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded =  [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results with and without flag
-    let expected_optimized_bounded =  [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
+
     Ok(())
 }
 
@@ -542,64 +424,69 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
         sort_exec_with_preserve_partitioning(ordering.clone(), coalesce_batches_exec);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results with and without flag
-    let expected_optimized_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
+
     Ok(())
 }
 
@@ -625,69 +512,74 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
         sort_exec_with_preserve_partitioning(ordering.clone(), coalesce_batches_exec_2);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          CoalesceBatchesExec: target_batch_size=8192",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          CoalesceBatchesExec: target_batch_size=8192",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "        CoalesceBatchesExec: target_batch_size=8192",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results with and without flag
-    let expected_optimized_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          CoalesceBatchesExec: target_batch_size=8192",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "        CoalesceBatchesExec: target_batch_size=8192",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                    CoalesceBatchesExec: target_batch_size=8192
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                    CoalesceBatchesExec: target_batch_size=8192
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
+
     Ok(())
 }
 
@@ -710,55 +602,50 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
     let coalesce_batches_exec = coalesce_batches_exec(filter, 8192);
     let physical_plan = coalesce_partitions_exec(coalesce_batches_exec);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "CoalescePartitionsExec",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded = [
-            "CoalescePartitionsExec",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "CoalescePartitionsExec",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results same with and without flag, because there is no executor  with ordering requirement
-    let expected_optimized_bounded = [
-            "CoalescePartitionsExec",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
 
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
     Ok(())
 }
 
@@ -783,69 +670,74 @@ async fn test_with_multiple_replaceable_repartitions(
     let sort = sort_exec_with_preserve_partitioning(ordering.clone(), repartition_hash_2);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      CoalesceBatchesExec: target_batch_size=8192",
-            "        FilterExec: c@1 > 3",
-            "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      CoalesceBatchesExec: target_batch_size=8192",
-            "        FilterExec: c@1 > 3",
-            "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results with and without flag
-    let expected_optimized_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      CoalesceBatchesExec: target_batch_size=8192",
-            "        FilterExec: c@1 > 3",
-            "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: c@1 > 3
+                      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: c@1 > 3
+                      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: c@1 > 3
+                      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
+
     Ok(())
 }
 
@@ -871,51 +763,47 @@ async fn test_not_replace_with_different_orderings(
     let sort = sort_exec_with_preserve_partitioning(ordering_c.clone(), repartition_hash);
     let physical_plan = sort_preserving_merge_exec(ordering_c, sort);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results same with and without flag, because ordering requirement of the executor is different than the existing ordering.
-    let expected_optimized_bounded = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [c@1 ASC]
+              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [c@1 ASC]
+              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [c@1 ASC]
+              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
 
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
     Ok(())
 }
 
@@ -937,54 +825,59 @@ async fn test_with_lost_ordering(
     let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
     let physical_plan = sort_exec(ordering, coalesce_partitions);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]",
-            "  CoalescePartitionsExec",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded = [
-            "SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]",
-            "  CoalescePartitionsExec",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results with and without flag
-    let expected_optimized_bounded = [
-            "SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]",
-            "  CoalescePartitionsExec",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+              CoalescePartitionsExec
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+              CoalescePartitionsExec
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+              CoalescePartitionsExec
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
+
     Ok(())
 }
 
@@ -1015,79 +908,84 @@ async fn test_with_lost_and_kept_ordering(
     let sort2 = sort_exec_with_preserve_partitioning(ordering_c.clone(), filter);
     let physical_plan = sort_preserving_merge_exec(ordering_c, sort2);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
-            "            CoalescePartitionsExec",
-            "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
-            "            CoalescePartitionsExec",
-            "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  FilterExec: c@1 > 3",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
-            "          CoalescePartitionsExec",
-            "            RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results with and without flag
-    let expected_optimized_bounded = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
-            "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
-            "            CoalescePartitionsExec",
-            "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = [
-            "SortPreservingMergeExec: [c@1 ASC]",
-            "  FilterExec: c@1 > 3",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
-            "          CoalescePartitionsExec",
-            "            RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [c@1 ASC]
+              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
+                        CoalescePartitionsExec
+                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                              StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+
+            Optimized:
+            SortPreservingMergeExec: [c@1 ASC]
+              FilterExec: c@1 > 3
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
+                      CoalescePartitionsExec
+                        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, false) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [c@1 ASC]
+              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
+                        CoalescePartitionsExec
+                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        },
+        (false, true) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [c@1 ASC]
+              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
+                        CoalescePartitionsExec
+                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+
+            Optimized:
+            SortPreservingMergeExec: [c@1 ASC]
+              FilterExec: c@1 > 3
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
+                      CoalescePartitionsExec
+                        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
+
     Ok(())
 }
 
@@ -1127,76 +1025,49 @@ async fn test_with_multiple_child_trees(
     let sort = sort_exec_with_preserve_partitioning(ordering.clone(), hash_join_exec);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    // Expected inputs unbounded and bounded
-    let expected_input_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
-            "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-            "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-    let expected_input_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
-            "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-            "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
+    let run = ReplaceTest::new(physical_plan)
+        .with_source_unbounded(source_unbounded)
+        .with_prefer_existing_sort(prefer_existing_sort);
 
-    // Expected unbounded result (same for with and without flag)
-    let expected_optimized_unbounded = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
-            "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-            "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
+    let physical_plan = run.run().await;
 
-    // Expected bounded results same with and without flag, because ordering get lost during intermediate executor anyway. Hence no need to preserve
-    // existing ordering.
-    let expected_optimized_bounded = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
-            "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-            "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
-        ];
-    let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
+    allow_duplicates! {
+    match (source_unbounded, prefer_existing_sort) {
+        (true, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [a@0 ASC]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
+                  CoalesceBatchesExec: target_batch_size=4096
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+                  CoalesceBatchesExec: target_batch_size=4096
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (false, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
+            SortPreservingMergeExec: [a@0 ASC]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
+                  CoalesceBatchesExec: target_batch_size=4096
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+                  CoalesceBatchesExec: target_batch_size=4096
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+            ");
+        }
+    }
+    }
 
-    assert_optimized_in_all_boundedness_situations!(
-        expected_input_unbounded,
-        expected_input_bounded,
-        expected_optimized_unbounded,
-        expected_optimized_bounded,
-        expected_optimized_bounded_sort_preserve,
-        physical_plan,
-        source_unbounded,
-        prefer_existing_sort
-    );
     Ok(())
 }
 
