@@ -33,7 +33,9 @@ use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
-use datafusion_cli::object_storage::instrumented::InstrumentedObjectStoreRegistry;
+use datafusion_cli::object_storage::instrumented::{
+    InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
+};
 use datafusion_cli::{
     exec,
     pool_type::PoolType,
@@ -208,9 +210,10 @@ async fn main_inner() -> Result<()> {
         rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
 
-    let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(Arc::new(
-        DefaultObjectStoreRegistry::new(),
-    )));
+    let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(
+        Arc::new(DefaultObjectStoreRegistry::new()),
+        InstrumentedObjectStoreMode::default(),
+    ));
     rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
 
     let runtime_env = rt_builder.build_arc()?;
