@@ -96,7 +96,7 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 }
 
-/// Provides access to [`InstrumentedObjectStore`] instances that record requests for reporting
+/// Provides access to [`ObjectStore`] instances that record requests for reporting
 #[derive(Debug)]
 pub struct InstrumentedObjectStoreRegistry {
     inner: Arc<dyn ObjectStoreRegistry>,
