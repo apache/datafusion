@@ -2898,13 +2898,19 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        let final_hash_agg = execution_plan
+        let projection = execution_plan
+            .as_any()
+            .downcast_ref::<ProjectionExec>()
+            .expect("projection");
+
+        let final_hash_agg = projection.input()
             .as_any()
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
+
         assert_eq!(
             "sum(aggregate_test_100.c3)",
-            final_hash_agg.schema().field(3).name()
+            projection.schema().field(2).name()
         );
         // we need access to the input to the partial aggregate so that other projects can
         // implement serde
