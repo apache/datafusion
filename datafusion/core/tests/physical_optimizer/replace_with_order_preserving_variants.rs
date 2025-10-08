@@ -653,6 +653,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
                     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
+                // Expected bounded results same with and without flag, because there is no executor  with ordering requirement
         },
         (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
@@ -816,6 +817,8 @@ async fn test_not_replace_with_different_orderings(
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
+                // Expected bounded results same with and without flag, because ordering requirement of the executor is
+                // different from the existing ordering.
         },
         (Boundedness::Bounded, SortPreference::PreserveOrder) => {
             assert_snapshot!(physical_plan, @r"
@@ -1097,6 +1100,8 @@ async fn test_with_multiple_child_trees(
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
+                // Expected bounded results same with and without flag, because ordering get lost during intermediate executor anyway.
+                //  Hence, no need to preserve existing ordering.
         }
     }
     }
