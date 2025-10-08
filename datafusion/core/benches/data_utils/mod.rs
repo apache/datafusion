@@ -81,10 +81,7 @@ fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
         .collect()
 }
 
-fn create_integer_data(size: usize, value_density: f64) -> Vec<Option<u64>> {
-    // use random numbers to avoid spurious compiler optimizations wrt to branching
-    let mut rng = StdRng::seed_from_u64(42);
-
+fn create_integer_data(rng: &mut StdRng, size: usize, value_density: f64) -> Vec<Option<u64>> {
     (0..size)
         .map(|_| {
             if rng.random::<f64>() > value_density {
@@ -116,7 +113,7 @@ fn create_record_batch(
     let values = create_data(batch_size, 0.5);
 
     // Integer values between [0, u64::MAX].
-    let integer_values_wide = create_integer_data(batch_size, 9.0);
+    let integer_values_wide = create_integer_data(rng, batch_size, 9.0);
 
     // Integer values between [0, 9].
     let integer_values_narrow = (0..batch_size)
