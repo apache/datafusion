@@ -134,7 +134,7 @@ impl AggGroupAccumulator {
         let arr =
             GenericListArray::<i32>::new(field, offsets_buffer, backend_array, None);
         // Only when this happen, we know that the stacked_batches are no longer neeeded
-        if self.stacked_group_indices.len() == 0 {
+        if self.stacked_group_indices.is_empty() {
             mem::take(&mut self.stacked_batches);
             self.stacked_batches_size = 0;
         }
@@ -243,10 +243,6 @@ impl GroupsAccumulator for AggGroupAccumulator {
     }
 
     fn size(&self) -> usize {
-        let val = size_of_val(self)
-            + self.stacked_group_indices.capacity() * size_of::<(usize, usize, usize)>()
-            + self.stacked_batches.capacity() * size_of::<Vec<ArrayRef>>()
-            + self.stacked_batches_size;
         size_of_val(self)
             + self.stacked_group_indices.capacity() * size_of::<(usize, usize, usize)>()
             + self.stacked_batches.capacity() * size_of::<Vec<ArrayRef>>()
