@@ -32,6 +32,7 @@ use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
@@ -82,8 +83,8 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
-    approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
-    nth_value,
+    approx_distinct, array_agg, avg, avg_distinct, bit_and, bit_or, bit_xor, bool_and,
+    bool_or, corr, nth_value,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -967,10 +968,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         functions_window::nth_value::last_value(lit(1)),
         functions_window::nth_value::nth_value(lit(1), 1),
         avg(lit(1.5)),
+        avg_distinct(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
         corr(lit(1.5), lit(2.2)),
         sum(lit(1)),
+        sum_distinct(lit(1)),
         max(lit(1)),
         median(lit(2)),
         min(lit(2)),
@@ -1587,7 +1590,7 @@ fn round_trip_scalar_values_and_data_types() {
         assert_eq!(
             dt, roundtrip,
             "DataType was not the same after round trip!\n\n\
-                        Input: {dt:?}\n\nRoundtrip: {roundtrip:?}"
+                        Input: {dt}\n\nRoundtrip: {roundtrip:?}"
         );
     }
 }

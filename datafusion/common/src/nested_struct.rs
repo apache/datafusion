@@ -87,7 +87,7 @@ fn cast_struct_column(
     } else {
         // Return error if source is not a struct type
         _plan_err!(
-            "Cannot cast column of type {:?} to struct type. Source must be a struct to cast to struct.",
+            "Cannot cast column of type {} to struct type. Source must be a struct to cast to struct.",
             source_col.data_type()
         )
     }
@@ -128,7 +128,7 @@ fn cast_struct_column(
 /// The struct casting logic requires that the source column must already be a struct type.
 /// This makes the function useful for:
 /// - Schema evolution scenarios where struct layouts change over time
-/// - Data migration between different struct schemas  
+/// - Data migration between different struct schemas
 /// - Type-safe data processing pipelines that maintain struct type integrity
 ///
 /// # Arguments
@@ -165,7 +165,7 @@ pub fn cast_column(
 /// Validates compatibility between source and target struct fields for casting operations.
 ///
 /// This function implements comprehensive struct compatibility checking by examining:
-/// - Field name matching between source and target structs  
+/// - Field name matching between source and target structs
 /// - Type castability for each matching field (including recursive struct validation)
 /// - Proper handling of missing fields (target fields not in source are allowed - filled with nulls)
 /// - Proper handling of extra fields (source fields not in target are allowed - ignored)
@@ -173,7 +173,7 @@ pub fn cast_column(
 /// # Compatibility Rules
 /// - **Field Matching**: Fields are matched by name (case-sensitive)
 /// - **Missing Target Fields**: Allowed - will be filled with null values during casting
-/// - **Extra Source Fields**: Allowed - will be ignored during casting  
+/// - **Extra Source Fields**: Allowed - will be ignored during casting
 /// - **Type Compatibility**: Each matching field must be castable using Arrow's type system
 /// - **Nested Structs**: Recursively validates nested struct compatibility
 ///
@@ -188,7 +188,7 @@ pub fn cast_column(
 /// # Examples
 /// ```text
 /// // Compatible: source has extra field, target has missing field
-/// // Source: {a: i32, b: string, c: f64}  
+/// // Source: {a: i32, b: string, c: f64}
 /// // Target: {a: i64, d: bool}
 /// // Result: Ok(()) - 'a' can cast i32->i64, 'b','c' ignored, 'd' filled with nulls
 ///
@@ -230,7 +230,7 @@ pub fn validate_struct_compatibility(
                         target_field.data_type(),
                     ) {
                         return _plan_err!(
-                            "Cannot cast struct field '{}' from type {:?} to type {:?}",
+                            "Cannot cast struct field '{}' from type {} to type {}",
                             target_field.name(),
                             source_field.data_type(),
                             target_field.data_type()

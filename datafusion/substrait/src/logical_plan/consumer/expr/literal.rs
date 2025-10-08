@@ -25,7 +25,8 @@ use crate::variation_const::{
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{new_empty_array, AsArray, MapArray};
@@ -155,6 +156,45 @@ pub(crate) fn from_substrait_literal(
             }
         },
         Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
+        Some(LiteralType::PrecisionTime(pt)) => match pt.precision {
+            0 => match lit.type_variation_reference {
+                TIME_32_TYPE_VARIATION_REF => {
+                    ScalarValue::Time32Second(Some(pt.value as i32))
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            },
+            3 => match lit.type_variation_reference {
+                TIME_32_TYPE_VARIATION_REF => {
+                    ScalarValue::Time32Millisecond(Some(pt.value as i32))
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            },
+            6 => match lit.type_variation_reference {
+                TIME_64_TYPE_VARIATION_REF => {
+                    ScalarValue::Time64Microsecond(Some(pt.value))
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            },
+            9 => match lit.type_variation_reference {
+                TIME_64_TYPE_VARIATION_REF => {
+                    ScalarValue::Time64Nanosecond(Some(pt.value))
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            },
+            p => {
+                return not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTime"
+                );
+            }
+        },
         Some(LiteralType::String(s)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8(Some(s.clone())),
             LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeUtf8(Some(s.clone())),

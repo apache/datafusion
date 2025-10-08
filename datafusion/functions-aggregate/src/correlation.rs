@@ -194,6 +194,11 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        let n = self.covar.get_count();
+        if n < 2 {
+            return Ok(ScalarValue::Float64(None));
+        }
+
         let covar = self.covar.evaluate()?;
         let stddev1 = self.stddev1.evaluate()?;
         let stddev2 = self.stddev2.evaluate()?;
@@ -202,7 +207,7 @@ impl Accumulator for CorrelationAccumulator {
             if let ScalarValue::Float64(Some(s1)) = stddev1 {
                 if let ScalarValue::Float64(Some(s2)) = stddev2 {
                     if s1 == 0_f64 || s2 == 0_f64 {
-                        return Ok(ScalarValue::Float64(Some(0_f64)));
+                        return Ok(ScalarValue::Float64(None));
                     } else {
                         return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
                     }
@@ -459,11 +464,8 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         //   the `denominator` state is 0. In these cases, the final aggregation
         //   result should be `Null` (according to PostgreSQL's behavior).
         //
-        // TODO: Old datafusion implementation returns 0.0 for these invalid cases.
-        // Update this to match PostgreSQL's behavior.
         for i in 0..n {
             if self.count[i] < 2 {
-                // TODO: Evaluate as `Null` (see notes above)
                 values.push(0.0);
                 nulls.append_null();
                 continue;
@@ -484,7 +486,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
                 ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
 
             if denominator == 0.0 {
-                // TODO: Evaluate as `Null` (see notes above)
                 values.push(0.0);
                 nulls.append_null();
             } else {

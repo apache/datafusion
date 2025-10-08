@@ -25,24 +25,25 @@ align to that vision.
 
 ## Planning `EPIC`s
 
-DataFusion uses [GitHub
-issues](https://github.com/apache/datafusion/issues) to track
-planned work. We collect related tickets using tracking issues labeled
-with `[EPIC]` which contain discussion and links to more detailed items.
+DataFusion uses [GitHub issues] to track planned work. We collect related
+tickets using tracking issues marked with the `EPIC` label, containing
+discussion and links to more detailed items:
 
-Epics offer a high level roadmap of what the DataFusion
-community is thinking about. The epics are not meant to restrict
-possibilities, but rather help the community see where development is
-headed, align our work, and inspire additional contributions.
+[github issues]: https://github.com/apache/datafusion/issues
 
-As this project is entirely driven by volunteers, we welcome
-contributions for items not currently covered by epics. However,
-before submitting a large PR, we strongly suggest and request you
-start a conversation using a github issue or the
-[dev@arrow.apache.org](mailto:dev@arrow.apache.org) mailing list to
-make review efficient and avoid surprises.
+- [The current list of `EPIC`s can be found here.](https://github.com/apache/datafusion/issues?q=is%3Aissue%20state%3Aopen%20label%3AEPIC)
 
-[The current list of `EPIC`s can be found here](https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+epic).
+- [The current list of `PROPOSAL EPIC` (that are not yet underway) can be found here.](https://github.com/apache/datafusion/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22PROPOSAL%20EPIC%22)
+
+Epics offer a high level roadmap of what the DataFusion community is thinking
+about. The epics are not meant to restrict possibilities, but rather help
+organize the community and make it easier to see where development is headed,
+align our work, and inspire additional contributions.
+
+We also welcome contributions for items not covered by epics. However, before
+submitting a large PR, we strongly suggest and request you start a conversation as described in [Discussing New Features](#discussing-new-features) below.
+
+[dev@arrow.apache.org]: mailto:dev@arrow.apache.org
 
 ## Quarterly Roadmap
 
@@ -62,14 +63,38 @@ For more information:
 ### Discussing New Features
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
-a good idea to open a ticket to discuss the feature. Advanced discussion often
-helps avoid wasted effort by determining early if the feature is a good fit for
-DataFusion before too much time is invested. Discussion on a ticket can help
-gather feedback from the community and is likely easier to discuss than a 1000
-line PR.
+a good idea to open one for discussion. Advanced discussion helps avoid wasted
+effort by determining if the feature is a good fit for DataFusion before too
+much time is invested. Discussion on a ticket can help gather feedback from the
+community and is likely easier to discuss than a 1000 line PR.
 
-If you open a ticket and it doesn't get any response, you can try `@`-mentioning
-recently active community members in the ticket to get their attention.
+Maintainers will mark major proposals as `PROPOSED EPIC` to make them more
+visible, but we are very limited on review bandwidth. If you open a ticket and it
+doesn't get any response, try `@`-mentioning recently active community members
+in the ticket, or [posting to the mailing list or Discord](communication.md).
+
+### Supervising Maintainers
+
+We have found that most successful epics have one or more "supervising
+maintainers", a committer ([see here for current list]) who take the lead on
+reviewing and committing PRs, helps with design, and coordinates and
+communicates with the community. If you want to ship a large feature, we
+recommend finding such maintainer upfront; otherwise, your PRs may
+remain unreviewed for a very long time.
+
+Supervising maintainers have no additional formal authority and there is
+currently no formal process for appointing, approving or tracking who has that
+role for a given epic. Instead, we rely on discussion on the ticket or PR.
+Helping complete an epic is a significant time commitment, so maintainers are
+more likely to help features they are particularly interested in or align with
+their own project's use of DataFusion.
+
+If you are willing to be a supervising maintainer for a feature, please say so
+explicitly. If you are unsure, we suggest asking directly who is willing to take
+the role, as it can be hard to tell sometimes whether a committer is simply
+participating and giving general feedback.
+
+[see here for current list]: governance.md
 
 ### What Contributions are Good Fits?
 

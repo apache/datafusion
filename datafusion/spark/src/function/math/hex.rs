@@ -272,7 +272,7 @@ pub fn compute_hex(
                         .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                         .collect::<Result<_, _>>()?,
                     _ => exec_err!(
-                        "hex got an unexpected argument type: {:?}",
+                        "hex got an unexpected argument type: {}",
                         array.data_type()
                     )?,
                 };
@@ -287,10 +287,7 @@ pub fn compute_hex(
 
                 Ok(ColumnarValue::Array(Arc::new(string_array_values)))
             }
-            _ => exec_err!(
-                "hex got an unexpected argument type: {:?}",
-                array.data_type()
-            ),
+            _ => exec_err!("hex got an unexpected argument type: {}", array.data_type()),
         },
         _ => exec_err!("native hex does not support scalar values at this time"),
     }

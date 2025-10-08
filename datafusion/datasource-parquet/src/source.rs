@@ -313,16 +313,9 @@ impl ParquetSource {
         self
     }
 
-    fn with_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
-        self.metrics = metrics;
-        self
-    }
-
     /// Set predicate information
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
-        let metrics = ExecutionPlanMetricsSet::new();
-        conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
         conf
     }
@@ -425,6 +418,12 @@ impl ParquetSource {
     /// Return the value described in [`Self::with_bloom_filter_on_read`]
     fn bloom_filter_on_read(&self) -> bool {
         self.table_parquet_options.global.bloom_filter_on_read
+    }
+
+    /// Return the maximum predicate cache size, in bytes, used when
+    /// `pushdown_filters`
+    pub fn max_predicate_cache_size(&self) -> Option<usize> {
+        self.table_parquet_options.global.max_predicate_cache_size
     }
 
     /// Applies schema adapter factory from the FileScanConfig if present.
@@ -583,6 +582,7 @@ impl FileSource for ParquetSource {
             expr_adapter_factory,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
+            max_predicate_cache_size: self.max_predicate_cache_size(),
         })
     }
 

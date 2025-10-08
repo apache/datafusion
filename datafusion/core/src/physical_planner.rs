@@ -59,12 +59,10 @@ use crate::schema_equivalence::schema_satisfied_by;
 
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::Schema;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
-};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::TableReference;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
@@ -85,7 +83,7 @@ use datafusion_expr::{
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::{Column, Literal};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
@@ -468,7 +466,6 @@ impl DefaultPhysicalPlanner {
                 Arc::clone(res.plan())
             }
             LogicalPlan::Values(Values { values, schema }) => {
-                let exec_schema = schema.as_ref().to_owned().into();
                 let exprs = values
                     .iter()
                     .map(|row| {
@@ -479,27 +476,23 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                MemorySourceConfig::try_new_as_values(SchemaRef::new(exec_schema), exprs)?
+                MemorySourceConfig::try_new_as_values(Arc::clone(schema.inner()), exprs)?
                     as _
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema,
-            }) => Arc::new(EmptyExec::new(SchemaRef::new(
-                schema.as_ref().to_owned().into(),
-            ))),
+            }) => Arc::new(EmptyExec::new(Arc::clone(schema.inner()))),
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: true,
                 schema,
-            }) => Arc::new(PlaceholderRowExec::new(SchemaRef::new(
-                schema.as_ref().to_owned().into(),
-            ))),
+            }) => Arc::new(PlaceholderRowExec::new(Arc::clone(schema.inner()))),
             LogicalPlan::DescribeTable(DescribeTable {
                 schema,
                 output_schema,
             }) => {
-                let output_schema: Schema = output_schema.as_ref().into();
-                self.plan_describe(Arc::clone(schema), Arc::new(output_schema))?
+                let output_schema = Arc::clone(output_schema.inner());
+                self.plan_describe(Arc::clone(schema), output_schema)?
             }
 
             // 1 Child
@@ -516,7 +509,7 @@ impl DefaultPhysicalPlanner {
                 let parsed_url = ListingTableUrl::parse(output_url)?;
                 let object_store_url = parsed_url.object_store();
 
-                let schema: Schema = (**input.schema()).clone().into();
+                let schema = Arc::clone(input.schema().inner());
 
                 // Note: the DataType passed here is ignored for the purposes of writing and inferred instead
                 // from the schema of the RecordBatch being written. This allows COPY statements to specify only
@@ -553,7 +546,7 @@ impl DefaultPhysicalPlanner {
                     object_store_url,
                     table_paths: vec![parsed_url],
                     file_group: FileGroup::default(),
-                    output_schema: Arc::new(schema),
+                    output_schema: schema,
                     table_partition_cols,
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
@@ -741,8 +734,53 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
+                let (mut aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(agg_filter);
+
+                let mut async_exprs = Vec::new();
+                let num_input_columns = physical_input_schema.fields().len();
+
+                for agg_func in &mut aggregates {
+                    match self.try_plan_async_exprs(
+                        num_input_columns,
+                        PlannedExprResult::Expr(agg_func.expressions()),
+                        physical_input_schema.as_ref(),
+                    )? {
+                        PlanAsyncExpr::Async(
+                            async_map,
+                            PlannedExprResult::Expr(physical_exprs),
+                        ) => {
+                            async_exprs.extend(async_map.async_exprs);
+
+                            if let Some(new_agg_func) = agg_func.with_new_expressions(
+                                physical_exprs,
+                                agg_func
+                                    .order_bys()
+                                    .iter()
+                                    .cloned()
+                                    .map(|x| x.expr)
+                                    .collect(),
+                            ) {
+                                *agg_func = Arc::new(new_agg_func);
+                            } else {
+                                return internal_err!("Failed to plan async expression");
+                            }
+                        }
+                        PlanAsyncExpr::Sync(PlannedExprResult::Expr(_)) => {
+                            // Do nothing
+                        }
+                        _ => {
+                            return internal_err!(
+                                "Unexpected result from try_plan_async_exprs"
+                            )
+                        }
+                    }
+                }
+                let input_exec = if !async_exprs.is_empty() {
+                    Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
+                } else {
+                    input_exec
+                };
 
                 let initial_aggr = Arc::new(AggregateExec::try_new(
                     AggregateMode::Partial,
@@ -933,7 +971,7 @@ impl DefaultPhysicalPlanner {
                 ..
             }) => {
                 let input = children.one()?;
-                let schema = SchemaRef::new(schema.as_ref().to_owned().into());
+                let schema = Arc::clone(schema.inner());
                 let list_column_indices = list_type_columns
                     .iter()
                     .map(|(index, unnesting)| ListUnnest {
@@ -1641,7 +1679,7 @@ pub fn create_window_expr_with_name(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
-    let physical_schema: &Schema = &logical_schema.into();
+    let physical_schema = Arc::clone(logical_schema.inner());
     match e {
         Expr::WindowFunction(window_fun) => {
             let WindowFunction {
@@ -2033,7 +2071,7 @@ impl DefaultPhysicalPlanner {
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = self.create_physical_plan(&a.input, session_state).await?;
-        let schema = SchemaRef::new((*a.schema).clone().into());
+        let schema = Arc::clone(a.schema.inner());
         let show_statistics = session_state.config_options().explain.show_statistics;
         Ok(Arc::new(AnalyzeExec::new(
             a.verbose,
@@ -2097,7 +2135,15 @@ impl DefaultPhysicalPlanner {
             "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent(false)
         );
-        debug!("Detailed optimized physical plan:\n{new_plan:?}");
+
+        // Don't print new_plan directly, as that may overflow the stack.
+        // For example:
+        // thread 'tokio-runtime-worker' has overflowed its stack
+        // fatal runtime error: stack overflow, aborting
+        debug!(
+            "Detailed optimized physical plan:\n{}\n",
+            displayable(new_plan.as_ref()).indent(true)
+        );
         Ok(new_plan)
     }
 
@@ -2115,7 +2161,7 @@ impl DefaultPhysicalPlanner {
 
             // "System supplied type" --> Use debug format of the datatype
             let data_type = field.data_type();
-            data_types.append_value(format!("{data_type:?}"));
+            data_types.append_value(format!("{data_type}"));
 
             // "YES if the column is possibly nullable, NO if it is known not nullable. "
             let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
@@ -2181,11 +2227,7 @@ impl DefaultPhysicalPlanner {
                 let physical_expr =
                     self.create_physical_expr(e, input_logical_schema, session_state);
 
-                // Check for possible column name mismatches
-                let final_physical_expr =
-                    maybe_fix_physical_column_name(physical_expr, &input_physical_schema);
-
-                tuple_err((final_physical_expr, physical_name))
+                tuple_err((physical_expr, physical_name))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -2272,11 +2314,13 @@ impl DefaultPhysicalPlanner {
     }
 }
 
+#[derive(Debug)]
 enum PlannedExprResult {
     ExprWithName(Vec<(Arc<dyn PhysicalExpr>, String)>),
     Expr(Vec<Arc<dyn PhysicalExpr>>),
 }
 
+#[derive(Debug)]
 enum PlanAsyncExpr {
     Sync(PlannedExprResult),
     Async(AsyncMapper, PlannedExprResult),
@@ -2289,47 +2333,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
         (Ok(_), Err(e1)) => Err(e1),
         (Err(e), Err(_)) => Err(e),
     }
-}
-
-// Handle the case where the name of a physical column expression does not match the corresponding physical input fields names.
-// Physical column names are derived from the physical schema, whereas physical column expressions are derived from the logical column names.
-//
-// This is a special case that applies only to column expressions. Logical plans may slightly modify column names by appending a suffix (e.g., using ':'),
-// to avoid duplicates—since DFSchemas do not allow duplicate names. For example: `count(Int64(1)):1`.
-fn maybe_fix_physical_column_name(
-    expr: Result<Arc<dyn PhysicalExpr>>,
-    input_physical_schema: &SchemaRef,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let Ok(expr) = expr else { return expr };
-    expr.transform_down(|node| {
-        if let Some(column) = node.as_any().downcast_ref::<Column>() {
-            let idx = column.index();
-            let physical_field = input_physical_schema.field(idx);
-            let expr_col_name = column.name();
-            let physical_name = physical_field.name();
-
-            if expr_col_name != physical_name {
-                // handle edge cases where the physical_name contains ':'.
-                let colon_count = physical_name.matches(':').count();
-                let mut splits = expr_col_name.match_indices(':');
-                let split_pos = splits.nth(colon_count);
-
-                if let Some((i, _)) = split_pos {
-                    let base_name = &expr_col_name[..i];
-                    if base_name == physical_name {
-                        let updated_column = Column::new(physical_name, idx);
-                        return Ok(Transformed::yes(Arc::new(updated_column)));
-                    }
-                }
-            }
-
-            // If names already match or fix is not possible, just leave it as it is
-            Ok(Transformed::no(node))
-        } else {
-            Ok(Transformed::no(node))
-        }
-    })
-    .data()
 }
 
 struct OptimizationInvariantChecker<'a> {
@@ -2429,18 +2432,17 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
+    use arrow_schema::SchemaRef;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
         assert_contains, DFSchemaRef, TableReference, ToDFSchema as _,
     };
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
-    use datafusion_expr::{
-        col, lit, LogicalPlanBuilder, Operator, UserDefinedLogicalNodeCore,
-    };
+    use datafusion_expr::builder::subquery_alias;
+    use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
     use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
-    use datafusion_physical_expr::expressions::{BinaryExpr, IsNotNullExpr};
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
@@ -2742,7 +2744,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct(foo Boolean), Utf8]"#
         );
 
         Ok(())
@@ -3001,71 +3003,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_maybe_fix_colon_in_physical_name() {
-        // The physical schema has a field name with a colon
-        let schema = Schema::new(vec![Field::new("metric:avg", DataType::Int32, false)]);
-        let schema_ref: SchemaRef = Arc::new(schema);
-
-        // What might happen after deduplication
-        let logical_col_name = "metric:avg:1";
-        let expr_with_suffix =
-            Arc::new(Column::new(logical_col_name, 0)) as Arc<dyn PhysicalExpr>;
-        let expr_result = Ok(expr_with_suffix);
-
-        // Call function under test
-        let fixed_expr =
-            maybe_fix_physical_column_name(expr_result, &schema_ref).unwrap();
-
-        // Downcast back to Column so we can check the name
-        let col = fixed_expr
-            .as_any()
-            .downcast_ref::<Column>()
-            .expect("Column");
-
-        assert_eq!(col.name(), "metric:avg");
-    }
-
-    #[tokio::test]
-    async fn test_maybe_fix_nested_column_name_with_colon() {
-        let schema = Schema::new(vec![Field::new("column", DataType::Int32, false)]);
-        let schema_ref: SchemaRef = Arc::new(schema);
-
-        // Construct the nested expr
-        let col_expr = Arc::new(Column::new("column:1", 0)) as Arc<dyn PhysicalExpr>;
-        let is_not_null_expr = Arc::new(IsNotNullExpr::new(col_expr.clone()));
-
-        // Create a binary expression and put the column inside
-        let binary_expr = Arc::new(BinaryExpr::new(
-            is_not_null_expr.clone(),
-            Operator::Or,
-            is_not_null_expr.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let fixed_expr =
-            maybe_fix_physical_column_name(Ok(binary_expr), &schema_ref).unwrap();
-
-        let bin = fixed_expr
-            .as_any()
-            .downcast_ref::<BinaryExpr>()
-            .expect("Expected BinaryExpr");
-
-        // Check that both sides where renamed
-        for expr in &[bin.left(), bin.right()] {
-            let is_not_null = expr
-                .as_any()
-                .downcast_ref::<IsNotNullExpr>()
-                .expect("Expected IsNotNull");
-
-            let col = is_not_null
-                .arg()
-                .as_any()
-                .downcast_ref::<Column>()
-                .expect("Expected Column");
-
-            assert_eq!(col.name(), "column");
-        }
-    }
     struct ErrorExtensionPlanner {}
 
     #[async_trait]
@@ -3559,6 +3496,63 @@ digraph {
         assert!(expected_err.to_string().contains(
             "extension node failed it's user-defined executable-invariant check"
         ));
+
+        Ok(())
+    }
+
+    // Reproducer for DataFusion issue #17405:
+    //
+    // The following SQL is semantically invalid. Notably, the `SELECT left_table.a, right_table.a`
+    // clause is missing from the explicit logical plan:
+    //
+    // SELECT a FROM (
+    //       -- SELECT left_table.a, right_table.a
+    //       FROM left_table
+    //       FULL JOIN right_table ON left_table.a = right_table.a
+    // ) AS alias
+    // GROUP BY a;
+    //
+    // As a result, the variables within `alias` subquery are not properly distinguished, which
+    // leads to a bug for logical and physical planning.
+    //
+    // The fix is to implicitly insert a Projection node to represent the missing SELECT clause to
+    // ensure each field is correctly aliased to a unique name when the SubqueryAlias node is added.
+    #[tokio::test]
+    async fn subquery_alias_confusing_the_optimizer() -> Result<()> {
+        let state = make_session_state();
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Arc::new(schema);
+
+        let table = MemTable::try_new(schema.clone(), vec![vec![]])?;
+        let table = Arc::new(table);
+
+        let source = DefaultTableSource::new(table);
+        let source = Arc::new(source);
+
+        let left = LogicalPlanBuilder::scan("left", source.clone(), None)?;
+        let right = LogicalPlanBuilder::scan("right", source, None)?.build()?;
+
+        let join_keys = (
+            vec![datafusion_common::Column::new(Some("left"), "a")],
+            vec![datafusion_common::Column::new(Some("right"), "a")],
+        );
+
+        let join = left.join(right, JoinType::Full, join_keys, None)?.build()?;
+
+        let alias = subquery_alias(join, "alias")?;
+
+        let planner = DefaultPhysicalPlanner::default();
+
+        let logical_plan = LogicalPlanBuilder::new(alias)
+            .aggregate(vec![col("a:1")], Vec::<Expr>::new())?
+            .build()?;
+        let _physical_plan = planner.create_physical_plan(&logical_plan, &state).await?;
+
+        let optimized_logical_plan = state.optimize(&logical_plan)?;
+        let _optimized_physical_plan = planner
+            .create_physical_plan(&optimized_logical_plan, &state)
+            .await?;
 
         Ok(())
     }

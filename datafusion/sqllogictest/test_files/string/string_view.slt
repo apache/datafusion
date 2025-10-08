@@ -804,7 +804,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: regexp_replace(test.column1_utf8view, Utf8("^https?://(?:www\.)?([^/]+)/.*$"), Utf8("\1")) AS k
+01)Projection: regexp_replace(test.column1_utf8view, Utf8View("^https?://(?:www\.)?([^/]+)/.*$"), Utf8View("\1")) AS k
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REPEAT

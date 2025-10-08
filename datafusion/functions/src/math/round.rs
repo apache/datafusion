@@ -41,7 +41,15 @@ use datafusion_macros::user_doc;
     argument(
         name = "decimal_places",
         description = "Optional. The number of decimal places to round to. Defaults to 0."
-    )
+    ),
+    sql_example = r#"```sql
+> SELECT round(3.14159);
++--------------+
+| round(3.14159)|
++--------------+
+| 3.0          |
++--------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RoundFunc {

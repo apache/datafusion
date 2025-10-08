@@ -81,6 +81,17 @@ abs(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT abs(-5);
++----------+
+| abs(-5)  |
++----------+
+| 5        |
++----------+
+```
+
 ### `acos`
 
 Returns the arc cosine or inverse cosine of a number.
@@ -92,6 +103,17 @@ acos(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT acos(1);
++----------+
+| acos(1)  |
++----------+
+| 0.0      |
++----------+
+```
 
 ### `acosh`
 
@@ -105,6 +127,17 @@ acosh(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT acosh(2);
++------------+
+| acosh(2)   |
++------------+
+| 1.31696    |
++------------+
+```
+
 ### `asin`
 
 Returns the arc sine or inverse sine of a number.
@@ -116,6 +149,17 @@ asin(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT asin(0.5);
++------------+
+| asin(0.5)  |
++------------+
+| 0.5235988  |
++------------+
+```
 
 ### `asinh`
 
@@ -129,6 +173,17 @@ asinh(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT asinh(1);
++------------+
+| asinh(1)   |
++------------+
+| 0.8813736  |
++------------+
+```
+
 ### `atan`
 
 Returns the arc tangent or inverse tangent of a number.
@@ -140,6 +195,17 @@ atan(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+    > SELECT atan(1);
++-----------+
+| atan(1)   |
++-----------+
+| 0.7853982 |
++-----------+
+```
 
 ### `atan2`
 
@@ -156,6 +222,17 @@ atan2(expression_y, expression_x)
 - **expression_x**: Second numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+#### Example
+
+```sql
+> SELECT atan2(1, 1);
++------------+
+| atan2(1,1) |
++------------+
+| 0.7853982  |
++------------+
+```
+
 ### `atanh`
 
 Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.
@@ -167,6 +244,17 @@ atanh(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+    > SELECT atanh(0.5);
++-------------+
+| atanh(0.5)  |
++-------------+
+| 0.5493061   |
++-------------+
+```
 
 ### `cbrt`
 
@@ -180,6 +268,17 @@ cbrt(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT cbrt(27);
++-----------+
+| cbrt(27)  |
++-----------+
+| 3.0       |
++-----------+
+```
+
 ### `ceil`
 
 Returns the nearest integer greater than or equal to a number.
@@ -191,6 +290,17 @@ ceil(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+    > SELECT ceil(3.14);
++------------+
+| ceil(3.14) |
++------------+
+| 4.0        |
++------------+
+```
 
 ### `cos`
 
@@ -204,6 +314,17 @@ cos(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT cos(0);
++--------+
+| cos(0) |
++--------+
+| 1.0    |
++--------+
+```
+
 ### `cosh`
 
 Returns the hyperbolic cosine of a number.
@@ -215,6 +336,17 @@ cosh(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT cosh(1);
++-----------+
+| cosh(1)   |
++-----------+
+| 1.5430806 |
++-----------+
+```
 
 ### `cot`
 
@@ -228,6 +360,17 @@ cot(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT cot(1);
++---------+
+| cot(1)  |
++---------+
+| 0.64209 |
++---------+
+```
+
 ### `degrees`
 
 Converts radians to degrees.
@@ -239,6 +382,17 @@ degrees(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+    > SELECT degrees(pi());
++------------+
+| degrees(0) |
++------------+
+| 180.0      |
++------------+
+```
 
 ### `exp`
 
@@ -252,6 +406,17 @@ exp(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT exp(1);
++---------+
+| exp(1)  |
++---------+
+| 2.71828 |
++---------+
+```
+
 ### `factorial`
 
 Factorial. Returns 1 if value is less than 2.
@@ -264,6 +429,17 @@ factorial(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT factorial(5);
++---------------+
+| factorial(5)  |
++---------------+
+| 120           |
++---------------+
+```
+
 ### `floor`
 
 Returns the nearest integer less than or equal to a number.
@@ -275,6 +451,17 @@ floor(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT floor(3.14);
++-------------+
+| floor(3.14) |
++-------------+
+| 3.0         |
++-------------+
+```
 
 ### `gcd`
 
@@ -289,6 +476,17 @@ gcd(expression_x, expression_y)
 - **expression_x**: First numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_y**: Second numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT gcd(48, 18);
++------------+
+| gcd(48,18) |
++------------+
+| 6          |
++------------+
+```
+
 ### `isnan`
 
 Returns true if a given number is +NaN or -NaN otherwise returns false.
@@ -301,6 +499,17 @@ isnan(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT isnan(1);
++----------+
+| isnan(1) |
++----------+
+| false    |
++----------+
+```
+
 ### `iszero`
 
 Returns true if a given number is +0.0 or -0.0 otherwise returns false.
@@ -312,6 +521,17 @@ iszero(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT iszero(0);
++------------+
+| iszero(0)  |
++------------+
+| true       |
++------------+
+```
 
 ### `lcm`
 
@@ -326,6 +546,17 @@ lcm(expression_x, expression_y)
 - **expression_x**: First numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_y**: Second numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT lcm(4, 5);
++----------+
+| lcm(4,5) |
++----------+
+| 20       |
++----------+
+```
+
 ### `ln`
 
 Returns the natural logarithm of a number.
@@ -337,6 +568,17 @@ ln(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT ln(2.71828);
++-------------+
+| ln(2.71828) |
++-------------+
+| 1.0         |
++-------------+
+```
 
 ### `log`
 
@@ -352,6 +594,17 @@ log(numeric_expression)
 - **base**: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT log(10);
++---------+
+| log(10) |
++---------+
+| 1.0     |
++---------+
+```
+
 ### `log10`
 
 Returns the base-10 logarithm of a number.
@@ -364,6 +617,17 @@ log10(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT log10(100);
++-------------+
+| log10(100)  |
++-------------+
+| 2.0         |
++-------------+
+```
+
 ### `log2`
 
 Returns the base-2 logarithm of a number.
@@ -375,6 +639,17 @@ log2(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT log2(8);
++-----------+
+| log2(8)   |
++-----------+
+| 3.0       |
++-----------+
+```
 
 ### `nanvl`
 
@@ -389,6 +664,17 @@ nanvl(expression_x, expression_y)
 
 - **expression_x**: Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression_y**: Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.
+
+#### Example
+
+```sql
+> SELECT nanvl(0, 5);
++------------+
+| nanvl(0,5) |
++------------+
+| 0          |
++------------+
+```
 
 ### `pi`
 
@@ -415,6 +701,17 @@ power(base, exponent)
 - **base**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **exponent**: Exponent numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT power(2, 3);
++-------------+
+| power(2,3)  |
++-------------+
+| 8           |
++-------------+
+```
+
 #### Aliases
 
 - pow
@@ -431,6 +728,17 @@ radians(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT radians(180);
++----------------+
+| radians(180)   |
++----------------+
+| 3.14159265359  |
++----------------+
+```
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -438,6 +746,17 @@ The random seed is unique to each row.
 
 ```sql
 random()
+```
+
+#### Example
+
+```sql
+> SELECT random();
++------------------+
+| random()         |
++------------------+
+| 0.7389238902938  |
++------------------+
 ```
 
 ### `round`
@@ -453,6 +772,17 @@ round(numeric_expression[, decimal_places])
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **decimal_places**: Optional. The number of decimal places to round to. Defaults to 0.
 
+#### Example
+
+```sql
+> SELECT round(3.14159);
++--------------+
+| round(3.14159)|
++--------------+
+| 3.0          |
++--------------+
+```
+
 ### `signum`
 
 Returns the sign of a number.
@@ -467,6 +797,17 @@ signum(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT signum(-42);
++-------------+
+| signum(-42) |
++-------------+
+| -1          |
++-------------+
+```
+
 ### `sin`
 
 Returns the sine of a number.
@@ -479,6 +820,17 @@ sin(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT sin(0);
++----------+
+| sin(0)   |
++----------+
+| 0.0      |
++----------+
+```
+
 ### `sinh`
 
 Returns the hyperbolic sine of a number.
@@ -490,6 +842,17 @@ sinh(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> SELECT sinh(1);
++-----------+
+| sinh(1)   |
++-----------+
+| 1.1752012 |
++-----------+
+```
 
 ### `sqrt`
 
@@ -515,6 +878,17 @@ tan(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+#### Example
+
+```sql
+> SELECT tan(pi()/4);
++--------------+
+| tan(PI()/4)  |
++--------------+
+| 1.0          |
++--------------+
+```
+
 ### `tanh`
 
 Returns the hyperbolic tangent of a number.
@@ -526,6 +900,17 @@ tanh(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+  > SELECT tanh(20);
+  +----------+
+  | tanh(20) |
+  +----------+
+  | 1.0      |
+  +----------+
+```
 
 ### `trunc`
 
@@ -543,6 +928,17 @@ trunc(numeric_expression[, decimal_places])
   `decimal_places` is a positive integer, truncates digits to the
   right of the decimal point. If `decimal_places` is a negative
   integer, replaces digits to the left of the decimal point with `0`.
+
+#### Example
+
+```sql
+> SELECT trunc(42.738);
++----------------+
+| trunc(42.738)  |
++----------------+
+| 42             |
++----------------+
+```
 
 ## Conditional Functions
 

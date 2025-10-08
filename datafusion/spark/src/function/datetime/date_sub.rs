@@ -114,7 +114,7 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         _ => {
             return internal_err!(
-                "Spark `date_add` function: argument must be int8, int16, int32, got {:?}",
+                "Spark `date_sub` function: argument must be int8, int16, int32, got {:?}",
                 days_arg.data_type()
             );
         }

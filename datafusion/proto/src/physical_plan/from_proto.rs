@@ -38,7 +38,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
 };
-use datafusion::execution::FunctionRegistry;
+use datafusion::execution::{FunctionRegistry, TaskContext};
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
@@ -47,8 +47,6 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion::prelude::SessionContext;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_proto_common::common::proto_error;
 
@@ -76,7 +74,7 @@ impl From<&protobuf::PhysicalColumn> for Column {
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_expr(
     proto: &protobuf::PhysicalSortExprNode,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<PhysicalSortExpr> {
@@ -103,7 +101,7 @@ pub fn parse_physical_sort_expr(
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_exprs(
     proto: &[protobuf::PhysicalSortExprNode],
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Vec<PhysicalSortExpr>> {
@@ -125,7 +123,7 @@ pub fn parse_physical_sort_exprs(
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_window_expr(
     proto: &protobuf::PhysicalWindowExprNode,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn WindowExpr>> {
@@ -177,7 +175,7 @@ pub fn parse_physical_window_expr(
         &partition_by,
         &order_by,
         Arc::new(window_frame),
-        &extended_schema,
+        extended_schema,
         proto.ignore_nulls,
         proto.distinct,
         None,
@@ -186,7 +184,7 @@ pub fn parse_physical_window_expr(
 
 pub fn parse_physical_exprs<'a, I>(
     protos: I,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
@@ -210,7 +208,7 @@ where
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -364,11 +362,8 @@ pub fn parse_physical_expr(
             let scalar_fun_def = Arc::clone(&udf);
 
             let args = parse_physical_exprs(&e.args, ctx, input_schema, codec)?;
-            let config_options =
-                match ctx.state().execution_props().config_options.as_ref() {
-                    Some(config_options) => Arc::clone(config_options),
-                    None => Arc::new(ConfigOptions::default()),
-                };
+
+            let config_options = Arc::clone(ctx.session_config().options());
 
             Arc::new(
                 ScalarFunctionExpr::new(
@@ -419,7 +414,7 @@ pub fn parse_physical_expr(
 
 fn parse_required_physical_expr(
     expr: Option<&protobuf::PhysicalExprNode>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     field: &str,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
@@ -433,7 +428,7 @@ fn parse_required_physical_expr(
 
 pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Option<Partitioning>> {
@@ -453,7 +448,7 @@ pub fn parse_protobuf_hash_partitioning(
 
 pub fn parse_protobuf_partitioning(
     partitioning: Option<&protobuf::Partitioning>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Option<Partitioning>> {
@@ -491,7 +486,7 @@ pub fn parse_protobuf_file_scan_schema(
 
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {

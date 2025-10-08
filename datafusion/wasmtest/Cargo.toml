@@ -60,4 +60,4 @@ object_store = { workspace = true }
 # needs to be compiled
 tokio = { workspace = true }
 url = { workspace = true }
-wasm-bindgen-test = "0.3.51"
+wasm-bindgen-test = "0.3.54"
