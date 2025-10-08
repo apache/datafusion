@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::config::ConfigOptions;
@@ -136,7 +137,9 @@ impl LimitedDistinctAggregation {
                     }
                 }
             }
-            rewrite_applicable = false;
+            if matches!(plan.as_any().downcast_ref::<ProjectionExec>(), None) {
+                rewrite_applicable = false;
+            }
             Ok(Transformed::no(plan))
         };
         let child = child.to_owned().transform_down(closure).data().ok()?;
