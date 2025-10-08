@@ -81,7 +81,11 @@ fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
         .collect()
 }
 
-fn create_integer_data(rng: &mut StdRng, size: usize, value_density: f64) -> Vec<Option<u64>> {
+fn create_integer_data(
+    rng: &mut StdRng,
+    size: usize,
+    value_density: f64,
+) -> Vec<Option<u64>> {
     (0..size)
         .map(|_| {
             if rng.random::<f64>() > value_density {
