@@ -555,14 +555,14 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
     fn create_reader(
         &self,
         _partition_index: usize,
-        file: PartitionedFile,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
         // for this example we ignore the partition index and metrics
         // but in a real system you would likely use them to report details on
         // the performance of the reader.
-        let filename = file
+        let filename = partition_file
             .object_meta
             .location
             .parts()
@@ -572,8 +572,9 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             .to_string();
 
         let object_store = Arc::clone(&self.object_store);
-        let mut inner = ParquetObjectReader::new(object_store, file.object_meta.location)
-            .with_file_size(file.object_meta.size);
+        let mut inner =
+            ParquetObjectReader::new(object_store, partition_file.object_meta.location)
+                .with_file_size(partition_file.object_meta.size);
 
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)

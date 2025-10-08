@@ -62,7 +62,7 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     fn create_reader(
         &self,
         partition_index: usize,
-        file: PartitionedFile,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>>;
@@ -133,7 +133,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
     fn create_reader(
         &self,
         partition_index: usize,
-        file: PartitionedFile,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
@@ -185,7 +185,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
     fn create_reader(
         &self,
         partition_index: usize,
-        file: PartitionedFile,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
@@ -222,7 +222,7 @@ pub struct CachedParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     store: Arc<dyn ObjectStore>,
     pub inner: ParquetObjectReader,
-    file: PartitionedFile,
+    partitioned_file: PartitionedFile,
     metadata_cache: Arc<dyn FileMetadataCache>,
     metadata_size_hint: Option<usize>,
 }

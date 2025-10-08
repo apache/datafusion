@@ -42,7 +42,7 @@ pub struct FilePruner {
     /// Schema used for pruning, which combines the file schema and partition fields.
     /// Partition fields are always at the end, as they are during scans.
     pruning_schema: Arc<Schema>,
-    file: PartitionedFile,
+    partitioned_file: PartitionedFile,
     partition_fields: Vec<FieldRef>,
     predicate_creation_errors: Count,
 }
@@ -52,7 +52,7 @@ impl FilePruner {
         predicate: Arc<dyn PhysicalExpr>,
         logical_file_schema: &SchemaRef,
         partition_fields: Vec<FieldRef>,
-        file: PartitionedFile,
+        partitioned_file: PartitionedFile,
         predicate_creation_errors: Count,
     ) -> Result<Self> {
         // Build a pruning schema that combines the file fields and partition fields.

@@ -2206,7 +2206,7 @@ mod tests {
         fn create_reader(
             &self,
             partition_index: usize,
-            file: PartitionedFile,
+            partitioned_file: PartitionedFile,
             metadata_size_hint: Option<usize>,
             metrics: &ExecutionPlanMetricsSet,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
@@ -2215,8 +2215,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(metadata_size_hint);
-            self.inner
-                .create_reader(partition_index, file, metadata_size_hint, metrics)
+            self.inner.create_reader(
+                partition_index,
+                partition_file,
+                metadata_size_hint,
+                metrics,
+            )
         }
     }
 
