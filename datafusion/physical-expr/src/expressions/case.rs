@@ -155,10 +155,7 @@ impl CaseExpr {
                 && else_expr.as_ref().unwrap().as_any().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
-            } else if when_then_expr.len() == 1
-                && is_cheap_and_infallible(&(when_then_expr[0].1))
-                && else_expr.as_ref().is_some_and(is_cheap_and_infallible)
-            {
+            } else if when_then_expr.len() == 1 && else_expr.is_some() {
                 EvalMethod::ExpressionOrExpression
             } else {
                 EvalMethod::NoExpression
@@ -430,6 +427,15 @@ impl CaseExpr {
             0 => Cow::Borrowed(when_value),
             _ => Cow::Owned(prep_null_mask_filter(when_value)),
         };
+
+        let true_count = when_value.true_count();
+        if true_count == batch.num_rows() {
+            // Avoid evaluate_selection when all rows are true
+            return self.when_then_expr[0].1.evaluate(batch);
+        } else if true_count == 0 {
+            // Avoid evaluate_selection when all rows are false/null
+            return self.else_expr.as_ref().unwrap().evaluate(batch);
+        }
 
         let then_value = self.when_then_expr[0]
             .1
