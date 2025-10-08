@@ -158,6 +158,7 @@ fn bytes_bench(
             (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
         },
     );
+    // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
 }
 
 fn primitive_vectorized_append(c: &mut Criterion) {
@@ -265,6 +266,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
             (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
         },
     );
+    // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
 }
 
 /// Test `vectorized_equal_to` with different number of true in the initial results
