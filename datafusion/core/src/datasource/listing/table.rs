@@ -2734,7 +2734,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_listing_table_prunes_extra_files_in_hive() -> Result<()> {
-        let files = vec![
+        let files = [
             "bucket/test/pid=1/file1",
             "bucket/test/pid=1/file2",
             "bucket/test/pid=2/file3",
