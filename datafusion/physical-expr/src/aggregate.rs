@@ -847,28 +847,28 @@ impl PhysicalExpr for GroupingExpr {
         };
 
         match grouping_id_col.data_type() {
-            DataType::Int8 => {
+            DataType::UInt8 => {
                 let result =
                     self.grouping(as_primitive_array::<UInt8Type>(grouping_id_col)?, indices);
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
-            DataType::Int16 => {
+            DataType::UInt16 => {
                 let result =
                     self.grouping(as_primitive_array::<UInt16Type>(grouping_id_col)?, indices);
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
-            DataType::Int32 => {
+            DataType::UInt32 => {
                 let result =
                     self.grouping(as_primitive_array::<UInt32Type>(grouping_id_col)?, indices);
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
-            DataType::Int64 => {
+            DataType::UInt64 => {
                 let result =
                     self.grouping(as_primitive_array::<UInt64Type>(grouping_id_col)?, indices);
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             _ => {
-                internal_err!("GROUPING expression requires a primitive array")
+                internal_err!("GROUPING expression requires a primitive array, but got {}", grouping_id_col.data_type())
             }
         }
     }
