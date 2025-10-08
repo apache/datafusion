@@ -2513,10 +2513,10 @@ dependencies = [
  "datafusion-proto-common",
  "doc-comment",
  "object_store",
- "pbjson",
+ "pbjson 0.8.0",
  "pretty_assertions",
  "prost 0.13.5",
- "serde",
+ "serde_core",
  "serde_json",
  "tokio",
 ]
@@ -2528,9 +2528,9 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "doc-comment",
- "pbjson",
+ "pbjson 0.8.0",
  "prost 0.13.5",
- "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -2655,7 +2655,7 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "object_store",
- "pbjson-types",
+ "pbjson-types 0.8.0",
  "prost 0.13.5",
  "serde_json",
  "substrait",
@@ -4481,6 +4481,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pbjson"
+version = "0.8.0"
+source = "git+http://github.com/adamgs/pbjson?branch=adamg%2Fserde-core#8bd7810f3ff85e700594bd6e3a60d2e11d7e8edc"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "pbjson-build"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4495,8 +4505,7 @@ dependencies = [
 [[package]]
 name = "pbjson-build"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af22d08a625a2213a78dbb0ffa253318c5c79ce3133d32d296655a7bdfb02095"
+source = "git+http://github.com/adamgs/pbjson?branch=adamg%2Fserde-core#8bd7810f3ff85e700594bd6e3a60d2e11d7e8edc"
 dependencies = [
  "heck 0.5.0",
  "itertools 0.14.0",
@@ -4512,10 +4521,25 @@ checksum = "e54e5e7bfb1652f95bc361d76f3c780d8e526b134b85417e774166ee941f0887"
 dependencies = [
  "bytes",
  "chrono",
- "pbjson",
+ "pbjson 0.7.0",
  "pbjson-build 0.7.0",
  "prost 0.13.5",
  "prost-build 0.13.5",
+ "serde",
+]
+
+[[package]]
+name = "pbjson-types"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e748e28374f10a330ee3bb9f29b828c0ac79831a32bab65015ad9b661ead526"
+dependencies = [
+ "bytes",
+ "chrono",
+ "pbjson 0.8.0",
+ "pbjson-build 0.8.0",
+ "prost 0.14.1",
+ "prost-build 0.14.1",
  "serde",
 ]
 
@@ -4821,7 +4845,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -4841,7 +4865,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac6c3320f9abac597dcbc668774ef006702672474aad53c6d596b62e487b40b1"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -4861,7 +4885,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -4874,7 +4898,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9120690fafc389a67ba3803df527d0ec9cbbc9cc45e4cc20b332996dfb672425"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -6167,9 +6191,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de6d24c270c6c672a86c183c3a8439ba46c1936f93cf7296aa692de3b0ff0228"
 dependencies = [
  "heck 0.5.0",
- "pbjson",
+ "pbjson 0.7.0",
  "pbjson-build 0.7.0",
- "pbjson-types",
+ "pbjson-types 0.7.0",
  "prettyplease",
  "prost 0.13.5",
  "prost-build 0.13.5",

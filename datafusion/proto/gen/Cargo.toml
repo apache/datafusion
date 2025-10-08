@@ -34,5 +34,5 @@ workspace = true
 
 [dependencies]
 # Pin these dependencies so that the generated output is deterministic
-pbjson-build = "=0.8.0"
+pbjson-build = { git = "http://github.com/adamgs/pbjson", branch = "adamg/serde-core" }
 prost-build = "=0.14.1"

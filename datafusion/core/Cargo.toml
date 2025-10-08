@@ -150,7 +150,7 @@ parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serde = { version = "1.0.200", default-features = false, features = ["derive"], optional = true }
 sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
