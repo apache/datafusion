@@ -137,7 +137,7 @@ impl LimitedDistinctAggregation {
                     }
                 }
             }
-            if matches!(plan.as_any().downcast_ref::<ProjectionExec>(), None) {
+            if plan.as_any().downcast_ref::<ProjectionExec>().is_none() {
                 rewrite_applicable = false;
             }
             Ok(Transformed::no(plan))

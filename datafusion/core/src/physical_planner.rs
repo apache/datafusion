@@ -83,7 +83,9 @@ use datafusion_expr::{
     Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
-use datafusion_physical_expr::aggregate::{AggregateExpr, AggregateExprBuilder, GroupingExpr};
+use datafusion_physical_expr::aggregate::{
+    AggregateExpr, AggregateExprBuilder, GroupingExpr,
+};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
@@ -742,21 +744,27 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let no_grouping_agg = agg_filter.iter().filter_map(|(e, filters, order_bys)| {
-                    if matches!(e, AggregateExpr::AggregateFunctionExpr(_)) {
-                        Some((e.clone(), filters.clone(), order_bys.clone()))
-                    } else {
-                        None
-                    }
-                }).collect::<Vec<_>>();
+                let no_grouping_agg = agg_filter
+                    .iter()
+                    .filter_map(|(e, filters, order_bys)| {
+                        if matches!(e, AggregateExpr::AggregateFunctionExpr(_)) {
+                            Some((e.clone(), filters.clone(), order_bys.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
 
                 let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(no_grouping_agg);
 
-                let mut aggregates = aggregates.into_iter().map(|e| match e {
-                    AggregateExpr::AggregateFunctionExpr(e) => e,
-                    _ => unreachable!(),
-                }).collect::<Vec<_>>();
+                let mut aggregates = aggregates
+                    .into_iter()
+                    .map(|e| match e {
+                        AggregateExpr::AggregateFunctionExpr(e) => e,
+                        _ => unreachable!(),
+                    })
+                    .collect::<Vec<_>>();
 
                 let mut async_exprs = Vec::new();
                 let num_input_columns = physical_input_schema.fields().len();
@@ -843,7 +851,11 @@ impl DefaultPhysicalPlanner {
                     Arc::clone(&physical_input_schema),
                 )?);
 
-                if groups.is_single() && !agg_filter.iter().any(|(e, _, _)| matches!(e, AggregateExpr::GroupingExpr(_))) {
+                if groups.is_single()
+                    && !agg_filter
+                        .iter()
+                        .any(|(e, _, _)| matches!(e, AggregateExpr::GroupingExpr(_)))
+                {
                     final_agg
                 } else {
                     // Need to project out __grouping_id column and compute GROUPING expressions
@@ -870,7 +882,8 @@ impl DefaultPhysicalPlanner {
                             AggregateExpr::GroupingExpr(grouping_expr) => {
                                 // Use the GroupingExpr directly as a physical expression
                                 proj_exprs.push(ProjectionExpr {
-                                    expr: Arc::clone(grouping_expr) as Arc<dyn PhysicalExpr>,
+                                    expr: Arc::clone(grouping_expr)
+                                        as Arc<dyn PhysicalExpr>,
                                     alias: agg_expr.name().to_string(),
                                 });
                             }
@@ -878,7 +891,10 @@ impl DefaultPhysicalPlanner {
                                 // Reference the aggregate function column
                                 let field = schema.field(agg_col_idx);
                                 proj_exprs.push(ProjectionExpr {
-                                    expr: Arc::new(Column::new(field.name(), agg_col_idx)),
+                                    expr: Arc::new(Column::new(
+                                        field.name(),
+                                        agg_col_idx,
+                                    )),
                                     alias: field.name().to_string(),
                                 });
                                 agg_col_idx += 1;
@@ -890,14 +906,8 @@ impl DefaultPhysicalPlanner {
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => {
                 let child = children.one()?;
-                self
-                .create_project_physical_exec(
-                    session_state,
-                    child,
-                    input,
-                    expr,
-                )?
-            },
+                self.create_project_physical_exec(session_state, child, input, expr)?
+            }
             LogicalPlan::Filter(Filter {
                 predicate, input, ..
             }) => {
@@ -1825,7 +1835,6 @@ type AggregateExprWithOptionalArgs = (
     Vec<PhysicalSortExpr>,
 );
 
-
 /// Create a map from grouping expr to index in the internal grouping id.
 ///
 /// For more details on how the grouping id bitmap works the documentation for
@@ -1855,15 +1864,24 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
         physical_name(e)?
     };
     match e {
-        Expr::AggregateFunction(AggregateFunction {func, params}) if func.name() == "grouping" => {
+        Expr::AggregateFunction(AggregateFunction { func, params })
+            if func.name() == "grouping" =>
+        {
             match group_by_expr {
                 Some(group_by_expr) => {
-                    let indices = params.args.iter().map(|expr| 
-                        match group_by_expr.get(expr) {
+                    let indices = params
+                        .args
+                        .iter()
+                        .map(|expr| match group_by_expr.get(expr) {
                             Some(idx) => Ok(*idx as i32),
-                            None => plan_err!("Grouping function argument {} not in grouping columns", expr),
-                        }).collect::<Result<Vec<i32>>>()?;
-                    let grouping_expr = GroupingExpr::new(name, human_display, Some(indices));
+                            None => plan_err!(
+                                "Grouping function argument {} not in grouping columns",
+                                expr
+                            ),
+                        })
+                        .collect::<Result<Vec<i32>>>()?;
+                    let grouping_expr =
+                        GroupingExpr::new(name, human_display, Some(indices));
                     Ok((Arc::new(grouping_expr).into(), None, Vec::new()))
                 }
                 None => {
@@ -1918,7 +1936,11 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 (agg_expr, filter, order_bys)
             };
 
-            Ok((AggregateExpr::AggregateFunctionExpr(agg_expr), filter, order_bys))
+            Ok((
+                AggregateExpr::AggregateFunctionExpr(agg_expr),
+                filter,
+                order_bys,
+            ))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
@@ -2903,7 +2925,8 @@ mod tests {
             .downcast_ref::<ProjectionExec>()
             .expect("projection");
 
-        let final_hash_agg = projection.input()
+        let final_hash_agg = projection
+            .input()
             .as_any()
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");

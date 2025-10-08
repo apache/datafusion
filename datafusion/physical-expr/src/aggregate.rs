@@ -43,7 +43,10 @@ use crate::expressions::Column;
 
 use arrow::array::{ArrowPrimitiveType, Int32Array, PrimitiveArray, RecordBatch};
 use arrow::compute::{unary, SortOptions};
-use arrow::datatypes::{ArrowNativeType, DataType, FieldRef, Int32Type, Schema, SchemaRef, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, FieldRef, Int32Type, Schema, SchemaRef, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
+};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::{AggregateUDF, ColumnarValue, ReversedUDAF, SetMonotonicity};
@@ -749,7 +752,6 @@ fn replace_fn_name_clause(aggr_name: &mut String, fn_name_old: &str, fn_name_new
     *aggr_name = aggr_name.replace(fn_name_old, fn_name_new);
 }
 
-
 /// Represents a GROUPING physical expression
 ///
 /// The GROUPING function returns a bitmask indicating which columns are aggregated
@@ -766,7 +768,11 @@ pub struct GroupingExpr {
 impl GroupingExpr {
     /// Create a new GROUPING physical expression
     pub fn new(name: String, human_display: String, indices: Option<Vec<i32>>) -> Self {
-        Self { name, human_display, indices }
+        Self {
+            name,
+            human_display,
+            indices,
+        }
     }
 
     /// Get the indices
@@ -782,7 +788,6 @@ impl GroupingExpr {
     where
         T::Native: Shr<i32, Output = T::Native>,
     {
-
         unary::<_, _, Int32Type>(grouping_id_col, |grouping_id| {
             let mut result = 0i32;
             for index in indices.iter() {
@@ -796,7 +801,6 @@ impl GroupingExpr {
     pub fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         PhysicalExpr::evaluate(self, batch)
     }
-    
 }
 
 impl std::fmt::Display for GroupingExpr {
@@ -835,11 +839,12 @@ impl PhysicalExpr for GroupingExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let Some(indices) = &self.indices else {
-            return Ok(ColumnarValue::Array(Arc::new(Int32Array::from(std::vec![0; batch.num_rows()]))));
+            return Ok(ColumnarValue::Array(Arc::new(Int32Array::from(
+                std::vec![0; batch.num_rows()],
+            ))));
         };
         // Get the grouping_id column from the batch
-        let Some(grouping_id_col) = batch.column_by_name(INTERNAL_GROUPING_ID)
-        else {
+        let Some(grouping_id_col) = batch.column_by_name(INTERNAL_GROUPING_ID) else {
             return internal_err!(
                 "GROUPING expression requires {} column in the schema",
                 INTERNAL_GROUPING_ID
@@ -848,27 +853,36 @@ impl PhysicalExpr for GroupingExpr {
 
         match grouping_id_col.data_type() {
             DataType::UInt8 => {
-                let result =
-                    self.grouping(as_primitive_array::<UInt8Type>(grouping_id_col)?, indices);
+                let result = self
+                    .grouping(as_primitive_array::<UInt8Type>(grouping_id_col)?, indices);
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::UInt16 => {
-                let result =
-                    self.grouping(as_primitive_array::<UInt16Type>(grouping_id_col)?, indices);
+                let result = self.grouping(
+                    as_primitive_array::<UInt16Type>(grouping_id_col)?,
+                    indices,
+                );
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::UInt32 => {
-                let result =
-                    self.grouping(as_primitive_array::<UInt32Type>(grouping_id_col)?, indices);
+                let result = self.grouping(
+                    as_primitive_array::<UInt32Type>(grouping_id_col)?,
+                    indices,
+                );
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::UInt64 => {
-                let result =
-                    self.grouping(as_primitive_array::<UInt64Type>(grouping_id_col)?, indices);
+                let result = self.grouping(
+                    as_primitive_array::<UInt64Type>(grouping_id_col)?,
+                    indices,
+                );
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             _ => {
-                internal_err!("GROUPING expression requires a primitive array, but got {}", grouping_id_col.data_type())
+                internal_err!(
+                    "GROUPING expression requires a primitive array, but got {}",
+                    grouping_id_col.data_type()
+                )
             }
         }
     }
@@ -887,7 +901,7 @@ impl PhysicalExpr for GroupingExpr {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{self}"))
     }
-    
+
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         Ok(Arc::new(arrow::datatypes::Field::new(
             std::format!("{self}"),
@@ -895,42 +909,50 @@ impl PhysicalExpr for GroupingExpr {
             self.nullable(input_schema)?,
         )))
     }
-    
+
     fn evaluate_selection(
         &self,
         batch: &RecordBatch,
         selection: &arrow::array::BooleanArray,
     ) -> Result<ColumnarValue> {
         let tmp_batch = arrow::compute::filter_record_batch(batch, selection)?;
-    
+
         let tmp_result = self.evaluate(&tmp_batch)?;
-    
+
         if batch.num_rows() == tmp_batch.num_rows() {
             // All values from the `selection` filter are true.
             Ok(tmp_result)
         } else if let ColumnarValue::Array(a) = tmp_result {
-            datafusion_physical_expr_common::utils::scatter(selection, a.as_ref()).map(ColumnarValue::Array)
+            datafusion_physical_expr_common::utils::scatter(selection, a.as_ref())
+                .map(ColumnarValue::Array)
         } else if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = &tmp_result {
             // When the scalar is true or false, skip the scatter process
             if let Some(v) = value {
                 if *v {
-                    Ok(ColumnarValue::from(Arc::new(selection.clone()) as arrow::array::ArrayRef))
+                    Ok(ColumnarValue::from(
+                        Arc::new(selection.clone()) as arrow::array::ArrayRef
+                    ))
                 } else {
                     Ok(tmp_result)
                 }
             } else {
-                let array = arrow::array::BooleanArray::from(std::vec![None; batch.num_rows()]);
-                datafusion_physical_expr_common::utils::scatter(selection, &array).map(ColumnarValue::Array)
+                let array =
+                    arrow::array::BooleanArray::from(std::vec![None; batch.num_rows()]);
+                datafusion_physical_expr_common::utils::scatter(selection, &array)
+                    .map(ColumnarValue::Array)
             }
         } else {
             Ok(tmp_result)
         }
     }
-    
-    fn evaluate_bounds(&self, _children: &[&datafusion_expr::interval_arithmetic::Interval]) -> Result<datafusion_expr::interval_arithmetic::Interval> {
+
+    fn evaluate_bounds(
+        &self,
+        _children: &[&datafusion_expr::interval_arithmetic::Interval],
+    ) -> Result<datafusion_expr::interval_arithmetic::Interval> {
         not_impl_err!("Not implemented for {self}")
     }
-    
+
     fn propagate_constraints(
         &self,
         _interval: &datafusion_expr::interval_arithmetic::Interval,
@@ -938,8 +960,11 @@ impl PhysicalExpr for GroupingExpr {
     ) -> Result<Option<Vec<datafusion_expr::interval_arithmetic::Interval>>> {
         Ok(Some(std::vec![]))
     }
-    
-    fn evaluate_statistics(&self, children: &[&datafusion_expr::statistics::Distribution]) -> Result<datafusion_expr::statistics::Distribution> {
+
+    fn evaluate_statistics(
+        &self,
+        children: &[&datafusion_expr::statistics::Distribution],
+    ) -> Result<datafusion_expr::statistics::Distribution> {
         let children_ranges = children
             .iter()
             .map(|c| c.range())
@@ -948,9 +973,13 @@ impl PhysicalExpr for GroupingExpr {
         let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
         let dt = output_interval.data_type();
         if dt.eq(&DataType::Boolean) {
-            let p = if output_interval.eq(&datafusion_expr::interval_arithmetic::Interval::CERTAINLY_TRUE) {
+            let p = if output_interval
+                .eq(&datafusion_expr::interval_arithmetic::Interval::CERTAINLY_TRUE)
+            {
                 ScalarValue::new_one(&dt)
-            } else if output_interval.eq(&datafusion_expr::interval_arithmetic::Interval::CERTAINLY_FALSE) {
+            } else if output_interval
+                .eq(&datafusion_expr::interval_arithmetic::Interval::CERTAINLY_FALSE)
+            {
                 ScalarValue::new_zero(&dt)
             } else {
                 ScalarValue::try_from(&dt)
@@ -960,7 +989,7 @@ impl PhysicalExpr for GroupingExpr {
             datafusion_expr::statistics::Distribution::new_from_interval(output_interval)
         }
     }
-    
+
     fn propagate_statistics(
         &self,
         parent: &datafusion_expr::statistics::Distribution,
@@ -999,18 +1028,21 @@ impl PhysicalExpr for GroupingExpr {
             .collect::<Result<_>>()
             .map(Some)
     }
-    
-    fn get_properties(&self, _children: &[datafusion_expr::sort_properties::ExprProperties]) -> Result<datafusion_expr::sort_properties::ExprProperties> {
+
+    fn get_properties(
+        &self,
+        _children: &[datafusion_expr::sort_properties::ExprProperties],
+    ) -> Result<datafusion_expr::sort_properties::ExprProperties> {
         Ok(datafusion_expr::sort_properties::ExprProperties::new_unknown())
     }
-    
+
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // By default, we return None to indicate that this PhysicalExpr does not
         // have any dynamic references or state.
         // This is a safe default behavior.
         Ok(None)
     }
-    
+
     fn snapshot_generation(&self) -> u64 {
         // By default, we return 0 to indicate that this PhysicalExpr does not
         // have any dynamic references or state.
@@ -1019,7 +1051,7 @@ impl PhysicalExpr for GroupingExpr {
         // static expressions will always return 0.
         0
     }
-    
+
     fn is_volatile_node(&self) -> bool {
         false
     }
