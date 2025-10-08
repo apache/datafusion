@@ -59,7 +59,7 @@ impl AggGroupAccumulator {
         &mut self,
         emit_to: EmitTo,
     ) -> Result<GenericListArray<i32>> {
-        // in the case of continous calls to function `evaluate` happen,
+        // in the case of continuous calls to function `evaluate` happen,
         // (without any interleaving calls to `merge_batch` or `update_batch`)
         // the first call will basically sort everything beforehand
         // so the second one does not need to
@@ -133,7 +133,7 @@ impl AggGroupAccumulator {
 
         let arr =
             GenericListArray::<i32>::new(field, offsets_buffer, backend_array, None);
-        // Only when this happen, we know that the stacked_batches are no longer neeeded
+        // Only when this happen, we know that the stacked_batches are no longer needed
         if self.stacked_group_indices.is_empty() {
             mem::take(&mut self.stacked_batches);
             self.stacked_batches_size = 0;
