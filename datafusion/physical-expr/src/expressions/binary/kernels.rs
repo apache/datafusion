@@ -31,7 +31,7 @@ use arrow::error::ArrowError;
 use std::sync::Arc;
 
 /// Downcasts $LEFT and $RIGHT to $ARRAY_TYPE and then calls $KERNEL($LEFT, $RIGHT)
-macro_rules! call_bitwise_kernel {
+macro_rules! call_kernel {
     ($LEFT:expr, $RIGHT:expr, $KERNEL:expr, $ARRAY_TYPE:ident) => {{
         let left = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let right = $RIGHT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
@@ -42,33 +42,33 @@ macro_rules! call_bitwise_kernel {
 
 /// Creates a $FUNC(left: ArrayRef, right: ArrayRef) that
 /// downcasts left / right to the appropriate integral type and calls the kernel
-macro_rules! create_dyn_kernel {
+macro_rules! create_left_integral_dyn_kernel {
     ($FUNC:ident, $KERNEL:ident) => {
         pub(crate) fn $FUNC(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
             match &left.data_type() {
                 DataType::Int8 => {
-                    call_bitwise_kernel!(left, right, $KERNEL, Int8Array)
+                    call_kernel!(left, right, $KERNEL, Int8Array)
                 }
                 DataType::Int16 => {
-                    call_bitwise_kernel!(left, right, $KERNEL, Int16Array)
+                    call_kernel!(left, right, $KERNEL, Int16Array)
                 }
                 DataType::Int32 => {
-                    call_bitwise_kernel!(left, right, $KERNEL, Int32Array)
+                    call_kernel!(left, right, $KERNEL, Int32Array)
                 }
                 DataType::Int64 => {
-                    call_bitwise_kernel!(left, right, $KERNEL, Int64Array)
+                    call_kernel!(left, right, $KERNEL, Int64Array)
                 }
                 DataType::UInt8 => {
-                    call_bitwise_kernel!(left, right, $KERNEL, UInt8Array)
+                    call_kernel!(left, right, $KERNEL, UInt8Array)
                 }
                 DataType::UInt16 => {
-                    call_bitwise_kernel!(left, right, $KERNEL, UInt16Array)
+                    call_kernel!(left, right, $KERNEL, UInt16Array)
                 }
                 DataType::UInt32 => {
-                    call_bitwise_kernel!(left, right, $KERNEL, UInt32Array)
+                    call_kernel!(left, right, $KERNEL, UInt32Array)
                 }
                 DataType::UInt64 => {
-                    call_bitwise_kernel!(left, right, $KERNEL, UInt64Array)
+                    call_kernel!(left, right, $KERNEL, UInt64Array)
                 }
                 other => plan_err!(
                     "Data type {} not supported for binary operation '{}' on dyn arrays",
@@ -80,14 +80,14 @@ macro_rules! create_dyn_kernel {
     };
 }
 
-create_dyn_kernel!(bitwise_or_dyn, bitwise_or);
-create_dyn_kernel!(bitwise_xor_dyn, bitwise_xor);
-create_dyn_kernel!(bitwise_and_dyn, bitwise_and);
-create_dyn_kernel!(bitwise_shift_right_dyn, bitwise_shift_right);
-create_dyn_kernel!(bitwise_shift_left_dyn, bitwise_shift_left);
+create_left_integral_dyn_kernel!(bitwise_or_dyn, bitwise_or);
+create_left_integral_dyn_kernel!(bitwise_xor_dyn, bitwise_xor);
+create_left_integral_dyn_kernel!(bitwise_and_dyn, bitwise_and);
+create_left_integral_dyn_kernel!(bitwise_shift_right_dyn, bitwise_shift_right);
+create_left_integral_dyn_kernel!(bitwise_shift_left_dyn, bitwise_shift_left);
 
 /// Downcasts $LEFT as $ARRAY_TYPE and $RIGHT as TYPE and calls $KERNEL($LEFT, $RIGHT)
-macro_rules! call_bitwise_scalar_kernel {
+macro_rules! call_scalar_kernel {
     ($LEFT:expr, $RIGHT:expr, $KERNEL:ident, $ARRAY_TYPE:ident, $TYPE:ty) => {{
         let len = $LEFT.len();
         let array = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
@@ -104,18 +104,18 @@ macro_rules! call_bitwise_scalar_kernel {
 
 /// Creates a $FUNC(left: ArrayRef, right: ScalarValue) that
 /// downcasts left / right to the appropriate integral type and calls the kernel
-macro_rules! create_dyn_scalar_kernel {
+macro_rules! create_left_integral_dyn_scalar_kernel {
     ($FUNC:ident, $KERNEL:ident) => {
         pub(crate) fn $FUNC(array: &dyn Array, scalar: ScalarValue) -> Option<Result<ArrayRef>> {
             let result = match array.data_type() {
-                DataType::Int8 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, Int8Array, i8),
-                DataType::Int16 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, Int16Array, i16),
-                DataType::Int32 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, Int32Array, i32),
-                DataType::Int64 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, Int64Array, i64),
-                DataType::UInt8 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt8Array, u8),
-                DataType::UInt16 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt16Array, u16),
-                DataType::UInt32 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt32Array, u32),
-                DataType::UInt64 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt64Array, u64),
+                DataType::Int8 => call_scalar_kernel!(array, scalar, $KERNEL, Int8Array, i8),
+                DataType::Int16 => call_scalar_kernel!(array, scalar, $KERNEL, Int16Array, i16),
+                DataType::Int32 => call_scalar_kernel!(array, scalar, $KERNEL, Int32Array, i32),
+                DataType::Int64 => call_scalar_kernel!(array, scalar, $KERNEL, Int64Array, i64),
+                DataType::UInt8 => call_scalar_kernel!(array, scalar, $KERNEL, UInt8Array, u8),
+                DataType::UInt16 => call_scalar_kernel!(array, scalar, $KERNEL, UInt16Array, u16),
+                DataType::UInt32 => call_scalar_kernel!(array, scalar, $KERNEL, UInt32Array, u32),
+                DataType::UInt64 => call_scalar_kernel!(array, scalar, $KERNEL, UInt64Array, u64),
                 other => plan_err!(
                     "Data type {} not supported for binary operation '{}' on dyn arrays",
                     other,
@@ -127,11 +127,17 @@ macro_rules! create_dyn_scalar_kernel {
     };
 }
 
-create_dyn_scalar_kernel!(bitwise_and_dyn_scalar, bitwise_and_scalar);
-create_dyn_scalar_kernel!(bitwise_or_dyn_scalar, bitwise_or_scalar);
-create_dyn_scalar_kernel!(bitwise_xor_dyn_scalar, bitwise_xor_scalar);
-create_dyn_scalar_kernel!(bitwise_shift_right_dyn_scalar, bitwise_shift_right_scalar);
-create_dyn_scalar_kernel!(bitwise_shift_left_dyn_scalar, bitwise_shift_left_scalar);
+create_left_integral_dyn_scalar_kernel!(bitwise_and_dyn_scalar, bitwise_and_scalar);
+create_left_integral_dyn_scalar_kernel!(bitwise_or_dyn_scalar, bitwise_or_scalar);
+create_left_integral_dyn_scalar_kernel!(bitwise_xor_dyn_scalar, bitwise_xor_scalar);
+create_left_integral_dyn_scalar_kernel!(
+    bitwise_shift_right_dyn_scalar,
+    bitwise_shift_right_scalar
+);
+create_left_integral_dyn_scalar_kernel!(
+    bitwise_shift_left_dyn_scalar,
+    bitwise_shift_left_scalar
+);
 
 pub fn concat_elements_utf8view(
     left: &StringViewArray,
