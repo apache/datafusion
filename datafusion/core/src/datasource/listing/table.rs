@@ -2747,9 +2747,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
             .with_file_extension_opt(Some(""))
-            .with_table_partition_cols(vec![
-                ("pid".to_string(), DataType::Int32)
-            ]);
+            .with_table_partition_cols(vec![("pid".to_string(), DataType::Int32)]);
 
         let table_path = ListingTableUrl::parse("test:///bucket/test/").unwrap();
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
@@ -2764,12 +2762,18 @@ mod tests {
 
         let files = file_list[0].clone();
 
-        assert_eq!(files.iter().map(|f| f.path().to_string()).collect::<Vec<_>>(), vec![
-            "bucket/test/pid=1/file1",
-            "bucket/test/pid=1/file2",
-            "bucket/test/pid=2/file3",
-            "bucket/test/pid=2/file4",
-        ]);
+        assert_eq!(
+            files
+                .iter()
+                .map(|f| f.path().to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "bucket/test/pid=1/file1",
+                "bucket/test/pid=1/file2",
+                "bucket/test/pid=2/file3",
+                "bucket/test/pid=2/file4",
+            ]
+        );
 
         Ok(())
     }

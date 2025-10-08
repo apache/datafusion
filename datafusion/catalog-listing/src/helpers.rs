@@ -247,11 +247,15 @@ async fn prune_partitions(
 ) -> Result<Vec<Partition>> {
     if filters.is_empty() {
         // prune partitions which don't contain the partition columns
-        return Ok(partitions.into_iter().filter(|p| {
-            let cols = partition_cols.iter().map(|x| x.0.as_str());
-            !parse_partitions_for_path(table_path, &p.path, cols)
-                .unwrap_or_default().is_empty()
-        }).collect());
+        return Ok(partitions
+            .into_iter()
+            .filter(|p| {
+                let cols = partition_cols.iter().map(|x| x.0.as_str());
+                !parse_partitions_for_path(table_path, &p.path, cols)
+                    .unwrap_or_default()
+                    .is_empty()
+            })
+            .collect());
     }
 
     let mut builders: Vec<_> = (0..partition_cols.len())
