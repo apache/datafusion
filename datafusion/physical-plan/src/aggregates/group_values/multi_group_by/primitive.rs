@@ -63,7 +63,7 @@ where
         equal_to_results: &mut [bool],
     ) {
         assert!(
-            !NULLABLE || (array.null_count() == 0 && !self.nulls.has_nulls()),
+            !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()),
             "called with nullable input"
         );
         let array_values = array.as_primitive::<T>().values();
@@ -176,7 +176,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     ) {
-        if !NULLABLE || (array.null_count() == 0 && !self.nulls.has_nulls()) {
+        if !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()) {
             self.vectorized_equal_to_non_nullable(
                 lhs_rows,
                 array,

@@ -90,8 +90,11 @@ impl MaybeNullBufferBuilder {
         new_builder.finish()
     }
 
-    pub fn has_nulls(&self) -> bool {
-        // TODO - assert correctness
+    /// Returns true if this builder might have any nulls
+    ///
+    /// This is guaranteed to be true if there are nulls
+    /// but may be true even if there are no nulls
+    pub(crate) fn might_have_nulls(&self) -> bool {
         self.nulls.as_slice().is_some()
     }
 }
