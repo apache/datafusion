@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ArrowNativeType, ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
-use datafusion_common::{exec_datafusion_err, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
 use itertools::izip;
 use std::mem::size_of;
@@ -210,13 +210,14 @@ where
             // If all nulls, we can just repeat the last offset
             self.offsets.extend(std::iter::repeat_n(O::usize_as(last_offset), length));
         } else {
-            self.offsets.reserve(length);
-
-            for start_and_end_values in offsets[start..=start + length].windows(2) {
-                let length = start_and_end_values[1] - start_and_end_values[0];
-                last_offset += length.as_usize();
-                self.offsets.push(O::usize_as(last_offset));
-            }
+            self.offsets.extend(
+                offsets[start..=start + length].windows(2)
+                    .map(|start_and_end_values| {
+                        let length = start_and_end_values[1] - start_and_end_values[0];
+                        last_offset += length.as_usize();
+                        O::usize_as(last_offset)
+                    })
+            );
         }
 
         // 3. Append the bytes
@@ -229,10 +230,7 @@ where
             self.buffer.append_slice(&bytes[values_start..values_end]);
 
             if self.buffer.len() > self.max_buffer_size {
-                return Err(DataFusionError::Execution(format!(
-                    "offset overflow, buffer size > {}",
-                    self.max_buffer_size
-                )));
+                return exec_err!( "offset overflow, buffer size > {}", self.max_buffer_size);
             }
         }
 
