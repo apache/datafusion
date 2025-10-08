@@ -635,6 +635,14 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
     /// if the function cannot be simplified, the arguments *MUST* be returned
     /// unmodified
+    ///
+    /// # Notes
+    ///
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(
         &self,
         args: Vec<Expr>,
