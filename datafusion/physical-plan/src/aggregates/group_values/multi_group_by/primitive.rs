@@ -17,17 +17,16 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{ArrowNativeTypeOp, BooleanBufferBuilder};
+use arrow::array::{ArrowNativeTypeOp};
 use arrow::array::{cast::AsArray, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow::buffer::{BooleanBuffer, ScalarBuffer};
+use arrow::buffer::{ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use itertools::izip;
 use std::iter;
+use std::ops::Range;
 use std::sync::Arc;
-use arrow::util::bit_iterator::BitIterator;
-use arrow::util::bit_util;
+use itertools::izip;
 
 /// An implementation of [`GroupColumn`] for primitive values
 ///
@@ -57,7 +56,38 @@ where
         }
     }
 
-    pub fn vectorized_equal_to_non_nullable(
+    fn vectorized_equal_to_left_over(&self, array: &PrimitiveArray<T>,
+                                     lhs_rows: &[usize], rhs_rows: &[usize],
+                                     equal_to_results: &mut [bool],
+    ) {
+        let iter = izip!(
+                lhs_rows.iter(),
+                rhs_rows.iter(),
+                equal_to_results.iter_mut(),
+            );
+
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+            // Has found not equal to in previous column, don't need to check
+            if !*equal_to_result {
+                continue;
+            }
+
+            // Perf: skip null check (by short circuit) if input is not nullable
+            if NULLABLE {
+                let exist_null = self.nulls.is_null(lhs_row);
+                let input_null = array.is_null(rhs_row);
+                if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                    *equal_to_result = result;
+                    continue;
+                }
+                // Otherwise, we need to check their values
+            }
+
+            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
+        }
+    }
+
+    fn vectorized_equal_to_non_nullable(
         &self,
         lhs_rows: &[usize],
         array: &ArrayRef,
@@ -67,37 +97,31 @@ where
         assert!(!NULLABLE || (array.null_count() == 0 && !self.nulls.has_nulls()), "called with nullable input");
         let array = array.as_primitive::<T>();
 
-        let (call_index, lhs_rows_leftover, rhs_rows_leftover) = run_on_auto_vectorization_simd_tuple::<usize, 8, _>(
+        let (start_leftover_index, lhs_rows_leftover, rhs_rows_leftover) = run_on_tuple_chunks::<usize, 8, _>(
             lhs_rows,
             rhs_rows,
-            &mut |call_index, lhs_rows_idxs: &[usize; 8], rhs_rows_idxs: &[usize; 8]| {
+            &mut |range: Range<usize>, lhs_rows_idxs: &[usize; 8], rhs_rows_idxs: &[usize; 8]| {
+                let equal_to_results = &mut equal_to_results[range];
+                if equal_to_results
+                    .iter()
+                    .all(|&r| !r)
+                {
+                    // All false already, skip
+                    return;
+                }
+
                 let bitmask = gather_and_compare_u8(&self.group_values, lhs_rows_idxs, array.values(), rhs_rows_idxs);
 
-                for i in call_index..call_index + 8 {
-                    equal_to_results[i] = equal_to_results[i] && (bitmask & (1 << (i - call_index)) != 0);
-                }
+                Self::apply_equal_mask_to_already_equal_to(equal_to_results, bitmask);
             }
         );
 
-        assert!(lhs_rows_leftover.len() < 8, "must have less than 8 left over");
-        if !lhs_rows_leftover.is_empty() {
-            let bitmask: u8 = lhs_rows_leftover.into_iter()
-              .map(|&idx| unsafe { *self.group_values.get_unchecked(idx) })
-              .zip(
-                  rhs_rows_leftover
-                    .into_iter()
-                    .map(|&idx| unsafe { *array.values().get_unchecked(idx) })
-              )
-              .enumerate()
-              .fold(
-                  0,
-                  |acc, (index, (l, r))| acc | (l.is_eq(r) as u8) << index
-              );
-
-            for i in call_index..call_index + lhs_rows_leftover.len() {
-                equal_to_results[i] = equal_to_results[i] && (bitmask & (1 << (i - call_index)) != 0);
-            }
-        }
+        self.vectorized_equal_to_left_over(
+            array,
+            lhs_rows_leftover,
+            rhs_rows_leftover,
+            &mut equal_to_results[start_leftover_index..],
+        );
     }
 
     pub fn vectorized_equal_nullable(
@@ -109,11 +133,18 @@ where
     ) {
         let array = array.as_primitive::<T>();
 
-        let (call_index, lhs_rows_leftover, rhs_rows_leftover) = run_on_auto_vectorization_simd_tuple::<usize, 8, _>(
+        let (start_leftover_index, lhs_rows_leftover, rhs_rows_leftover) = run_on_tuple_chunks::<usize, 8, _>(
             lhs_rows,
             rhs_rows,
-            &mut |call_index, lhs_rows_idxs: &[usize; 8], rhs_rows_idxs: &[usize; 8]| {
-                assert_eq!(lhs_rows_idxs.len(), 8, "must have 8");
+            &mut |range: Range<usize>, lhs_rows_idxs: &[usize; 8], rhs_rows_idxs: &[usize; 8]| {
+                let equal_to_results = &mut equal_to_results[range];
+                if equal_to_results
+                  .iter()
+                  .all(|&r| !r)
+                {
+                    // All false already, skip
+                    return;
+                }
 
                 let equal_bitmask = gather_and_compare_u8(&self.group_values, lhs_rows_idxs, array.values(), rhs_rows_idxs);
                 let block_equal_to_results = compare_with_nullability(
@@ -126,42 +157,28 @@ where
                     )
                 );
 
-                for i in call_index..call_index + 8 {
-                    equal_to_results[i] = equal_to_results[i] && (block_equal_to_results & (1 << (i - call_index)) != 0);
-                }
+                Self::apply_equal_mask_to_already_equal_to(equal_to_results, block_equal_to_results);
             }
         );
 
-        assert!(lhs_rows_leftover.len() < 8, "must have less than 8 left over");
-        if !lhs_rows_leftover.is_empty() {
-            let equal_bitmask: u8 = lhs_rows_leftover.into_iter()
-              .map(|&idx| unsafe { *self.group_values.get_unchecked(idx) })
-              .zip(
-                  rhs_rows_leftover
-                    .into_iter()
-                    .map(|&idx| unsafe { *array.values().get_unchecked(idx) })
-              )
-              .enumerate()
-              .fold(
-                  0,
-                  |acc, (index, (l, r))| acc | (l.is_eq(r) as u8) << index
-              );
+        self.vectorized_equal_to_left_over(
+            array,
+            lhs_rows_leftover,
+            rhs_rows_leftover,
+            &mut equal_to_results[start_leftover_index..],
+        );
+    }
 
-            let block_equal_to_results = compare_with_nullability(
-                equal_bitmask,
-
-                get_validity_from_null_buffer_builder(
-                    &self.nulls, lhs_rows_leftover.into_iter()
-                ),
-                get_validity_from_array(
-                    &array, rhs_rows_leftover.into_iter()
-                )
-            );
-
-            for i in call_index..call_index + lhs_rows_leftover.len() {
-                equal_to_results[i] = equal_to_results[i] && (block_equal_to_results & (1 << (i - call_index)) != 0);
-            }
-        }
+    #[inline]
+    fn apply_equal_mask_to_already_equal_to(equal_to_results: &mut [bool], bitmask: u8) {
+        equal_to_results
+          .iter_mut()
+          .enumerate()
+          .for_each(|(i, r)| {
+              // If already false, keep it false
+              // if true, set to the bitmask result
+              *r = *r && (bitmask & (1 << i) != 0);
+          });
     }
 }
 
@@ -206,7 +223,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     ) {
-        if(!NULLABLE || (array.null_count() == 0 && !self.nulls.has_nulls())) {
+        if !NULLABLE || (array.null_count() == 0 && !self.nulls.has_nulls()) {
             self.vectorized_equal_to_non_nullable(
                 lhs_rows,
                 array,
@@ -321,15 +338,6 @@ pub fn compare_to_bitmask<T: ArrowNativeTypeOp>(a: [T; 64], b: [T; 64]) -> u64 {
     bitmask
 }
 
-pub fn gather_and_compare<const N: usize, T: ArrowNativeTypeOp>(a_array: &[T], a_idx: &[usize; 64], b_array: &[T], b_idx: &[usize; 64]) -> u64 {
-    let a_idx_values = a_idx.map(|idx| unsafe { *a_array.get_unchecked(idx) });
-    let b_idx_values = b_idx.map(|idx| unsafe { *b_array.get_unchecked(idx) });
-
-    let bitmask = compare_to_bitmask(a_idx_values, b_idx_values);
-
-    return bitmask;
-}
-
 
 pub fn compare_to_bitmask_u8<T: ArrowNativeTypeOp>(a: [T; 8], b: [T; 8]) -> u8 {
     let mut bitmask = 0;
@@ -340,32 +348,34 @@ pub fn compare_to_bitmask_u8<T: ArrowNativeTypeOp>(a: [T; 8], b: [T; 8]) -> u8 {
     bitmask
 }
 
-pub fn gather_and_compare_u8<T: ArrowNativeTypeOp>(a_array: &[T], a_idx: &[usize; 8], b_array: &[T], b_idx: &[usize; 8]) -> u8 {
-    let a_idx_values = a_idx.map(|idx| unsafe { *a_array.get_unchecked(idx) });
-    let b_idx_values = b_idx.map(|idx| unsafe { *b_array.get_unchecked(idx) });
+pub fn gather_and_compare_u8<T: ArrowNativeTypeOp>(a_slice: &[T], a_idx: &[usize; 8], b_slice: &[T], b_idx: &[usize; 8]) -> u8 {
+    // Try to be as close as possible to the following simd
+    // let a_idx_simd = Simd::from_array(a_idx);
+    // let a_idx_values_simd = Simd::gather_or_default(a_slice, a_idx_simd);
 
+    let a_idx_values = a_idx.map(|idx| {
+        if cfg!(debug_assertions) {
+            a_slice[idx]
+        } else {
+            // SAFETY: indices are guaranteed to be in bounds
+            unsafe { *a_slice.get_unchecked(idx) }
+        }
+    });
+    let b_idx_values = b_idx.map(|idx| {
+        if cfg!(debug_assertions) {
+            b_slice[idx]
+        } else {
+            // SAFETY: indices are guaranteed to be in bounds
+            unsafe { *b_slice.get_unchecked(idx) }
+        }
+    });
+
+    // Try to be as close as possible to the following simd:
+    // let eq = a_idx_values_simd.simd_eq(b_idx_values_simd);
+    // eq.to_bitmask();
     let bitmask = compare_to_bitmask_u8(a_idx_values, b_idx_values);
 
-    return bitmask;
-}
-
-
-pub fn compare_to_bitmask_u8_bit(a: [bool; 8], b: [bool; 8]) -> u8 {
-    let mut bitmask = 0;
-    for (index, (l, r)) in a.into_iter().zip(b.into_iter()).enumerate() {
-        bitmask |= ((l == r) as u8) << index;
-    }
-
     bitmask
-}
-
-pub fn gather_and_compare_u8_nulls(a_array: &MaybeNullBufferBuilder, a_idx: &[usize; 8], b_array: &impl Array, b_idx: &[usize; 8]) -> u8 {
-    let a_idx_values = a_idx.map(|idx| a_array.is_null(idx));
-    let b_idx_values = b_idx.map(|idx| b_array.is_null(idx));
-
-    let bitmask = compare_to_bitmask_u8_bit(a_idx_values, b_idx_values);
-
-    return bitmask;
 }
 
 fn get_validity_from_null_buffer_builder<'a>(a_array: &MaybeNullBufferBuilder, a_idx: impl ExactSizeIterator<Item=&'a usize> + 'a) -> u8 {
@@ -417,40 +427,22 @@ fn compare_with_nullability(equals: u8, a_valid: u8, b_valid: u8) -> u8 {
     both_null | both_valid_result
 }
 
-fn run_on_auto_vectorization_simd_tuple<'a, T, const N: usize, SimdFn: FnMut(usize, &[T; N], &[T; N])>(slice_a: &'a [T], slice_b: &'a [T], run_on_simd: &mut SimdFn) -> (usize, &'a [T], &'a [T]) {
+/// Prepare slice of T into chunks of N, and run the provided function on each chunk pair
+///
+/// This is to nudge the compiler to auto-vectorize the operation on each chunk
+fn run_on_tuple_chunks<'a, T, const N: usize, SimdFn: FnMut(Range<usize>, &[T; N], &[T; N])>(slice_a: &'a [T], slice_b: &'a [T], run_on_simd: &mut SimdFn) -> (usize, &'a [T], &'a [T]) {
     assert_eq!(slice_a.len(), slice_b.len());
     let (simd_chunks_a, remainder_a) = slice_a.as_chunks::<N>();
     let (simd_chunks_b, remainder_b) = slice_b.as_chunks::<N>();
     let simd_chunks = simd_chunks_a.into_iter().zip(simd_chunks_b.into_iter());
     let mut i = 0;
     for (chunk_a, chunk_b) in simd_chunks {
-        run_on_simd(i, chunk_a, chunk_b);
-        i += 1;
+        run_on_simd(i..i + N, chunk_a, chunk_b);
+        i += N;
     }
 
     (i, remainder_a, remainder_b)
 }
-
-trait ChunksExt {
-    type Item: Sized;
-    fn as_chunks<const N: usize>(&self) -> (&[[Self::Item; N]], &[Self::Item]);
-}
-
-impl<T: Sized> ChunksExt for [T] {
-    type Item = T;
-    fn as_chunks<const N: usize>(&self) -> (&[[T; N]], &[T]) {
-        assert!(N != 0, "chunk size must be non-zero");
-        let len_rounded_down = self.len() / N * N;
-        // SAFETY: The rounded-down value is always the same or smaller than the
-        // original length, and thus must be in-bounds of the slice.
-        let (multiple_of_n, remainder) = unsafe { self.split_at_unchecked(len_rounded_down) };
-        // SAFETY: We already panicked for zero, and ensured by construction
-        // that the length of the subslice is a multiple of N.
-        let array_slice = unsafe { multiple_of_n.as_chunks_unchecked() };
-        (array_slice, remainder)
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
