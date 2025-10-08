@@ -40,6 +40,7 @@ pub struct AggGroupAccumulator {
         /*array_number*/ usize,
         /*offset_in_array*/ usize,
     )>,
+    stacked_batches_size: usize,
     indice_sorted: bool,
     max_group: usize,
 }
@@ -48,6 +49,7 @@ impl AggGroupAccumulator {
     pub fn new() -> Self {
         Self {
             stacked_batches: vec![],
+            stacked_batches_size: 0,
             stacked_group_indices: vec![],
             indice_sorted: false,
             max_group: 0,
@@ -73,8 +75,8 @@ impl AggGroupAccumulator {
 
         // this is inclusive, zero-based
         let stop_at_group = match emit_to {
-            EmitTo::All => self.max_group-1,
-            EmitTo::First(groups_taken) => groups_taken-1,
+            EmitTo::All => self.max_group - 1,
+            EmitTo::First(groups_taken) => groups_taken - 1,
         };
         let mut group_windows =
             Vec::<i32>::with_capacity(self.max_group.min(stop_at_group) + 1);
@@ -101,7 +103,7 @@ impl AggGroupAccumulator {
             mem::swap(&mut self.stacked_group_indices, &mut tail_part);
             for item in self.stacked_group_indices.iter_mut() {
                 // shift down the number of group being taken
-                item.0 -= (stop_at_group+1)
+                item.0 -= stop_at_group + 1
             }
 
             group_windows.push(split_offset as i32);
@@ -131,6 +133,11 @@ impl AggGroupAccumulator {
 
         let arr =
             GenericListArray::<i32>::new(field, offsets_buffer, backend_array, None);
+        // Only when this happen, we know that the stacked_batches are no longer neeeded
+        if self.stacked_group_indices.len() == 0 {
+            mem::take(&mut self.stacked_batches);
+            self.stacked_batches_size = 0;
+        }
         Ok(arr)
     }
 }
@@ -161,6 +168,7 @@ impl GroupsAccumulator for AggGroupAccumulator {
             .ok_or(internal_datafusion_err!("invalid agg input"))?;
 
         self.stacked_batches.push(Arc::clone(singular_col));
+        self.stacked_batches_size += singular_col.get_array_memory_size();
         let batch_index = self.stacked_batches.len() - 1;
 
         if let Some(filter) = opt_filter {
@@ -228,15 +236,21 @@ impl GroupsAccumulator for AggGroupAccumulator {
 
         let backed_arr = list_arr.values();
         self.stacked_batches.push(Arc::clone(backed_arr));
+        self.stacked_batches_size += backed_arr.get_array_memory_size();
         self.indice_sorted = false;
         self.max_group = self.max_group.max(total_num_groups);
         Ok(())
     }
 
     fn size(&self) -> usize {
+        let val = size_of_val(self)
+            + self.stacked_group_indices.capacity() * size_of::<(usize, usize, usize)>()
+            + self.stacked_batches.capacity() * size_of::<Vec<ArrayRef>>()
+            + self.stacked_batches_size;
         size_of_val(self)
             + self.stacked_group_indices.capacity() * size_of::<(usize, usize, usize)>()
             + self.stacked_batches.capacity() * size_of::<Vec<ArrayRef>>()
+            + self.stacked_batches_size
     }
 
     fn convert_to_state(

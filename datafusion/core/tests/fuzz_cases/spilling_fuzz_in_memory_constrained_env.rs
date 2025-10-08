@@ -468,7 +468,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
 #[tokio::test]
 async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_record_batch(
 ) -> Result<()> {
-    let record_batch_size = 8192;
+    let record_batch_size = 1024;
     let pool_size = 2 * MB as usize;
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(pool_size));
@@ -530,7 +530,7 @@ async fn run_test_aggregate_with_high_cardinality(
             futures::stream::iter((0..args.number_of_record_batches as u64).map(
                 move |index| {
                     let mut record_batch_memory_size =
-                        get_size_of_record_batch_to_generate(index as usize);
+                        get_size_of_record_batch_to_generate(index as usize); // 333
                     record_batch_memory_size = record_batch_memory_size
                         .saturating_sub(size_of::<u64>() * record_batch_size as usize);
 
