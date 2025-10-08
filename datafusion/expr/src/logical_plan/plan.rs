@@ -51,7 +51,7 @@ use crate::{
     WindowFunctionDefinition,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::tree_node::{
@@ -1494,24 +1494,43 @@ impl LogicalPlan {
     }
 
     /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
+    ///
+    /// Note that this will drop any extension or field metadata attached to parameters. Use
+    /// [`LogicalPlan::get_parameter_fields`] to keep extension metadata.
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
-        let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
+        let mut parameter_fields = self.get_parameter_fields()?;
+        Ok(parameter_fields
+            .drain()
+            .map(|(name, maybe_field)| {
+                (name, maybe_field.map(|field| field.data_type().clone()))
+            })
+            .collect())
+    }
+
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs
+    pub fn get_parameter_fields(
+        &self,
+    ) -> Result<HashMap<String, Option<FieldRef>>, DataFusionError> {
+        let mut param_types: HashMap<String, Option<FieldRef>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
                 expr.apply(|expr| {
-                    if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
+                    if let Expr::Placeholder(Placeholder { id, field }) = expr {
                         let prev = param_types.get(id);
-                        match (prev, data_type) {
-                            (Some(Some(prev)), Some(dt)) => {
-                                if prev != dt {
+                        match (prev, field) {
+                            (Some(Some(prev)), Some(field)) => {
+                                // This check is possibly too strict (requires nullability and field
+                                // metadata align perfectly, rather than compute true type equality
+                                // when field metadata is representing an extension type)
+                                if prev != field {
                                     plan_err!("Conflicting types for {id}")?;
                                 }
                             }
-                            (_, Some(dt)) => {
-                                param_types.insert(id.clone(), Some(dt.clone()));
+                            (_, Some(field)) => {
+                                param_types.insert(id.clone(), Some(Arc::clone(field)));
                             }
                             _ => {
                                 param_types.insert(id.clone(), None);
