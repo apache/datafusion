@@ -21,12 +21,15 @@ use datafusion::execution::object_store::ObjectStoreRegistry;
 use object_store::ObjectStore;
 use url::Url;
 
+/// Provides access to wrapped [`ObjectStore`] instances that record requests for reporting
 #[derive(Debug)]
 pub struct InstrumentedObjectStoreRegistry {
     inner: Arc<dyn ObjectStoreRegistry>,
 }
 
 impl InstrumentedObjectStoreRegistry {
+    /// Returns a new [`InstrumentedObjectStoreRegistry`] that wraps the provided
+    /// [`ObjectStoreRegistry`]
     pub fn new(registry: Arc<dyn ObjectStoreRegistry>) -> Self {
         Self { inner: registry }
     }
