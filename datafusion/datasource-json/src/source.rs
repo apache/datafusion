@@ -203,14 +203,13 @@ impl FileOpener for JsonOpener {
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut result_file, _) => {
+                GetResultPayload::File(mut file, _) => {
                     let bytes = match file.range {
-                        None => file_compression_type.convert_read(result_file)?,
+                        None => file_compression_type.convert_read(file)?,
                         Some(_) => {
-                            result_file.seek(SeekFrom::Start(result.range.start as _))?;
+                            file.seek(SeekFrom::Start(result.range.start as _))?;
                             let limit = result.range.end - result.range.start;
-                            file_compression_type
-                                .convert_read(result_file.take(limit as u64))?
+                            file_compression_type.convert_read(file.take(limit as u64))?
                         }
                     };
 

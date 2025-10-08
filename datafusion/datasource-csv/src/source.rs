@@ -389,16 +389,15 @@ impl FileOpener for CsvOpener {
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut result_file, _) => {
+                GetResultPayload::File(mut file, _) => {
                     let is_whole_file_scanned = file.range.is_none();
                     let decoder = if is_whole_file_scanned {
                         // Don't seek if no range as breaks FIFO files
-                        file_compression_type.convert_read(result_file)?
+                        file_compression_type.convert_read(file)?
                     } else {
-                        result_file.seek(SeekFrom::Start(result.range.start as _))?;
+                        file.seek(SeekFrom::Start(result.range.start as _))?;
                         file_compression_type.convert_read(
-                            result_file
-                                .take((result.range.end - result.range.start) as u64),
+                            file.take((result.range.end - result.range.start) as u64),
                         )?
                     };
 
