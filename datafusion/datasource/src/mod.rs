@@ -490,7 +490,7 @@ pub struct PartitionedFile {
     /// DataFusion relies on these statistics for planning (in particular to sort file groups),
     /// so if they are incorrect, incorrect answers may result.
     pub statistics: Option<Arc<Statistics>>,
-    /// Optinal distribution based statistics that describe the data in this file if known.
+    /// Optional distribution based statistics that describe the data in this file if known.
     ///
     /// These statistics are used for optimization purposes, such as join planning.
     /// If marked as exact these may also be used for correctness purposes, such as in pruning files based on filter predicates.
