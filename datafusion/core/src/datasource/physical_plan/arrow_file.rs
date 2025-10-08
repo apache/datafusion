@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
+use crate::datasource::physical_plan::{FileOpenFuture, FileOpener};
 use crate::error::Result;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
@@ -123,20 +123,13 @@ pub struct ArrowOpener {
 
 impl FileOpener for ArrowOpener {
     fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
-        let file_meta = FileMeta {
-            object_meta: file.object_meta.clone(),
-            range: file.range.clone(),
-            extensions: file.extensions.clone(),
-            metadata_size_hint: file.metadata_size_hint,
-        };
-
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
         Ok(Box::pin(async move {
-            let range = file_meta.range.clone();
+            let range = file.range.clone();
             match range {
                 None => {
-                    let r = object_store.get(file_meta.location()).await?;
+                    let r = object_store.get(&file.object_meta.location).await?;
                     match r.payload {
                         #[cfg(not(target_arch = "wasm32"))]
                         GetResultPayload::File(file, _) => {
@@ -167,7 +160,7 @@ impl FileOpener for ArrowOpener {
                         ..Default::default()
                     };
                     let get_result = object_store
-                        .get_opts(file_meta.location(), get_option)
+                        .get_opts(&file.object_meta.location, get_option)
                         .await?;
                     let footer_len_buf = get_result.bytes().await?;
                     let footer_len = arrow_ipc::reader::read_footer_length(
@@ -179,7 +172,7 @@ impl FileOpener for ArrowOpener {
                         ..Default::default()
                     };
                     let get_result = object_store
-                        .get_opts(file_meta.location(), get_option)
+                        .get_opts(&file.object_meta.location, get_option)
                         .await?;
                     let footer_buf = get_result.bytes().await?;
                     let footer = arrow_ipc::root_as_footer(
@@ -207,7 +200,7 @@ impl FileOpener for ArrowOpener {
                         })
                         .collect_vec();
                     let dict_results = object_store
-                        .get_ranges(file_meta.location(), &dict_ranges)
+                        .get_ranges(&file.object_meta.location, &dict_ranges)
                         .await?;
                     for (dict_block, dict_result) in
                         footer.dictionaries().iter().flatten().zip(dict_results)
@@ -240,7 +233,7 @@ impl FileOpener for ArrowOpener {
                         .collect_vec();
 
                     let recordbatch_results = object_store
-                        .get_ranges(file_meta.location(), &recordbatch_ranges)
+                        .get_ranges(&file.object_meta.location, &recordbatch_ranges)
                         .await?;
 
                     Ok(futures::stream::iter(

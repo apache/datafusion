@@ -28,7 +28,6 @@ use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
@@ -177,20 +176,13 @@ impl FileOpener for JsonOpener {
     /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
     /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
     fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
-        let file_meta = FileMeta {
-            object_meta: file.object_meta.clone(),
-            range: file.range.clone(),
-            extensions: file.extensions.clone(),
-            metadata_size_hint: file.metadata_size_hint,
-        };
-
         let store = Arc::clone(&self.object_store);
         let schema = Arc::clone(&self.projected_schema);
         let batch_size = self.batch_size;
         let file_compression_type = self.file_compression_type.to_owned();
 
         Ok(Box::pin(async move {
-            let calculated_range = calculate_range(&file_meta, &store, None).await?;
+            let calculated_range = calculate_range(&file, &store, None).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
@@ -207,17 +199,18 @@ impl FileOpener for JsonOpener {
                 ..Default::default()
             };
 
-            let result = store.get_opts(file_meta.location(), options).await?;
+            let result = store.get_opts(&file.object_meta.location, options).await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => {
-                    let bytes = match file_meta.range {
-                        None => file_compression_type.convert_read(file)?,
+                GetResultPayload::File(mut result_file, _) => {
+                    let bytes = match file.range {
+                        None => file_compression_type.convert_read(result_file)?,
                         Some(_) => {
-                            file.seek(SeekFrom::Start(result.range.start as _))?;
+                            result_file.seek(SeekFrom::Start(result.range.start as _))?;
                             let limit = result.range.end - result.range.start;
-                            file_compression_type.convert_read(file.take(limit as u64))?
+                            file_compression_type
+                                .convert_read(result_file.take(limit as u64))?
                         }
                     };
 
