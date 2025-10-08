@@ -157,6 +157,34 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         Ok(())
     }
 
+    fn support_append_array_slice(&self) -> bool {
+        true
+    }
+
+    fn append_array_slice(&mut self, array: &ArrayRef, start: usize, length: usize) -> Result<()> {
+        let array = array.as_boolean();
+
+        if NULLABLE {
+            if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+                self.nulls.append_buffer(&nulls.slice(start, length));
+            } else {
+                self.nulls.append_n(length, false);
+            }
+        } else {
+            assert_eq!(
+                array.null_count(),
+                0,
+                "unexpected nulls in non nullable input"
+            );
+            self.nulls.append_n(length, false);
+        }
+
+        self.buffer
+          .append_buffer(&array.values().slice(start, length));
+
+        Ok(())
+    }
+
     fn len(&self) -> usize {
         self.buffer.len()
     }
