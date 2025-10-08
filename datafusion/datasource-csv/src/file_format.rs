@@ -823,7 +823,7 @@ mod tests {
             HashSet::from([DataType::Utf8]), // col5
         ];
 
-        let schema = build_schema_helper(column_names, &column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities);
 
         // Verify schema has 5 columns
         assert_eq!(schema.fields().len(), 5);
@@ -853,7 +853,7 @@ mod tests {
             HashSet::from([DataType::Utf8]),                     // Should remain Utf8
         ];
 
-        let schema = build_schema_helper(column_names, &column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities);
 
         // col1 should be Float64 due to Int64 + Float64 = Float64
         assert_eq!(*schema.field(0).data_type(), DataType::Float64);
@@ -871,7 +871,7 @@ mod tests {
             HashSet::from([DataType::Boolean, DataType::Int64, DataType::Utf8]), // Should resolve to Utf8 due to conflicts
         ];
 
-        let schema = build_schema_helper(column_names, &column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities);
 
         // Should default to Utf8 for conflicting types
         assert_eq!(*schema.field(0).data_type(), DataType::Utf8);
