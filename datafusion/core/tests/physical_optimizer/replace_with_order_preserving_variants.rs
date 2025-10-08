@@ -151,9 +151,9 @@ impl ReplaceTest {
         let optimized = self.execute_plan().await;
 
         if input_plan_string == optimized {
-            format!("Input / Optimized:\n{}", input_plan_string)
+            format!("Input / Optimized:\n{input_plan_string}")
         } else {
-            format!("Input:\n{}\nOptimized:\n{}", input_plan_string, optimized)
+            format!("Input:\n{input_plan_string}\nOptimized:\n{optimized}")
         }
     }
 }
