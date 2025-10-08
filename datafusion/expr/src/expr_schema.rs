@@ -433,18 +433,16 @@ impl ExprSchemable for Expr {
                 ..
             }) => {
                 let field = match &**expr {
-                    Expr::Placeholder(Placeholder { data_type, .. }) => {
-                        match &data_type {
-                            None => schema
-                                .data_type_and_nullable(&Column::from_name(name))
-                                .map(|(d, n)| Field::new(&schema_name, d.clone(), n)),
-                            Some(dt) => Ok(Field::new(
-                                &schema_name,
-                                dt.clone(),
-                                expr.nullable(schema)?,
-                            )),
-                        }
-                    }
+                    Expr::Placeholder(Placeholder { field, .. }) => match &field {
+                        None => schema
+                            .data_type_and_nullable(&Column::from_name(name))
+                            .map(|(d, n)| Field::new(&schema_name, d.clone(), n)),
+                        Some(field) => Ok(field
+                            .as_ref()
+                            .clone()
+                            .with_name(&schema_name)
+                            .with_nullable(expr.nullable(schema)?)),
+                    },
                     _ => expr.to_field(schema).map(|(_, f)| f.as_ref().clone()),
                 }?;
 
