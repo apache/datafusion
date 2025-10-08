@@ -28,14 +28,12 @@ use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan};
 
-use crate::analyzer::resolve_grouping_function::ResolveGroupingFunction;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
 
 use self::function_rewrite::ApplyFunctionRewrites;
 
 pub mod function_rewrite;
-pub mod resolve_grouping_function;
 pub mod type_coercion;
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
@@ -85,10 +83,8 @@ impl Default for Analyzer {
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
-        let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
-            Arc::new(ResolveGroupingFunction::new()),
-            Arc::new(TypeCoercion::new()),
-        ];
+        let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
+            vec![Arc::new(TypeCoercion::new())];
         Self::with_rules(rules)
     }
 

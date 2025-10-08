@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use super::dml::CopyTo;
 use super::invariants::{
@@ -3415,28 +3415,9 @@ impl Aggregate {
     ) -> Result<Self> {
         let group_expr = enumerate_grouping_sets(group_expr)?;
 
-        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
-
         let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
         let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
-
-        // Even columns that cannot be null will become nullable when used in a grouping set.
-        if is_grouping_set {
-            qualified_fields = qualified_fields
-                .into_iter()
-                .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
-                .collect::<Vec<_>>();
-            qualified_fields.push((
-                None,
-                Field::new(
-                    Self::INTERNAL_GROUPING_ID,
-                    Self::grouping_id_type(qualified_fields.len()),
-                    false,
-                )
-                .into(),
-            ));
-        }
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
@@ -3476,6 +3457,25 @@ impl Aggregate {
             );
         }
 
+        let group_expr_set = grouping_set_to_exprlist(&group_expr)?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        // Validate GROUPING function arguments are all columns and in group_expr
+        for expr in &aggr_expr {
+            if let Expr::AggregateFunction(agg_func) = expr {
+                if agg_func.func.name() == "grouping" {
+                    for arg in &agg_func.params.args {
+                        if !group_expr_set.contains(arg) {
+                            return plan_err!(
+                                "GROUPING function argument {} not in grouping columns",
+                                arg
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         let aggregate_func_dependencies =
             calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
         let new_schema = schema.as_ref().clone();
@@ -3490,19 +3490,9 @@ impl Aggregate {
         })
     }
 
-    fn is_grouping_set(&self) -> bool {
-        matches!(self.group_expr.as_slice(), [Expr::GroupingSet(_)])
-    }
-
     /// Get the output expressions.
     fn output_expressions(&self) -> Result<Vec<&Expr>> {
-        static INTERNAL_ID_EXPR: LazyLock<Expr> = LazyLock::new(|| {
-            Expr::Column(Column::from_name(Aggregate::INTERNAL_GROUPING_ID))
-        });
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
-        if self.is_grouping_set() {
-            exprs.push(&INTERNAL_ID_EXPR);
-        }
         exprs.extend(self.aggr_expr.iter());
         debug_assert!(exprs.len() == self.schema.fields().len());
         Ok(exprs)

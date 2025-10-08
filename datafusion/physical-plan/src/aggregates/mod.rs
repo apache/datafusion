@@ -23,7 +23,7 @@ use std::sync::Arc;
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
-    topk_stream::GroupedTopKAggregateStream,
+    topk_stream::GroupedTopKAggregateStream, grouping::GroupingStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -41,7 +41,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::aggregate::{AggregateExpr, AggregateFunctionExpr, INTERNAL_GROUPING_ID};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -61,6 +61,7 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+mod grouping;
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: ahash::RandomState =
@@ -261,7 +262,7 @@ impl PhysicalGroupBy {
         );
         if !self.is_single() {
             output_exprs.push(Arc::new(Column::new(
-                Aggregate::INTERNAL_GROUPING_ID,
+                INTERNAL_GROUPING_ID,
                 self.expr.len(),
             )) as _);
         }
@@ -300,7 +301,7 @@ impl PhysicalGroupBy {
         if !self.is_single() {
             fields.push(
                 Field::new(
-                    Aggregate::INTERNAL_GROUPING_ID,
+                    INTERNAL_GROUPING_ID,
                     Aggregate::grouping_id_type(self.expr.len()),
                     false,
                 )
@@ -328,7 +329,7 @@ impl PhysicalGroupBy {
                 .into_iter()
                 .zip(
                     self.expr.iter().map(|t| t.1.clone()).chain(std::iter::once(
-                        Aggregate::INTERNAL_GROUPING_ID.to_owned(),
+                        INTERNAL_GROUPING_ID.to_owned(),
                     )),
                 )
                 .collect();

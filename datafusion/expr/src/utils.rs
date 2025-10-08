@@ -60,7 +60,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
             );
         }
         // Groupings sets have an additional integral column for the grouping id
-        Ok(grouping_set.distinct_expr().len() + 1)
+        Ok(grouping_set.distinct_expr().len())
     } else {
         grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
     }
