@@ -54,6 +54,7 @@ use chrono::TimeZone;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
 use datafusion_common::{ScalarValue, Statistics};
+use datafusion_expr::statistics::Distribution;
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
@@ -87,6 +88,37 @@ impl FileRange {
     }
 }
 
+/// Statistics for a column within a relation
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColumnDistributionStatistics {
+    /// Number of null values on column
+    pub null_count: Precision<usize>,
+    /// Distribution of values within the column
+    pub distribution: Distribution,
+    /// Sum value of a column
+    pub sum_value: Precision<ScalarValue>,
+    /// Number of distinct values
+    pub distinct_count: Precision<usize>,
+    /// Size of each value in the column, in bytes.
+    pub row_size: Distribution,
+}
+
+/// Statistics for a file or a group of files.
+/// Fields are optional and can be inexact because the sources
+/// sometimes provide approximate estimates for performance reasons
+/// and the transformations output are not always predictable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStatistics {
+    /// The number of table rows.
+    pub num_rows: Precision<usize>,
+    /// Total bytes of the table rows.
+    pub total_byte_size: Precision<usize>,
+    /// Statistics on a column level.
+    /// Each entry in the vector corresponds to a column in the source schema.
+    /// None entries are possible if statistics are not available for a column.
+    pub column_statistics: Vec<Option<ColumnDistributionStatistics>>,
+}
+
 #[derive(Debug, Clone)]
 /// A single file or part of a file that should be read, along with its schema, statistics
 /// and partition column values that need to be appended to each row.
@@ -111,6 +143,11 @@ pub struct PartitionedFile {
     /// DataFusion relies on these statistics for planning (in particular to sort file groups),
     /// so if they are incorrect, incorrect answers may result.
     pub statistics: Option<Arc<Statistics>>,
+    /// Optinal distribution based statistics that describe the data in this file if known.
+    ///
+    /// These statistics are used for optimization purposes, such as join planning.
+    /// If marked as exact these may also be used for correctness purposes, such as in pruning files based on filter predicates.
+    pub distribution_statistics: Option<Arc<FileStatistics>>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
     /// The estimated size of the parquet metadata, in bytes
@@ -133,6 +170,7 @@ impl PartitionedFile {
             statistics: None,
             extensions: None,
             metadata_size_hint: None,
+            distribution_statistics: None,
         }
     }
 
@@ -151,6 +189,7 @@ impl PartitionedFile {
             statistics: None,
             extensions: None,
             metadata_size_hint: None,
+            distribution_statistics: None,
         }
         .with_range(start, end)
     }
@@ -191,9 +230,18 @@ impl PartitionedFile {
         self
     }
 
-    // Update the statistics for this file.
+    /// Update the statistics for this file.
     pub fn with_statistics(mut self, statistics: Arc<Statistics>) -> Self {
         self.statistics = Some(statistics);
+        self
+    }
+
+    /// Update distribution based statistics for this file.
+    pub fn with_distribution_statistics(
+        mut self,
+        statistics: Arc<FileStatistics>,
+    ) -> Self {
+        self.distribution_statistics = Some(statistics);
         self
     }
 
@@ -224,6 +272,7 @@ impl From<ObjectMeta> for PartitionedFile {
             statistics: None,
             extensions: None,
             metadata_size_hint: None,
+            distribution_statistics: None,
         }
     }
 }
@@ -414,6 +463,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     distinct_count: Precision::Absent,
                 }],
             })),
+            distribution_statistics: None,
             extensions: None,
             metadata_size_hint: None,
         };

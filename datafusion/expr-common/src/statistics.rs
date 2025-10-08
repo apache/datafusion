@@ -205,6 +205,8 @@ impl Distribution {
     }
 }
 
+impl Eq for Distribution {}
+
 /// Uniform distribution, represented by its range. If the given range extends
 /// towards infinity, the distribution will be improper -- which is OK. For a
 /// more in-depth discussion, see:
