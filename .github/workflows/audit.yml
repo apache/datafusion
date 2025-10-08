@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Install cargo-audit
-        uses: taiki-e/install-action@f33d3f211b0303ea71864a2677724fed135b8e99  # v2.62.22
+        uses: taiki-e/install-action@eba4035583f0f9b001a27be2cce0a136d05d05e3  # v2.62.23
         with:
           tool: cargo-audit
       - name: Run audit check
