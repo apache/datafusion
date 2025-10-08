@@ -187,7 +187,7 @@ pub struct FileStatistics {
     /// Statistics on a column level.
     /// Each entry in the vector corresponds to a column in the source schema.
     /// None entries are possible if statistics are not available for a column.
-    pub column_statistics: Vec<Option<ColumnDistributionStatistics>>,
+    pub column_statistics: Vec<Option<Arc<ColumnDistributionStatistics>>>,
 }
 
 impl Default for FileStatistics {
@@ -212,7 +212,7 @@ impl FileStatistics {
             column_statistics: schema
                 .fields()
                 .iter()
-                .map(|_| Some(ColumnDistributionStatistics::new_unknown()))
+                .map(|_| Some(Arc::new(ColumnDistributionStatistics::new_unknown())))
                 .collect(),
         }
     }
@@ -232,7 +232,7 @@ impl FileStatistics {
     /// Add a column to the column statistics
     pub fn add_column_statistics(
         mut self,
-        column_stats: Option<ColumnDistributionStatistics>,
+        column_stats: Option<Arc<ColumnDistributionStatistics>>,
     ) -> Self {
         self.column_statistics.push(column_stats);
         self
@@ -246,7 +246,7 @@ impl FileStatistics {
         self.column_statistics = self
             .column_statistics
             .into_iter()
-            .map(|s| s.map(|stats| stats.to_inexact()))
+            .map(|s| s.map(|arc_stats| Arc::new(arc_stats.as_ref().clone().to_inexact())))
             .collect();
         self
     }
@@ -266,7 +266,7 @@ impl FileStatistics {
             /// The column is taken and put into the specified statistics location
             Taken(usize),
             /// The original column is present
-            Present(Option<ColumnDistributionStatistics>),
+            Present(Option<Arc<ColumnDistributionStatistics>>),
         }
 
         // Convert to Vec<Slot> so we can avoid copying the statistics
@@ -358,9 +358,9 @@ impl FileStatistics {
     /// Merge two optional column distribution statistics.
     /// Returns None if either input is None.
     fn merge_column_distribution_stats(
-        left: &Option<ColumnDistributionStatistics>,
-        right: &Option<ColumnDistributionStatistics>,
-    ) -> Result<Option<ColumnDistributionStatistics>> {
+        left: &Option<Arc<ColumnDistributionStatistics>>,
+        right: &Option<Arc<ColumnDistributionStatistics>>,
+    ) -> Result<Option<Arc<ColumnDistributionStatistics>>> {
         match (left, right) {
             (Some(l), Some(r)) => {
                 let null_count = l.null_count.add(&r.null_count);
@@ -371,13 +371,13 @@ impl FileStatistics {
                 let distinct_count = Precision::Absent;
                 let row_size = Self::merge_distributions(&l.row_size, &r.row_size)?;
 
-                Ok(Some(ColumnDistributionStatistics {
+                Ok(Some(Arc::new(ColumnDistributionStatistics {
                     null_count,
                     distribution,
                     sum_value,
                     distinct_count,
                     row_size,
-                }))
+                })))
             }
             _ => Ok(None),
         }
@@ -1098,10 +1098,10 @@ mod tests {
         let stats = FileStatistics::default()
             .with_num_rows(Precision::Exact(100))
             .with_total_byte_size(Precision::Exact(1024))
-            .add_column_statistics(Some(
+            .add_column_statistics(Some(Arc::new(
                 ColumnDistributionStatistics::new_unknown()
                     .with_null_count(Precision::Exact(5)),
-            ));
+            )));
 
         let inexact = stats.to_inexact();
 
@@ -1119,18 +1119,18 @@ mod tests {
         use datafusion_common::stats::Precision;
 
         let stats = FileStatistics::default()
-            .add_column_statistics(Some(
+            .add_column_statistics(Some(Arc::new(
                 ColumnDistributionStatistics::new_unknown()
                     .with_null_count(Precision::Exact(1)),
-            ))
-            .add_column_statistics(Some(
+            )))
+            .add_column_statistics(Some(Arc::new(
                 ColumnDistributionStatistics::new_unknown()
                     .with_null_count(Precision::Exact(2)),
-            ))
-            .add_column_statistics(Some(
+            )))
+            .add_column_statistics(Some(Arc::new(
                 ColumnDistributionStatistics::new_unknown()
                     .with_null_count(Precision::Exact(3)),
-            ));
+            )));
 
         // Project to columns [2, 0]
         let projection = vec![2, 0];
@@ -1176,22 +1176,22 @@ mod tests {
         let stats1 = FileStatistics::default()
             .with_num_rows(Precision::Exact(100))
             .with_total_byte_size(Precision::Exact(1000))
-            .add_column_statistics(Some(
+            .add_column_statistics(Some(Arc::new(
                 ColumnDistributionStatistics::new_unknown()
                     .with_null_count(Precision::Exact(5))
                     .with_distribution(Precision::Exact(dist1))
                     .with_sum_value(Precision::Exact(ScalarValue::Int32(Some(500)))),
-            ));
+            )));
 
         let stats2 = FileStatistics::default()
             .with_num_rows(Precision::Exact(200))
             .with_total_byte_size(Precision::Inexact(2000))
-            .add_column_statistics(Some(
+            .add_column_statistics(Some(Arc::new(
                 ColumnDistributionStatistics::new_unknown()
                     .with_null_count(Precision::Exact(10))
                     .with_distribution(Precision::Exact(dist2))
                     .with_sum_value(Precision::Exact(ScalarValue::Int32(Some(1000)))),
-            ));
+            )));
 
         let merged = stats1.try_merge(&stats2).unwrap();
 
@@ -1224,10 +1224,10 @@ mod tests {
         let stats = FileStatistics::default()
             .with_num_rows(Precision::Exact(100))
             .with_total_byte_size(Precision::Inexact(1024))
-            .add_column_statistics(Some(
+            .add_column_statistics(Some(Arc::new(
                 ColumnDistributionStatistics::new_unknown()
                     .with_null_count(Precision::Exact(5)),
-            ));
+            )));
 
         let display_str = format!("{}", stats);
         assert!(display_str.contains("Rows=Exact(100)"));
