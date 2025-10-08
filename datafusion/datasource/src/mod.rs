@@ -249,11 +249,11 @@ pub enum RangeCalculation {
 /// Calculates an appropriate byte range for reading from an object based on the
 /// provided metadata.
 ///
-/// This asynchronous function examines the `FileMeta` of an object in an object store
+/// This asynchronous function examines the [`PartitionedFile`] of an object in an object store
 /// and determines the range of bytes to be read. The range calculation may adjust
 /// the start and end points to align with meaningful data boundaries (like newlines).
 ///
-/// Returns a `Result` wrapping a `RangeCalculation`, which is either a calculated byte range or an indication to terminate early.
+/// Returns a `Result` wrapping a [`RangeCalculation`], which is either a calculated byte range or an indication to terminate early.
 ///
 /// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
 pub async fn calculate_range(
