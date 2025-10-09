@@ -1783,8 +1783,7 @@ mod test {
     ///
     macro_rules! assert_plan {
         ($EXPECTED_PLAN_LINES: expr,  $PLAN: expr) => {
-            let physical_plan = $PLAN;
-            let formatted = crate::displayable(&physical_plan).indent(true).to_string();
+            let formatted = crate::displayable($PLAN).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();
 
             let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
@@ -1815,7 +1814,7 @@ mod test {
             "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
             "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(expected_plan, &exec);
         Ok(())
     }
 
@@ -1834,7 +1833,7 @@ mod test {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "  DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(expected_plan, &exec);
         Ok(())
     }
 
@@ -1855,7 +1854,26 @@ mod test {
             "    DataSourceExec: partitions=1, partition_sizes=[0]",
             "    DataSourceExec: partitions=1, partition_sizes=[0]",
         ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(expected_plan, &exec);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repartition() -> Result<()> {
+        let schema = test_schema();
+        let sort_exprs = sort_exprs(&schema);
+        let source = sorted_memory_exec(&schema, sort_exprs);
+        // output is sorted, but has only a single partition, so no need to sort
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))?
+            .repartitioned(20, &Default::default())?
+            .unwrap();
+
+        // Repartition should not preserve order
+        let expected_plan = [
+            "RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1",
+            "  DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+        ];
+        assert_plan!(expected_plan, exec.as_ref());
         Ok(())
     }
 
