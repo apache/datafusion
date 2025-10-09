@@ -31,11 +31,11 @@ use object_store::{
     path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
+use parking_lot::RwLock;
 use url::Url;
 
-/// The profiling mode to use for an [`ObjectStore`] instance that has been instrumented to collect
-/// profiling data. Collecting profiling data will have a small negative impact on both CPU and
-/// memory usage. Default is `Disabled`
+/// The profiling mode to use for an [`InstrumentedObjectStore`] instance. Collecting profiling
+/// data will have a small negative impact on both CPU and memory usage. Default is `Disabled`
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum InstrumentedObjectStoreMode {
     /// Disable collection of profiling data
@@ -75,7 +75,7 @@ impl From<u8> for InstrumentedObjectStoreMode {
 /// Wrapped [`ObjectStore`] instances that record information for reporting on the usage of the
 /// inner [`ObjectStore`]
 #[derive(Debug)]
-struct InstrumentedObjectStore {
+pub struct InstrumentedObjectStore {
     inner: Arc<dyn ObjectStore>,
     instrument_mode: AtomicU8,
 }
@@ -87,6 +87,10 @@ impl InstrumentedObjectStore {
             inner: object_store,
             instrument_mode,
         }
+    }
+
+    fn set_instrument_mode(&self, mode: InstrumentedObjectStoreMode) {
+        self.instrument_mode.store(mode as u8, Ordering::Relaxed)
     }
 }
 
@@ -150,11 +154,12 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 }
 
-/// Provides access to [`ObjectStore`] instances that record requests for reporting
+/// Provides access to [`InstrumentedObjectStore`] instances that record requests for reporting
 #[derive(Debug)]
 pub struct InstrumentedObjectStoreRegistry {
     inner: Arc<dyn ObjectStoreRegistry>,
-    instrument_mode: InstrumentedObjectStoreMode,
+    instrument_mode: AtomicU8,
+    stores: RwLock<Vec<Arc<InstrumentedObjectStore>>>,
 }
 
 impl InstrumentedObjectStoreRegistry {
@@ -166,7 +171,28 @@ impl InstrumentedObjectStoreRegistry {
     ) -> Self {
         Self {
             inner: registry,
-            instrument_mode: default_mode,
+            instrument_mode: AtomicU8::new(default_mode as u8),
+            stores: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Provides access to all of the [`InstrumentedObjectStore`]s managed by this
+    /// [`InstrumentedObjectStoreRegistry`]
+    pub fn stores(&self) -> Vec<Arc<InstrumentedObjectStore>> {
+        self.stores.read().clone()
+    }
+
+    /// Returns the current [`InstrumentedObjectStoreMode`] for this
+    /// [`InstrumentedObjectStoreRegistry`]
+    pub fn mode(&self) -> InstrumentedObjectStoreMode {
+        self.instrument_mode.load(Ordering::Relaxed).into()
+    }
+
+    /// Sets the [`InstrumentedObjectStoreMode`] for this [`InstrumentedObjectStoreRegistry`]
+    pub fn set_instrument_mode(&self, mode: InstrumentedObjectStoreMode) {
+        self.instrument_mode.store(mode as u8, Ordering::Relaxed);
+        for s in self.stores.read().iter() {
+            s.set_instrument_mode(mode)
         }
     }
 }
@@ -177,8 +203,10 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let mode = AtomicU8::new(self.instrument_mode as u8);
-        let instrumented = Arc::new(InstrumentedObjectStore::new(store, mode));
+        let mode = self.instrument_mode.load(Ordering::Relaxed);
+        let instrumented =
+            Arc::new(InstrumentedObjectStore::new(store, AtomicU8::new(mode)));
+        self.stores.write().push(Arc::clone(&instrumented));
         self.inner.register_store(url, instrumented)
     }
 
@@ -223,13 +251,15 @@ mod tests {
             Arc::new(DefaultObjectStoreRegistry::new()),
             InstrumentedObjectStoreMode::default(),
         ));
-        let store = object_store::memory::InMemory::new();
+        assert!(reg.stores().is_empty());
 
+        let store = object_store::memory::InMemory::new();
         let url = "mem://test".parse().unwrap();
         let registered = reg.register_store(&url, Arc::new(store));
         assert!(registered.is_none());
 
         let fetched = reg.get_store(&url);
-        assert!(fetched.is_ok())
+        assert!(fetched.is_ok());
+        assert_eq!(reg.stores().len(), 1);
     }
 }

@@ -46,6 +46,7 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
+    ObjectStoreProfileMode(Option<String>),
 }
 
 pub enum OutputFormat {
@@ -122,6 +123,29 @@ impl Command {
             Self::OutputFormat(_) => exec_err!(
                 "Unexpected change output format, this should be handled outside"
             ),
+            Self::ObjectStoreProfileMode(mode) => {
+                if let Some(mode) = mode {
+                    let profile_mode = mode
+                        .parse()
+                        .map_err(|_|
+                            exec_datafusion_err!("Failed to parse input: {mode}. Valid options are disabled, enabled")
+                        )?;
+                    print_options
+                        .instrumented_registry
+                        .set_instrument_mode(profile_mode);
+                    println!(
+                        "ObjectStore Profile mode set to {}",
+                        print_options.instrumented_registry.mode()
+                    );
+                } else {
+                    println!(
+                        "ObjectStore Profile mode is {}",
+                        print_options.instrumented_registry.mode()
+                    );
+                }
+
+                Ok(())
+            }
         }
     }
 
@@ -140,11 +164,15 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
+            Self::ObjectStoreProfileMode(_) => (
+                "\\object_store_profiling (disabled|enabled)",
+                "print or set object store profile mode",
+            ),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 9] = [
+const ALL_COMMANDS: [Command; 10] = [
     Command::ListTables,
     Command::DescribeTableStmt(String::new()),
     Command::Quit,
@@ -154,6 +182,7 @@ const ALL_COMMANDS: [Command; 9] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
+    Command::ObjectStoreProfileMode(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -204,6 +233,10 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
+            ("object_store_profiling", Some(mode)) => {
+                Self::ObjectStoreProfileMode(Some(mode.to_string()))
+            }
+            ("object_store_profiling", None) => Self::ObjectStoreProfileMode(None),
             _ => return Err(()),
         })
     }
@@ -242,5 +275,54 @@ impl OutputFormat {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::{
+        execution::object_store::DefaultObjectStoreRegistry, prelude::SessionContext,
+    };
+
+    use crate::{
+        object_storage::instrumented::{
+            InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
+        },
+        print_options::MaxRows,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn command_execute_profile_mode() {
+        let ctx = SessionContext::new();
+
+        let profile_mode = InstrumentedObjectStoreMode::default();
+        let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(
+            Arc::new(DefaultObjectStoreRegistry::new()),
+            profile_mode,
+        ));
+        let mut print_options = PrintOptions {
+            format: PrintFormat::Automatic,
+            quiet: false,
+            maxrows: MaxRows::Unlimited,
+            color: true,
+            instrumented_registry: Arc::clone(&instrumented_registry),
+        };
+
+        let mut cmd: Command = "object_store_profiling"
+            .parse()
+            .expect("expected parse to succeed");
+        assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
+
+        cmd = "object_store_profiling enabled"
+            .parse()
+            .expect("expected parse to succeed");
+        assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
+
+        cmd = "object_store_profiling does_not_exist"
+            .parse()
+            .expect("expected parse to succeed");
+        assert!(cmd.execute(&ctx, &mut print_options).await.is_err());
     }
 }

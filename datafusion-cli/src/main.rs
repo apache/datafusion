@@ -149,6 +149,13 @@ struct Args {
         value_parser(extract_disk_limit)
     )]
     disk_limit: Option<usize>,
+
+    #[clap(
+        long,
+        help = "Specify the default object_store_profiling mode, defaults to 'disabled'.\n[possible values: disabled, enabled]",
+        default_value_t = InstrumentedObjectStoreMode::Disabled
+    )]
+    object_store_profiling: InstrumentedObjectStoreMode,
 }
 
 #[tokio::main]
@@ -212,7 +219,7 @@ async fn main_inner() -> Result<()> {
 
     let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(
         Arc::new(DefaultObjectStoreRegistry::new()),
-        InstrumentedObjectStoreMode::default(),
+        args.object_store_profiling,
     ));
     rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
 
@@ -243,6 +250,7 @@ async fn main_inner() -> Result<()> {
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
+        instrumented_registry: Arc::clone(&instrumented_registry),
     };
 
     let commands = args.command;
