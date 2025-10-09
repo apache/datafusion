@@ -781,3 +781,19 @@ impl FileSource for ParquetSource {
         self.schema_adapter_factory.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_physical_expr::expressions::lit;
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_parquet_source_predicate_same_as_filter() {
+        let predicate = lit(true);
+
+        let parquet_source = ParquetSource::default().with_predicate(predicate);
+        // same value. but filter() call Arc::clone internally
+        assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+    }
+}
