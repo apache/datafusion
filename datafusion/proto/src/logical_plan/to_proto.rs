@@ -608,7 +608,8 @@ pub fn serialize_expr(
                     None => None,
                 },
                 nullable: field.as_ref().map(|f| f.is_nullable()),
-                metadata: field.as_ref()
+                metadata: field
+                    .as_ref()
                     .map(|f| f.metadata().clone())
                     .unwrap_or(HashMap::new()),
             })),
