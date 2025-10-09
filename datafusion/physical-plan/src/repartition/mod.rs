@@ -858,6 +858,27 @@ impl ExecutionPlan for RepartitionExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        _config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        use Partitioning::*;
+        let mut new_properties = self.cache.clone();
+        new_properties.partitioning = match new_properties.partitioning {
+            RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
+            Hash(hash, _) => Hash(hash, target_partitions),
+            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
+        };
+        Ok(Some(Arc::new(Self {
+            input: Arc::clone(&self.input),
+            state: Arc::clone(&self.state),
+            metrics: self.metrics.clone(),
+            preserve_order: self.preserve_order,
+            cache: new_properties,
+        })))
+    }
 }
 
 impl RepartitionExec {
