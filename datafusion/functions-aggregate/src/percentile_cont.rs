@@ -174,8 +174,8 @@ impl PercentileCont {
         }
 
         let input_dt = args.exprs[0].data_type(args.schema)?;
-        // For integer types, use Float64 internally since percentile_cont returns Float64
-        let dt = match &input_dt {
+        match input_dt {
+            // For integer types, use Float64 internally since percentile_cont returns Float64
             DataType::Int8
             | DataType::Int16
             | DataType::Int32
@@ -183,21 +183,17 @@ impl PercentileCont {
             | DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
-            | DataType::UInt64 => DataType::Float64,
-            _ => input_dt.clone(),
-        };
-
-        match dt {
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
+            | DataType::UInt64 => helper!(Float64Type, DataType::Float64),
+            DataType::Float16 => helper!(Float16Type, input_dt),
+            DataType::Float32 => helper!(Float32Type, input_dt),
+            DataType::Float64 => helper!(Float64Type, input_dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, input_dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, input_dt),
+            DataType::Decimal128(_, _) => helper!(Decimal128Type, input_dt),
+            DataType::Decimal256(_, _) => helper!(Decimal256Type, input_dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "PercentileContAccumulator not supported for {} with {}",
-                args.name, dt,
+                args.name, input_dt,
             ))),
         }
     }
@@ -271,8 +267,19 @@ impl AggregateUDFImpl for PercentileCont {
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => Ok(arg_types[0].clone()),
-            // For integer types, return Float64
-            _ => Ok(DataType::Float64),
+            DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64 => Ok(DataType::Float64),
+            // Shouldn't happen due to signature check, but just in case
+            dt => plan_err!(
+                "percentile_cont does not support input type {}, must be numeric",
+                dt
+            ),
         }
     }
 
@@ -341,20 +348,6 @@ impl AggregateUDFImpl for PercentileCont {
             percentile
         };
 
-        let input_dt = args.exprs[0].data_type(args.schema)?;
-        // For integer types, use Float64 internally since percentile_cont returns Float64
-        let dt = match &input_dt {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => DataType::Float64,
-            _ => input_dt.clone(),
-        };
-
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
                 Ok(Box::new(PercentileContGroupsAccumulator::<$t>::new(
@@ -363,17 +356,27 @@ impl AggregateUDFImpl for PercentileCont {
             };
         }
 
-        match dt {
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
+        let input_dt = args.exprs[0].data_type(args.schema)?;
+        match input_dt {
+            // For integer types, use Float64 internally since percentile_cont returns Float64
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => helper!(Float64Type, DataType::Float64),
+            DataType::Float16 => helper!(Float16Type, input_dt),
+            DataType::Float32 => helper!(Float32Type, input_dt),
+            DataType::Float64 => helper!(Float64Type, input_dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, input_dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, input_dt),
+            DataType::Decimal128(_, _) => helper!(Decimal128Type, input_dt),
+            DataType::Decimal256(_, _) => helper!(Decimal256Type, input_dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "PercentileContGroupsAccumulator not supported for {} with {}",
-                args.name, dt,
+                args.name, input_dt,
             ))),
         }
     }
