@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::{ArrayRef, BooleanArray};
+use arrow::array::{make_builder, ArrayBuilder, ArrayRef, BooleanArray};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
@@ -97,11 +97,21 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let tmp_batch = filter_record_batch(batch, selection)?;
+        let row_count = selection.true_count();
 
-        let tmp_result = self.evaluate(&tmp_batch)?;
+        let tmp_result = if row_count == 0 {
+            // Do not call `evaluate` when the selection is empty.
+            // Otherwise, conditionally executing expressions like `case` may end up
+            // unintentionally evaluating fallible expressions like `1/0` which will trigger
+            // unexpected runtime errors.
+            let datatype = self.data_type(batch.schema_ref().as_ref())?;
+            ColumnarValue::Array(make_builder(&datatype, 0).finish())
+        } else {
+            let tmp_batch = filter_record_batch(batch, selection)?;
+            self.evaluate(&tmp_batch)?
+        };
 
-        if batch.num_rows() == tmp_batch.num_rows() {
+        if batch.num_rows() == row_count {
             // All values from the `selection` filter are true.
             Ok(tmp_result)
         } else if let ColumnarValue::Array(a) = tmp_result {
