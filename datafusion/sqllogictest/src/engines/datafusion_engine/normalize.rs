@@ -22,7 +22,7 @@ use arrow::array::{Array, AsArray};
 use arrow::datatypes::{Fields, Schema};
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion::common::DataFusionError;
+use datafusion::common::internal_datafusion_err;
 use datafusion::config::ConfigField;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -37,12 +37,10 @@ pub fn convert_batches(
     for batch in batches {
         // Verify schema
         if !schema.contains(&batch.schema()) {
-            return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
-                format!(
-                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                    &schema,
-                    batch.schema()
-                ),
+            return Err(DFSqlLogicTestError::DataFusion(internal_datafusion_err!(
+                "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                &schema,
+                batch.schema()
             )));
         }
 
