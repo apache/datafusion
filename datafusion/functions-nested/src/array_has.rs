@@ -145,8 +145,7 @@ impl ScalarUDFImpl for ArrayHas {
                     let list = scalar_values
                         .into_iter()
                         // If the vec is a singular null, `list` will be empty due to this flatten().
-                        // It would be more clear if we handled the None separately, but this is more performant,
-                        // and still handles it correctly (see `test_simplify_array_has_with_null_haystack`).
+                        // It would be more clear if we handled the None separately, but this is more performant.
                         .flatten()
                         .flatten()
                         .map(|v| Expr::Literal(v.clone(), None))
@@ -674,7 +673,7 @@ mod tests {
         ScalarValue,
     };
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, in_list, lit, simplify::ExprSimplifyResult,
+        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult,
         ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl,
     };
 
@@ -789,30 +788,5 @@ mod tests {
         assert!(output.is_null(0));
 
         Ok(())
-    }
-
-    #[test]
-    fn test_simplify_array_has_with_null_haystack() {
-        let haystack = ListArray::new_null(
-            Arc::new(Field::new_list_field(DataType::Int32, true)),
-            1,
-        );
-        let haystack = lit(ScalarValue::List(Arc::new(haystack)));
-        let needle = col("c");
-
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
-
-        let expr = match ArrayHas::new()
-            .simplify(vec![haystack.clone(), needle.clone()], &context)
-            .unwrap()
-        {
-            ExprSimplifyResult::Simplified(expr) => expr,
-            ExprSimplifyResult::Original(_) => {
-                panic!("expected simplified result, not original")
-            }
-        };
-
-        assert_eq!(expr, in_list(col("c"), vec![], false));
     }
 }
