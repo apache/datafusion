@@ -3387,27 +3387,27 @@ OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
 FROM aggregate_test_100
 
 # Test basic percentile_cont with WITHIN GROUP syntax
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 3
 
-query I
+query R
 SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 1
 
-query I
+query R
 SELECT percentile_cont(1.0) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 5
 
-query I
+query R
 SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 2
 
-query I
+query R
 SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 4
@@ -3418,61 +3418,61 @@ SELECT median(c2) FROM aggregate_test_100
 ----
 3
 
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 3
 
 # Test with descending order
-query I
+query R
 SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
 ----
--105
+-101.25
 
-query I
+query R
 SELECT percentile_cont(0.05) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
 ----
-117
+118.099998
 
 # Test with GROUP BY
-query TI
+query TR
 SELECT c1, percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
 ----
 a -25
 b 17
 c 1
-d 37
+d 46.5
 e 64
 
-query TI
+query TR
 SELECT c1, percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
 ----
 a 65
 b 68
 c 118
-d 122
+d 123.299998
 e 112
 
 # Test with NULLs
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v)
 ----
 2
 
 # Test with all NULLs
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v)
 ----
 NULL
 
 # Test with empty set
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1)) as t (v) WHERE v > 10
 ----
 NULL
 
 # Test with single value
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (42)) as t (v)
 ----
 42
@@ -3494,12 +3494,12 @@ SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0)
 3.25
 
 # Test with various numeric types
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c7) FROM aggregate_test_100
 ----
-133
+134.5
 
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c8) FROM aggregate_test_100
 ----
 30634
@@ -3542,52 +3542,52 @@ SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3
 3.25
 
 # Test with exact percentile values (no interpolation needed)
-query I
+query R
 SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
 ----
 1
 
-query I
+query R
 SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
 ----
 2
 
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
 ----
 3
 
-query I
+query R
 SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
 ----
 4
 
-query I
+query R
 SELECT percentile_cont(1.0) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
 ----
 5
 
 # Test with negative numbers
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
 ----
 0
 
-query I
+query R
 SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
 ----
 -5
 
-query I
+query R
 SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
 ----
 5
 
 # Test comparison: percentile_cont should give exact results
-query I
+query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 ----
-14
+15.5
 
 # Compare with approx_percentile_cont (should be close but may not be exact)
 query B

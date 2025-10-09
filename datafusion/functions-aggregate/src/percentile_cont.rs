@@ -20,8 +20,7 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_integer, ArrowNumericType, BooleanArray, ListArray, PrimitiveArray,
-    PrimitiveBuilder,
+    ArrowNumericType, BooleanArray, ListArray, PrimitiveArray, PrimitiveBuilder,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -174,9 +173,21 @@ impl PercentileCont {
             };
         }
 
-        let dt = args.exprs[0].data_type(args.schema)?;
-        downcast_integer! {
-            dt => (helper, dt),
+        let input_dt = args.exprs[0].data_type(args.schema)?;
+        // For integer types, use Float64 internally since percentile_cont returns Float64
+        let dt = match &input_dt {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => DataType::Float64,
+            _ => input_dt.clone(),
+        };
+
+        match dt {
             DataType::Float16 => helper!(Float16Type, dt),
             DataType::Float32 => helper!(Float32Type, dt),
             DataType::Float64 => helper!(Float64Type, dt),
@@ -186,8 +197,7 @@ impl PercentileCont {
             DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "PercentileContAccumulator not supported for {} with {}",
-                args.name,
-                dt,
+                args.name, dt,
             ))),
         }
     }
@@ -250,12 +260,39 @@ impl AggregateUDFImpl for PercentileCont {
         if !arg_types[0].is_numeric() {
             return plan_err!("percentile_cont requires numeric input types");
         }
-        Ok(arg_types[0].clone())
+        // PERCENTILE_CONT performs linear interpolation and should return a float type
+        // For integer inputs, return Float64 (matching PostgreSQL/DuckDB behavior)
+        // For float inputs, preserve the float type
+        match &arg_types[0] {
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                Ok(arg_types[0].clone())
+            }
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => Ok(arg_types[0].clone()),
+            // For integer types, return Float64
+            _ => Ok(DataType::Float64),
+        }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new_list_field(args.input_fields[0].data_type().clone(), true);
+        let input_type = args.input_fields[0].data_type().clone();
+        // For integer types, we store as Float64 internally
+        let storage_type = match &input_type {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => DataType::Float64,
+            _ => input_type,
+        };
+
+        let field = Field::new_list_field(storage_type, true);
         let state_name = if args.is_distinct {
             "distinct_percentile_cont"
         } else {
@@ -304,7 +341,19 @@ impl AggregateUDFImpl for PercentileCont {
             percentile
         };
 
-        let dt = args.exprs[0].data_type(args.schema)?;
+        let input_dt = args.exprs[0].data_type(args.schema)?;
+        // For integer types, use Float64 internally since percentile_cont returns Float64
+        let dt = match &input_dt {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => DataType::Float64,
+            _ => input_dt.clone(),
+        };
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
@@ -314,8 +363,7 @@ impl AggregateUDFImpl for PercentileCont {
             };
         }
 
-        downcast_integer! {
-            dt => (helper, dt),
+        match dt {
             DataType::Float16 => helper!(Float16Type, dt),
             DataType::Float32 => helper!(Float32Type, dt),
             DataType::Float64 => helper!(Float64Type, dt),
@@ -325,8 +373,7 @@ impl AggregateUDFImpl for PercentileCont {
             DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "PercentileContGroupsAccumulator not supported for {} with {}",
-                args.name,
-                dt,
+                args.name, dt,
             ))),
         }
     }
@@ -394,7 +441,14 @@ impl<T: ArrowNumericType> Accumulator for PercentileContAccumulator<T> {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<T>();
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let values = values.as_primitive::<T>();
         self.all_values.reserve(values.len() - values.null_count());
         self.all_values.extend(values.iter().flatten());
         Ok(())
@@ -455,7 +509,15 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
     ) -> Result<()> {
         // For ordered-set aggregates, we only care about the ORDER BY column (first element)
         // The percentile parameter is already stored in self.percentile
-        let values = values[0].as_primitive::<T>();
+
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values_array = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let values = values_array.as_primitive::<T>();
 
         // Push the `not nulls + not filtered` row into its group
         self.group_values.resize(total_num_groups, Vec::new());
@@ -554,7 +616,14 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
     ) -> Result<Vec<ArrayRef>> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
 
-        let input_array = values[0].as_primitive::<T>();
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values_array = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let input_array = values_array.as_primitive::<T>();
 
         // Directly convert the input array to states, each row will be
         // seen as a respective group.
@@ -644,7 +713,14 @@ impl<T: ArrowNumericType> Accumulator for DistinctPercentileContAccumulator<T> {
             return Ok(());
         }
 
-        let array = values[0].as_primitive::<T>();
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let array = values.as_primitive::<T>();
         match array.nulls().filter(|x| x.null_count() > 0) {
             Some(n) => {
                 for idx in n.valid_indices() {
