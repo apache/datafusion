@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use insta::{allow_duplicates, assert_snapshot};
-
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
@@ -31,6 +29,7 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use insta::{allow_duplicates, assert_snapshot};
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{assert_contains, NullEquality, Result};
 use datafusion_common::config::ConfigOptions;
@@ -56,24 +55,52 @@ use object_store::ObjectStore;
 use rstest::rstest;
 use url::Url;
 
-/// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
-/// the plan against the original and expected plans.
-///
-/// # Parameters
-///
-/// * `$PLAN`: The plan to optimize.
-/// * `$PREFER_EXISTING_SORT`: Value of the `prefer_existing_sort` flag.
-#[macro_export]
-macro_rules! get_plan_string {
-    ($PLAN: expr, $PREFER_EXISTING_SORT: expr, $SOURCE_UNBOUNDED: expr) => {{
-        let physical_plan = $PLAN;
-        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Boundedness {
+    Unbounded,
+    Bounded,
+}
 
-        // Run the rule top-down
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortPreference {
+    PreserveOrder,
+    MaximizeParallelism,
+}
+
+struct ReplaceTest {
+    plan: Arc<dyn ExecutionPlan>,
+    boundedness: Boundedness,
+    sort_preference: SortPreference,
+}
+
+impl ReplaceTest {
+    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            plan,
+            boundedness: Boundedness::Bounded,
+            sort_preference: SortPreference::MaximizeParallelism,
+        }
+    }
+
+    fn with_boundedness(mut self, boundedness: Boundedness) -> Self {
+        self.boundedness = boundedness;
+        self
+    }
+
+    fn with_sort_preference(mut self, sort_preference: SortPreference) -> Self {
+        self.sort_preference = sort_preference;
+        self
+    }
+
+    async fn execute_plan(&self) -> String {
         let mut config = ConfigOptions::new();
-        config.optimizer.prefer_existing_sort = $PREFER_EXISTING_SORT;
-        let plan_with_pipeline_fixer =
-            OrderPreservationContext::new_default(physical_plan);
+        config.optimizer.prefer_existing_sort =
+            self.sort_preference == SortPreference::PreserveOrder;
+
+        let plan_with_pipeline_fixer = OrderPreservationContext::new_default(
+            self.plan.clone().reset_state().unwrap(),
+        );
+
         let parallel = plan_with_pipeline_fixer
             .transform_up(|plan_with_pipeline_fixer| {
                 replace_with_order_preserving_variants(
@@ -84,15 +111,15 @@ macro_rules! get_plan_string {
                 )
             })
             .data()
-            .and_then(check_integrity)?;
-        let optimized_physical_plan = parallel.plan;
+            .and_then(check_integrity)
+            .unwrap();
 
-        // Get string representation of the plan
-        let formatted_optimized = displayable(optimized_physical_plan.as_ref())
+        let optimized_physical_plan = parallel.plan;
+        let optimized_plan_string = displayable(optimized_physical_plan.as_ref())
             .indent(true)
             .to_string();
 
-        if !$SOURCE_UNBOUNDED {
+        if self.boundedness == Boundedness::Bounded {
             let ctx = SessionContext::new();
             let object_store = InMemory::new();
             object_store
@@ -100,7 +127,8 @@ macro_rules! get_plan_string {
                     &object_store::path::Path::from("file_path"),
                     bytes::Bytes::from("").into(),
                 )
-                .await?;
+                .await
+                .expect("could not create object store");
             ctx.register_object_store(
                 &Url::parse("test://").unwrap(),
                 Arc::new(object_store),
@@ -109,124 +137,117 @@ macro_rules! get_plan_string {
             let res = collect(optimized_physical_plan, task_ctx).await;
             assert!(
                 res.is_ok(),
-                "Some errors occurred while executing the optimized physical plan: {:?}",
-                res.unwrap_err()
+                "Some errors occurred while executing the optimized physical plan: {:?}\nPlan: {}",
+                res.unwrap_err(), optimized_plan_string
             );
         }
 
-        (formatted, formatted_optimized)
-    }};
+        optimized_plan_string
+    }
+
+    async fn run(&self) -> String {
+        let input_plan_string = displayable(self.plan.as_ref()).indent(true).to_string();
+
+        let optimized = self.execute_plan().await;
+
+        if input_plan_string == optimized {
+            format!("Input / Optimized:\n{input_plan_string}")
+        } else {
+            format!("Input:\n{input_plan_string}\nOptimized:\n{optimized}")
+        }
+    }
 }
 
 #[rstest]
 #[tokio::test]
 // Searches for a simple sort and a repartition just after it, the second repartition with 1 input partition should not be affected
 async fn test_replace_multiple_input_repartition_1(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let sort_exprs: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs.clone())
-    } else {
-        memory_exec_sorted(&schema, sort_exprs.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, sort_exprs.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, sort_exprs.clone()),
     };
     let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
     let sort = sort_exec_with_preserve_partitioning(sort_exprs.clone(), repartition);
     let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
-                SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-                  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-                "
-            );
-
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-                SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-                "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
-                SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-                  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-                "
-            );
-
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-                SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-                  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-                "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
+        },
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
+
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                   DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_with_inter_children_change_only(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr_default("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -239,15 +260,17 @@ async fn test_with_inter_children_change_only(
 
     let physical_plan = sort_preserving_merge_exec(ordering, sort2);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
             SortPreservingMergeExec: [a@0 ASC]
               SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
@@ -258,13 +281,8 @@ async fn test_with_inter_children_change_only(
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                             RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                               StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]
-            "
-            );
 
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC]
               FilterExec: c@1 > 3
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
@@ -273,13 +291,11 @@ async fn test_with_inter_children_change_only(
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
                         RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                           StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC]
               SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
@@ -290,47 +306,23 @@ async fn test_with_inter_children_change_only(
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                             RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                               DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
-            "
-            );
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                        CoalescePartitionsExec
+                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
 
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC]
-              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-                FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-                        CoalescePartitionsExec
-                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC]
-              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-                FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-                        CoalescePartitionsExec
-                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC]
               FilterExec: c@1 > 3
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
@@ -339,25 +331,28 @@ async fn test_with_inter_children_change_only(
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
                         RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_replace_multiple_input_repartition_2(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let filter = filter_exec(repartition_rr);
@@ -365,103 +360,81 @@ async fn test_replace_multiple_input_repartition_2(
     let sort = sort_exec_with_preserve_partitioning(ordering.clone(), repartition_hash);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                       StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
 
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_replace_multiple_input_repartition_with_extra_steps(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -471,15 +444,17 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
         sort_exec_with_preserve_partitioning(ordering.clone(), coalesce_batches_exec);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 CoalesceBatchesExec: target_batch_size=8192
@@ -487,26 +462,19 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
 
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                       StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 CoalesceBatchesExec: target_batch_size=8192
@@ -514,66 +482,48 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                CoalesceBatchesExec: target_batch_size=8192
-                  FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                CoalesceBatchesExec: target_batch_size=8192
-                  FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_replace_multiple_input_repartition_with_extra_steps_2(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let coalesce_batches_exec_1 = coalesce_batches_exec(repartition_rr, 8192);
@@ -584,15 +534,17 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
         sort_exec_with_preserve_partitioning(ordering.clone(), coalesce_batches_exec_2);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 CoalesceBatchesExec: target_batch_size=8192
@@ -601,13 +553,8 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                       CoalesceBatchesExec: target_batch_size=8192
                         RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                           StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
 
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
@@ -615,13 +562,11 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                     CoalesceBatchesExec: target_batch_size=8192
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 CoalesceBatchesExec: target_batch_size=8192
@@ -630,43 +575,21 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                       CoalesceBatchesExec: target_batch_size=8192
                         RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: c@1 > 3
+                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                CoalesceBatchesExec: target_batch_size=8192
-                  FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      CoalesceBatchesExec: target_batch_size=8192
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                CoalesceBatchesExec: target_batch_size=8192
-                  FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      CoalesceBatchesExec: target_batch_size=8192
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
@@ -674,25 +597,26 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                     CoalesceBatchesExec: target_batch_size=8192
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_not_replacing_when_no_need_to_preserve_sorting(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering)
-    } else {
-        memory_exec_sorted(&schema, ordering)
+    let source = match boundedness {
+        Boundedness::Unbounded => stream_exec_ordered_with_projection(&schema, ordering),
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -700,105 +624,68 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
     let coalesce_batches_exec = coalesce_batches_exec(filter, 8192);
     let physical_plan = coalesce_partitions_exec(coalesce_batches_exec);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             CoalescePartitionsExec
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                       StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            CoalescePartitionsExec
-              CoalesceBatchesExec: target_batch_size=8192
-                FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             CoalescePartitionsExec
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            ");
+                // Expected bounded results same with and without flag, because there is no executor  with ordering requirement
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             CoalescePartitionsExec
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            CoalescePartitionsExec
-              CoalesceBatchesExec: target_batch_size=8192
-                FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            CoalescePartitionsExec
-              CoalesceBatchesExec: target_batch_size=8192
-                FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_with_multiple_replaceable_repartitions(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -808,15 +695,17 @@ async fn test_with_multiple_replaceable_repartitions(
     let sort = sort_exec_with_preserve_partitioning(ordering.clone(), repartition_hash_2);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
@@ -825,13 +714,8 @@ async fn test_with_multiple_replaceable_repartitions(
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                         RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                           StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
 
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 CoalesceBatchesExec: target_batch_size=8192
@@ -839,13 +723,11 @@ async fn test_with_multiple_replaceable_repartitions(
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
@@ -854,43 +736,21 @@ async fn test_with_multiple_replaceable_repartitions(
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                         RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: c@1 > 3
+                      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  CoalesceBatchesExec: target_batch_size=8192
-                    FilterExec: c@1 > 3
-                      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-              SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  CoalesceBatchesExec: target_batch_size=8192
-                    FilterExec: c@1 > 3
-                      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 CoalesceBatchesExec: target_batch_size=8192
@@ -898,27 +758,30 @@ async fn test_with_multiple_replaceable_repartitions(
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_not_replace_with_different_orderings(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     use datafusion_physical_expr::LexOrdering;
 
     let schema = create_test_schema()?;
     let ordering_a = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering_a)
-    } else {
-        memory_exec_sorted(&schema, ordering_a)
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering_a)
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering_a),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -927,198 +790,144 @@ async fn test_not_replace_with_different_orderings(
     let sort = sort_exec_with_preserve_partitioning(ordering_c.clone(), repartition_hash);
     let physical_plan = sort_preserving_merge_exec(ordering_c, sort);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [c@1 ASC]
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [c@1 ASC]
-              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                    StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded    {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [c@1 ASC]
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            ");
+                // Expected bounded results same with and without flag, because ordering requirement of the executor is
+                // different from the existing ordering.
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [c@1 ASC]
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortPreservingMergeExec: [c@1 ASC]
-              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [c@1 ASC]
-              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_with_lost_ordering(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering.clone())
-    } else {
-        memory_exec_sorted(&schema, ordering.clone())
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering.clone())
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering.clone()),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
     let physical_plan = sort_exec(ordering, coalesce_partitions);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
             SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
               CoalescePartitionsExec
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
 
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                   StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
               CoalescePartitionsExec
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+              CoalescePartitionsExec
+                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-              CoalescePartitionsExec
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-              CoalescePartitionsExec
-                RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                    DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                   DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_with_lost_and_kept_ordering(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     use datafusion_physical_expr::LexOrdering;
 
     let schema = create_test_schema()?;
     let ordering_a = [sort_expr("a", &schema)].into();
-    let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, ordering_a)
-    } else {
-        memory_exec_sorted(&schema, ordering_a)
+    let source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, ordering_a)
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, ordering_a),
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -1132,15 +941,17 @@ async fn test_with_lost_and_kept_ordering(
     let sort2 = sort_exec_with_preserve_partitioning(ordering_c.clone(), filter);
     let physical_plan = sort_preserving_merge_exec(ordering_c, sort2);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
             SortPreservingMergeExec: [c@1 ASC]
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
@@ -1151,13 +962,8 @@ async fn test_with_lost_and_kept_ordering(
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                             RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                               StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
 
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [c@1 ASC]
               FilterExec: c@1 > 3
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC
@@ -1167,13 +973,11 @@ async fn test_with_lost_and_kept_ordering(
                         RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                           RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                             StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::MaximizeParallelism) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [c@1 ASC]
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
@@ -1184,47 +988,23 @@ async fn test_with_lost_and_kept_ordering(
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                             RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                               DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
+        },
+        (Boundedness::Bounded, SortPreference::PreserveOrder) => {
+            assert_snapshot!(physical_plan, @r"
+            Input:
+            SortPreservingMergeExec: [c@1 ASC]
+              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
+                FilterExec: c@1 > 3
+                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
+                        CoalescePartitionsExec
+                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [c@1 ASC]
-              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
-                FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
-                        CoalescePartitionsExec
-                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortPreservingMergeExec: [c@1 ASC]
-              SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
-                FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                      SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
-                        CoalescePartitionsExec
-                          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
+            Optimized:
             SortPreservingMergeExec: [c@1 ASC]
               FilterExec: c@1 > 3
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC
@@ -1234,26 +1014,29 @@ async fn test_with_lost_and_kept_ordering(
                         RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                           RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
         }
     }
+    }
+
     Ok(())
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_with_multiple_child_trees(
-    #[values(false, true)] source_unbounded: bool,
-    #[values(false, true)] prefer_existing_sort: bool,
+    #[values(Boundedness::Unbounded, Boundedness::Bounded)] boundedness: Boundedness,
+    #[values(SortPreference::PreserveOrder, SortPreference::MaximizeParallelism)]
+    sort_pref: SortPreference,
 ) -> Result<()> {
     let schema = create_test_schema()?;
 
     let left_ordering = [sort_expr("a", &schema)].into();
-    let left_source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, left_ordering)
-    } else {
-        memory_exec_sorted(&schema, left_ordering)
+    let left_source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, left_ordering)
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, left_ordering),
     };
     let left_repartition_rr = repartition_exec_round_robin(left_source);
     let left_repartition_hash = repartition_exec_hash(left_repartition_rr);
@@ -1261,10 +1044,11 @@ async fn test_with_multiple_child_trees(
         Arc::new(CoalesceBatchesExec::new(left_repartition_hash, 4096));
 
     let right_ordering = [sort_expr("a", &schema)].into();
-    let right_source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, right_ordering)
-    } else {
-        memory_exec_sorted(&schema, right_ordering)
+    let right_source = match boundedness {
+        Boundedness::Unbounded => {
+            stream_exec_ordered_with_projection(&schema, right_ordering)
+        }
+        Boundedness::Bounded => memory_exec_sorted(&schema, right_ordering),
     };
     let right_repartition_rr = repartition_exec_round_robin(right_source);
     let right_repartition_hash = repartition_exec_hash(right_repartition_rr);
@@ -1277,15 +1061,17 @@ async fn test_with_multiple_child_trees(
     let sort = sort_exec_with_preserve_partitioning(ordering.clone(), hash_join_exec);
     let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    let (actual, actual_optimized) =
-        get_plan_string!(physical_plan, prefer_existing_sort, source_unbounded);
+    let run = ReplaceTest::new(physical_plan)
+        .with_boundedness(boundedness)
+        .with_sort_preference(sort_pref);
+
+    let physical_plan = run.run().await;
 
     allow_duplicates! {
-        if !prefer_existing_sort && source_unbounded {
-            // Original plan with unbounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+    match (boundedness, sort_pref) {
+        (Boundedness::Unbounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC]
               SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                 HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
@@ -1297,31 +1083,11 @@ async fn test_with_multiple_child_trees(
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-
-            // Optimized plan with unbounded source - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC]
-              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
-                  CoalesceBatchesExec: target_batch_size=4096
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-                  CoalesceBatchesExec: target_batch_size=4096
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
-            "
-            );
-        } else if !prefer_existing_sort && !source_unbounded {
-            // Original plan with bounded source and prefer_existing_sort=false
-            assert_snapshot!(
-                actual,
-                @r"
+            ");
+        },
+        (Boundedness::Bounded, _) => {
+            assert_snapshot!(physical_plan, @r"
+            Input / Optimized:
             SortPreservingMergeExec: [a@0 ASC]
               SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                 HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
@@ -1333,64 +1099,13 @@ async fn test_with_multiple_child_trees(
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with bounded source - no optimization applied, plan remains unchanged
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC]
-              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
-                  CoalesceBatchesExec: target_batch_size=4096
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-                  CoalesceBatchesExec: target_batch_size=4096
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-        } else if prefer_existing_sort && !source_unbounded {
-            // Original plan with prefer_existing_sort=true
-            assert_snapshot!(
-                actual,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC]
-              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
-                  CoalesceBatchesExec: target_batch_size=4096
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-                  CoalesceBatchesExec: target_batch_size=4096
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
-
-            // Optimized plan with prefer_existing_sort=true - SortExec removed and RepartitionExec preserves order
-            assert_snapshot!(
-                actual_optimized,
-                @r"
-            SortPreservingMergeExec: [a@0 ASC]
-              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
-                  CoalesceBatchesExec: target_batch_size=4096
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-                  CoalesceBatchesExec: target_batch_size=4096
-                    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-                        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-            "
-            );
+            ");
+                // Expected bounded results same with and without flag, because ordering get lost during intermediate executor anyway.
+                //  Hence, no need to preserve existing ordering.
         }
     }
+    }
+
     Ok(())
 }
 
