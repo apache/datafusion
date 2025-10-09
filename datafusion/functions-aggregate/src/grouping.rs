@@ -47,13 +47,13 @@ make_udaf_expr_and_func!(
 > SELECT column_name, GROUPING(column_name) AS group_column
   FROM table_name
   GROUP BY GROUPING SETS ((column_name), ());
-+-------------+-------------+
++-------------+--------------+
 | column_name | group_column |
-+-------------+-------------+
-| value1      | 0           |
-| value2      | 0           |
-| NULL        | 1           |
-+-------------+-------------+
++-------------+--------------+
+| value1      | 0            |
+| value2      | 0            |
+| NULL        | 1            |
++-------------+--------------+
 ```"#,
     argument(
         name = "expression",
