@@ -653,6 +653,13 @@ pub struct PlaceholderNode {
     pub id: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
     pub data_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(bool, optional, tag = "3")]
+    pub nullable: ::core::option::Option<bool>,
+    #[prost(map = "string, string", tag = "4")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogicalExprList {
