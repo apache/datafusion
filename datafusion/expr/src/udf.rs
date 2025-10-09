@@ -670,7 +670,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Setting this to true prevents certain optimizations such as common
     /// subexpression elimination
     ///
-    /// When overriding this function to return `true`, [conditional_arguments] can also be
+    /// When overriding this function to return `true`, [ScalarUDFImpl::conditional_arguments] can also be
     /// overridden to report more accurately which arguments are eagerly evaluated and which ones
     /// lazily.
     fn short_circuits(&self) -> bool {
@@ -687,7 +687,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// When `Some` is returned, implementations must ensure that the two returned `Vec`s are
     /// disjunct, and that each argument from `args` is present in one the two `Vec`s.
     ///
-    /// When overriding this function, [short_circuits] should also be overridden to return `true`.
+    /// When overriding this function, [ScalarUDFImpl::short_circuits] should also be overridden to return `true`.
     fn conditional_arguments<'a>(
         &self,
         args: &'a [Expr],
