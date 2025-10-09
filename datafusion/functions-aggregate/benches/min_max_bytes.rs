@@ -87,6 +87,16 @@ const LARGE_TOTAL_GROUPS: usize = 10_000;
 const MONOTONIC_BATCHES: usize = 32;
 const MONOTONIC_TOTAL_GROUPS: usize = MONOTONIC_BATCHES * BATCH_SIZE;
 const LARGE_DENSE_GROUPS: usize = MONOTONIC_TOTAL_GROUPS;
+const STABLE_GROUPS: usize = 1_000;
+const STABLE_BATCHES: usize = 50;
+const SEQUENTIAL_DENSE_LARGE_GROUPS: usize = 65_536;
+const SEQUENTIAL_DENSE_LARGE_BATCHES: usize = 8;
+const MEDIUM_TOTAL_GROUPS: usize = 50_000;
+const MEDIUM_BATCHES: usize = 20;
+const ULTRA_SPARSE_TOTAL_GROUPS: usize = 1_000_000;
+const ULTRA_SPARSE_BATCHES: usize = 20;
+const ULTRA_SPARSE_ACTIVE: usize = 100;
+const MODE_TRANSITION_PHASES: usize = 20; // 10 dense + 10 sparse
 
 fn prepare_min_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     let field = Field::new("f", data_type.clone(), true).into();
@@ -105,6 +115,41 @@ fn prepare_min_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     Min::new()
         .create_groups_accumulator(accumulator_args)
         .expect("create min accumulator")
+}
+
+fn make_string_values(len: usize) -> ArrayRef {
+    Arc::new(StringArray::from_iter_values(
+        (0..len).map(|i| format!("value_{i:05}")),
+    ))
+}
+
+fn bench_batches<F>(
+    c: &mut Criterion,
+    name: &str,
+    total_num_groups: usize,
+    group_batches: &[Vec<usize>],
+    mut with_values: F,
+) where
+    F: FnMut(usize) -> ArrayRef,
+{
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
+            for (batch_idx, group_indices) in group_batches.iter().enumerate() {
+                let values = with_values(batch_idx);
+                black_box(
+                    accumulator
+                        .update_batch(
+                            std::slice::from_ref(&values),
+                            group_indices,
+                            None,
+                            total_num_groups,
+                        )
+                        .expect("update batch"),
+                );
+            }
+        })
+    });
 }
 
 fn min_bytes_single_batch_small(c: &mut Criterion) {
@@ -280,6 +325,151 @@ fn min_bytes_dense_duplicate_groups(c: &mut Criterion) {
     });
 }
 
+fn min_bytes_extreme_duplicates(c: &mut Criterion) {
+    let unique_groups = 50;
+    let repeats_per_group = 10;
+    let total_rows = unique_groups * repeats_per_group;
+
+    let mut value_strings = Vec::with_capacity(total_rows);
+    for group in 0..unique_groups {
+        for _ in 0..repeats_per_group {
+            value_strings.push(format!("value_{group:04}"));
+        }
+    }
+    let values: ArrayRef = Arc::new(StringArray::from(value_strings));
+    let group_indices: Vec<usize> = (0..unique_groups)
+        .flat_map(|group| std::iter::repeat(group).take(repeats_per_group))
+        .collect();
+
+    debug_assert_eq!(values.len(), total_rows);
+    debug_assert_eq!(group_indices.len(), total_rows);
+
+    c.bench_function("min bytes extreme duplicates", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
+            for _ in 0..MONOTONIC_BATCHES {
+                black_box(
+                    accumulator
+                        .update_batch(
+                            std::slice::from_ref(&values),
+                            &group_indices,
+                            None,
+                            unique_groups,
+                        )
+                        .expect("update batch"),
+                );
+            }
+        })
+    });
+}
+
+fn min_bytes_sequential_stable_groups(c: &mut Criterion) {
+    let batches: Vec<Vec<usize>> = (0..STABLE_BATCHES)
+        .map(|_| (0..STABLE_GROUPS).collect())
+        .collect();
+
+    bench_batches(
+        c,
+        "min bytes sequential stable groups",
+        STABLE_GROUPS,
+        &batches,
+        |_| make_string_values(STABLE_GROUPS),
+    );
+}
+
+fn min_bytes_sequential_dense_large_stable(c: &mut Criterion) {
+    let batches: Vec<Vec<usize>> = (0..SEQUENTIAL_DENSE_LARGE_BATCHES)
+        .map(|_| (0..SEQUENTIAL_DENSE_LARGE_GROUPS).collect())
+        .collect();
+
+    let baseline = make_string_values(SEQUENTIAL_DENSE_LARGE_GROUPS);
+    bench_batches(
+        c,
+        "min bytes sequential dense large stable",
+        SEQUENTIAL_DENSE_LARGE_GROUPS,
+        &batches,
+        move |_| baseline.clone(),
+    );
+}
+
+fn min_bytes_medium_cardinality_stable(c: &mut Criterion) {
+    let touched_per_batch = (MEDIUM_TOTAL_GROUPS as f64 * 0.8) as usize;
+    let batches: Vec<Vec<usize>> = (0..MEDIUM_BATCHES)
+        .map(|batch| {
+            let start = (batch * touched_per_batch) % MEDIUM_TOTAL_GROUPS;
+            (0..touched_per_batch)
+                .map(|offset| (start + offset) % MEDIUM_TOTAL_GROUPS)
+                .collect()
+        })
+        .collect();
+
+    bench_batches(
+        c,
+        "min bytes medium cardinality stable",
+        MEDIUM_TOTAL_GROUPS,
+        &batches,
+        |_| make_string_values(touched_per_batch),
+    );
+}
+
+fn min_bytes_ultra_sparse(c: &mut Criterion) {
+    let batches: Vec<Vec<usize>> = (0..ULTRA_SPARSE_BATCHES)
+        .map(|batch| {
+            let base = (batch * ULTRA_SPARSE_ACTIVE) % ULTRA_SPARSE_TOTAL_GROUPS;
+            (0..ULTRA_SPARSE_ACTIVE)
+                .map(|offset| (base + offset * 8_129) % ULTRA_SPARSE_TOTAL_GROUPS)
+                .collect()
+        })
+        .collect();
+
+    bench_batches(
+        c,
+        "min bytes ultra sparse",
+        ULTRA_SPARSE_TOTAL_GROUPS,
+        &batches,
+        |_| make_string_values(ULTRA_SPARSE_ACTIVE),
+    );
+}
+
+fn min_bytes_mode_transition(c: &mut Criterion) {
+    let mut batches = Vec::with_capacity(MODE_TRANSITION_PHASES * 2);
+
+    let dense_touch = (STABLE_GROUPS as f64 * 0.9) as usize;
+    for batch in 0..MODE_TRANSITION_PHASES {
+        let start = (batch * dense_touch) % STABLE_GROUPS;
+        batches.push(
+            (0..dense_touch)
+                .map(|offset| (start + offset) % STABLE_GROUPS)
+                .collect(),
+        );
+    }
+
+    let sparse_total = 100_000;
+    let sparse_touch = (sparse_total as f64 * 0.05) as usize;
+    for batch in 0..MODE_TRANSITION_PHASES {
+        let start = (batch * sparse_touch * 13) % sparse_total;
+        batches.push(
+            (0..sparse_touch)
+                .map(|offset| (start + offset * 17) % sparse_total)
+                .collect(),
+        );
+    }
+
+    bench_batches(
+        c,
+        "min bytes mode transition",
+        sparse_total,
+        &batches,
+        |batch_idx| {
+            if batch_idx < MODE_TRANSITION_PHASES {
+                make_string_values(dense_touch)
+            } else {
+                make_string_values(sparse_touch)
+            }
+        },
+    );
+}
+
 /// Demonstration benchmark: simulate growing `total_num_groups` across batches
 /// while group indices remain dense in each batch. This exposes quadratic
 /// allocation behaviour when per-batch allocations scale with the historical
@@ -419,10 +609,16 @@ criterion_group!(
     min_bytes_dense_first_batch,
     min_bytes_dense_reused_batches,
     min_bytes_dense_duplicate_groups,
+    min_bytes_extreme_duplicates,
     min_bytes_quadratic_growing_total_groups,
     min_bytes_sparse_groups,
     min_bytes_monotonic_group_ids,
     min_bytes_growing_total_groups,
-    min_bytes_large_dense_groups
+    min_bytes_large_dense_groups,
+    min_bytes_sequential_stable_groups,
+    min_bytes_sequential_dense_large_stable,
+    min_bytes_medium_cardinality_stable,
+    min_bytes_ultra_sparse,
+    min_bytes_mode_transition
 );
 criterion_main!(benches);

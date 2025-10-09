@@ -80,7 +80,15 @@ enum WorkloadMode {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct BatchStats {
+    /// Number of **unique** group ids observed in the processed batch. The
+    /// counter is strictly per-batch – duplicates within the batch do not
+    /// contribute multiple times and the value intentionally ignores groups
+    /// touched in prior batches. This makes the density heuristics resilient to
+    /// workloads that repeatedly touch the same domain across many batches.
     unique_groups: usize,
+    /// Highest group index encountered in the batch. Unlike `unique_groups`
+    /// duplicates matter here because it is used to derive the effective domain
+    /// size for density comparisons.
     max_group_index: Option<usize>,
 }
 
@@ -591,6 +599,15 @@ const DENSE_INLINE_MIN_DENSITY_PERCENT: usize = 50;
 /// Maximum number of groups for which the simple dense path is considered.
 const SIMPLE_MODE_MAX_TOTAL_GROUPS: usize = 100_000;
 /// Minimum observed density (in percent) required to remain on the simple path.
+///
+/// The density calculation compares the per-batch `unique_groups` against the
+/// effective domain derived from `max_group_index`. Prior to fixing the
+/// statistics bug described in docs/tasks/min_max_bytes_regression_v2.md the
+/// thresholds were evaluated using inflated unique counts (effectively counting
+/// every non-null row). Re-validating with the corrected per-batch counts shows
+/// that a 10% density remains the tipping point where the simple path starts to
+/// outperform the sparse implementation while avoiding the inline dense path's
+/// mark bookkeeping.
 const SIMPLE_MODE_MIN_DENSITY_PERCENT: usize = 10;
 /// Threshold after which the accumulator reevaluates whether it should switch
 /// to the sparse implementation.
@@ -698,20 +715,23 @@ impl MinMaxBytesState {
         // This is the common case for dense aggregations and matches the original
         // pre-optimization algorithm behavior with zero overhead.
         //
-        // We use a lightweight heuristic check: if length matches total_num_groups,
-        // first element is 0, and last element is N-1, we assume sequential.
-        // This avoids scanning the entire array for the common case.
+        // We use a lightweight heuristic check: verify the batch covers every group
+        // exactly once by ensuring it spans the full domain and the indices are
+        // strictly sequential.
         if group_indices.len() == total_num_groups
             && !group_indices.is_empty()
             && group_indices[0] == 0
             && group_indices[total_num_groups - 1] == total_num_groups - 1
+            && group_indices.windows(2).all(|pair| pair[1] == pair[0] + 1)
         {
-            return self.update_batch_sequential_dense(
+            let stats = self.update_batch_sequential_dense(
                 iter,
                 group_indices,
                 total_num_groups,
                 cmp,
-            );
+            )?;
+            self.record_batch_stats(stats, total_num_groups);
+            return Ok(());
         }
 
         let mut cmp = cmp;
@@ -945,7 +965,7 @@ impl MinMaxBytesState {
         group_indices: &[usize],
         total_num_groups: usize,
         mut cmp: F,
-    ) -> Result<()>
+    ) -> Result<BatchStats>
     where
         F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
         I: IntoIterator<Item = Option<&'a [u8]>>,
@@ -957,13 +977,38 @@ impl MinMaxBytesState {
         // and updating the owned values in self.min_max at most once
         let mut locations =
             vec![SequentialDenseLocation::ExistingMinMax; total_num_groups];
+        let mut unique_groups = 0_usize;
+        let mut max_group_index: Option<usize> = None;
 
-        // Figure out the new min/max value for each group
-        for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
+        // Figure out the new min/max value for each group. The sequential fast
+        // path is only selected when `group_indices` is exactly `[0, 1, ..., N-1]`
+        // for the supplied `total_num_groups`, so each non-null row corresponds
+        // to a unique group id. This keeps the loop read-mostly: we only write
+        // into `locations` when a new value actually wins.
+        for (position, (new_val, group_index)) in
+            iter.into_iter().zip(group_indices.iter()).enumerate()
+        {
             let group_index = *group_index;
+            debug_assert_eq!(
+                group_index, position,
+                "sequential dense path expects strictly sequential group ids"
+            );
+
             let Some(new_val) = new_val else {
                 continue; // skip nulls
             };
+
+            unique_groups = unique_groups.saturating_add(1);
+
+            // Track the largest group index encountered in this batch. Unlike
+            // `unique_groups`, this intentionally considers every row (including
+            // duplicates) because the domain size we derive from
+            // `max_group_index` only depends on the highest index touched, not on
+            // how many distinct groups contributed to it.
+            max_group_index = Some(match max_group_index {
+                Some(current_max) => current_max.max(group_index),
+                None => group_index,
+            });
 
             let existing_val = match locations[group_index] {
                 // previous input value was the min/max, so compare it
@@ -993,7 +1038,10 @@ impl MinMaxBytesState {
                 }
             }
         }
-        Ok(())
+        Ok(BatchStats {
+            unique_groups,
+            max_group_index,
+        })
     }
 
     /// Fast path for DenseInline once the workload has been deemed stable.
@@ -1158,6 +1206,18 @@ impl MinMaxBytesState {
     /// overhead in single-batch scenarios. The overhead comes from tracking
     /// `unique_groups` and `max_group_index` statistics needed to evaluate
     /// density and choose the optimal execution path.
+    /// Capture per-batch statistics and feed them into the adaptive mode
+    /// selection heuristic.
+    ///
+    /// * `stats.unique_groups` counts the distinct group ids in **this** batch.
+    ///   It is accumulated into `self.total_groups_seen` so the sparse path can
+    ///   reason about long-lived density trends.
+    /// * `stats.max_group_index` captures the largest identifier touched in the
+    ///   batch and therefore the effective domain size used for density
+    ///   comparisons.
+    /// * `total_num_groups` is the logical domain configured by the execution
+    ///   plan. It acts as an upper bound for allocations and is used alongside
+    ///   `unique_groups` to reason about per-batch density.
     fn record_batch_stats(&mut self, stats: BatchStats, total_num_groups: usize) {
         self.processed_batches = self.processed_batches.saturating_add(1);
         if stats.unique_groups == 0 {
@@ -1172,6 +1232,17 @@ impl MinMaxBytesState {
                 None => max_group_index,
             });
         }
+
+        #[cfg(feature = "trace")]
+        tracing::debug!(
+            unique_groups = stats.unique_groups,
+            max_group_index = ?stats.max_group_index,
+            total_num_groups,
+            processed_batches = self.processed_batches,
+            total_groups_seen = self.total_groups_seen,
+            workload_mode = ?self.workload_mode,
+            "Recorded min/max batch statistics"
+        );
 
         match self.workload_mode {
             WorkloadMode::Undecided => {
@@ -1263,7 +1334,11 @@ impl MinMaxBytesState {
             return false;
         }
 
-        unique_groups * 100 >= total_num_groups * DENSE_INLINE_MIN_DENSITY_PERCENT
+        Self::density_at_least(
+            unique_groups,
+            total_num_groups,
+            DENSE_INLINE_MIN_DENSITY_PERCENT,
+        )
     }
 
     fn should_use_simple(
@@ -1275,7 +1350,7 @@ impl MinMaxBytesState {
         if total_num_groups > SIMPLE_MODE_MAX_TOTAL_GROUPS || domain == 0 {
             return false;
         }
-        unique_groups * SIMPLE_MODE_MIN_DENSITY_PERCENT >= domain
+        Self::density_at_least(unique_groups, domain, SIMPLE_MODE_MIN_DENSITY_PERCENT)
     }
 
     fn should_switch_to_sparse(&self) -> bool {
@@ -1290,9 +1365,24 @@ impl MinMaxBytesState {
             return false;
         }
 
-        let populated_scaled = self.populated_groups.saturating_mul(100);
-        let domain_scaled = domain.saturating_mul(SPARSE_SWITCH_MAX_DENSITY_PERCENT);
-        populated_scaled < domain_scaled
+        !Self::density_at_least(
+            self.populated_groups,
+            domain,
+            SPARSE_SWITCH_MAX_DENSITY_PERCENT,
+        )
+    }
+
+    /// Returns `true` when the observed population covers at least `percent`
+    /// percent of the provided domain.
+    #[inline]
+    fn density_at_least(observed: usize, domain: usize, percent: usize) -> bool {
+        if domain == 0 || percent == 0 {
+            return false;
+        }
+
+        let observed_scaled = observed.saturating_mul(100);
+        let required_scaled = domain.saturating_mul(percent);
+        observed_scaled >= required_scaled
     }
 
     fn enter_simple_mode(&mut self) {
@@ -2436,5 +2526,87 @@ mod tests {
         assert_eq!(state.min_max.len(), 0);
         assert_eq!(state.total_data_bytes, 0);
         assert_eq!(state.populated_groups, 0);
+    }
+
+    #[test]
+    fn sequential_dense_counts_non_null_groups_without_spurious_updates() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let total_groups = 6_usize;
+
+        state.resize_min_max(total_groups);
+        let existing_values: Vec<Vec<u8>> = (0..total_groups)
+            .map(|group| format!("seed_{group:02}").into_bytes())
+            .collect();
+        for (group, value) in existing_values.iter().enumerate() {
+            state.set_value(group, value);
+        }
+
+        let owned_replacements: Vec<Option<Vec<u8>>> = vec![
+            Some(b"aaa".to_vec()), // smaller -> should replace
+            Some(b"zzz".to_vec()), // larger -> should not replace
+            None,
+            Some(b"seed_03".to_vec()), // equal -> should not replace
+            None,
+            Some(b"aaa".to_vec()), // smaller -> should replace
+        ];
+
+        let group_indices: Vec<usize> = (0..total_groups).collect();
+        let stats = state
+            .update_batch_sequential_dense(
+                owned_replacements.iter().map(|value| value.as_deref()),
+                &group_indices,
+                total_groups,
+                |a, b| a < b,
+            )
+            .expect("sequential dense update");
+
+        // Only four groups supplied non-null values in the batch.
+        assert_eq!(stats.unique_groups, 4);
+        assert_eq!(stats.max_group_index, Some(5));
+
+        // Groups 0 and 5 should have been updated with the smaller values.
+        assert_eq!(state.min_max[0].as_deref(), Some(b"aaa".as_slice()));
+        assert_eq!(state.min_max[5].as_deref(), Some(b"aaa".as_slice()));
+
+        // Groups with larger/equal values must retain their existing minima.
+        assert_eq!(state.min_max[1].as_deref(), Some(b"seed_01".as_slice()));
+        assert_eq!(state.min_max[3].as_deref(), Some(b"seed_03".as_slice()));
+
+        // Null groups are left untouched.
+        assert_eq!(state.min_max[2].as_deref(), Some(b"seed_02".as_slice()));
+        assert_eq!(state.min_max[4].as_deref(), Some(b"seed_04".as_slice()));
+    }
+
+    #[test]
+    fn update_batch_duplicate_batches_match_expected_unique_counts() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let total_groups = 8_usize;
+        let repeats_per_group = 4_usize;
+
+        let group_indices: Vec<usize> = (0..total_groups)
+            .flat_map(|group| std::iter::repeat(group).take(repeats_per_group))
+            .collect();
+        let values: Vec<Vec<u8>> = group_indices
+            .iter()
+            .map(|group| format!("value_{group:02}").into_bytes())
+            .collect();
+
+        for batch in 0..3 {
+            let before = state.total_groups_seen;
+            state
+                .update_batch(
+                    values.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("update batch");
+
+            assert_eq!(
+                state.total_groups_seen,
+                before + total_groups,
+                "batch {batch} should add exactly {total_groups} unique groups",
+            );
+        }
     }
 }
