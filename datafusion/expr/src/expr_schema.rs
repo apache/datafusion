@@ -294,9 +294,17 @@ impl ExprSchemable for Expr {
                             // using limited const evaluation if the branch will be taken when
                             // the then expression evaluates to null.
                             Ok(true) => {
-                                let const_result = predicate_eval::const_eval_predicate(w, input_schema, |expr| {
-                                    if expr.eq(t) { TriStateBool::True } else { TriStateBool::Uncertain }
-                                });
+                                let const_result = predicate_eval::const_eval_predicate(
+                                    w,
+                                    input_schema,
+                                    |expr| {
+                                        if expr.eq(t) {
+                                            TriStateBool::True
+                                        } else {
+                                            TriStateBool::Uncertain
+                                        }
+                                    },
+                                );
 
                                 match const_result {
                                     // Const evaluation was inconclusive or determined the branch

@@ -22,7 +22,7 @@ impl TryFrom<&ScalarValue> for TriStateBool {
             ScalarValue::Null => {
                 // Literal null is equivalent to boolean uncertain
                 Ok(Uncertain)
-            },
+            }
             ScalarValue::Boolean(b) => Ok(match b {
                 Some(true) => True,
                 Some(false) => False,
@@ -151,7 +151,11 @@ where
                 Some(Uncertain) => Some(Uncertain),
                 None => None,
             },
-            Expr::BinaryExpr(BinaryExpr { left, op: Operator::And, right }) => {
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::And,
+                right,
+            }) => {
                 match (
                     self.const_eval_predicate(left),
                     self.const_eval_predicate(right),
@@ -163,8 +167,12 @@ where
                     }
                     _ => None,
                 }
-            },
-            Expr::BinaryExpr(BinaryExpr { left, op: Operator::Or, right }) => {
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Or,
+                right,
+            }) => {
                 match (
                     self.const_eval_predicate(left),
                     self.const_eval_predicate(right),
@@ -176,7 +184,7 @@ where
                     }
                     _ => None,
                 }
-            },
+            }
             e => match self.is_null(e) {
                 True => Some(Uncertain),
                 _ => None,

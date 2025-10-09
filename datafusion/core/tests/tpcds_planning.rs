@@ -1055,7 +1055,7 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
         if create_physical {
             let _ = state.create_physical_plan(&plan).await?;
         } else {
-            // Run the logical optimizer even if we are not creating the physical plan 
+            // Run the logical optimizer even if we are not creating the physical plan
             // to ensure it will properly succeed
             let _ = state.optimize(&plan)?;
         }

@@ -69,6 +69,7 @@ pub mod async_udf;
 pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
+mod predicate_eval;
 pub mod ptr_eq;
 pub mod test;
 pub mod tree_node;
@@ -78,7 +79,6 @@ pub mod utils;
 pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
-mod predicate_eval;
 
 pub use datafusion_doc::{
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections, DocSection,
