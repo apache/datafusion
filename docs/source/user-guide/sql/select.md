@@ -521,7 +521,7 @@ select * from range(0,3)
 ### JOIN
 
 ```sql
-> (
+(
   SELECT 'apples' AS item, 2 AS sales
   UNION ALL
   SELECT 'bananas' AS item, 5 AS sales
