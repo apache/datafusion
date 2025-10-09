@@ -252,7 +252,28 @@ impl ScalarUDF {
         Ok(result)
     }
 
-    /// Get the circuits of inner implementation
+    /// Determines which of the arguments passed to this function are evaluated eagerly
+    /// and which may be evaluated lazily.
+    ///
+    /// If all arguments are evaluated eagerly this function may either return `None` or `Some(args, vec![])`.
+    ///
+    /// When `Some` is returned the first value of the tuple are the eagerly evaluated arguments,
+    /// and the second value of the tuple are the arguments that may be evaluated lazily.
+    /// The two sets of arguments are guaranteed to be disjunct, and each argument from `args` will
+    /// only be present in one the two `Vec`s.
+    ///
+    /// See [ScalarUDFImpl::conditional_arguments] for more information.
+    pub fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        self.inner.conditional_arguments(args)
+    }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered.
+    ///
+    /// See [ScalarUDFImpl::short_circuits] for more information.
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
     }
@@ -648,8 +669,34 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// Setting this to true prevents certain optimizations such as common
     /// subexpression elimination
+    ///
+    /// When overriding this function to return `true`, [conditional_arguments] can also be
+    /// overridden to report more accurately which arguments are eagerly evaluated and which ones
+    /// lazily.
     fn short_circuits(&self) -> bool {
         false
+    }
+
+    /// Determines which of the arguments passed to this function are evaluated eagerly
+    /// and which may be evaluated lazily.
+    ///
+    /// If all arguments are eagerly evaluated this function is allowed, but is not required to,
+    /// return `None`. Returning `None` is a micro optimization that saves a needless `Vec`
+    /// allocation.
+    ///
+    /// When `Some` is returned, implementations must ensure that the two returned `Vec`s are
+    /// disjunct, and that each argument from `args` is present in one the two `Vec`s.
+    ///
+    /// When overriding this function, [short_circuits] should also be overridden to return `true`.
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        if self.short_circuits() {
+            Some((vec![], args.iter().collect()))
+        } else {
+            None
+        }
     }
 
     /// Computes the output [`Interval`] for a [`ScalarUDFImpl`], given the input
@@ -835,6 +882,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
+    }
+
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        self.inner.conditional_arguments(args)
     }
 
     fn short_circuits(&self) -> bool {
