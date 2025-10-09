@@ -18834,6 +18834,9 @@ impl serde::Serialize for PrepareNode {
         if self.input.is_some() {
             len += 1;
         }
+        if !self.fields.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PrepareNode", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -18843,6 +18846,9 @@ impl serde::Serialize for PrepareNode {
         }
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
+        }
+        if !self.fields.is_empty() {
+            struct_ser.serialize_field("fields", &self.fields)?;
         }
         struct_ser.end()
     }
@@ -18858,6 +18864,7 @@ impl<'de> serde::Deserialize<'de> for PrepareNode {
             "data_types",
             "dataTypes",
             "input",
+            "fields",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -18865,6 +18872,7 @@ impl<'de> serde::Deserialize<'de> for PrepareNode {
             Name,
             DataTypes,
             Input,
+            Fields,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18889,6 +18897,7 @@ impl<'de> serde::Deserialize<'de> for PrepareNode {
                             "name" => Ok(GeneratedField::Name),
                             "dataTypes" | "data_types" => Ok(GeneratedField::DataTypes),
                             "input" => Ok(GeneratedField::Input),
+                            "fields" => Ok(GeneratedField::Fields),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18911,6 +18920,7 @@ impl<'de> serde::Deserialize<'de> for PrepareNode {
                 let mut name__ = None;
                 let mut data_types__ = None;
                 let mut input__ = None;
+                let mut fields__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -18931,12 +18941,19 @@ impl<'de> serde::Deserialize<'de> for PrepareNode {
                             }
                             input__ = map_.next_value()?;
                         }
+                        GeneratedField::Fields => {
+                            if fields__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fields"));
+                            }
+                            fields__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PrepareNode {
                     name: name__.unwrap_or_default(),
                     data_types: data_types__.unwrap_or_default(),
                     input: input__,
+                    fields: fields__.unwrap_or_default(),
                 })
             }
         }

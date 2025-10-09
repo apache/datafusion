@@ -33,7 +33,7 @@ use crate::{
 };
 
 use crate::protobuf::{proto_error, ToProtoError};
-use arrow::datatypes::{DataType, Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
 use datafusion::datasource::file_format::arrow::ArrowFormat;
 #[cfg(feature = "avro")]
@@ -888,9 +888,30 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(DataType::try_from)
                     .collect::<Result<_, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .prepare(prepare.name.clone(), data_types)?
-                    .build()
+                let fields: Vec<Field> = prepare
+                    .fields
+                    .iter()
+                    .map(Field::try_from)
+                    .collect::<Result<_, _>>()?;
+
+                if fields.is_empty() {
+                    LogicalPlanBuilder::from(input)
+                        .prepare(
+                            prepare.name.clone(),
+                            data_types
+                                .into_iter()
+                                .map(|dt| Field::new("", dt, true).into())
+                                .collect(),
+                        )?
+                        .build()
+                } else {
+                    LogicalPlanBuilder::from(input)
+                        .prepare(
+                            prepare.name.clone(),
+                            fields.into_iter().map(|f| f.into()).collect(),
+                        )?
+                        .build()
+                }
             }
             LogicalPlanType::DropView(dropview) => {
                 Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
@@ -1632,9 +1653,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: name.clone(),
                             data_types: data_types
                                 .iter()
-                                .map(|t| t.try_into())
+                                .map(|t| t.data_type().try_into())
                                 .collect::<Result<Vec<_>, _>>()?,
                             input: Some(Box::new(input)),
+                            fields: data_types
+                                .iter()
+                                .map(|f| f.as_ref().try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
                         },
                     ))),
                 })
