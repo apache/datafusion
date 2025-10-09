@@ -53,6 +53,10 @@ use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+/// Precision multiplier for linear interpolation calculations
+/// Used to maintain precision when converting floating-point fractions to integers
+const INTERPOLATION_PRECISION: usize = 1_000_000;
+
 create_func!(PercentileCont, percentile_cont_udaf);
 
 /// Computes the exact percentile continuous of a set of numbers
@@ -593,10 +597,10 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
     fn size(&self) -> usize {
         self.group_values
             .iter()
-            .map(|values| values.capacity() * size_of::<T>())
+            .map(|values| values.capacity() * size_of::<T::Native>())
             .sum::<usize>()
             // account for size of self.group_values too
-            + self.group_values.capacity() * size_of::<Vec<T>>()
+            + self.group_values.capacity() * size_of::<Vec<T::Native>>()
     }
 }
 
@@ -726,8 +730,10 @@ fn calculate_percentile<T: ArrowNumericType>(
             let fraction = index - (lower_index as f64);
             let diff = upper_value.sub_wrapping(lower_value);
             let interpolated = lower_value.add_wrapping(
-                diff.mul_wrapping(T::Native::usize_as((fraction * 1000000.0) as usize))
-                    .div_wrapping(T::Native::usize_as(1000000)),
+                diff.mul_wrapping(T::Native::usize_as(
+                    (fraction * INTERPOLATION_PRECISION as f64) as usize,
+                ))
+                .div_wrapping(T::Native::usize_as(INTERPOLATION_PRECISION)),
             );
             Some(interpolated)
         }

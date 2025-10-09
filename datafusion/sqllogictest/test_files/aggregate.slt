@@ -3525,6 +3525,22 @@ SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.
 ----
 17.5
 
+# Test integer inputs requiring interpolation (should return float)
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+2.5
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+1.75
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+3.25
+
 # Test with exact percentile values (no interpolation needed)
 query I
 SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
