@@ -52,8 +52,16 @@ use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-/// Precision multiplier for linear interpolation calculations
-/// Used to maintain precision when converting floating-point fractions to integers
+/// Precision multiplier for linear interpolation calculations.
+///
+/// This value of 1,000,000 was chosen to balance precision with overflow safety:
+/// - Provides 6 decimal places of precision for the fractional component
+/// - Small enough to avoid overflow when multiplied with typical numeric values
+/// - Sufficient precision for most statistical applications
+///
+/// The interpolation formula: `lower + (upper - lower) * fraction`
+/// is computed as: `lower + ((upper - lower) * (fraction * PRECISION)) / PRECISION`
+/// to avoid floating-point operations on integer types while maintaining precision.
 const INTERPOLATION_PRECISION: usize = 1_000_000;
 
 create_func!(PercentileCont, percentile_cont_udaf);
@@ -215,7 +223,7 @@ fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
 
 fn validate_percentile(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     let percentile = match get_scalar_value(expr)
-        .map_err(|_| not_impl_datafusion_err!("Percentile value for 'PERCENTILE_CONT' must be a literal, got: {expr}"))? {
+        .map_err(|_| not_impl_datafusion_err!("Percentile value for 'PERCENTILE_CONT' must be a literal"))? {
         ScalarValue::Float32(Some(value)) => {
             value as f64
         }
@@ -646,7 +654,12 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
             )
         })?;
         let offsets = (0..=offset_end).collect::<Vec<_>>();
-        // Safety: all checks in `OffsetBuffer::new` are ensured to pass
+        // Safety: The offsets vector is constructed as a sequential range from 0 to input_array.len(),
+        // which guarantees all OffsetBuffer invariants:
+        // 1. Offsets are monotonically increasing (each element is prev + 1)
+        // 2. No offset exceeds the values array length (max offset = input_array.len())
+        // 3. First offset is 0 and last offset equals the total length
+        // Therefore new_unchecked is safe to use here.
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
 
         // `nulls` for converted `ListArray`
@@ -805,7 +818,13 @@ fn calculate_percentile<T: ArrowNumericType>(
             let (_, upper_value, _) = values.select_nth_unstable_by(upper_index, cmp);
             let upper_value = *upper_value;
 
-            // Linear interpolation
+            // Linear interpolation using wrapping arithmetic
+            // We use wrapping operations here (matching the approach in median.rs) because:
+            // 1. Both values come from the input data, so diff is bounded by the value range
+            // 2. fraction is between 0 and 1, and INTERPOLATION_PRECISION is small enough
+            //    to prevent overflow when combined with typical numeric ranges
+            // 3. The result is guaranteed to be between lower_value and upper_value
+            // 4. For floating-point types, wrapping ops behave the same as standard ops
             let fraction = index - (lower_index as f64);
             let diff = upper_value.sub_wrapping(lower_value);
             let interpolated = lower_value.add_wrapping(
