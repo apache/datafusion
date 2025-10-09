@@ -311,9 +311,8 @@ async fn aggregate_grouping_rollup() -> Result<()> {
     assert_snapshot!(
     plan,
     @r#"
-        Projection: data.a, data.c, data.e, avg(data.b)
-          Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]
-            TableScan: data projection=[a, b, c, e]
+        Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]
+          TableScan: data projection=[a, b, c, e]
         "#
     );
     Ok(())
