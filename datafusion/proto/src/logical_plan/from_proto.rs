@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::Field;
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, NullEquality,
@@ -595,12 +596,23 @@ pub fn parse_expr(
         ExprType::Rollup(RollupNode { expr }) => Ok(Expr::GroupingSet(
             GroupingSet::Rollup(parse_exprs(expr, registry, codec)?),
         )),
-        ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
+        ExprType::Placeholder(PlaceholderNode {
+            id,
+            data_type,
+            nullable,
+            metadata,
+        }) => match data_type {
             None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
-            Some(data_type) => Ok(Expr::Placeholder(Placeholder::new(
-                id.clone(),
-                Some(data_type.try_into()?),
-            ))),
+            Some(data_type) => {
+                // Foofy
+                let field =
+                    Field::new("", data_type.try_into()?, nullable.unwrap_or(true))
+                        .with_metadata(metadata.clone());
+                Ok(Expr::Placeholder(Placeholder::new_with_metadata(
+                    id.clone(),
+                    Some(field.into()),
+                )))
+            }
         },
     }
 }
