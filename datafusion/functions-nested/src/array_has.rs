@@ -674,7 +674,7 @@ mod tests {
         ScalarValue,
     };
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult,
+        col, execution_props::ExecutionProps, in_list, lit, simplify::ExprSimplifyResult,
         ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl,
     };
 
@@ -803,12 +803,16 @@ mod tests {
         let props = ExecutionProps::new();
         let context = datafusion_expr::simplify::SimplifyContext::new(&props);
 
-        let Ok(ExprSimplifyResult::Original(args)) =
-            ArrayHas::new().simplify(vec![haystack.clone(), needle.clone()], &context)
-        else {
-            panic!("Expected non-simplified expression");
+        let expr = match ArrayHas::new()
+            .simplify(vec![haystack.clone(), needle.clone()], &context)
+            .unwrap()
+        {
+            ExprSimplifyResult::Simplified(expr) => expr,
+            ExprSimplifyResult::Original(_) => {
+                panic!("expected simplified result, not original")
+            }
         };
 
-        assert_eq!(args, vec![haystack, col("c")]);
+        assert_eq!(expr, in_list(col("c"), vec![], false));
     }
 }
