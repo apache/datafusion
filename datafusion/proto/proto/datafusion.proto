@@ -181,6 +181,7 @@ message PrepareNode {
   string name = 1;
   repeated datafusion_common.ArrowType data_types = 2;
   LogicalPlanNode input = 3;
+  repeated datafusion_common.Field fields = 4;
 }
 
 message CreateCatalogSchemaNode {
