@@ -78,6 +78,7 @@ pub mod utils;
 pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
+mod predicate_eval;
 
 pub use datafusion_doc::{
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections, DocSection,
