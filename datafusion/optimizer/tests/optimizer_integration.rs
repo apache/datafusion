@@ -47,6 +47,48 @@ fn init() {
 }
 
 #[test]
+fn recursive_cte_with_nested_subquery() -> Result<()> {
+    // Covers bailout path in `plan_contains_other_subqueries`, ensuring nested subqueries
+    // within recursive CTE branches prevent projection pushdown.
+    let sql = r#"
+        WITH RECURSIVE numbers(id, level) AS (
+            SELECT sub.id, sub.level FROM (
+                SELECT col_int32 AS id, 1 AS level FROM test
+            ) sub
+            UNION ALL
+            SELECT t.col_int32, numbers.level + 1
+            FROM test t
+            JOIN numbers ON t.col_int32 = numbers.id + 1
+        )
+        SELECT id, level FROM numbers
+    "#;
+
+    let plan = test_sql(sql)?;
+
+    assert_snapshot!(
+        format!("{plan}"),
+        @r#"
+        SubqueryAlias: numbers
+          Projection: sub.id AS id, sub.level AS level
+            RecursiveQuery: is_distinct=false
+              Projection: sub.id, sub.level
+                SubqueryAlias: sub
+                  Projection: test.col_int32 AS id, Int64(1) AS level
+                    TableScan: test
+              Projection: t.col_int32, numbers.level + Int64(1)
+                Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
+                  SubqueryAlias: t
+                    Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
+                      TableScan: test
+                  Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
+                    TableScan: numbers
+        "#
+    );
+
+    Ok(())
+}
+
+#[test]
 fn case_when() -> Result<()> {
     let sql = "SELECT CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
@@ -478,6 +520,117 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
     );
 }
 
+#[test]
+fn recursive_cte_projection_pushdown() -> Result<()> {
+    // Test that projection pushdown works with recursive CTEs by ensuring
+    // only the required columns are projected from the base table, even when
+    // the CTE definition includes unused columns
+    let sql = "WITH RECURSIVE nodes AS (\
+        SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS extra FROM test \
+        UNION ALL \
+        SELECT id + 1, name, extra FROM nodes WHERE id < 3\
+    ) SELECT id FROM nodes";
+    let plan = test_sql(sql)?;
+
+    // The optimizer successfully performs projection pushdown by only selecting the needed
+    // columns from the base table and recursive table, eliminating unused columns
+    assert_snapshot!(
+        format!("{plan}"),
+        @r#"SubqueryAlias: nodes
+  RecursiveQuery: is_distinct=false
+    Projection: test.col_int32 AS id
+      TableScan: test projection=[col_int32]
+    Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32)
+      Filter: nodes.id < Int32(3)
+        TableScan: nodes projection=[id]
+"#
+    );
+    Ok(())
+}
+
+#[test]
+fn recursive_cte_with_aliased_self_reference() -> Result<()> {
+    let sql = "WITH RECURSIVE nodes AS (\
+        SELECT col_int32 AS id, col_utf8 AS name FROM test \
+        UNION ALL \
+        SELECT child.id + 1, child.name FROM nodes AS child WHERE child.id < 3\
+    ) SELECT id FROM nodes";
+    let plan = test_sql(sql)?;
+
+    assert_snapshot!(
+        format!("{plan}"),
+        @r#"SubqueryAlias: nodes
+  RecursiveQuery: is_distinct=false
+    Projection: test.col_int32 AS id
+      TableScan: test projection=[col_int32]
+    Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32)
+      SubqueryAlias: child
+        Filter: nodes.id < Int32(3)
+          TableScan: nodes projection=[id]"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn recursive_cte_with_unused_columns() -> Result<()> {
+    // Test projection pushdown with a recursive CTE where the base case
+    // includes columns that are never used in the recursive part or final result
+    let sql = "WITH RECURSIVE series AS (\
+        SELECT 1 AS n, col_utf8, col_uint32, col_date32 FROM test WHERE col_int32 = 1 \
+        UNION ALL \
+        SELECT n + 1, col_utf8, col_uint32, col_date32 FROM series WHERE n < 3\
+    ) SELECT n FROM series";
+    let plan = test_sql(sql)?;
+
+    // The optimizer successfully performs projection pushdown by eliminating unused columns
+    // even when they're defined in the CTE but not actually needed
+    assert_snapshot!(
+        format!("{plan}"),
+        @r#"SubqueryAlias: series
+  RecursiveQuery: is_distinct=false
+    Projection: Int64(1) AS n
+      Filter: test.col_int32 = Int32(1)
+        TableScan: test projection=[col_int32]
+    Projection: series.n + Int64(1)
+      Filter: series.n < Int64(3)
+        TableScan: series projection=[n]
+"#
+    );
+    Ok(())
+}
+
+#[test]
+/// Asserts the minimal plan shape once projection pushdown succeeds for a recursive CTE.
+/// Unlike the previous two tests that retain extra columns in either the base or recursive
+/// branches, this baseline shows the optimizer trimming everything down to the single
+/// column required by the final projection.
+fn recursive_cte_projection_pushdown_baseline() -> Result<()> {
+    // Test case that truly demonstrates projection pushdown working:
+    // The base case only selects needed columns
+    let sql = "WITH RECURSIVE countdown AS (\
+        SELECT col_int32 AS n FROM test WHERE col_int32 = 5 \
+        UNION ALL \
+        SELECT n - 1 FROM countdown WHERE n > 1\
+    ) SELECT n FROM countdown";
+    let plan = test_sql(sql)?;
+
+    // This demonstrates optimal projection pushdown where only col_int32 is projected from the base table,
+    // and only the needed column is selected from the recursive table
+    assert_snapshot!(
+        format!("{plan}"),
+        @r#"SubqueryAlias: countdown
+  RecursiveQuery: is_distinct=false
+    Projection: test.col_int32 AS n
+      Filter: test.col_int32 = Int32(5)
+        TableScan: test projection=[col_int32]
+    Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32)
+      Filter: countdown.n > Int32(1)
+        TableScan: countdown projection=[n]
+"#
+    );
+    Ok(())
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -585,6 +738,14 @@ impl ContextProvider for MyContextProvider {
 
     fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
         None
+    }
+
+    fn create_cte_work_table(
+        &self,
+        _name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        Ok(Arc::new(MyTableSource { schema }))
     }
 
     fn options(&self) -> &ConfigOptions {

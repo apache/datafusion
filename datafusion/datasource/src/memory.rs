@@ -30,10 +30,7 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::{
-    OrderingEquivalenceClass, ProjectionMapping,
-};
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
@@ -433,22 +430,9 @@ impl MemorySourceConfig {
         }
 
         // If there is a projection on the source, we also need to project orderings
-        if let Some(projection) = &self.projection {
-            let base_schema = self.original_schema();
-            let proj_exprs = projection.iter().map(|idx| {
-                let name = base_schema.field(*idx).name();
-                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
-            });
-            let projection_mapping =
-                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
-            let base_eqp = EquivalenceProperties::new_with_orderings(
-                Arc::clone(&base_schema),
-                sort_information,
-            );
-            let proj_eqp =
-                base_eqp.project(&projection_mapping, Arc::clone(&self.projected_schema));
-            let oeq_class: OrderingEquivalenceClass = proj_eqp.into();
-            sort_information = oeq_class.into();
+        if self.projection.is_some() {
+            sort_information =
+                project_orderings(&sort_information, &self.projected_schema);
         }
 
         self.sort_information = sort_information;
