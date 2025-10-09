@@ -29,7 +29,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow::datatypes::{DataType, Fields};
+use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -730,7 +730,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
             } => {
                 // Convert parser data types to DataFusion data types
-                let mut data_types: Vec<DataType> = data_types
+                let mut data_types: Vec<FieldRef> = data_types
                     .into_iter()
                     .map(|t| self.convert_data_type(&t))
                     .collect::<Result<_>>()?;
@@ -746,7 +746,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?;
 
                 if data_types.is_empty() {
-                    let map_types = plan.get_parameter_types()?;
+                    let map_types = plan.get_parameter_fields()?;
                     let param_types: Vec<_> = (1..=map_types.len())
                         .filter_map(|i| {
                             let key = format!("${i}");
@@ -1203,7 +1203,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Ok(OperateFunctionArg {
                                     name: arg.name,
                                     default_expr,
-                                    data_type,
+                                    data_type: data_type.data_type().clone(),
                                 })
                             })
                             .collect::<Result<Vec<OperateFunctionArg>>>();
@@ -1221,7 +1221,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // Convert resulting expression to data fusion expression
                 //
                 let arg_types = args.as_ref().map(|arg| {
-                    arg.iter().map(|t| t.data_type.clone()).collect::<Vec<_>>()
+                    arg.iter()
+                        .map(|t| Arc::new(Field::new("", t.data_type.clone(), true)))
+                        .collect::<Vec<_>>()
                 });
                 let mut planner_context = PlannerContext::new()
                     .with_prepare_param_data_types(arg_types.unwrap_or_default());
@@ -1264,7 +1266,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     or_replace,
                     temporary,
                     name,
-                    return_type,
+                    return_type: return_type.map(|f| f.data_type().clone()),
                     args,
                     params,
                     schema: DFSchemaRef::new(DFSchema::empty()),
@@ -2105,8 +2107,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 idx + 1
                             )
                         })?;
-                        let dt = field.data_type().clone();
-                        let _ = prepare_param_data_types.insert(name, dt);
+                        let _ = prepare_param_data_types.insert(name, Arc::clone(field));
                     }
                 }
             }

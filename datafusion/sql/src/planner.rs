@@ -256,7 +256,7 @@ impl IdentNormalizer {
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
     /// in `PREPARE` statement
-    prepare_param_data_types: Arc<Vec<DataType>>,
+    prepare_param_data_types: Arc<Vec<FieldRef>>,
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
@@ -290,7 +290,7 @@ impl PlannerContext {
     /// Update the PlannerContext with provided prepare_param_data_types
     pub fn with_prepare_param_data_types(
         mut self,
-        prepare_param_data_types: Vec<DataType>,
+        prepare_param_data_types: Vec<FieldRef>,
     ) -> Self {
         self.prepare_param_data_types = prepare_param_data_types.into();
         self
@@ -347,7 +347,7 @@ impl PlannerContext {
     }
 
     /// Return the types of parameters (`$1`, `$2`, etc) if known
-    pub fn prepare_param_data_types(&self) -> &[DataType] {
+    pub fn prepare_param_data_types(&self) -> &[FieldRef] {
         &self.prepare_param_data_types
     }
 
@@ -433,11 +433,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .options
                 .iter()
                 .any(|x| x.option == ColumnOption::NotNull);
-            fields.push(Field::new(
-                self.ident_normalizer.normalize(column.name),
-                data_type,
-                !not_nullable,
-            ));
+            fields.push(
+                data_type
+                    .as_ref()
+                    .clone()
+                    .with_name(self.ident_normalizer.normalize(column.name))
+                    .with_nullable(!not_nullable),
+            );
         }
 
         Ok(Schema::new(fields))
@@ -587,11 +589,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
-    pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
+    pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<FieldRef> {
         // First check if any of the registered type_planner can handle this type
         if let Some(type_planner) = self.context_provider.get_type_planner() {
             if let Some(data_type) = type_planner.plan_type(sql_type)? {
-                return Ok(data_type);
+                return Ok(Field::new("", data_type, true).into());
             }
         }
 
@@ -600,7 +602,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 let inner_data_type = self.convert_data_type(inner_sql_type)?;
-                Ok(DataType::new_list(inner_data_type, true))
+                Ok(Field::new("", DataType::List(inner_data_type), true).into())
             }
             SQLDataType::Array(ArrayElemTypeDef::SquareBracket(
                 inner_sql_type,
@@ -608,19 +610,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )) => {
                 let inner_data_type = self.convert_data_type(inner_sql_type)?;
                 if let Some(array_size) = maybe_array_size {
-                    Ok(DataType::new_fixed_size_list(
-                        inner_data_type,
-                        *array_size as i32,
+                    Ok(Field::new(
+                        "",
+                        DataType::FixedSizeList(inner_data_type, *array_size as i32),
                         true,
-                    ))
+                    )
+                    .into())
                 } else {
-                    Ok(DataType::new_list(inner_data_type, true))
+                    Ok(Field::new("", DataType::List(inner_data_type), true).into())
                 }
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
                 not_impl_err!("Arrays with unspecified type is not supported")
             }
-            other => self.convert_simple_data_type(other),
+            other => {
+                Ok(Field::new("", self.convert_simple_data_type(other)?, true).into())
+            }
         }
     }
 
@@ -739,11 +744,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Some(ident) => ident.clone(),
                             None => Ident::new(format!("c{idx}")),
                         };
-                        Ok(Arc::new(Field::new(
-                            self.ident_normalizer.normalize(field_name),
-                            data_type,
-                            true,
-                        )))
+                        Ok(data_type.as_ref().clone().with_name(self.ident_normalizer.normalize(field_name)))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))

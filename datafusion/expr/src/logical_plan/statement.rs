@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::FieldRef;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use itertools::Itertools as _;
 use std::fmt::{self, Display};
@@ -192,7 +192,7 @@ pub struct Prepare {
     /// The name of the statement
     pub name: String,
     /// Data types of the parameters ([`Expr::Placeholder`])
-    pub data_types: Vec<DataType>,
+    pub data_types: Vec<FieldRef>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
 }
