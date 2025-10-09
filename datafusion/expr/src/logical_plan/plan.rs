@@ -3415,9 +3415,17 @@ impl Aggregate {
     ) -> Result<Self> {
         let group_expr = enumerate_grouping_sets(group_expr)?;
 
+        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
+
         let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
         let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
+        if is_grouping_set {
+            qualified_fields = qualified_fields
+                .into_iter()
+                .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
+                .collect::<Vec<_>>();
+        }
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 

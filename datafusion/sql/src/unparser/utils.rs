@@ -243,14 +243,7 @@ fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a E
             let grouping_expr = grouping_set_to_exprlist(agg.group_expr.as_slice())?;
             match index.cmp(&grouping_expr.len()) {
                 Ordering::Less => Ok(grouping_expr.into_iter().nth(index)),
-                Ordering::Equal => {
-                    internal_err!(
-                        "Tried to unproject column referring to internal grouping id"
-                    )
-                }
-                Ordering::Greater => {
-                    Ok(agg.aggr_expr.get(index - grouping_expr.len() - 1))
-                }
+                _ => Ok(agg.aggr_expr.get(index - grouping_expr.len())),
             }
         } else {
             Ok(agg.group_expr.iter().chain(agg.aggr_expr.iter()).nth(index))

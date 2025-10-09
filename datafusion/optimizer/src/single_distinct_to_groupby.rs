@@ -371,7 +371,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[GROUPING SETS ((test.a), (test.b))]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
+        Aggregate: groupBy=[[GROUPING SETS ((test.a), (test.b))]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, count(DISTINCT test.c):Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
@@ -392,7 +392,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[CUBE (test.a, test.b)]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
+        Aggregate: groupBy=[[CUBE (test.a, test.b)]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, count(DISTINCT test.c):Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
@@ -414,7 +414,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[ROLLUP (test.a, test.b)]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, __grouping_id:UInt8, count(DISTINCT test.c):Int64]
+        Aggregate: groupBy=[[ROLLUP (test.a, test.b)]], aggr=[[count(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, count(DISTINCT test.c):Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )

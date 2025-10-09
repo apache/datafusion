@@ -1838,7 +1838,7 @@ type AggregateExprWithOptionalArgs = (
 /// Create a map from grouping expr to index in the internal grouping id.
 ///
 /// For more details on how the grouping id bitmap works the documentation for
-/// [[INTERNAL_GROUPING_ID]]
+/// [[datafusion_physical_expr::aggregate::INTERNAL_GROUPING_ID]]
 fn group_expr_to_bitmap_index(group_expr: &[Expr]) -> Result<HashMap<&Expr, usize>> {
     Ok(grouping_set_to_exprlist(group_expr)?
         .into_iter()
