@@ -287,7 +287,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         schema,
                         planner_context,
                     )?),
-                    self.convert_data_type(&data_type)?,
+                    self.convert_data_type(&data_type)?.data_type().clone(),
                 )))
             }
 
@@ -297,7 +297,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 uses_odbc_syntax: _,
             }) => Ok(Expr::Cast(Cast::new(
                 Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type(&data_type)?,
+                self.convert_data_type(&data_type)?.data_type().clone(),
             ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
@@ -974,7 +974,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // numeric constants are treated as seconds (rather as nanoseconds)
         // to align with postgres / duckdb semantics
-        let expr = match &dt {
+        let expr = match dt.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, tz)
                 if expr.get_type(schema)? == DataType::Int64 =>
             {
@@ -986,7 +986,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => expr,
         };
 
-        Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))
+        Ok(Expr::Cast(Cast::new(
+            Box::new(expr),
+            dt.data_type().clone(),
+        )))
     }
 
     /// Extracts the root expression and access chain from a compound expression.

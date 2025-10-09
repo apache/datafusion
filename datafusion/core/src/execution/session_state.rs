@@ -30,7 +30,7 @@ use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow::datatypes::DataType;
+use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
@@ -115,11 +115,11 @@ use uuid::Uuid;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 ///     let state = SessionStateBuilder::new()
-///         .with_config(SessionConfig::new())  
+///         .with_config(SessionConfig::new())
 ///         .with_runtime_env(Arc::new(RuntimeEnv::default()))
 ///         .with_default_features()
 ///         .build();
-///     Ok(())  
+///     Ok(())
 /// # }
 /// ```
 ///
@@ -872,7 +872,7 @@ impl SessionState {
     pub(crate) fn store_prepared(
         &mut self,
         name: String,
-        data_types: Vec<DataType>,
+        data_types: Vec<FieldRef>,
         plan: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<()> {
         match self.prepared_plans.entry(name) {
@@ -1322,7 +1322,7 @@ impl SessionStateBuilder {
     /// let url = Url::try_from("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
     /// let state = SessionStateBuilder::new()
-    ///     .with_config(SessionConfig::new())  
+    ///     .with_config(SessionConfig::new())
     ///     .with_object_store(&url, Arc::new(object_store))
     ///     .with_default_features()
     ///     .build();
@@ -2011,7 +2011,7 @@ impl SimplifyInfo for SessionSimplifyProvider<'_> {
 #[derive(Debug)]
 pub(crate) struct PreparedPlan {
     /// Data types of the parameters
-    pub(crate) data_types: Vec<DataType>,
+    pub(crate) data_types: Vec<FieldRef>,
     /// The prepared logical plan
     pub(crate) plan: Arc<LogicalPlan>,
 }

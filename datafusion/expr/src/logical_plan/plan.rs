@@ -1464,7 +1464,7 @@ impl LogicalPlan {
                     let transformed_expr = e.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
                             let value = param_values.get_placeholders_with_values(&id)?;
-                            Ok(Transformed::yes(Expr::Literal(value, None)))
+                            Ok(Transformed::yes(Expr::Literal(value.0, value.1)))
                         } else {
                             Ok(Transformed::no(e))
                         }
