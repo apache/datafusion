@@ -18343,12 +18343,24 @@ impl serde::Serialize for PlaceholderNode {
         if self.data_type.is_some() {
             len += 1;
         }
+        if self.nullable.is_some() {
+            len += 1;
+        }
+        if !self.metadata.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PlaceholderNode", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
         }
         if let Some(v) = self.data_type.as_ref() {
             struct_ser.serialize_field("dataType", v)?;
+        }
+        if let Some(v) = self.nullable.as_ref() {
+            struct_ser.serialize_field("nullable", v)?;
+        }
+        if !self.metadata.is_empty() {
+            struct_ser.serialize_field("metadata", &self.metadata)?;
         }
         struct_ser.end()
     }
@@ -18363,12 +18375,16 @@ impl<'de> serde::Deserialize<'de> for PlaceholderNode {
             "id",
             "data_type",
             "dataType",
+            "nullable",
+            "metadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Id,
             DataType,
+            Nullable,
+            Metadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18392,6 +18408,8 @@ impl<'de> serde::Deserialize<'de> for PlaceholderNode {
                         match value {
                             "id" => Ok(GeneratedField::Id),
                             "dataType" | "data_type" => Ok(GeneratedField::DataType),
+                            "nullable" => Ok(GeneratedField::Nullable),
+                            "metadata" => Ok(GeneratedField::Metadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18413,6 +18431,8 @@ impl<'de> serde::Deserialize<'de> for PlaceholderNode {
             {
                 let mut id__ = None;
                 let mut data_type__ = None;
+                let mut nullable__ = None;
+                let mut metadata__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -18427,11 +18447,27 @@ impl<'de> serde::Deserialize<'de> for PlaceholderNode {
                             }
                             data_type__ = map_.next_value()?;
                         }
+                        GeneratedField::Nullable => {
+                            if nullable__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullable"));
+                            }
+                            nullable__ = map_.next_value()?;
+                        }
+                        GeneratedField::Metadata => {
+                            if metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadata"));
+                            }
+                            metadata__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(PlaceholderNode {
                     id: id__.unwrap_or_default(),
                     data_type: data_type__,
+                    nullable: nullable__,
+                    metadata: metadata__.unwrap_or_default(),
                 })
             }
         }
