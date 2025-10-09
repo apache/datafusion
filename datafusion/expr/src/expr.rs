@@ -1153,6 +1153,11 @@ impl Placeholder {
             field: data_type.map(|dt| Arc::new(Field::new("", dt, true))),
         }
     }
+
+    /// Create a new Placeholder expression from a Field
+    pub fn new_with_metadata(id: String, field: Option<FieldRef>) -> Self {
+        Self { id, field }
+    }
 }
 
 /// Grouping sets
