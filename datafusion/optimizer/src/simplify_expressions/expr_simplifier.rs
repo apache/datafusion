@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
+    metadata::FieldMetadata,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{
@@ -57,7 +58,6 @@ use crate::simplify_expressions::unwrap_cast::{
     unwrap_cast_in_comparison_for_binary,
 };
 use crate::simplify_expressions::SimplifyInfo;
-use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
 use regex::Regex;
