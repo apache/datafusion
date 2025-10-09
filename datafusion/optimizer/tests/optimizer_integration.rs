@@ -549,6 +549,29 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
 }
 
 #[test]
+fn recursive_cte_with_aliased_self_reference() -> Result<()> {
+    let sql = "WITH RECURSIVE nodes AS (\
+        SELECT col_int32 AS id, col_utf8 AS name FROM test \
+        UNION ALL \
+        SELECT child.id + 1, child.name FROM nodes AS child WHERE child.id < 3\
+    ) SELECT id FROM nodes";
+    let plan = test_sql(sql)?;
+
+    assert_snapshot!(
+        format!("{plan}"),
+        @r#"SubqueryAlias: nodes
+  RecursiveQuery: is_distinct=false
+    Projection: test.col_int32 AS id
+      TableScan: test projection=[col_int32]
+    Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32)
+      SubqueryAlias: child
+        Filter: nodes.id < Int32(3)
+          TableScan: nodes projection=[id]"#,
+    );
+    Ok(())
+}
+
+#[test]
 fn recursive_cte_with_unused_columns() -> Result<()> {
     // Test projection pushdown with a recursive CTE where the base case
     // includes columns that are never used in the recursive part or final result

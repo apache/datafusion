@@ -38,7 +38,7 @@ use datafusion_common::cast::{
     as_int8_array, as_string_array, as_string_view_array, as_uint16_array,
     as_uint32_array, as_uint64_array, as_uint8_array,
 };
-use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
+use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
@@ -203,9 +203,7 @@ async fn row_count_demuxer(
             .send(rb)
             .await
             .map_err(|_| {
-                DataFusionError::Execution(
-                    "Error sending RecordBatch to file stream!".into(),
-                )
+                exec_datafusion_err!("Error sending RecordBatch to file stream!")
             })?;
 
         next_send_steam = (next_send_steam + 1) % minimum_parallel_files;
@@ -248,9 +246,8 @@ fn create_new_file_stream(
         single_file_output,
     );
     let (tx_file, rx_file) = mpsc::channel(max_buffered_batches / 2);
-    tx.send((file_path, rx_file)).map_err(|_| {
-        DataFusionError::Execution("Error sending RecordBatch to file stream!".into())
-    })?;
+    tx.send((file_path, rx_file))
+        .map_err(|_| exec_datafusion_err!("Error sending RecordBatch to file stream!"))?;
     Ok(tx_file)
 }
 
@@ -307,17 +304,13 @@ async fn hive_style_partitions_demuxer(
                     );
 
                     tx.send((file_path, part_rx)).map_err(|_| {
-                        DataFusionError::Execution(
-                            "Error sending new file stream!".into(),
-                        )
+                        exec_datafusion_err!("Error sending new file stream!")
                     })?;
 
                     value_map.insert(part_key.clone(), part_tx);
-                    value_map
-                        .get_mut(&part_key)
-                        .ok_or(DataFusionError::Internal(
-                            "Key must exist since it was just inserted!".into(),
-                        ))?
+                    value_map.get_mut(&part_key).ok_or_else(|| {
+                        exec_datafusion_err!("Key must exist since it was just inserted!")
+                    })?
                 }
             };
 
@@ -329,7 +322,7 @@ async fn hive_style_partitions_demuxer(
 
             // Finally send the partial batch partitioned by distinct value!
             part_tx.send(final_batch_to_send).await.map_err(|_| {
-                DataFusionError::Internal("Unexpected error sending parted batch!".into())
+                internal_datafusion_err!("Unexpected error sending parted batch!")
             })?;
         }
     }

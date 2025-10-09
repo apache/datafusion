@@ -2539,9 +2539,15 @@ config_namespace! {
         // The input regex for Nulls when loading CSVs.
         pub null_regex: Option<String>, default = None
         pub comment: Option<u8>, default = None
-        // Whether to allow truncated rows when parsing.
-        // By default this is set to false and will error if the CSV rows have different lengths.
-        // When set to true then it will allow records with less than the expected number of columns
+        /// Whether to allow truncated rows when parsing, both within a single file and across files.
+        ///
+        /// When set to false (default), reading a single CSV file which has rows of different lengths will
+        /// error; if reading multiple CSV files with different number of columns, it will also fail.
+        ///
+        /// When set to true, reading a single CSV file with rows of different lengths will pad the truncated
+        /// rows with null values for the missing columns; if reading multiple CSV files with different number
+        /// of columns, it creates a union schema containing all columns found across the files, and will
+        /// pad any files missing columns with null values for their rows.
         pub truncated_rows: Option<bool>, default = None
     }
 }
