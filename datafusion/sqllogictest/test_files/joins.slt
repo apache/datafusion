@@ -4148,11 +4148,10 @@ logical_plan
 03)----TableScan: left_table projection=[a, b, c]
 04)----TableScan: right_table projection=[x, y, z]
 physical_plan
-01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(a < x)
-03)----SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[0]
-05)----DataSourceExec: partitions=1, partition_sizes=[0]
+01)SortExec: expr=[x@3 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=Inner, filter=a@0 < x@1
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
 EXPLAIN SELECT * FROM left_table JOIN right_table ON left_table.a<right_table.x AND left_table.b=right_table.y ORDER BY x;
@@ -4197,14 +4196,6 @@ SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 20;
 3 3 3 3 true
 4 4 NULL NULL NULL
 
-
-statement ok
-set datafusion.execution.target_partitions = 1;
-
-statement ok
-set datafusion.execution.batch_size = 4;
-
-
 query TT rowsort
 -- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
 EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
@@ -4212,12 +4203,11 @@ EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
 01)GlobalLimitExec: skip=0, fetch=20
 01)Limit: skip=0, fetch=20
 02)--Full Join:  Filter: t0.c2 >= t1.c2
-02)--PiecewiseMergeJoin: operator=GtEq, join_type=Full, on=(c2 >= c2)
-03)----SortExec: expr=[c2@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=Full, filter=c2@0 >= c2@1
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
 03)----TableScan: t0 projection=[c1, c2]
-04)------DataSourceExec: partitions=1, partition_sizes=[2]
+04)----DataSourceExec: partitions=1, partition_sizes=[2]
 04)----TableScan: t1 projection=[c1, c2, c3]
-05)----DataSourceExec: partitions=1, partition_sizes=[2]
 logical_plan
 physical_plan
 
@@ -4236,9 +4226,6 @@ SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
 4 4 2 2 true
 4 4 3 3 false
 4 4 3 3 true
-
-statement ok
-set datafusion.execution.batch_size = 3;
 
 query IIIIB rowsort
 -- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
@@ -4277,10 +4264,9 @@ logical_plan
 04)----TableScan: t1 projection=[c1, c2, c3]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
-02)--PiecewiseMergeJoin: operator=GtEq, join_type=Full, on=(c2 >= c2)
-03)----SortExec: expr=[c2@1 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[2]
-05)----DataSourceExec: partitions=1, partition_sizes=[2]
+02)--NestedLoopJoinExec: join_type=Full, filter=c2@0 >= c2@1
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----DataSourceExec: partitions=1, partition_sizes=[2]
 
 ## Test !join.on.is_empty() && join.filter.is_some()
 query TT
@@ -5222,11 +5208,7 @@ SELECT c
 
 # PiecewiseMergeJoin Test
 statement ok
-set datafusion.execution.batch_size = 8192;
-
-# TODO: partitioned PWMJ execution
-statement ok
-set datafusion.execution.target_partitions = 1;
+set datafusion.optimizer.allow_piecewise_merge_join = true;
 
 query II
 SELECT join_t1.t1_id, join_t2.t2_id
@@ -5251,10 +5233,10 @@ physical_plan
 01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
 03)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------CoalesceBatchesExec: target_batch_size=8192
+04)------CoalesceBatchesExec: target_batch_size=3
 05)--------FilterExec: t1_id@0 > 10
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----CoalesceBatchesExec: target_batch_size=8192
+07)----CoalesceBatchesExec: target_batch_size=3
 08)------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
 09)--------DataSourceExec: partitions=1, partition_sizes=[1]
 

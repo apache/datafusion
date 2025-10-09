@@ -19,6 +19,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -1247,11 +1248,6 @@ impl DefaultPhysicalPlanner {
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
 
-                let cfg = session_state.config();
-
-                let can_run_single =
-                    cfg.target_partitions() == 1 || !cfg.repartition_joins();
-
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
                     if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
@@ -1259,7 +1255,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
-                        && can_run_single
                         && !matches!(
                             join_type,
                             JoinType::LeftSemi
@@ -1342,12 +1337,17 @@ impl DefaultPhysicalPlanner {
                             session_state.execution_props(),
                         )?;
 
+                        let num_partitions = Arc::new(AtomicUsize::new(
+                            session_state.config().target_partitions(),
+                        ));
+
                         Arc::new(PiecewiseMergeJoinExec::try_new(
                             physical_left,
                             physical_right,
                             (on_left, on_right),
                             op,
                             *join_type,
+                            num_partitions,
                         )?)
                     } else {
                         // there is no equal join condition, use the nested loop join

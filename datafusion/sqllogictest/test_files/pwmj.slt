@@ -16,8 +16,8 @@
 # under the License.
 
 
-statement ok 
-set datafusion.execution.target_partitions = 1;
+statement ok
+set datafusion.optimizer.allow_piecewise_merge_join = true;
 
 statement ok
 CREATE TABLE join_t1 (t1_id INT);
@@ -69,15 +69,17 @@ logical_plan
 08)--------Filter: join_t2.t2_int > Int32(1)
 09)----------TableScan: join_t2 projection=[t2_id, t2_int]
 physical_plan
-01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
-03)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------FilterExec: t1_id@0 > 10
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----CoalesceBatchesExec: target_batch_size=8192
-08)------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
-09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
+04)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: t1_id@0 > 10
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------CoalesceBatchesExec: target_batch_size=8192
+10)----------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.t1_id, t2.t2_id
@@ -114,15 +116,17 @@ logical_plan
 08)--------Filter: join_t2.t2_int = Int32(3)
 09)----------TableScan: join_t2 projection=[t2_id, t2_int]
 physical_plan
-01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--PiecewiseMergeJoin: operator=GtEq, join_type=Inner, on=(t1_id >= t2_id)
-03)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------FilterExec: t1_id@0 >= 22
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----CoalesceBatchesExec: target_batch_size=8192
-08)------FilterExec: t2_int@1 = 3, projection=[t2_id@0]
-09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=GtEq, join_type=Inner, on=(t1_id >= t2_id)
+04)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: t1_id@0 >= 22
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------CoalesceBatchesExec: target_batch_size=8192
+10)----------FilterExec: t2_int@1 = 3, projection=[t2_id@0]
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.t1_id, t2.t2_id
@@ -159,13 +163,15 @@ logical_plan
 07)--------Filter: join_t2.t2_int >= Int32(3)
 08)----------TableScan: join_t2 projection=[t2_id, t2_int]
 physical_plan
-01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(t1_id < t2_id)
-03)----SortExec: expr=[t1_id@0 DESC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)----CoalesceBatchesExec: target_batch_size=8192
-06)------FilterExec: t2_int@1 >= 3, projection=[t2_id@0]
-07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(t1_id < t2_id)
+04)------SortExec: expr=[t1_id@0 DESC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)--------CoalesceBatchesExec: target_batch_size=8192
+08)----------FilterExec: t2_int@1 >= 3, projection=[t2_id@0]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query II
@@ -204,12 +210,17 @@ logical_plan
 08)--------Filter: join_t2.t2_name != Utf8View("y")
 09)----------TableScan: join_t2 projection=[t2_id, t2_name]
 physical_plan
-01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--PiecewiseMergeJoin: operator=LtEq, join_type=Inner, on=(t1_id <= t2_id)
-03)----SortExec: expr=[t1_id@0 DESC NULLS LAST], preserve_partitioning=[false]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------FilterExec: t1_id@0 = 11 OR t1_id@0 = 44
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----CoalesceBatchesExec: target_batch_size=8192
-08)------FilterExec: t2_name@1 != y, projection=[t2_id@0]
-09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=LtEq, join_type=Inner, on=(t1_id <= t2_id)
+04)------SortExec: expr=[t1_id@0 DESC NULLS LAST], preserve_partitioning=[false]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: t1_id@0 = 11 OR t1_id@0 = 44
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------CoalesceBatchesExec: target_batch_size=8192
+10)----------FilterExec: t2_name@1 != y, projection=[t2_id@0]
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.allow_piecewise_merge_join = false;

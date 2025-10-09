@@ -31,12 +31,14 @@ use datafusion_execution::{
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{
-    LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    Distribution, LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalExprRef,
+    PhysicalSortExpr,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 use std::fmt::Formatter;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use crate::execution_plan::{boundedness_from_children, EmissionType};
@@ -47,7 +49,7 @@ use crate::joins::piecewise_merge_join::classic_join::{
 use crate::joins::piecewise_merge_join::utils::{
     build_visited_indices_map, is_existence_join, is_right_existence_join,
 };
-use crate::joins::utils::symmetric_join_output_partitioning;
+use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::{
     joins::{
         utils::{build_join_schema, BuildProbeJoinMetrics, OnceAsync, OnceFut},
@@ -266,12 +268,14 @@ pub struct PiecewiseMergeJoinExec {
     /// The right sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
     /// Unsorted for mark joins
     #[allow(unused)]
-    ight_batch_required_orders: LexOrdering,
+    right_batch_required_orders: LexOrdering,
 
     /// This determines the sort order of all join columns used in sorting the stream and buffered execution plans.
     sort_options: SortOptions,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Number of partitions to process
+    remaining_partitions: Arc<AtomicUsize>,
 }
 
 impl PiecewiseMergeJoinExec {
@@ -281,6 +285,7 @@ impl PiecewiseMergeJoinExec {
         on: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
         operator: Operator,
         join_type: JoinType,
+        num_partitions: Arc<AtomicUsize>,
     ) -> Result<Self> {
         // TODO: Implement existence joins for PiecewiseMergeJoin
         if is_existence_join(join_type) {
@@ -318,7 +323,7 @@ impl PiecewiseMergeJoinExec {
         // Give the same `sort_option for comparison later`
         let left_child_plan_required_order =
             vec![PhysicalSortExpr::new(Arc::clone(&on.0), sort_options)];
-        let ight_batch_required_orders =
+        let right_batch_required_orders =
             vec![PhysicalSortExpr::new(Arc::clone(&on.1), sort_options)];
 
         let Some(left_child_plan_required_order) =
@@ -328,8 +333,8 @@ impl PiecewiseMergeJoinExec {
                 "PiecewiseMergeJoinExec requires valid sort expressions for its left side"
             );
         };
-        let Some(ight_batch_required_orders) =
-            LexOrdering::new(ight_batch_required_orders)
+        let Some(right_batch_required_orders) =
+            LexOrdering::new(right_batch_required_orders)
         else {
             return internal_err!(
                 "PiecewiseMergeJoinExec requires valid sort expressions for its right side"
@@ -360,9 +365,10 @@ impl PiecewiseMergeJoinExec {
             buffered_fut: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             left_child_plan_required_order,
-            ight_batch_required_orders,
+            right_batch_required_orders,
             sort_options,
             cache,
+            remaining_partitions: num_partitions,
         })
     }
 
@@ -421,7 +427,7 @@ impl PiecewiseMergeJoinExec {
         )?;
 
         let output_partitioning =
-            symmetric_join_output_partitioning(buffered, streamed, &join_type)?;
+            asymmetric_join_output_partitioning(buffered, streamed, &join_type)?;
 
         Ok(PlanProperties::new(
             eq_properties,
@@ -471,6 +477,13 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         vec![&self.buffered, &self.streamed]
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![
+            Distribution::SinglePartition,
+            Distribution::UnspecifiedDistribution,
+        ]
+    }
+
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // Existence joins don't need to be sorted on one side.
         if is_right_existence_join(self.join_type) {
@@ -497,6 +510,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 self.on.clone(),
                 self.operator,
                 self.join_type,
+                Arc::clone(&self.remaining_partitions),
             )?)),
             _ => internal_err!(
                 "PiecewiseMergeJoin should have 2 children, found {}",
@@ -513,12 +527,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let on_buffered = Arc::clone(&self.on.0);
         let on_streamed = Arc::clone(&self.on.1);
 
-        let metrics = BuildProbeJoinMetrics::new(0, &self.metrics);
+        let metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let buffered_fut = self.buffered_fut.try_once(|| {
             let reservation = MemoryConsumer::new("PiecewiseMergeJoinInput")
                 .register(context.memory_pool());
-            let buffered_stream =
-                self.buffered.execute(partition, Arc::clone(&context))?;
+
+            let buffered_stream = self.buffered.execute(0, Arc::clone(&context))?;
             Ok(build_buffered_data(
                 buffered_stream,
                 Arc::clone(&on_buffered),
@@ -547,6 +561,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 self.sort_options,
                 metrics,
                 batch_size,
+                Arc::clone(&self.remaining_partitions),
             )))
         }
     }
@@ -607,8 +622,7 @@ async fn build_buffered_data(
         })
         .await?;
 
-    let batches_iter = batches.iter().rev();
-    let single_batch = concat_batches(&schema, batches_iter)?;
+    let single_batch = concat_batches(&schema, batches.iter())?;
 
     // Evaluate physical expression on the buffered side.
     let buffered_values = on_buffered

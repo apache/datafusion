@@ -17,24 +17,21 @@
 
 //! Stream Implementation for PiecewiseMergeJoin's Classic Join (Left, Right, Full, Inner)
 
-use arrow::array::{
-    new_null_array, Array, PrimitiveArray, PrimitiveBuilder, RecordBatchOptions,
-};
-use arrow::compute::take;
-use arrow::datatypes::{UInt32Type, UInt64Type};
+use arrow::array::{new_null_array, Array, PrimitiveBuilder};
+use arrow::compute::{take, BatchCoalescer};
+use arrow::datatypes::UInt32Type;
 use arrow::{
-    array::{
-        ArrayRef, RecordBatch, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
-    },
+    array::{ArrayRef, RecordBatch, UInt32Array},
     compute::{sort_to_indices, take_record_batch},
 };
-use arrow_schema::{ArrowError, Schema, SchemaRef, SortOptions};
+use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
+use std::sync::atomic::AtomicUsize;
 use std::{cmp::Ordering, task::ready};
 use std::{sync::Arc, task::Poll};
 
@@ -43,6 +40,7 @@ use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadySt
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
 use crate::joins::utils::{compare_join_arrays, get_final_indices_from_shared_bitmap};
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
+
 pub(super) enum PiecewiseMergeJoinStreamState {
     WaitBufferedSide,
     FetchStreamBatch,
@@ -105,8 +103,8 @@ pub(super) struct ClassicPWMJStream {
     join_metrics: BuildProbeJoinMetrics,
     // Tracking incremental state for emitting record batches
     batch_process_state: BatchProcessState,
-    // Creates batch size
-    batch_size: usize,
+    // To synchronize when partition needs to finish
+    remaining_partitions: Arc<AtomicUsize>,
 }
 
 impl RecordBatchStream for ClassicPWMJStream {
@@ -121,10 +119,11 @@ impl RecordBatchStream for ClassicPWMJStream {
 // Classic Joins
 //  1. `WaitBufferedSide` - Load in the buffered side data into memory.
 //  2. `FetchStreamBatch` -  Fetch + sort incoming stream batches. We switch the state to
-//      `ExhaustedStreamBatch` once stream batches are exhausted.
+//     `Completed` if there are are still remaining partitions to process. It is only switched to
+//     `ExhaustedStreamBatch` if all partitions have been processed.
 //  3. `ProcessStreamBatch` - Compare stream batch row values against the buffered side data.
 //  4. `ExhaustedStreamBatch` - If the join type is Left or Inner we will return state as
-//      `Completed` however for Full and Right we will need to process the matched/unmatched rows.
+//      `Completed` however for Full and Right we will need to process the unmatched buffered rows.
 impl ClassicPWMJStream {
     // Creates a new `PiecewiseMergeJoinStream` instance
     #[allow(clippy::too_many_arguments)]
@@ -139,21 +138,21 @@ impl ClassicPWMJStream {
         sort_option: SortOptions,
         join_metrics: BuildProbeJoinMetrics,
         batch_size: usize,
+        remaining_partitions: Arc<AtomicUsize>,
     ) -> Self {
-        let streamed_schema = streamed.schema();
         Self {
-            schema,
+            schema: Arc::clone(&schema),
             on_streamed,
             join_type,
             operator,
-            streamed_schema,
+            streamed_schema: streamed.schema(),
             streamed,
             buffered_side,
             state,
             sort_option,
             join_metrics,
-            batch_process_state: BatchProcessState::new(),
-            batch_size,
+            batch_process_state: BatchProcessState::new(schema, batch_size),
+            remaining_partitions,
         }
     }
 
@@ -209,7 +208,16 @@ impl ClassicPWMJStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.streamed.poll_next_unpin(cx)) {
             None => {
-                self.state = PiecewiseMergeJoinStreamState::ExhaustedStreamSide;
+                if self
+                    .remaining_partitions
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+                    == 1
+                {
+                    self.batch_process_state.reset();
+                    self.state = PiecewiseMergeJoinStreamState::ExhaustedStreamSide;
+                } else {
+                    self.state = PiecewiseMergeJoinStreamState::Completed;
+                }
             }
             Some(Ok(batch)) => {
                 // Evaluate the streamed physical expression on the stream batch
@@ -230,6 +238,8 @@ impl ClassicPWMJStream {
                 let stream_batch = take_record_batch(&batch, &indices)?;
                 let stream_values = take(stream_values.as_ref(), &indices, None)?;
 
+                // Reset BatchProcessState before processing a new stream batch
+                self.batch_process_state.reset();
                 self.state =
                     PiecewiseMergeJoinStreamState::ProcessStreamBatch(StreamedBatch {
                         batch: stream_batch,
@@ -250,6 +260,15 @@ impl ClassicPWMJStream {
         let buffered_side = self.buffered_side.try_as_ready_mut()?;
         let stream_batch = self.state.try_as_process_stream_batch_mut()?;
 
+        if let Some(batch) = self
+            .batch_process_state
+            .output_batches
+            .next_completed_batch()
+        {
+            return Ok(StatefulStreamResult::Ready(Some(batch)));
+        }
+
+        // Produce more work
         let batch = resolve_classic_join(
             buffered_side,
             stream_batch,
@@ -258,14 +277,26 @@ impl ClassicPWMJStream {
             self.sort_option,
             self.join_type,
             &mut self.batch_process_state,
-            self.batch_size,
         )?;
 
-        if self.batch_process_state.continue_process {
+        if !self.batch_process_state.continue_process {
+            // We finished scanning this stream batch.
+            self.batch_process_state
+                .output_batches
+                .finish_buffered_batch()?;
+            if let Some(b) = self
+                .batch_process_state
+                .output_batches
+                .next_completed_batch()
+            {
+                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+                return Ok(StatefulStreamResult::Ready(Some(b)));
+            }
+            // Nothing pending; hand back whatever `resolve` returned (often empty) and move on.
+            self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
-        self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
         Ok(StatefulStreamResult::Ready(Some(batch)))
     }
 
@@ -279,211 +310,116 @@ impl ClassicPWMJStream {
             return Ok(StatefulStreamResult::Ready(None));
         }
 
-        let timer = self.join_metrics.join_time.timer();
+        if !self.batch_process_state.continue_process {
+            if let Some(batch) = self
+                .batch_process_state
+                .output_batches
+                .next_completed_batch()
+            {
+                return Ok(StatefulStreamResult::Ready(Some(batch)));
+            }
+
+            self.batch_process_state
+                .output_batches
+                .finish_buffered_batch()?;
+            if let Some(batch) = self
+                .batch_process_state
+                .output_batches
+                .next_completed_batch()
+            {
+                self.state = PiecewiseMergeJoinStreamState::Completed;
+                return Ok(StatefulStreamResult::Ready(Some(batch)));
+            }
+        }
 
         let buffered_data =
             Arc::clone(&self.buffered_side.try_as_ready().unwrap().buffered_data);
 
-        // Check if the same batch needs to be checked for values again
-        if let Some(stream_idx) = self.batch_process_state.process_rest {
-            if let Some(buffered_indices) = &self.batch_process_state.buffered_indices {
-                let remaining = buffered_indices.len() - stream_idx;
-
-                // Branch into this and return value if there are more rows to deal with
-                if remaining > self.batch_size {
-                    let buffered_batch = buffered_data.batch();
-                    let empty_stream_batch =
-                        RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
-
-                    let buffered_chunk_ref =
-                        buffered_indices.slice(stream_idx, self.batch_size);
-                    let new_buffered_indices = buffered_chunk_ref
-                        .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .expect("downcast to UInt64Array after slice");
-
-                    let streamed_indices: UInt32Array =
-                        (0..new_buffered_indices.len() as u32).collect();
-
-                    let batch = build_matched_indices(
-                        Arc::clone(&self.schema),
-                        &empty_stream_batch,
-                        buffered_batch,
-                        streamed_indices,
-                        new_buffered_indices.clone(),
-                    )?;
-
-                    self.batch_process_state
-                        .set_process_rest(Some(stream_idx + self.batch_size));
-                    self.batch_process_state.continue_process = true;
-
-                    return Ok(StatefulStreamResult::Ready(Some(batch)));
-                }
-
-                let buffered_batch = buffered_data.batch();
-                let empty_stream_batch =
-                    RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
-
-                let buffered_chunk_ref = buffered_indices.slice(stream_idx, remaining);
-                let new_buffered_indices = buffered_chunk_ref
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .expect("downcast to UInt64Array after slice");
-
-                let streamed_indices: UInt32Array =
-                    (0..new_buffered_indices.len() as u32).collect();
-
-                let batch = build_matched_indices(
-                    Arc::clone(&self.schema),
-                    &empty_stream_batch,
-                    buffered_batch,
-                    streamed_indices,
-                    new_buffered_indices.clone(),
-                )?;
-
-                self.batch_process_state.reset();
-
-                timer.done();
-                self.join_metrics.output_batches.add(1);
-                self.state = PiecewiseMergeJoinStreamState::Completed;
-
-                return Ok(StatefulStreamResult::Ready(Some(batch)));
-            }
-
-            return exec_err!("Batch process state should hold buffered indices");
-        }
-
-        let (buffered_indices, streamed_indices) = get_final_indices_from_shared_bitmap(
+        let (buffered_indices, _streamed_indices) = get_final_indices_from_shared_bitmap(
             &buffered_data.visited_indices_bitmap,
             self.join_type,
             true,
         );
 
-        // If the output indices is larger than the limit for the incremental batching then
-        // proceed to outputting all matches up to that index, return batch, and the matching
-        // will start next on the updated index (`process_rest`)
-        if buffered_indices.len() > self.batch_size {
-            let buffered_batch = buffered_data.batch();
-            let empty_stream_batch =
-                RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
+        let new_buffered_batch =
+            take_record_batch(buffered_data.batch(), &buffered_indices)?;
+        let mut buffered_columns = new_buffered_batch.columns().to_vec();
 
-            let indices_chunk_ref = buffered_indices
-                .slice(self.batch_process_state.stream_idx, self.batch_size);
+        let streamed_columns: Vec<ArrayRef> = self
+            .streamed_schema
+            .fields()
+            .iter()
+            .map(|f| new_null_array(f.data_type(), new_buffered_batch.num_rows()))
+            .collect();
 
-            let indices_chunk = indices_chunk_ref
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .expect("downcast to UInt64Array after slice");
+        buffered_columns.extend(streamed_columns);
 
-            let batch = build_matched_indices(
-                Arc::clone(&self.schema),
-                &empty_stream_batch,
-                buffered_batch,
-                streamed_indices,
-                indices_chunk.clone(),
-            )?;
+        let batch = RecordBatch::try_new(Arc::clone(&self.schema), buffered_columns)?;
 
-            self.batch_process_state.buffered_indices = Some(buffered_indices);
-            self.batch_process_state
-                .set_process_rest(Some(self.batch_size));
-            self.batch_process_state.continue_process = true;
+        self.batch_process_state.output_batches.push_batch(batch)?;
 
+        self.batch_process_state.continue_process = false;
+        if let Some(batch) = self
+            .batch_process_state
+            .output_batches
+            .next_completed_batch()
+        {
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
-        let buffered_batch = buffered_data.batch();
-        let empty_stream_batch =
-            RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
+        self.batch_process_state
+            .output_batches
+            .finish_buffered_batch()?;
+        if let Some(batch) = self
+            .batch_process_state
+            .output_batches
+            .next_completed_batch()
+        {
+            self.state = PiecewiseMergeJoinStreamState::Completed;
+            return Ok(StatefulStreamResult::Ready(Some(batch)));
+        }
 
-        let batch = build_matched_indices(
-            Arc::clone(&self.schema),
-            &empty_stream_batch,
-            buffered_batch,
-            streamed_indices,
-            buffered_indices,
-        )?;
-
-        timer.done();
-        self.join_metrics.output_batches.add(1);
         self.state = PiecewiseMergeJoinStreamState::Completed;
-
-        Ok(StatefulStreamResult::Ready(Some(batch)))
+        self.batch_process_state.reset();
+        Ok(StatefulStreamResult::Ready(None))
     }
 }
 
-// Holds all information for processing incremental output
-// 
-// Responsibilities:
-// - Keeps track of the current stream row index (`stream_idx`) so we can resume
-//   processing the same stream batch if we return early due to `batch_size`.
-// - Remembers the last buffered row index we probed (`buffer_idx`) so we don’t
-//   restart from 0 for every stream row.
-// - Stores `process_rest` to continue outputting matches for the same stream row
-//   when we previously hit the batch size limit mid-output.
-// - Tracks how many rows we’ve produced so far (`num_rows`) to know when to flush.
-// - Uses `not_found` to signal that the last stream row had no matches and we
-//   may need to emit NULLs for RIGHT/FULL OUTER joins.
-// - Uses `continue_process` to tell the executor we are not done yet and must
-//   be called again with the same stream batch.
-// - Optionally holds `buffered_indices` when resuming output of remaining matches.
 struct BatchProcessState {
     // Used to pick up from the last index on the stream side
-    stream_idx: usize,
-    // Used to pick up from the last index on the buffered side
-    buffer_idx: usize,
-    // Tracks the number of rows processed; default starts at 0
-    num_rows: usize,
-    // Processes the rest of the batch
-    process_rest: Option<usize>,
-    // Used to skip fully processing the row
-    not_found: bool,
-    // Signals whether to call `ProcessStreamBatch` again
+    output_batches: Box<BatchCoalescer>,
+    // Used to store the unmatched stream indices for `JoinType::Right` and `JoinType::Full`
+    unmatched_indices: PrimitiveBuilder<UInt32Type>,
+    // Used to store the start index on the buffered side; used to resume processing on the correct
+    // row
+    start_buffer_idx: usize,
+    // Used to store the start index on the stream side; used to resume processing on the correct
+    // row
+    start_stream_idx: usize,
+    // Signals if we found a match for the current stream row
+    found: bool,
+    // Signals to continue processing the current stream batch
     continue_process: bool,
-    // Holding the buffered indices when processing the remaining marked rows.
-    buffered_indices: Option<PrimitiveArray<UInt64Type>>,
 }
 
 impl BatchProcessState {
-    pub fn new() -> Self {
+    pub(crate) fn new(schema: Arc<Schema>, batch_size: usize) -> Self {
         Self {
-            stream_idx: 0,
-            num_rows: 0,
-            buffer_idx: 0,
-            process_rest: None,
-            not_found: false,
-            continue_process: false,
-            buffered_indices: None,
+            output_batches: Box::new(BatchCoalescer::new(schema, batch_size)),
+            unmatched_indices: PrimitiveBuilder::new(),
+            start_buffer_idx: 0,
+            start_stream_idx: 0,
+            found: false,
+            continue_process: true,
         }
     }
 
-    fn reset(&mut self) {
-        self.stream_idx = 0;
-        self.num_rows = 0;
-        self.buffer_idx = 0;
-        self.process_rest = None;
-        self.not_found = false;
-        self.continue_process = false;
-        self.buffered_indices = None;
-    }
-
-    fn buffer_idx(&self) -> usize {
-        self.buffer_idx
-    }
-
-    fn set_buffer_idx(&mut self, buffer_idx: usize) {
-        self.buffer_idx = buffer_idx;
-    }
-
-    fn set_stream_idx(&mut self, stream_idx: usize) {
-        self.stream_idx = stream_idx;
-    }
-
-    fn set_rows(&mut self, num_rows: usize) {
-        self.num_rows = num_rows;
-    }
-
-    fn set_process_rest(&mut self, process_rest: Option<usize>) {
-        self.process_rest = process_rest;
+    pub(crate) fn reset(&mut self) {
+        self.unmatched_indices = PrimitiveBuilder::new();
+        self.start_buffer_idx = 0;
+        self.start_stream_idx = 0;
+        self.found = false;
+        self.continue_process = true;
     }
 }
 
@@ -499,7 +435,6 @@ impl Stream for ClassicPWMJStream {
 }
 
 // For Left, Right, Full, and Inner joins, incoming stream batches will already be sorted.
-// 
 #[allow(clippy::too_many_arguments)]
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
@@ -509,332 +444,188 @@ fn resolve_classic_join(
     sort_options: SortOptions,
     join_type: JoinType,
     batch_process_state: &mut BatchProcessState,
-    batch_size: usize,
 ) -> Result<RecordBatch> {
-    let buffered_values = buffered_side.buffered_data.values();
-    let buffered_len = buffered_values.len();
+    let buffered_len = buffered_side.buffered_data.values().len();
     let stream_values = stream_batch.values();
 
-    let mut buffered_indices = UInt64Builder::default();
-    let mut stream_indices = UInt32Builder::default();
+    let mut buffer_idx = batch_process_state.start_buffer_idx;
+    let stream_idx = batch_process_state.start_stream_idx;
 
     // Our buffer_idx variable allows us to start probing on the buffered side where we last matched
     // in the previous stream row.
-    let mut buffer_idx = batch_process_state.buffer_idx();
-    for row_idx in batch_process_state.stream_idx..stream_values[0].len() {
-        let mut found = false;
-
-        // Check once to see if it is a redo of a null value if not we do not try to process the batch
-        if !batch_process_state.not_found {
-            while buffer_idx < buffered_values.len()
-                || batch_process_state.process_rest.is_some()
-            {
-                // If there is still data left in the batch to process, use the index and output
-                if let Some(stream_idx) = batch_process_state.process_rest {
-                    let count = buffered_values.len() - stream_idx;
-                    if count >= batch_size {
-                        let stream_repeated = vec![row_idx as u32; batch_size];
-                        batch_process_state
-                            .set_process_rest(Some(stream_idx + batch_size));
-                        batch_process_state
-                            .set_rows(batch_process_state.num_rows + batch_size);
-                        let buffered_range: Vec<u64> = (stream_idx as u64
-                            ..((stream_idx as u64) + (batch_size as u64)))
-                            .collect();
-                        stream_indices.append_slice(&stream_repeated);
-                        buffered_indices.append_slice(&buffered_range);
-
-                        let batch = process_batch(
-                            &mut buffered_indices,
-                            &mut stream_indices,
-                            stream_batch,
-                            buffered_side,
-                            join_type,
-                            join_schema,
-                        )?;
-                        batch_process_state.continue_process = true;
-                        batch_process_state.set_rows(0);
-
-                        return Ok(batch);
-                    }
-
-                    batch_process_state.set_rows(batch_process_state.num_rows + count);
-                    let stream_repeated = vec![row_idx as u32; count];
-                    let buffered_range: Vec<u64> =
-                        (stream_idx as u64..buffered_len as u64).collect();
-                    stream_indices.append_slice(&stream_repeated);
-                    buffered_indices.append_slice(&buffered_range);
-                    batch_process_state.process_rest = None;
-
-                    found = true;
-
-                    break;
-                }
-
-                let compare = compare_join_arrays(
+    for row_idx in stream_idx..stream_batch.batch.num_rows() {
+        while buffer_idx < buffered_len {
+            let compare = {
+                let buffered_values = buffered_side.buffered_data.values();
+                compare_join_arrays(
                     &[Arc::clone(&stream_values[0])],
                     row_idx,
                     &[Arc::clone(buffered_values)],
                     buffer_idx,
                     &[sort_options],
                     NullEquality::NullEqualsNothing,
-                )?;
+                )?
+            };
 
-                // If we find a match we append all indices and move to the next stream row index
-                match operator {
-                    Operator::Gt | Operator::Lt => {
-                        if matches!(compare, Ordering::Less) {
-                            let count = buffered_values.len() - buffer_idx;
+            // If we find a match we append all indices and move to the next stream row index
+            match operator {
+                Operator::Gt | Operator::Lt => {
+                    if matches!(compare, Ordering::Less) {
+                        batch_process_state.found = true;
+                        let count = buffered_len - buffer_idx;
 
-                            // If the current output + new output is over our process value then we want to be
-                            // able to change that
-                            if batch_process_state.num_rows + count >= batch_size {
-                                let process_batch_size =
-                                    batch_size - batch_process_state.num_rows;
-                                let stream_repeated =
-                                    vec![row_idx as u32; process_batch_size];
-                                batch_process_state.set_rows(
-                                    batch_process_state.num_rows + process_batch_size,
-                                );
+                        let batch = build_matched_indices(
+                            (buffer_idx, count),
+                            (row_idx, count),
+                            buffered_side,
+                            stream_batch,
+                            join_type,
+                            Arc::clone(&join_schema),
+                        )?;
 
-                                let buffered_range: Vec<u64> = (buffer_idx as u64
-                                    ..(buffer_idx + process_batch_size) as u64)
-                                    .collect();
-                                stream_indices.append_slice(&stream_repeated);
-                                buffered_indices.append_slice(&buffered_range);
+                        batch_process_state.output_batches.push_batch(batch)?;
 
-                                let batch = process_batch(
-                                    &mut buffered_indices,
-                                    &mut stream_indices,
-                                    stream_batch,
-                                    buffered_side,
-                                    join_type,
-                                    join_schema,
-                                )?;
-
-                                batch_process_state.set_process_rest(Some(
-                                    buffer_idx + process_batch_size,
-                                ));
-                                batch_process_state.continue_process = true;
-                                // Update the start index so it repeats the process
-                                batch_process_state.set_stream_idx(row_idx);
-                                batch_process_state.set_buffer_idx(buffer_idx);
-                                batch_process_state.set_rows(0);
-
-                                return Ok(batch);
-                            }
-
-                            // Update the number of rows processed
-                            batch_process_state
-                                .set_rows(batch_process_state.num_rows + count);
-
-                            let stream_repeated = vec![row_idx as u32; count];
-                            let buffered_range: Vec<u64> =
-                                (buffer_idx as u64..buffered_len as u64).collect();
-
-                            stream_indices.append_slice(&stream_repeated);
-                            buffered_indices.append_slice(&buffered_range);
-                            found = true;
-
-                            break;
+                        // Flush batch and update pointers if we have a completed batch
+                        if let Some(batch) =
+                            batch_process_state.output_batches.next_completed_batch()
+                        {
+                            batch_process_state.found = false;
+                            batch_process_state.start_buffer_idx = buffer_idx;
+                            batch_process_state.start_stream_idx = row_idx + 1;
+                            return Ok(batch);
                         }
+
+                        break;
                     }
-                    Operator::GtEq | Operator::LtEq => {
-                        if matches!(compare, Ordering::Equal | Ordering::Less) {
-                            let count = buffered_values.len() - buffer_idx;
+                }
+                Operator::GtEq | Operator::LtEq => {
+                    if matches!(compare, Ordering::Equal | Ordering::Less) {
+                        batch_process_state.found = true;
+                        let count = buffered_len - buffer_idx;
+                        let batch = build_matched_indices(
+                            (buffer_idx, count),
+                            (row_idx, count),
+                            buffered_side,
+                            stream_batch,
+                            join_type,
+                            Arc::clone(&join_schema),
+                        )?;
 
-                            // If the current output + new output is over our process value then we want to be
-                            // able to change that
-                            if batch_process_state.num_rows + count >= batch_size {
-                                // Update the start index so it repeats the process
-                                batch_process_state.set_stream_idx(row_idx);
-                                batch_process_state.set_buffer_idx(buffer_idx);
-
-                                let process_batch_size =
-                                    batch_size - batch_process_state.num_rows;
-                                let stream_repeated =
-                                    vec![row_idx as u32; process_batch_size];
-                                batch_process_state.set_process_rest(Some(
-                                    buffer_idx + process_batch_size,
-                                ));
-                                batch_process_state.set_rows(
-                                    batch_process_state.num_rows + process_batch_size,
-                                );
-                                let buffered_range: Vec<u64> = (buffer_idx as u64
-                                    ..(buffer_idx + process_batch_size) as u64)
-                                    .collect();
-                                stream_indices.append_slice(&stream_repeated);
-                                buffered_indices.append_slice(&buffered_range);
-
-                                let batch = process_batch(
-                                    &mut buffered_indices,
-                                    &mut stream_indices,
-                                    stream_batch,
-                                    buffered_side,
-                                    join_type,
-                                    join_schema,
-                                )?;
-
-                                batch_process_state.continue_process = true;
-                                batch_process_state.set_rows(0);
-
-                                return Ok(batch);
-                            }
-
-                            // Update the number of rows processed
-                            batch_process_state
-                                .set_rows(batch_process_state.num_rows + count);
-                            let stream_repeated = vec![row_idx as u32; count];
-                            let buffered_range: Vec<u64> =
-                                (buffer_idx as u64..buffered_len as u64).collect();
-
-                            stream_indices.append_slice(&stream_repeated);
-                            buffered_indices.append_slice(&buffered_range);
-                            found = true;
-
-                            break;
+                        // Flush batch and update pointers if we have a completed batch
+                        batch_process_state.output_batches.push_batch(batch)?;
+                        if let Some(batch) =
+                            batch_process_state.output_batches.next_completed_batch()
+                        {
+                            batch_process_state.found = false;
+                            batch_process_state.start_buffer_idx = buffer_idx;
+                            batch_process_state.start_stream_idx = row_idx + 1;
+                            return Ok(batch);
                         }
-                    }
-                    _ => {
-                        return exec_err!(
-                            "PiecewiseMergeJoin should not contain operator, {}",
-                            operator
-                        )
-                    }
-                };
 
-                // Increment buffer_idx after every row
-                buffer_idx += 1;
-            }
+                        break;
+                    }
+                }
+                _ => {
+                    return exec_err!(
+                        "PiecewiseMergeJoin should not contain operator, {}",
+                        operator
+                    )
+                }
+            };
+
+            // Increment buffer_idx after every row
+            buffer_idx += 1;
         }
 
-        // If not found we append a null value for `JoinType::Right` and `JoinType::Full`
-        if (!found || batch_process_state.not_found)
-            && matches!(join_type, JoinType::Right | JoinType::Full)
+        // If a match was not found for the current stream row index the stream indice is appended
+        // to the unmatched indices to be flushed later.
+        if matches!(join_type, JoinType::Right | JoinType::Full)
+            && !batch_process_state.found
         {
-            let remaining = batch_size.saturating_sub(batch_process_state.num_rows);
-            if remaining == 0 {
-                let batch = process_batch(
-                    &mut buffered_indices,
-                    &mut stream_indices,
-                    stream_batch,
-                    buffered_side,
-                    join_type,
-                    join_schema,
-                )?;
-
-                // Update the start index so it repeats the process
-                batch_process_state.set_stream_idx(row_idx);
-                batch_process_state.set_buffer_idx(buffer_idx);
-                batch_process_state.not_found = true;
-                batch_process_state.continue_process = true;
-                batch_process_state.set_rows(0);
-
-                return Ok(batch);
-            }
-
-            // Append right side value + null value for left
-            stream_indices.append_value(row_idx as u32);
-            buffered_indices.append_null();
-            batch_process_state.set_rows(batch_process_state.num_rows + 1);
-            batch_process_state.not_found = false;
+            batch_process_state
+                .unmatched_indices
+                .append_value(row_idx as u32);
         }
+
+        batch_process_state.found = false;
     }
 
-    let batch = process_batch(
-        &mut buffered_indices,
-        &mut stream_indices,
-        stream_batch,
-        buffered_side,
-        join_type,
-        join_schema,
-    )?;
+    // Flushed all unmatched indices on the streamed side
+    if matches!(join_type, JoinType::Right | JoinType::Full) {
+        let batch = create_unmatched_batch(
+            &mut batch_process_state.unmatched_indices,
+            stream_batch,
+            Arc::clone(&join_schema),
+        )?;
 
-    // Resets batch process state for processing `Left` + `Full` join
-    batch_process_state.reset();
+        batch_process_state.output_batches.push_batch(batch)?;
+    }
 
-    Ok(batch)
+    batch_process_state.continue_process = false;
+    Ok(RecordBatch::new_empty(Arc::clone(&join_schema)))
 }
 
-fn process_batch(
-    buffered_indices: &mut PrimitiveBuilder<UInt64Type>,
-    stream_indices: &mut PrimitiveBuilder<UInt32Type>,
-    stream_batch: &StreamedBatch,
+// Builds a record batch from indices ranges on the buffered and streamed side.
+//
+// The two ranges are: buffered_range: (start index, count) and streamed_range: (start index, count) due
+// to batch.slice(start, count).
+fn build_matched_indices(
+    buffered_range: (usize, usize),
+    streamed_range: (usize, usize),
     buffered_side: &mut BufferedSideReadyState,
+    stream_batch: &StreamedBatch,
     join_type: JoinType,
     join_schema: Arc<Schema>,
 ) -> Result<RecordBatch> {
-    let stream_indices_array = stream_indices.finish();
-    let buffered_indices_array = buffered_indices.finish();
-
-    // We need to mark the buffered side matched indices for `JoinType::Full` and `JoinType::Left`
+    // Mark the buffered indices as visited
     if need_produce_result_in_final(join_type) {
         let mut bitmap = buffered_side.buffered_data.visited_indices_bitmap.lock();
-
-        buffered_indices_array.iter().flatten().for_each(|i| {
-            bitmap.set_bit(i as usize, true);
-        });
+        for i in buffered_range.0..buffered_range.0 + buffered_range.1 {
+            bitmap.set_bit(i, true);
+        }
     }
 
-    let batch = build_matched_indices(
-        join_schema,
-        &stream_batch.batch,
-        &buffered_side.buffered_data.batch,
-        stream_indices_array,
-        buffered_indices_array,
-    )?;
+    let new_buffered_batch = buffered_side
+        .buffered_data
+        .batch()
+        .slice(buffered_range.0, buffered_range.1);
+    let mut buffered_columns = new_buffered_batch.columns().to_vec();
 
-    Ok(batch)
-}
-
-fn build_matched_indices(
-    schema: Arc<Schema>,
-    streamed_batch: &RecordBatch,
-    buffered_batch: &RecordBatch,
-    streamed_indices: UInt32Array,
-    buffered_indices: UInt64Array,
-) -> Result<RecordBatch> {
-    if schema.fields().is_empty() {
-        // Build an “empty” RecordBatch with just row‐count metadata
-        let options = RecordBatchOptions::new()
-            .with_match_field_names(true)
-            .with_row_count(Some(streamed_indices.len()));
-        return Ok(RecordBatch::try_new_with_options(
-            Arc::new((*schema).clone()),
-            vec![],
-            &options,
-        )?);
-    }
-
-    // Gather stream columns after applying filter specified with stream indices
-    let streamed_columns = streamed_batch
-        .columns()
-        .iter()
-        .map(|column_array| {
-            if column_array.is_empty()
-                || streamed_indices.null_count() == streamed_indices.len()
-            {
-                assert_eq!(streamed_indices.null_count(), streamed_indices.len());
-                Ok(new_null_array(
-                    column_array.data_type(),
-                    streamed_indices.len(),
-                ))
-            } else {
-                take(column_array, &streamed_indices, None)
-            }
-        })
-        .collect::<Result<Vec<_>, ArrowError>>()?;
-
-    let mut buffered_columns = buffered_batch
-        .columns()
-        .iter()
-        .map(|column_array| take(column_array, &buffered_indices, None))
-        .collect::<Result<Vec<_>, ArrowError>>()?;
+    let indices = UInt32Array::from_value(streamed_range.0 as u32, streamed_range.1);
+    let new_stream_batch = take_record_batch(&stream_batch.batch, &indices)?;
+    let streamed_columns = new_stream_batch.columns().to_vec();
 
     buffered_columns.extend(streamed_columns);
 
     Ok(RecordBatch::try_new(
-        Arc::new((*schema).clone()),
+        Arc::clone(&join_schema),
+        buffered_columns,
+    )?)
+}
+
+// Creates a record batch from the unmatched indices on the streamed side
+fn create_unmatched_batch(
+    streamed_indices: &mut PrimitiveBuilder<UInt32Type>,
+    stream_batch: &StreamedBatch,
+    join_schema: Arc<Schema>,
+) -> Result<RecordBatch> {
+    let streamed_indices = streamed_indices.finish();
+    let new_stream_batch = take_record_batch(&stream_batch.batch, &streamed_indices)?;
+    let streamed_columns = new_stream_batch.columns().to_vec();
+    let buffered_cols_len = join_schema.fields().len() - streamed_columns.len();
+
+    let num_rows = new_stream_batch.num_rows();
+    let mut buffered_columns: Vec<ArrayRef> = join_schema
+        .fields()
+        .iter()
+        .take(buffered_cols_len)
+        .map(|field| new_null_array(field.data_type(), num_rows))
+        .collect();
+
+    buffered_columns.extend(streamed_columns);
+
+    Ok(RecordBatch::try_new(
+        Arc::clone(&join_schema),
         buffered_columns,
     )?)
 }
@@ -928,7 +719,14 @@ mod tests {
         operator: Operator,
         join_type: JoinType,
     ) -> Result<PiecewiseMergeJoinExec> {
-        PiecewiseMergeJoinExec::try_new(left, right, on, operator, join_type)
+        PiecewiseMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            operator,
+            join_type,
+            Arc::new(AtomicUsize::new(1)),
+        )
     }
 
     async fn join_collect(
@@ -1344,6 +1142,253 @@ mod tests {
         | 3  | 1  | 9  | 30 | 5  | 90 |
         | 3  | 1  | 9  | 20 | 3  | 80 |
         | 3  | 1  | 9  | 10 | 2  | 70 |
+        +----+----+----+----+----+----+
+        "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_inner_less_than_equal_with_dups() -> Result<()> {
+        // +----+----+----+
+        // | a1 | b1 | c1 |
+        // +----+----+----+
+        // | 1  | 4  | 7  |
+        // | 2  | 4  | 8  |
+        // | 3  | 2  | 9  |
+        // +----+----+----+
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 4, 2]),
+            ("c1", &vec![7, 8, 9]),
+        );
+
+        // +----+----+----+
+        // | a2 | b1 | c2 |
+        // +----+----+----+
+        // | 10 | 4  | 70 |
+        // | 20 | 3  | 80 |
+        // | 30 | 2  | 90 |
+        // +----+----+----+
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 3, 2]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
+
+        // Expected grouping follows right.b1 descending (4, 3, 2)
+        assert_snapshot!(batches_to_string(&batches), @r#"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
+        | 1  | 4  | 7  | 10 | 4  | 70 |
+        | 2  | 4  | 8  | 10 | 4  | 70 |
+        | 3  | 2  | 9  | 10 | 4  | 70 |
+        | 3  | 2  | 9  | 20 | 3  | 80 |
+        | 3  | 2  | 9  | 30 | 2  | 90 |
+        +----+----+----+----+----+----+
+        "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_inner_greater_than_unsorted_right() -> Result<()> {
+        // +----+----+----+
+        // | a1 | b1 | c1 |
+        // +----+----+----+
+        // | 1  | 1  | 7  |
+        // | 2  | 2  | 8  |
+        // | 3  | 4  | 9  |
+        // +----+----+----+
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 2, 4]),
+            ("c1", &vec![7, 8, 9]),
+        );
+
+        // +----+----+----+
+        // | a2 | b1 | c2 |
+        // +----+----+----+
+        // | 10 | 3  | 70 |
+        // | 20 | 1  | 80 |
+        // | 30 | 2  | 90 |
+        // +----+----+----+
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![3, 1, 2]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
+
+        // Grouped by right in ascending evaluation for > (1,2,3)
+        assert_snapshot!(batches_to_string(&batches), @r#"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
+        | 2  | 2  | 8  | 20 | 1  | 80 |
+        | 3  | 4  | 9  | 20 | 1  | 80 |
+        | 3  | 4  | 9  | 30 | 2  | 90 |
+        | 3  | 4  | 9  | 10 | 3  | 70 |
+        +----+----+----+----+----+----+
+        "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_less_than_equal_with_left_nulls_on_no_match() -> Result<()> {
+        // +----+----+----+
+        // | a1 | b1 | c1 |
+        // +----+----+----+
+        // | 1  | 5  | 7  |
+        // | 2  | 4  | 8  |
+        // | 3  | 1  | 9  |
+        // +----+----+----+
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![5, 4, 1]),
+            ("c1", &vec![7, 8, 9]),
+        );
+
+        // +----+----+----+
+        // | a2 | b1 | c2 |
+        // +----+----+----+
+        // | 10 | 3  | 70 |
+        // +----+----+----+
+        let right = build_table(("a2", &vec![10]), ("b1", &vec![3]), ("c2", &vec![70]));
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::LtEq, JoinType::Left).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r#"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
+        | 3  | 1  | 9  | 10 | 3  | 70 |
+        | 1  | 5  | 7  |    |    |    |
+        | 2  | 4  | 8  |    |    |    |
+        +----+----+----+----+----+----+
+        "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_greater_than_equal_with_right_nulls_on_no_match() -> Result<()> {
+        // +----+----+----+
+        // | a1 | b1 | c1 |
+        // +----+----+----+
+        // | 1  | 1  | 7  |
+        // | 2  | 2  | 8  |
+        // +----+----+----+
+        let left = build_table(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![1, 2]),
+            ("c1", &vec![7, 8]),
+        );
+
+        // +----+----+----+
+        // | a2 | b1 | c2 |
+        // +----+----+----+
+        // | 10 | 3  | 70 |
+        // | 20 | 5  | 80 |
+        // +----+----+----+
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![3, 5]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::GtEq, JoinType::Right).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r#"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
+        |    |    |    | 10 | 3  | 70 |
+        |    |    |    | 20 | 5  | 80 |
+        +----+----+----+----+----+----+
+        "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_inner_single_row_left_less_than() -> Result<()> {
+        let left = build_table(("a1", &vec![42]), ("b1", &vec![5]), ("c1", &vec![999]));
+
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![1, 5, 7]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r#"
+        +----+----+-----+----+----+----+
+        | a1 | b1 | c1  | a2 | b1 | c2 |
+        +----+----+-----+----+----+----+
+        | 42 | 5  | 999 | 30 | 7  | 90 |
+        +----+----+-----+----+----+----+
+        "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_inner_empty_right() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 2, 3]),
+            ("c1", &vec![7, 8, 9]),
+        );
+
+        let right = build_table(
+            ("a2", &Vec::<i32>::new()),
+            ("b1", &Vec::<i32>::new()),
+            ("c2", &Vec::<i32>::new()),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r#"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
         +----+----+----+----+----+----+
         "#);
         Ok(())
