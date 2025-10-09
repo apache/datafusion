@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -28,9 +27,8 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
     array::{Array, ArrayRef, AsArray},
     datatypes::{
-        ArrowNativeType, ArrowPrimitiveType, DataType, Decimal128Type, Decimal256Type,
-        Decimal32Type, Decimal64Type, Field, FieldRef, Float16Type, Float32Type,
-        Float64Type,
+        ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
+        Decimal64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
     },
 };
 
@@ -139,10 +137,7 @@ impl PercentileCont {
         }
     }
 
-    fn create_accumulator(
-        &self,
-        args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn create_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let percentile = validate_percentile(&args.exprs[1])?;
 
         let is_descending = args
@@ -195,8 +190,8 @@ impl PercentileCont {
 }
 
 fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
-    use arrow::datatypes::Schema;
     use arrow::array::RecordBatch;
+    use arrow::datatypes::Schema;
     use datafusion_expr::ColumnarValue;
 
     let empty_schema = Arc::new(Schema::empty());
@@ -444,7 +439,9 @@ impl<T: ArrowNumericType + Send> PercentileContGroupsAccumulator<T> {
     }
 }
 
-impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileContGroupsAccumulator<T> {
+impl<T: ArrowNumericType + Send> GroupsAccumulator
+    for PercentileContGroupsAccumulator<T>
+{
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -729,10 +726,8 @@ fn calculate_percentile<T: ArrowNumericType>(
             let fraction = index - (lower_index as f64);
             let diff = upper_value.sub_wrapping(lower_value);
             let interpolated = lower_value.add_wrapping(
-                diff.mul_wrapping(T::Native::usize_as(
-                    (fraction * 1000000.0) as usize,
-                ))
-                .div_wrapping(T::Native::usize_as(1000000)),
+                diff.mul_wrapping(T::Native::usize_as((fraction * 1000000.0) as usize))
+                    .div_wrapping(T::Native::usize_as(1000000)),
             );
             Some(interpolated)
         }
