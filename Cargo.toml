@@ -153,6 +153,7 @@ half = { version = "2.6.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
 indexmap = "2.11.4"
+insta = { version = "1.43.2", features = ["glob", "filters"] }
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.4", default-features = false }
@@ -162,11 +163,10 @@ parquet = { version = "56.2.0", default-features = false, features = [
     "async",
     "object_store",
 ] }
-pbjson = { version = "0.7.0" }
-pbjson-types = "0.7"
+pbjson = { version = "0.8.0" }
+pbjson-types = "0.8"
 # Should match arrow-flight's version of prost.
-insta = { version = "1.43.2", features = ["glob", "filters"] }
-prost = "0.13.1"
+prost = "0.14.1"
 rand = "0.9"
 recursive = "0.1.1"
 regex = "1.11"
@@ -258,3 +258,33 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+[patch.crates-io]
+# Local pin
+# arrow = { path = "/Users/andrewlamb/Software/arrow-rs/arrow" }
+# arrow-array = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-array" }
+# arrow-buffer = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-buffer" }
+# arrow-cast = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-cast" }
+# arrow-data = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-data" }
+# arrow-ipc = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-ipc" }
+# arrow-schema = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-schema" }
+# arrow-select = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-select" }
+# arrow-string = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-string" }
+# arrow-ord = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-ord" }
+# arrow-flight = { path = "/Users/andrewlamb/Software/arrow-rs/arrow-flight" }
+# parquet = { path = "/Users/andrewlamb/Software/arrow-rs/parquet" }
+
+## Temporary arrow-rs to main patch until 57.0.0 is released
+## https://github.com/apache/arrow-rs/issues/7835
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "760b7b6077559e0e73a01771a5b423da535fc96a" }
