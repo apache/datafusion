@@ -505,6 +505,13 @@ impl SessionContext {
         self.runtime_env().register_object_store(url, object_store)
     }
 
+    /// Deregisters an [`ObjectStore`] associated with the specific URL prefix.
+    ///
+    /// See [`RuntimeEnv::deregister_object_store`] for more details.
+    pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        self.runtime_env().deregister_object_store(url)
+    }
+
     /// Registers the [`RecordBatch`] as the specified table name
     pub fn register_batch(
         &self,

@@ -44,6 +44,13 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
         self.inner.register_store(url, store)
     }
 
+    fn deregister_store(
+        &self,
+        url: &Url,
+    ) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
+        self.inner.deregister_store(url)
+    }
+
     fn get_store(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
         self.inner.get_store(url)
     }
