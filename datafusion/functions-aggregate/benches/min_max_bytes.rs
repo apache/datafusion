@@ -115,14 +115,15 @@
 //!   This checks the accumulator's ability to recognise and adapt between
 //!   modes over time without catastrophic thrashing.
 
-use std::sync::Arc;
-
-use arrow::array::{ArrayRef, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::{
+    array::{ArrayRef, StringArray},
+    datatypes::{DataType, Field, Schema},
+};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::min_max::Min;
 use datafusion_physical_expr::expressions::col;
+use std::sync::Arc;
 
 const BATCH_SIZE: usize = 512;
 const SPARSE_GROUPS: usize = 16;
