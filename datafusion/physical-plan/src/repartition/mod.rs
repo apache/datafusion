@@ -1936,6 +1936,161 @@ mod tests {
         // Verify we got all the data (50 batches * 8 rows each)
         assert_eq!(total_rows, 50 * 8);
 
+        // Verify spilling metrics to confirm spilling actually happened
+        let metrics = exec.metrics().unwrap();
+        assert!(
+            metrics.spill_count().unwrap() > 0,
+            "Expected spill_count > 0, but got {:?}",
+            metrics.spill_count()
+        );
+        println!("Spilled {} times", metrics.spill_count().unwrap());
+        assert!(
+            metrics.spilled_bytes().unwrap() > 0,
+            "Expected spilled_bytes > 0, but got {:?}",
+            metrics.spilled_bytes()
+        );
+        println!(
+            "Spilled {} bytes in {} spills",
+            metrics.spilled_bytes().unwrap(),
+            metrics.spill_count().unwrap()
+        );
+        assert!(
+            metrics.spilled_rows().unwrap() > 0,
+            "Expected spilled_rows > 0, but got {:?}",
+            metrics.spilled_rows()
+        );
+        println!("Spilled {} rows", metrics.spilled_rows().unwrap());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repartition_with_partial_spilling() -> Result<()> {
+        // Test that repartition can handle partial spilling (some batches in memory, some spilled)
+        let schema = test_schema();
+        let partition = create_vec_batches(50);
+        let input_partitions = vec![partition];
+        let partitioning = Partitioning::RoundRobinBatch(4);
+
+        // Set up context with moderate memory limit to force partial spilling
+        // 2KB should allow some batches in memory but force others to spill
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(2 * 1024, 1.0)
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // create physical plan
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        // Collect all partitions - should succeed with partial spilling
+        let mut total_rows = 0;
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                total_rows += batch.num_rows();
+            }
+        }
+
+        // Verify we got all the data (50 batches * 8 rows each)
+        assert_eq!(total_rows, 50 * 8);
+
+        // Verify partial spilling metrics
+        let metrics = exec.metrics().unwrap();
+        let spill_count = metrics.spill_count().unwrap();
+        let spilled_rows = metrics.spilled_rows().unwrap();
+        let spilled_bytes = metrics.spilled_bytes().unwrap();
+
+        assert!(
+            spill_count > 0,
+            "Expected some spilling to occur, but got spill_count={}",
+            spill_count
+        );
+        assert!(
+            spilled_rows > 0 && spilled_rows < total_rows,
+            "Expected partial spilling (0 < spilled_rows < {}), but got spilled_rows={}",
+            total_rows,
+            spilled_rows
+        );
+        assert!(
+            spilled_bytes > 0,
+            "Expected some bytes to be spilled, but got spilled_bytes={}",
+            spilled_bytes
+        );
+
+        println!(
+            "Partial spilling: spilled {} out of {} rows ({:.1}%) in {} spills, {} bytes",
+            spilled_rows,
+            total_rows,
+            (spilled_rows as f64 / total_rows as f64) * 100.0,
+            spill_count,
+            spilled_bytes
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repartition_without_spilling() -> Result<()> {
+        // Test that repartition does not spill when there's ample memory
+        let schema = test_schema();
+        let partition = create_vec_batches(50);
+        let input_partitions = vec![partition];
+        let partitioning = Partitioning::RoundRobinBatch(4);
+
+        // Set up context with generous memory limit - no spilling should occur
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(10 * 1024 * 1024, 1.0) // 10MB
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // create physical plan
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        // Collect all partitions - should succeed without spilling
+        let mut total_rows = 0;
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                total_rows += batch.num_rows();
+            }
+        }
+
+        // Verify we got all the data (50 batches * 8 rows each)
+        assert_eq!(total_rows, 50 * 8);
+
+        // Verify no spilling occurred
+        let metrics = exec.metrics().unwrap();
+        assert_eq!(
+            metrics.spill_count(),
+            Some(0),
+            "Expected no spilling, but got spill_count={:?}",
+            metrics.spill_count()
+        );
+        assert_eq!(
+            metrics.spilled_bytes(),
+            Some(0),
+            "Expected no bytes spilled, but got spilled_bytes={:?}",
+            metrics.spilled_bytes()
+        );
+        assert_eq!(
+            metrics.spilled_rows(),
+            Some(0),
+            "Expected no rows spilled, but got spilled_rows={:?}",
+            metrics.spilled_rows()
+        );
+
+        println!("No spilling occurred - all data processed in memory");
+
         Ok(())
     }
 
