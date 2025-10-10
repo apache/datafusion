@@ -71,6 +71,49 @@
 //!   adaptive approach is negligible when groups and data are tiny (micro
 //!   workloads), and that the simple path remains the fastest for these
 //!   cases.
+//!
+//! - `min bytes extreme duplicates`:
+//!   Very small number of unique groups with many repeated rows per group.
+//!   This stresses run-length and duplicate detection behaviour and ensures
+//!   the accumulator handles extreme duplicate patterns without excessive
+//!   per-row overhead.
+//!
+//! - `min bytes quadratic growing total groups`:
+//!   Demonstration benchmark that grows `total_num_groups` across batches
+//!   while each batch remains dense. It exposes pathological allocation or
+//!   resize behaviour which scales with the historical total number of
+//!   groups (quadratic behaviour) so the heuristic/resizing strategy can be
+//!   validated.
+//!
+//! - `min bytes sequential stable groups`:
+//!   Multiple batches where the same contiguous set of groups is touched in
+//!   each batch. This measures benefit of reusing lazily-allocated dense
+//!   scratch/state across batches.
+//!
+//! - `min bytes sequential dense large stable`:
+//!   A multi-batch benchmark with a large dense domain that remains stable
+//!   across batches. Used to confirm the sequential dense path reuses
+//!   allocations and remains consistent.
+//!
+//! - `min bytes sequential dense large allocations`:
+//!   Similar to the stable sequential benchmark but each batch allocates
+//!   different values to ensure the accumulator reuses its scratch
+//!   allocation across batches (asserts stable size).
+//!
+//! - `min bytes medium cardinality stable`:
+//!   Medium-cardinality workload where each batch touches a large fraction
+//!   (e.g. 80%) of the full domain. This captures behaviour between dense
+//!   and sparse extremes and validates the heuristic choices.
+//!
+//! - `min bytes ultra sparse`:
+//!   Extremely high-cardinality domain where each batch touches only a tiny
+//!   number of groups. This validates the SparseOptimized implementation and
+//!   hash-based tracking for low-touch workloads.
+//!
+//! - `min bytes mode transition`:
+//!   Alternating phase benchmark that flips between dense and sparse phases.
+//!   This checks the accumulator's ability to recognise and adapt between
+//!   modes over time without catastrophic thrashing.
 
 use std::sync::Arc;
 
