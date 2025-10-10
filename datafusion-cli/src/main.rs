@@ -27,7 +27,6 @@ use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
-use datafusion::execution::object_store::DefaultObjectStoreRegistry;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
@@ -217,10 +216,10 @@ async fn main_inner() -> Result<()> {
         rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
 
-    let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(
-        Arc::new(DefaultObjectStoreRegistry::new()),
-        args.object_store_profiling,
-    ));
+    let instrumented_registry = Arc::new(
+        InstrumentedObjectStoreRegistry::new()
+            .with_profile_mode(args.object_store_profiling),
+    );
     rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
 
     let runtime_env = rt_builder.build_arc()?;

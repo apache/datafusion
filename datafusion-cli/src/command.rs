@@ -135,12 +135,12 @@ impl Command {
                         .set_instrument_mode(profile_mode);
                     println!(
                         "ObjectStore Profile mode set to {}",
-                        print_options.instrumented_registry.mode()
+                        print_options.instrumented_registry.instrument_mode()
                     );
                 } else {
                     println!(
                         "ObjectStore Profile mode is {}",
-                        print_options.instrumented_registry.mode()
+                        print_options.instrumented_registry.instrument_mode()
                     );
                 }
 
@@ -280,9 +280,7 @@ impl OutputFormat {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{
-        execution::object_store::DefaultObjectStoreRegistry, prelude::SessionContext,
-    };
+    use datafusion::prelude::SessionContext;
 
     use crate::{
         object_storage::instrumented::{
@@ -297,28 +295,31 @@ mod tests {
     async fn command_execute_profile_mode() {
         let ctx = SessionContext::new();
 
-        let profile_mode = InstrumentedObjectStoreMode::default();
-        let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(
-            Arc::new(DefaultObjectStoreRegistry::new()),
-            profile_mode,
-        ));
         let mut print_options = PrintOptions {
             format: PrintFormat::Automatic,
             quiet: false,
             maxrows: MaxRows::Unlimited,
             color: true,
-            instrumented_registry: Arc::clone(&instrumented_registry),
+            instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
         };
 
         let mut cmd: Command = "object_store_profiling"
             .parse()
             .expect("expected parse to succeed");
         assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
+        assert_eq!(
+            print_options.instrumented_registry.instrument_mode(),
+            InstrumentedObjectStoreMode::default()
+        );
 
         cmd = "object_store_profiling enabled"
             .parse()
             .expect("expected parse to succeed");
         assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
+        assert_eq!(
+            print_options.instrumented_registry.instrument_mode(),
+            InstrumentedObjectStoreMode::Enabled
+        );
 
         cmd = "object_store_profiling does_not_exist"
             .parse()

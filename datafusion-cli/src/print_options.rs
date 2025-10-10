@@ -188,7 +188,8 @@ impl PrintOptions {
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
 
-            if self.instrumented_registry.mode() != InstrumentedObjectStoreMode::Disabled
+            if self.instrumented_registry.instrument_mode()
+                != InstrumentedObjectStoreMode::Disabled
             {
                 writeln!(writer, "{OBJECT_STORE_PROFILING_HEADER}")?;
                 for store in self.instrumented_registry.stores() {
@@ -204,17 +205,12 @@ impl PrintOptions {
 #[cfg(test)]
 mod tests {
     use datafusion::error::Result;
-    use datafusion::execution::object_store::DefaultObjectStoreRegistry;
 
     use super::*;
 
     #[test]
     fn write_output() -> Result<()> {
-        let profile_mode = InstrumentedObjectStoreMode::default();
-        let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(
-            Arc::new(DefaultObjectStoreRegistry::new()),
-            profile_mode,
-        ));
+        let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new());
         let mut print_options = PrintOptions {
             format: PrintFormat::Automatic,
             quiet: true,

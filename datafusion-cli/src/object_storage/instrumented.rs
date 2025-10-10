@@ -25,7 +25,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use datafusion::{error::DataFusionError, execution::object_store::ObjectStoreRegistry};
+use datafusion::{
+    error::DataFusionError,
+    execution::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
+};
 use futures::stream::BoxStream;
 use object_store::{
     path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
@@ -162,18 +165,26 @@ pub struct InstrumentedObjectStoreRegistry {
     stores: RwLock<Vec<Arc<InstrumentedObjectStore>>>,
 }
 
+impl Default for InstrumentedObjectStoreRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InstrumentedObjectStoreRegistry {
     /// Returns a new [`InstrumentedObjectStoreRegistry`] that wraps the provided
     /// [`ObjectStoreRegistry`]
-    pub fn new(
-        registry: Arc<dyn ObjectStoreRegistry>,
-        default_mode: InstrumentedObjectStoreMode,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            inner: registry,
-            instrument_mode: AtomicU8::new(default_mode as u8),
+            inner: Arc::new(DefaultObjectStoreRegistry::new()),
+            instrument_mode: AtomicU8::new(InstrumentedObjectStoreMode::default() as u8),
             stores: RwLock::new(Vec::new()),
         }
+    }
+
+    pub fn with_profile_mode(self, mode: InstrumentedObjectStoreMode) -> Self {
+        self.instrument_mode.store(mode as u8, Ordering::Relaxed);
+        self
     }
 
     /// Provides access to all of the [`InstrumentedObjectStore`]s managed by this
@@ -184,7 +195,7 @@ impl InstrumentedObjectStoreRegistry {
 
     /// Returns the current [`InstrumentedObjectStoreMode`] for this
     /// [`InstrumentedObjectStoreRegistry`]
-    pub fn mode(&self) -> InstrumentedObjectStoreMode {
+    pub fn instrument_mode(&self) -> InstrumentedObjectStoreMode {
         self.instrument_mode.load(Ordering::Relaxed).into()
     }
 
@@ -217,8 +228,6 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::execution::object_store::DefaultObjectStoreRegistry;
-
     use super::*;
 
     #[test]
@@ -247,11 +256,15 @@ mod tests {
 
     #[test]
     fn instrumented_registry() {
-        let reg = Arc::new(InstrumentedObjectStoreRegistry::new(
-            Arc::new(DefaultObjectStoreRegistry::new()),
-            InstrumentedObjectStoreMode::default(),
-        ));
+        let mut reg = InstrumentedObjectStoreRegistry::new();
         assert!(reg.stores().is_empty());
+        assert_eq!(
+            reg.instrument_mode(),
+            InstrumentedObjectStoreMode::default()
+        );
+
+        reg = reg.with_profile_mode(InstrumentedObjectStoreMode::Enabled);
+        assert_eq!(reg.instrument_mode(), InstrumentedObjectStoreMode::Enabled);
 
         let store = object_store::memory::InMemory::new();
         let url = "mem://test".parse().unwrap();

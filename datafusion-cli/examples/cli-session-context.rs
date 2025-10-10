@@ -23,18 +23,13 @@ use std::sync::Arc;
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
-    execution::{
-        context::SessionState, object_store::DefaultObjectStoreRegistry, TaskContext,
-    },
+    execution::{context::SessionState, TaskContext},
     logical_expr::{LogicalPlan, LogicalPlanBuilder},
     prelude::SessionContext,
 };
 use datafusion_cli::{
-    cli_context::CliSessionContext,
-    exec::exec_from_repl,
-    object_storage::instrumented::{
-        InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
-    },
+    cli_context::CliSessionContext, exec::exec_from_repl,
+    object_storage::instrumented::InstrumentedObjectStoreRegistry,
     print_options::PrintOptions,
 };
 use object_store::ObjectStore;
@@ -91,17 +86,12 @@ impl CliSessionContext for MyUnionerContext {
 pub async fn main() {
     let my_ctx = MyUnionerContext::default();
 
-    let profile_mode = InstrumentedObjectStoreMode::default();
-    let instrumented_registry = Arc::new(InstrumentedObjectStoreRegistry::new(
-        Arc::new(DefaultObjectStoreRegistry::new()),
-        profile_mode,
-    ));
     let mut print_options = PrintOptions {
         format: datafusion_cli::print_format::PrintFormat::Automatic,
         quiet: false,
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
         color: true,
-        instrumented_registry,
+        instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
     };
 
     exec_from_repl(&my_ctx, &mut print_options).await.unwrap();
