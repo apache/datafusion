@@ -1086,8 +1086,7 @@ impl RepartitionExec {
                                     .spill_record_batch_and_finish(
                                         &[batch],
                                         &format!(
-                                            "RepartitionExec spill partition {}",
-                                            partition
+                                            "RepartitionExec spill partition {partition}"
                                         ),
                                     )?
                                     .expect("non-empty batch should produce spill file");
