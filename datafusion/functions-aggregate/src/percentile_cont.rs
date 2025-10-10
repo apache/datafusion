@@ -34,8 +34,8 @@ use arrow::{
 use arrow::array::ArrowNativeTypeOp;
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_datafusion_err, plan_err,
-    DataFusionError, HashSet, Result, ScalarValue,
+    internal_datafusion_err, internal_err, plan_err, DataFusionError, HashSet, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -48,9 +48,8 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_functions_aggregate_common::utils::{validate_percentile_expr, Hashable};
 use datafusion_macros::user_doc;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 /// Precision multiplier for linear interpolation calculations.
 ///
@@ -119,6 +118,7 @@ An alternate syntax is also supported:
 #[derive(PartialEq, Eq, Hash)]
 pub struct PercentileCont {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Debug for PercentileCont {
@@ -145,11 +145,12 @@ impl PercentileCont {
         }
         Self {
             signature: Signature::one_of(variants, Volatility::Immutable),
+            aliases: vec![String::from("quantile_cont")],
         }
     }
 
     fn create_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let percentile = validate_percentile(&args.exprs[1])?;
+        let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
         let is_descending = args
             .order_bys
@@ -207,46 +208,6 @@ impl PercentileCont {
     }
 }
 
-fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
-    use arrow::array::RecordBatch;
-    use arrow::datatypes::Schema;
-    use datafusion_expr::ColumnarValue;
-
-    let empty_schema = Arc::new(Schema::empty());
-    let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    if let ColumnarValue::Scalar(s) = expr.evaluate(&batch)? {
-        Ok(s)
-    } else {
-        internal_err!("Didn't expect ColumnarValue::Array")
-    }
-}
-
-fn validate_percentile(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
-    let percentile = match get_scalar_value(expr)
-        .map_err(|_| not_impl_datafusion_err!("Percentile value for 'PERCENTILE_CONT' must be a literal"))? {
-        ScalarValue::Float32(Some(value)) => {
-            value as f64
-        }
-        ScalarValue::Float64(Some(value)) => {
-            value
-        }
-        sv => {
-            return plan_err!(
-                "Percentile value for 'PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
-                sv.data_type()
-            )
-        }
-    };
-
-    // Ensure the percentile is between 0 and 1.
-    if !(0.0..=1.0).contains(&percentile) {
-        return plan_err!(
-            "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
-        );
-    }
-    Ok(percentile)
-}
-
 impl AggregateUDFImpl for PercentileCont {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -254,6 +215,10 @@ impl AggregateUDFImpl for PercentileCont {
 
     fn name(&self) -> &str {
         "percentile_cont"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn signature(&self) -> &Signature {
@@ -342,7 +307,7 @@ impl AggregateUDFImpl for PercentileCont {
             );
         }
 
-        let percentile = validate_percentile(&args.exprs[1])?;
+        let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
         let is_descending = args
             .order_bys
