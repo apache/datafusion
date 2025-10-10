@@ -97,13 +97,18 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let row_count = selection.true_count();
+        let selection_count = selection.true_count();
 
-        let tmp_result = if row_count == 0 {
+        let tmp_result = if batch.num_rows() == 0 || selection_count == batch.num_rows() {
+            // When evaluating the empty set we should simply delegate to `evaluate`
+            // Additionally, if the selection vector is entirely true, we can skip filtering
+            self.evaluate(batch)?
+        } else if selection_count == 0 {
             // Do not call `evaluate` when the selection is empty.
-            // Otherwise, conditionally executing expressions like `case` may end up
-            // unintentionally evaluating fallible expressions like `1/0` which will trigger
-            // unexpected runtime errors.
+            // We're already sure we're not evaluating over the empty set due to the previous check.
+            // Reducing a non-empty set to the empty set due to the selection vector and then
+            // calling `evaluate` with the empty set would yield a different answer when evaluating
+            // expressions without column references.
             let datatype = self.data_type(batch.schema_ref().as_ref())?;
             ColumnarValue::Array(make_builder(&datatype, 0).finish())
         } else {
@@ -111,7 +116,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             self.evaluate(&tmp_batch)?
         };
 
-        if batch.num_rows() == row_count {
+        if batch.num_rows() == selection_count {
             // All values from the `selection` filter are true.
             Ok(tmp_result)
         } else if let ColumnarValue::Array(a) = tmp_result {
