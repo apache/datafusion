@@ -392,6 +392,49 @@ fn min_bytes_sequential_dense_large_stable(c: &mut Criterion) {
     );
 }
 
+fn min_bytes_sequential_dense_large_allocations(c: &mut Criterion) {
+    let group_indices: Vec<usize> = (0..SEQUENTIAL_DENSE_LARGE_GROUPS).collect();
+    let batches: Vec<ArrayRef> = (0..SEQUENTIAL_DENSE_LARGE_BATCHES)
+        .map(|step| {
+            let prefix = (b'z' - step as u8) as char;
+            Arc::new(StringArray::from_iter_values(
+                (0..SEQUENTIAL_DENSE_LARGE_GROUPS)
+                    .map(|group| format!("{prefix}{prefix}_{group:05}")),
+            )) as ArrayRef
+        })
+        .collect();
+
+    c.bench_function("min bytes sequential dense large allocations", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
+            let mut baseline_size: Option<usize> = None;
+
+            for values in &batches {
+                black_box(
+                    accumulator
+                        .update_batch(
+                            std::slice::from_ref(values),
+                            &group_indices,
+                            None,
+                            SEQUENTIAL_DENSE_LARGE_GROUPS,
+                        )
+                        .expect("update batch"),
+                );
+
+                let current_size = accumulator.size();
+                if let Some(expected) = baseline_size {
+                    assert_eq!(
+                        current_size, expected,
+                        "sequential dense path should reuse its scratch allocation"
+                    );
+                } else {
+                    baseline_size = Some(current_size);
+                }
+            }
+        })
+    });
+}
+
 fn min_bytes_medium_cardinality_stable(c: &mut Criterion) {
     let touched_per_batch = (MEDIUM_TOTAL_GROUPS as f64 * 0.8) as usize;
     let batches: Vec<Vec<usize>> = (0..MEDIUM_BATCHES)
@@ -617,6 +660,7 @@ criterion_group!(
     min_bytes_large_dense_groups,
     min_bytes_sequential_stable_groups,
     min_bytes_sequential_dense_large_stable,
+    min_bytes_sequential_dense_large_allocations,
     min_bytes_medium_cardinality_stable,
     min_bytes_ultra_sparse,
     min_bytes_mode_transition

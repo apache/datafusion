@@ -364,7 +364,7 @@ impl MinMaxStructState {
     fn size(&self) -> usize {
         self.total_data_bytes
             + self.min_max.len() * size_of::<Option<StructArray>>()
-            + self.scratch_entries.len() * size_of::<ScratchEntry>()
+            + self.scratch_entries.capacity() * size_of::<ScratchEntry>()
             + self.scratch_touched_groups.capacity() * size_of::<usize>()
             + self.scratch_batch_inputs.capacity() * size_of::<StructArray>()
     }
