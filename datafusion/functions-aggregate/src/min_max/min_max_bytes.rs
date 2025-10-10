@@ -1540,7 +1540,7 @@ impl MinMaxBytesState {
                         .min(total_num_groups);
                 }
                 desired_limit = desired_limit.min(total_num_groups);
-                if self.expand_dense_limit(desired_limit) {
+                if self.expand_dense_limit(desired_limit, state) {
                     return DenseResult::Retry;
                 }
                 allow_dense = group_index < self.scratch_dense_limit;
@@ -1591,7 +1591,7 @@ impl MinMaxBytesState {
         }
 
         if let Some(desired_limit) = pending_dense_growth {
-            self.expand_dense_limit(desired_limit);
+            self.expand_dense_limit(desired_limit, state);
         }
 
         DenseResult::Handled
@@ -1641,7 +1641,7 @@ impl MinMaxBytesState {
                                 state.use_dense = true;
                                 return ProcessResult::Retry;
                             } else if state.dense_activated_this_batch
-                                && self.expand_dense_limit(candidate_limit)
+                                && self.expand_dense_limit(candidate_limit, state)
                             {
                                 return ProcessResult::Retry;
                             }
@@ -1695,7 +1695,7 @@ impl MinMaxBytesState {
                     state.use_dense = true;
                     return ProcessResult::Retry;
                 } else if state.dense_activated_this_batch
-                    && self.expand_dense_limit(candidate_limit)
+                    && self.expand_dense_limit(candidate_limit, state)
                 {
                     return ProcessResult::Retry;
                 }
@@ -1893,7 +1893,11 @@ impl MinMaxBytesState {
     /// Increase the dense limit for the current batch without remigrating
     /// previously processed groups. Returns `true` if the limit was expanded so
     /// the caller can retry handling the current group using the dense path.
-    fn expand_dense_limit(&mut self, candidate_limit: usize) -> bool {
+    fn expand_dense_limit<'a>(
+        &mut self,
+        candidate_limit: usize,
+        state: &mut SparseBatchState<'a>,
+    ) -> bool {
         if candidate_limit <= self.scratch_dense_limit {
             return false;
         }
@@ -1903,10 +1907,40 @@ impl MinMaxBytesState {
             return false;
         }
 
+        let previous_limit = self.scratch_dense_limit;
         self.scratch_dense_limit = candidate_limit;
         if self.scratch_dense.len() < self.scratch_dense_limit {
             self.scratch_dense
                 .resize(self.scratch_dense_limit, ScratchEntry::new());
+        }
+
+        if self.scratch_dense_enabled {
+            // Preserve staged candidates for groups that move from the sparse map into
+            // the newly expanded dense range so we do not lose per-batch minima when
+            // reprocessing the current row.
+            for &group_index in state.scratch_group_ids.iter() {
+                if group_index >= self.scratch_dense_limit {
+                    continue;
+                }
+
+                let entry = &mut self.scratch_dense[group_index];
+                if entry.epoch != self.scratch_epoch {
+                    let location = state
+                        .scratch_sparse
+                        .remove(&group_index)
+                        .unwrap_or(ScratchLocation::Existing);
+                    entry.epoch = self.scratch_epoch;
+                    entry.location = location;
+                } else if let Some(location) = state.scratch_sparse.remove(&group_index) {
+                    entry.location = location;
+                }
+            }
+
+            // If we are expanding from a zero limit, enable dense tracking so future
+            // iterations can reuse the migrated state without reactivation.
+            if previous_limit == 0 {
+                self.scratch_dense_enabled = true;
+            }
         }
 
         true
@@ -1936,8 +1970,11 @@ impl MinMaxBytesState {
                     .iter()
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
                     .sum();
-                self.total_data_bytes -= first_data_capacity;
-                self.populated_groups -= drained_populated;
+                self.total_data_bytes =
+                    self.total_data_bytes.saturating_sub(first_data_capacity);
+                self.populated_groups =
+                    self.populated_groups.saturating_sub(drained_populated);
+                self.realign_after_partial_emit(n);
                 if self.min_max.is_empty() {
                     self.reset_after_full_emit();
                 }
@@ -1973,6 +2010,53 @@ impl MinMaxBytesState {
             self.dense_enable_invocations = 0;
             self.dense_sparse_detours = 0;
         }
+    }
+
+    fn realign_after_partial_emit(&mut self, emitted: usize) {
+        if emitted == 0 {
+            return;
+        }
+
+        let remaining = self.min_max.len();
+        if remaining == 0 {
+            return;
+        }
+
+        self.processed_batches = 0;
+        self.total_groups_seen = self.populated_groups;
+        self.lifetime_max_group_index = Some(remaining - 1);
+
+        self.scratch_group_ids.clear();
+        self.scratch_sparse.clear();
+        self.scratch_epoch = 0;
+        self.scratch_dense_enabled = false;
+        self.scratch_dense_limit = 0;
+        self.scratch_dense.clear();
+
+        if emitted >= self.simple_slots.len() {
+            self.simple_slots.clear();
+        } else {
+            self.simple_slots.drain(..emitted);
+        }
+        self.simple_slots.truncate(remaining);
+        for slot in &mut self.simple_slots {
+            slot.epoch = 0;
+            slot.location = SimpleLocation::Untouched;
+        }
+        self.simple_epoch = 0;
+        self.simple_touched_groups.clear();
+
+        if emitted >= self.dense_inline_marks.len() {
+            self.dense_inline_marks.clear();
+        } else {
+            self.dense_inline_marks.drain(..emitted);
+        }
+        self.dense_inline_marks.truncate(remaining);
+        self.dense_inline_marks_ready = false;
+        self.dense_inline_epoch = 0;
+        self.dense_inline_stable_batches = 0;
+        self.dense_inline_committed = false;
+        self.dense_inline_committed_groups = 0;
     }
 
     fn size(&self) -> usize {
@@ -2081,6 +2165,821 @@ enum DenseResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+
+    #[allow(dead_code)]
+    #[derive(Debug)]
+    enum Operation {
+        Expand {
+            new_total: usize,
+        },
+        Update {
+            total_groups: usize,
+            groups: Vec<usize>,
+            values: Vec<Option<Vec<u8>>>,
+        },
+        Emit {
+            emit_count: usize,
+        },
+    }
+
+    fn random_ascii_bytes(rng: &mut StdRng, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|_| {
+                let offset = rng.random_range(0..26_u8);
+                b'a' + offset
+            })
+            .collect()
+    }
+
+    fn random_binary_bytes(rng: &mut StdRng, len: usize) -> Vec<u8> {
+        (0..len).map(|_| rng.random_range(0..=u8::MAX)).collect()
+    }
+
+    #[test]
+    fn min_updates_across_batches_dense_inline_variants() {
+        fn run_scenario(data_type: DataType) {
+            let mut state = MinMaxBytesState::new(data_type.clone());
+            let total_groups = 4_usize;
+            let group_indices = [0_usize, 1, 2, 3, 0];
+            let first_values = ["m0", "n1", "o2", "p3", "z9"];
+            let second_values = ["a0", "n1", "o2", "p3", "z9"];
+
+            let first_batch: Vec<Vec<u8>> = first_values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect();
+            state
+                .update_batch(
+                    first_batch.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("first batch");
+
+            assert!(
+                matches!(state.workload_mode, WorkloadMode::DenseInline),
+                "expected DenseInline for {data_type:?}, found {:?}",
+                state.workload_mode
+            );
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(first_values[0].as_bytes()),
+                "initial minimum should match first batch for {data_type:?}"
+            );
+
+            let second_batch: Vec<Vec<u8>> = second_values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect();
+            state
+                .update_batch(
+                    second_batch.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("second batch");
+
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(second_values[0].as_bytes()),
+                "second batch should lower the minimum for {data_type:?}"
+            );
+        }
+
+        for data_type in [DataType::Utf8, DataType::Binary, DataType::BinaryView] {
+            run_scenario(data_type);
+        }
+    }
+
+    #[test]
+    fn randomized_min_matches_reference() {
+        let mut rng = StdRng::seed_from_u64(0xDAB5_C0DE);
+
+        for data_type in [DataType::Utf8, DataType::Binary, DataType::BinaryView] {
+            for trial in 0..256 {
+                let max_total_groups = rng.random_range(1..=48_usize);
+                let mut current_total = rng.random_range(1..=max_total_groups);
+                let mut state = MinMaxBytesState::new(data_type.clone());
+                let mut expected: Vec<Option<Vec<u8>>> = vec![None; current_total];
+                let batches = rng.random_range(1..=8_usize);
+                let mut history = Vec::new();
+
+                for _ in 0..batches {
+                    if current_total == 0 {
+                        current_total = rng.random_range(1..=max_total_groups);
+                        expected.resize(current_total, None);
+                        history.push(Operation::Expand {
+                            new_total: current_total,
+                        });
+                    } else if rng.random_bool(0.3) && current_total < max_total_groups {
+                        let new_total =
+                            rng.random_range((current_total + 1)..=max_total_groups);
+                        expected.resize(new_total, None);
+                        current_total = new_total;
+                        history.push(Operation::Expand {
+                            new_total: current_total,
+                        });
+                    }
+
+                    let batch_len = rng.random_range(1..=48_usize);
+                    let mut group_indices = Vec::with_capacity(batch_len);
+                    let mut values: Vec<Option<Vec<u8>>> = Vec::with_capacity(batch_len);
+
+                    for _ in 0..batch_len {
+                        let group_index = rng.random_range(0..current_total);
+                        group_indices.push(group_index);
+
+                        if rng.random_bool(0.1) {
+                            values.push(None);
+                        } else {
+                            let len = rng.random_range(0..=12_usize);
+                            let bytes = match data_type {
+                                DataType::Utf8 => random_ascii_bytes(&mut rng, len),
+                                DataType::Binary | DataType::BinaryView => {
+                                    random_binary_bytes(&mut rng, len)
+                                }
+                                other => unreachable!(
+                                    "randomized_min_matches_reference unexpected data type {other:?}"
+                                ),
+                            };
+                            values.push(Some(bytes));
+                        }
+                    }
+
+                    let iter = values
+                        .iter()
+                        .map(|value| value.as_ref().map(|bytes| bytes.as_slice()));
+                    history.push(Operation::Update {
+                        total_groups: current_total,
+                        groups: group_indices.clone(),
+                        values: values.clone(),
+                    });
+
+                    state
+                        .update_batch(iter, &group_indices, current_total, |a, b| a < b)
+                        .expect("randomized batch");
+
+                    for (group_index, value) in group_indices.into_iter().zip(values) {
+                        if let Some(bytes) = value {
+                            let entry = &mut expected[group_index];
+                            let should_replace = entry
+                                .as_ref()
+                                .map(|existing| bytes.as_slice() < existing.as_slice())
+                                .unwrap_or(true);
+                            if should_replace {
+                                *entry = Some(bytes);
+                            }
+                        }
+                    }
+
+                    if rng.random_bool(0.2) && !state.min_max.is_empty() {
+                        let emit_count = rng.random_range(1..=state.min_max.len());
+                        let _ = state.emit_to(EmitTo::First(emit_count));
+                        expected.drain(..emit_count);
+                        current_total = expected.len();
+                        history.push(Operation::Emit { emit_count });
+                    }
+                }
+
+                assert_eq!(state.min_max.len(), expected.len());
+
+                for (group_index, expected_bytes) in expected.iter().enumerate() {
+                    let actual = state.min_max[group_index]
+                        .as_ref()
+                        .map(|buffer| buffer.as_slice());
+                    let expected =
+                        expected_bytes.as_ref().map(|buffer| buffer.as_slice());
+                    assert_eq!(
+                        actual, expected,
+                        "randomized min mismatch for {:?} in group {group_index} (trial {trial}) history: {:?}",
+                        data_type,
+                        history
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reproduces_randomized_failure_case() {
+        fn apply_update(
+            state: &mut MinMaxBytesState,
+            expected: &mut Vec<Option<Vec<u8>>>,
+            total: usize,
+            groups: Vec<usize>,
+            values: Vec<Option<Vec<u8>>>,
+        ) {
+            if expected.len() < total {
+                expected.resize(total, None);
+            }
+
+            let iter = values
+                .iter()
+                .map(|value| value.as_ref().map(|bytes| bytes.as_slice()));
+
+            state
+                .update_batch(iter, &groups, total, |a, b| a < b)
+                .expect("structured update");
+
+            for (group_index, value) in groups.into_iter().zip(values) {
+                if let Some(bytes) = value {
+                    let entry = &mut expected[group_index];
+                    let should_replace = entry
+                        .as_ref()
+                        .map(|existing| bytes.as_slice() < existing.as_slice())
+                        .unwrap_or(true);
+                    if should_replace {
+                        *entry = Some(bytes);
+                    }
+                }
+            }
+        }
+
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let mut expected: Vec<Option<Vec<u8>>> = Vec::new();
+
+        {
+            let groups = vec![23, 28];
+            let values = vec![
+                Some(vec![121, 103, 113, 122, 115, 111, 104, 101, 100]),
+                Some(vec![121, 112, 107, 97]),
+            ];
+            apply_update(&mut state, &mut expected, 45, groups, values);
+        }
+        assert_eq!(state.emit_to(EmitTo::First(11)).1.len(), 11);
+        expected.drain(..11);
+
+        {
+            let groups = vec![
+                33, 17, 31, 0, 27, 3, 12, 6, 3, 27, 20, 28, 2, 9, 0, 1, 17, 33, 25, 28,
+                20, 2, 29, 10, 32, 28, 32, 26, 2, 27, 22, 27, 14, 32, 30, 23, 13, 19, 26,
+                14, 26, 32, 4, 32, 14, 21,
+            ];
+            let values = vec![
+                Some(vec![118, 114, 97, 97]),
+                Some(vec![108]),
+                Some(vec![114, 118, 106, 99, 122, 103, 122]),
+                Some(vec![
+                    98, 112, 103, 114, 99, 100, 111, 113, 114, 100, 121, 115,
+                ]),
+                Some(vec![114, 105, 114, 113, 110, 122]),
+                Some(vec![105, 117]),
+                Some(vec![111, 119, 106, 99, 98, 100, 102, 100, 99, 102]),
+                Some(vec![116, 118, 98, 121]),
+                Some(vec![114, 119, 117, 107, 118, 115]),
+                Some(vec![110, 113, 103, 114, 120, 109, 108, 117]),
+                Some(vec![105, 121, 97, 111, 99, 101, 118, 122, 121]),
+                Some(vec![115, 121, 111, 121, 120, 97, 109, 109, 104, 105, 108]),
+                Some(vec![117, 101]),
+                Some(vec![112, 107, 113, 105]),
+                None,
+                Some(vec![99, 117, 114, 103, 118, 107, 107]),
+                Some(vec![]),
+                Some(vec![]),
+                Some(vec![113, 98, 104, 119, 101]),
+                Some(vec![122, 114]),
+                Some(vec![119, 98]),
+                Some(vec![101, 99, 111, 116, 112, 116, 113, 101, 113]),
+                Some(vec![114, 109, 101, 107, 117, 111, 106]),
+                None,
+                Some(vec![121, 111, 118, 106, 116, 120, 108, 119, 118]),
+                Some(vec![]),
+                None,
+                Some(vec![108]),
+                Some(vec![
+                    121, 102, 105, 97, 118, 117, 120, 97, 109, 118, 97, 122,
+                ]),
+                Some(vec![98, 102, 118, 108]),
+                Some(vec![117, 106, 116, 103, 122]),
+                Some(vec![104, 103, 117, 107, 118]),
+                Some(vec![109, 99, 112, 112, 106, 109]),
+                Some(vec![117, 100, 116, 117, 120, 116, 100, 111, 119, 120]),
+                Some(vec![109, 104, 99, 98]),
+                Some(vec![107]),
+                Some(vec![114, 107, 110, 112, 100, 98]),
+                Some(vec![122, 110, 103, 104]),
+                Some(vec![103, 113, 122, 104, 107, 117, 113, 122, 106]),
+                Some(vec![
+                    122, 114, 116, 101, 106, 102, 118, 106, 114, 104, 122, 105,
+                ]),
+                Some(vec![98, 106, 107, 115, 115, 118, 122]),
+                Some(vec![
+                    114, 122, 107, 115, 108, 105, 99, 122, 106, 110, 122, 103,
+                ]),
+                Some(vec![119, 106, 120, 104, 115, 118, 108, 113, 120, 122, 121]),
+                Some(vec![113, 104, 113, 101, 98, 122, 97, 100, 106]),
+                Some(vec![105]),
+                Some(vec![]),
+            ];
+            apply_update(&mut state, &mut expected, 34, groups, values);
+        }
+
+        {
+            let groups = vec![
+                38, 22, 20, 37, 0, 33, 9, 9, 8, 21, 34, 32, 8, 20, 8, 1, 25, 27, 17, 3,
+                20, 32, 34, 36, 8, 29, 2, 39, 38, 20, 38, 16, 11, 13, 15, 22, 30, 15, 13,
+            ];
+            let values = vec![
+                Some(vec![104, 107, 105, 101, 99, 118]),
+                Some(vec![100, 110, 114]),
+                Some(vec![120, 107, 119, 111, 118]),
+                Some(vec![121, 120, 109, 109, 118, 97, 119, 122, 110, 115]),
+                Some(vec![111, 106]),
+                Some(vec![98, 113, 114, 116]),
+                Some(vec![114, 113, 105, 113, 122, 110, 105, 97, 100]),
+                Some(vec![97, 116, 107, 102, 97, 107]),
+                Some(vec![
+                    102, 103, 105, 115, 121, 119, 103, 107, 118, 100, 101, 99,
+                ]),
+                Some(vec![]),
+                Some(vec![99, 102, 110, 109, 103, 109, 120]),
+                Some(vec![104]),
+                Some(vec![
+                    107, 101, 101, 115, 115, 97, 115, 114, 101, 113, 121, 97,
+                ]),
+                Some(vec![114]),
+                Some(vec![116, 118, 113, 106, 109, 120, 100, 121, 99]),
+                Some(vec![114, 100, 110, 111, 100, 110, 98]),
+                Some(vec![114, 105, 111, 104, 111, 100, 98, 114, 99, 113]),
+                Some(vec![122, 100, 97, 119, 121, 101, 117, 104, 110, 113]),
+                Some(vec![116, 109, 114, 110, 103, 121, 108, 114]),
+                Some(vec![
+                    106, 122, 102, 120, 105, 103, 122, 109, 118, 113, 100, 118,
+                ]),
+                None,
+                Some(vec![114, 112, 97, 102, 113, 114, 107, 104]),
+                None,
+                Some(vec![116, 102]),
+                Some(vec![100, 116, 103, 104, 97, 114, 117]),
+                Some(vec![117, 119, 107, 104, 106, 99, 120, 103]),
+                Some(vec![104]),
+                Some(vec![]),
+                Some(vec![120, 115, 122, 119, 97, 102, 110, 100, 118, 117, 97]),
+                Some(vec![
+                    98, 112, 121, 102, 118, 101, 100, 110, 108, 118, 108, 100,
+                ]),
+                Some(vec![117, 114, 115, 111, 122, 98, 98, 115, 112, 100]),
+                Some(vec![106, 99, 113, 116, 103, 100, 110, 117, 102, 122, 104]),
+                Some(vec![
+                    102, 101, 121, 97, 121, 99, 98, 104, 103, 100, 112, 113,
+                ]),
+                Some(vec![114, 107, 100, 101]),
+                Some(vec![98, 115, 112, 100, 106, 119, 103, 104, 111]),
+                Some(vec![]),
+                Some(vec![121, 116, 112, 121, 114, 110, 104, 119]),
+                Some(vec![99, 104, 101, 109, 115, 101, 105]),
+                Some(vec![97, 104]),
+            ];
+            apply_update(&mut state, &mut expected, 40, groups, values);
+        }
+
+        assert_eq!(
+            state.min_max[38].as_ref().map(|buffer| buffer.as_slice()),
+            expected[38].as_ref().map(|buffer| buffer.as_slice()),
+            "state should hold expected minimum before re-expansion"
+        );
+
+        {
+            let groups = vec![
+                33, 24, 30, 5, 24, 13, 0, 8, 24, 40, 27, 25, 14, 8, 36, 23, 28, 22, 14,
+                20, 23, 10, 28, 22, 31, 35, 13, 11, 10, 36, 39, 4, 40, 5, 13, 1, 20, 17,
+                0, 5, 3, 24, 19, 38,
+            ];
+            let values = vec![
+                Some(vec![106, 98, 105, 119, 115, 110, 116, 119, 111, 104, 118]),
+                Some(vec![]),
+                Some(vec![
+                    108, 115, 97, 110, 112, 105, 102, 100, 117, 114, 110, 116,
+                ]),
+                None,
+                Some(vec![111, 114, 110]),
+                Some(vec![107]),
+                Some(vec![111, 106, 121, 114, 113, 105]),
+                Some(vec![100, 109, 119, 122, 111, 105, 116, 104]),
+                Some(vec![98, 103]),
+                Some(vec![118, 99, 118, 118, 115, 116, 104, 110, 114, 115, 115]),
+                Some(vec![102, 107]),
+                Some(vec![105, 107, 119, 115, 98, 110, 110]),
+                Some(vec![120, 121, 114, 121, 102, 120, 117, 109, 122]),
+                Some(vec![104, 101, 115, 104, 103, 106]),
+                Some(vec![108, 97, 99, 111]),
+                Some(vec![98, 115, 102, 98, 101, 109, 120, 118, 112, 104, 102]),
+                Some(vec![]),
+                Some(vec![122, 116, 111, 107, 107]),
+                Some(vec![97, 118, 104, 111, 122, 100, 99, 106, 101, 107, 104]),
+                Some(vec![105, 119, 114, 99, 122]),
+                Some(vec![106, 122, 117, 116, 111, 104, 109, 105, 111, 121, 122]),
+                Some(vec![
+                    107, 106, 111, 109, 107, 97, 105, 104, 117, 98, 105, 114,
+                ]),
+                Some(vec![115, 116, 120, 102, 109, 112, 122, 102, 102, 120, 110]),
+                Some(vec![114, 105, 109]),
+                Some(vec![117, 97, 121, 109, 120, 109, 122, 101, 112, 104]),
+                Some(vec![103, 111, 99]),
+                Some(vec![120, 120, 115, 101, 101, 109, 100, 122]),
+                Some(vec![115, 107, 121, 122, 121, 108, 118]),
+                Some(vec![107, 109, 120, 102, 121, 109, 118]),
+                Some(vec![98, 104, 122, 100, 97, 111, 116]),
+                Some(vec![121, 120]),
+                Some(vec![118, 110, 99, 109, 122, 103, 98, 100, 111]),
+                Some(vec![107, 113, 108, 97, 110, 114, 105, 122, 112, 99]),
+                Some(vec![105, 104, 99, 117, 108, 107, 115, 97]),
+                Some(vec![108, 114, 109, 106, 103, 99, 100, 99]),
+                Some(vec![
+                    106, 112, 114, 112, 101, 117, 108, 106, 112, 116, 107, 109,
+                ]),
+                Some(vec![]),
+                Some(vec![102, 109, 102]),
+                Some(vec![111, 122, 115, 102, 98, 101, 105, 105, 109]),
+                Some(vec![105, 104, 101, 117, 100, 110, 103, 99, 113]),
+                Some(vec![111, 100, 103]),
+                Some(vec![113, 112, 111, 111, 107, 111, 103]),
+                Some(vec![111]),
+                Some(vec![
+                    108, 122, 116, 107, 108, 112, 108, 110, 114, 116, 120, 98,
+                ]),
+            ];
+            apply_update(&mut state, &mut expected, 41, groups, values);
+        }
+
+        {
+            let groups = vec![7, 35, 27, 39, 2, 16, 19, 40, 24, 10, 32, 27];
+            let values = vec![
+                Some(vec![111, 98, 115, 115, 107, 121, 101, 119]),
+                Some(vec![]),
+                None,
+                Some(vec![98]),
+                Some(vec![110, 112, 103, 98, 118, 104, 103, 119, 120]),
+                Some(vec![104, 101, 115, 100, 102, 102, 113, 111]),
+                Some(vec![97]),
+                Some(vec![111, 116, 106, 110, 117, 121, 122, 104, 113, 110]),
+                Some(vec![122, 103, 111, 99, 103, 112, 108, 100, 117, 105, 100]),
+                Some(vec![108]),
+                Some(vec![100, 111, 114, 98, 98, 112, 99, 115, 120, 120]),
+                Some(vec![104]),
+            ];
+            apply_update(&mut state, &mut expected, 41, groups, values);
+        }
+
+        {
+            let groups = vec![4, 10, 30, 6, 5, 14, 31, 20, 2, 31, 35];
+            let values = vec![
+                None,
+                Some(vec![115, 109, 111, 112]),
+                Some(vec![112, 113, 108]),
+                Some(vec![113, 116]),
+                Some(vec![112, 106]),
+                Some(vec![104]),
+                Some(vec![106, 115, 122, 113, 107, 111, 101, 112, 108, 122]),
+                Some(vec![114, 116, 107, 106, 102, 118, 97, 114, 119, 116]),
+                Some(vec![99, 106]),
+                Some(vec![107, 98, 100, 109, 115, 114, 114, 104, 103]),
+                Some(vec![98, 111, 122, 110, 117, 103, 102, 110, 115, 114, 105]),
+            ];
+            apply_update(&mut state, &mut expected, 41, groups, values);
+        }
+
+        let actual = state.min_max[38].as_ref().map(|buffer| buffer.clone());
+        let expected_bytes = expected[38].clone();
+        assert_eq!(actual, expected_bytes);
+    }
+
+    #[test]
+    fn min_updates_across_batches_simple_variants() {
+        fn run_scenario(data_type: DataType) {
+            let mut state = MinMaxBytesState::new(data_type.clone());
+            let total_groups = 10_usize;
+            let first_groups = [0_usize, 9, 0, 9];
+            let second_groups = first_groups;
+            let first_values = ["m0", "t9", "n0", "u9"];
+            let second_values = ["a0", "t9", "n0", "u9"];
+
+            let first_batch: Vec<Vec<u8>> = first_values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect();
+            state
+                .update_batch(
+                    first_batch.iter().map(|value| Some(value.as_slice())),
+                    &first_groups,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("first batch");
+
+            assert!(
+                matches!(state.workload_mode, WorkloadMode::Simple),
+                "expected Simple for {data_type:?}, found {:?}",
+                state.workload_mode
+            );
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(first_values[0].as_bytes()),
+                "initial minimum should match first batch for {data_type:?}"
+            );
+
+            let second_batch: Vec<Vec<u8>> = second_values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect();
+            state
+                .update_batch(
+                    second_batch.iter().map(|value| Some(value.as_slice())),
+                    &second_groups,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("second batch");
+
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(second_values[0].as_bytes()),
+                "second batch should lower the minimum for {data_type:?}"
+            );
+        }
+
+        for data_type in [DataType::Utf8, DataType::Binary, DataType::BinaryView] {
+            run_scenario(data_type);
+        }
+    }
+
+    #[test]
+    fn min_updates_across_batches_sparse_variants() {
+        fn run_scenario(data_type: DataType) {
+            let mut state = MinMaxBytesState::new(data_type.clone());
+            let total_groups = 1_024_usize;
+            let group_indices = [0_usize, 512, 0, 512];
+            let first_values = ["m0", "t9", "n0", "u9"];
+            let second_values = ["a0", "t9", "n0", "u9"];
+
+            let first_batch: Vec<Vec<u8>> = first_values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect();
+            state
+                .update_batch(
+                    first_batch.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("first batch");
+
+            assert!(
+                matches!(state.workload_mode, WorkloadMode::SparseOptimized),
+                "expected SparseOptimized for {data_type:?}, found {:?}",
+                state.workload_mode
+            );
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(first_values[0].as_bytes()),
+                "initial minimum should match first batch for {data_type:?}"
+            );
+
+            let second_batch: Vec<Vec<u8>> = second_values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect();
+            state
+                .update_batch(
+                    second_batch.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("second batch");
+
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(second_values[0].as_bytes()),
+                "second batch should lower the minimum for {data_type:?}"
+            );
+        }
+
+        for data_type in [DataType::Utf8, DataType::Binary, DataType::BinaryView] {
+            run_scenario(data_type);
+        }
+    }
+
+    #[test]
+    fn min_updates_after_dense_inline_commit() {
+        fn run_scenario(data_type: DataType) {
+            let mut state = MinMaxBytesState::new(data_type.clone());
+            let total_groups = 8_usize;
+            let group_indices = [0_usize, 1, 2, 3, 4, 5, 6, 7];
+            let initial_values = ["m0", "n1", "o2", "p3", "q4", "r5", "s6", "t7"];
+            let initial_batch: Vec<Vec<u8>> = initial_values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect();
+
+            // Drive the accumulator into DenseInline mode and allow it to commit.
+            for _ in 0..=DENSE_INLINE_STABILITY_THRESHOLD {
+                state
+                    .update_batch(
+                        initial_batch.iter().map(|value| Some(value.as_slice())),
+                        &group_indices,
+                        total_groups,
+                        |a, b| a < b,
+                    )
+                    .expect("stable dense batch");
+            }
+
+            assert!(
+                matches!(state.workload_mode, WorkloadMode::DenseInline),
+                "expected DenseInline for {data_type:?}, found {:?}",
+                state.workload_mode
+            );
+            assert!(state.dense_inline_committed);
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(initial_values[0].as_bytes()),
+                "initial committed minimum should match the seeded batch for {data_type:?}"
+            );
+
+            let updated_values = ["a0", "n1", "o2", "p3", "q4", "r5", "s6", "t7"];
+            let updated_batch: Vec<Vec<u8>> = updated_values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect();
+
+            state
+                .update_batch(
+                    updated_batch.iter().map(|value| Some(value.as_slice())),
+                    &group_indices,
+                    total_groups,
+                    |a, b| a < b,
+                )
+                .expect("dense inline committed batch");
+
+            assert!(state.dense_inline_committed);
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(updated_values[0].as_bytes()),
+                "committed dense inline path should accept the new minimum for {data_type:?}"
+            );
+        }
+
+        for data_type in [DataType::Utf8, DataType::Binary, DataType::BinaryView] {
+            run_scenario(data_type);
+        }
+    }
+
+    #[test]
+    fn min_updates_after_dense_inline_reconsideration() {
+        fn run_scenario(data_type: DataType) {
+            let mut state = MinMaxBytesState::new(data_type.clone());
+            let seed_groups: Vec<usize> = (0..8).collect();
+            let seed_values: Vec<Vec<u8>> = seed_groups
+                .iter()
+                .map(|group| format!("seed_{group}").into_bytes())
+                .collect();
+
+            // Establish DenseInline mode with a committed state.
+            for _ in 0..=DENSE_INLINE_STABILITY_THRESHOLD {
+                state
+                    .update_batch(
+                        seed_values.iter().map(|value| Some(value.as_slice())),
+                        &seed_groups,
+                        seed_groups.len(),
+                        |a, b| a < b,
+                    )
+                    .expect("seed dense batch");
+            }
+
+            assert!(state.dense_inline_committed);
+
+            // Expand the domain substantially and provide a new minimum for group 0.
+            let expanded_total = 32_usize;
+            let expanded_groups: Vec<usize> = (0..expanded_total).collect();
+            let mut expanded_values: Vec<Vec<u8>> = expanded_groups
+                .iter()
+                .map(|group| format!("expanded_{group}").into_bytes())
+                .collect();
+            expanded_values[0] = b"a0".to_vec();
+
+            state
+                .update_batch(
+                    expanded_values.iter().map(|value| Some(value.as_slice())),
+                    &expanded_groups,
+                    expanded_total,
+                    |a, b| a < b,
+                )
+                .expect("expanded dense batch");
+
+            assert!(matches!(state.workload_mode, WorkloadMode::DenseInline));
+            assert_eq!(
+                state.min_max[0].as_deref(),
+                Some(b"a0".as_slice()),
+                "reconsidered dense inline path should adopt the new minimum for {data_type:?}"
+            );
+        }
+
+        for data_type in [DataType::Utf8, DataType::Binary, DataType::BinaryView] {
+            run_scenario(data_type);
+        }
+    }
+
+    #[test]
+    fn randomized_minimum_matches_baseline_for_byte_types() {
+        struct Lcg(u64);
+
+        impl Lcg {
+            fn new(seed: u64) -> Self {
+                Self(seed)
+            }
+
+            fn next(&mut self) -> u64 {
+                self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+                self.0
+            }
+        }
+
+        fn generate_batches(
+            rng: &mut Lcg,
+            total_groups: usize,
+            batches: usize,
+        ) -> Vec<(Vec<usize>, Vec<Option<Vec<u8>>>)> {
+            (0..batches)
+                .map(|_| {
+                    let rows = (rng.next() % 16 + 1) as usize;
+                    let mut groups = Vec::with_capacity(rows);
+                    let mut values = Vec::with_capacity(rows);
+
+                    for _ in 0..rows {
+                        let group = (rng.next() as usize) % total_groups;
+                        groups.push(group);
+
+                        let is_null = rng.next() % 5 == 0;
+                        if is_null {
+                            values.push(None);
+                            continue;
+                        }
+
+                        let len = (rng.next() % 5) as usize;
+                        let mut value = Vec::with_capacity(len);
+                        for _ in 0..len {
+                            value.push((rng.next() & 0xFF) as u8);
+                        }
+                        values.push(Some(value));
+                    }
+
+                    (groups, values)
+                })
+                .collect()
+        }
+
+        fn run_scenario(data_type: DataType) {
+            let mut rng = Lcg::new(0x5EED5EED);
+            let total_groups = 128_usize;
+
+            for case in 0..512 {
+                let mut state = MinMaxBytesState::new(data_type.clone());
+                let mut baseline: Vec<Option<Vec<u8>>> = vec![None; total_groups];
+                let batches = (rng.next() % 6 + 1) as usize;
+                let payloads = generate_batches(&mut rng, total_groups, batches);
+
+                for (batch_index, (groups, values)) in payloads.into_iter().enumerate() {
+                    let iter = values
+                        .iter()
+                        .map(|value| value.as_ref().map(|bytes| bytes.as_slice()));
+                    state
+                        .update_batch(iter, &groups, total_groups, |a, b| a < b)
+                        .expect("update batch");
+
+                    for (group, value) in groups.iter().zip(values.iter()) {
+                        if let Some(candidate) = value {
+                            match &mut baseline[*group] {
+                                Some(existing) => {
+                                    if candidate < existing {
+                                        *existing = candidate.clone();
+                                    }
+                                }
+                                slot @ None => {
+                                    *slot = Some(candidate.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    for (group_index, expected) in baseline.iter().enumerate() {
+                        assert_eq!(
+                            state.min_max[group_index].as_ref().map(|v| v.as_slice()),
+                            expected.as_ref().map(|v| v.as_slice()),
+                            "case {case}, batch {batch_index}, group {group_index}, type {data_type:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        for data_type in [DataType::Utf8, DataType::Binary, DataType::BinaryView] {
+            run_scenario(data_type);
+        }
+    }
 
     #[test]
     fn dense_batches_use_dense_inline_mode() {
@@ -2415,6 +3314,86 @@ mod tests {
 
         // Remaining groups should retain their data (original index 3)
         assert_eq!(state.min_max[1].as_deref(), Some(b"right".as_slice()));
+    }
+
+    #[test]
+    fn min_updates_after_emit_first_realigns_indices() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        let initial_groups: Vec<usize> = (0..4).collect();
+        let initial_values = ["m0", "n1", "o2", "p3"];
+        let initial_batch: Vec<Vec<u8>> = initial_values
+            .iter()
+            .map(|value| value.as_bytes().to_vec())
+            .collect();
+
+        state
+            .update_batch(
+                initial_batch.iter().map(|value| Some(value.as_slice())),
+                &initial_groups,
+                initial_groups.len(),
+                |a, b| a < b,
+            )
+            .expect("seed batch");
+
+        state.workload_mode = WorkloadMode::SparseOptimized;
+        state.scratch_dense_enabled = true;
+        state.scratch_dense_limit = initial_groups.len();
+        state.scratch_dense = vec![ScratchEntry::new(); initial_groups.len()];
+        state.scratch_group_ids = initial_groups.clone();
+        state.scratch_epoch = 42;
+        state
+            .simple_slots
+            .resize_with(initial_groups.len(), SimpleSlot::new);
+        state.simple_epoch = 7;
+        state.simple_touched_groups = initial_groups.clone();
+        state.dense_inline_marks = vec![99; initial_groups.len()];
+        state.dense_inline_marks_ready = true;
+        state.dense_inline_epoch = 9;
+        state.dense_inline_stable_batches = 5;
+        state.dense_inline_committed = true;
+        state.dense_inline_committed_groups = initial_groups.len();
+        state.total_groups_seen = 16;
+        state.lifetime_max_group_index = Some(initial_groups.len() - 1);
+
+        let (_capacity, emitted) = state.emit_to(EmitTo::First(2));
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(state.min_max.len(), 2);
+        assert_eq!(
+            state.min_max[0].as_deref(),
+            Some(initial_values[2].as_bytes())
+        );
+        assert_eq!(state.populated_groups, 2);
+        assert_eq!(state.total_groups_seen, state.populated_groups);
+        assert_eq!(state.lifetime_max_group_index, Some(1));
+        assert!(!state.scratch_dense_enabled);
+        assert_eq!(state.scratch_dense_limit, 0);
+        assert!(state.scratch_dense.is_empty());
+        assert!(state.scratch_group_ids.is_empty());
+        assert!(state.scratch_sparse.is_empty());
+        assert_eq!(state.scratch_epoch, 0);
+        assert_eq!(state.simple_slots.len(), state.min_max.len());
+        assert_eq!(state.simple_epoch, 0);
+        assert!(state.simple_touched_groups.is_empty());
+        assert_eq!(state.dense_inline_marks.len(), state.min_max.len());
+        assert!(!state.dense_inline_marks_ready);
+        assert_eq!(state.dense_inline_epoch, 0);
+        assert_eq!(state.dense_inline_stable_batches, 0);
+        assert!(!state.dense_inline_committed);
+        assert_eq!(state.dense_inline_committed_groups, 0);
+        assert_eq!(state.processed_batches, 0);
+
+        let update_groups = [0_usize];
+        let updated_value = b"a0".to_vec();
+        state
+            .update_batch(
+                std::iter::once(Some(updated_value.as_slice())),
+                &update_groups,
+                state.min_max.len(),
+                |a, b| a < b,
+            )
+            .expect("update after emit");
+
+        assert_eq!(state.min_max[0].as_deref(), Some(updated_value.as_slice()));
     }
 
     #[test]
