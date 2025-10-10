@@ -2281,7 +2281,6 @@ dependencies = [
  "log",
  "paste",
  "rand 0.9.2",
- "tracing",
 ]
 
 [[package]]

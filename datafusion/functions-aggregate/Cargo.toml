@@ -52,7 +52,6 @@ half = { workspace = true }
 hashbrown = { workspace = true }
 log = { workspace = true }
 paste = "1.0.14"
-tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
@@ -75,8 +74,3 @@ harness = false
 name = "min_max_bytes"
 harness = false
 
-[features]
-# Enable tracing instrumentation within this crate. This is an optional
-# feature used by developers to capture debug traces without forcing the
-# dependency for consumers.
-trace = ["tracing"]

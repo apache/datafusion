@@ -1197,17 +1197,6 @@ impl MinMaxBytesState {
             });
         }
 
-        #[cfg(feature = "trace")]
-        tracing::debug!(
-            unique_groups = stats.unique_groups,
-            max_group_index = ?stats.max_group_index,
-            total_num_groups,
-            processed_batches = self.processed_batches,
-            total_groups_seen = self.total_groups_seen,
-            workload_mode = ?self.workload_mode,
-            "Recorded min/max batch statistics"
-        );
-
         match self.workload_mode {
             WorkloadMode::Undecided => {
                 if let Some(max_group_index) = stats.max_group_index {
