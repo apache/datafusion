@@ -540,9 +540,11 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// group during query execution.
     ///
     /// acc_args: [`AccumulatorArgs`] contains information about how the
-    /// aggregate function was called. To recover the full input `FieldRef` for
-    /// a given argument index `i`, pair the expression in `acc_args.exprs[i]`
-    /// with the corresponding field in `acc_args.schema`.
+    /// aggregate function was called. `acc_args.schema` exposes the physical
+    /// input schema (the same one used by the expressions), whereas
+    /// [`AccumulatorArgs::input_field`] / [`AccumulatorArgs::input_fields`]
+    /// wrap `acc_args.exprs[i].return_field(&acc_args.schema)?` to yield the
+    /// effective [`FieldRef`]s for the aggregate arguments.
     ///
     /// In practice this is useful when you need field metadata or the exact
     /// return field (name, type, metadata) for the argument. For example:
@@ -550,15 +552,15 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// // get Arrow field metadata for the i-th input
     /// let metadata = acc_args.schema.field(i).metadata();
     /// // obtain the complete FieldRef (name, type, nullability, metadata)
-    /// // for the i-th argument by asking the corresponding expression to
-    /// // produce its return field using the full schema.
-    /// let field = acc_args.exprs[i].return_field(&acc_args.schema)?;
+    /// // for the i-th argument using the convenience helper.
+    /// let field = acc_args.input_field(i)?;
     /// ```
     ///
-    /// Multi-argument functions: `exprs[i]` corresponds to `schema.field(i)`.
-    /// Mixed inputs (columns and literals): the physical input schema is used
-    /// when not empty; `acc_args.schema` is only synthesized from literals when
-    /// the physical schema is empty.
+    /// Multi-argument functions: `exprs[i]` are evaluated against the physical
+    /// schema. Mixed inputs (columns and literals): the physical input schema is
+    /// used when not empty; `acc_args.schema` is only synthesized from literals
+    /// when the physical schema is empty (so expressions that rely on column
+    /// lookups continue to work).
     ///
     /// When an
     /// aggregate is invoked with literal values only, `acc_args.schema` is

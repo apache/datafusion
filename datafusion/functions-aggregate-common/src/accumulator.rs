@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, FieldRef, Schema};
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -30,14 +30,34 @@ pub struct AccumulatorArgs<'a> {
     /// The return field of the aggregate function.
     pub return_field: FieldRef,
 
-    /// The schema of the input arguments.
+    /// The physical schema of the record batches fed into the aggregate.
     ///
-    /// This schema contains the fields corresponding to the function’s input
-    /// expressions (`exprs`). When an aggregate is invoked with only literal
-    /// values, this schema is synthesized from those literals to preserve
-    /// field-level metadata (such as Arrow extension types). In mixed column
-    /// and literal inputs, metadata from the physical schema takes precedence;
+    /// This is the same schema that [`exprs`] expect when resolving column
+    /// references. For column-only aggregates the physical schema and the
+    /// "effective" argument fields match one-to-one, so
+    /// `acc_args.schema.field(i)` and
+    /// `acc_args.exprs[i].return_field(&acc_args.schema)?` return equivalent
+    /// metadata. For expressions that reference multiple columns (e.g.
+    /// `SUM(a + b)`) the physical schema still contains the full input
+    /// (`[a, b, …]`), while `return_field` synthesises the single argument
+    /// field that the accumulator consumes. Both views are therefore exposed:
+    ///
+    /// * Use [`Self::schema`] to inspect the raw physical fields, including
+    ///   metadata coming from the child plan.
+    /// * Use [`Self::exprs`] in combination with [`PhysicalExpr::return_field`]
+    ///   to recover the effective [`FieldRef`] for each aggregate argument.
+    ///
+    /// When an aggregate is invoked with only literal values, the physical
+    /// schema is empty. In that case DataFusion synthesises a schema from the
+    /// literal expressions so extension metadata is still available. In mixed
+    /// column and literal inputs the existing physical schema takes precedence;
     /// synthesized metadata is only used when the physical schema is empty.
+    ///
+    /// For convenience, [`Self::input_field`] and [`Self::input_fields`] wrap
+    /// the `exprs[i].return_field(&schema)` pattern so UDAF implementations can
+    /// recover the effective [`FieldRef`]s without interacting with the raw
+    /// schema directly, matching the ergonomics of other function argument
+    /// structs.
     pub schema: &'a Schema,
 
     /// Whether to ignore nulls.
@@ -74,7 +94,8 @@ pub struct AccumulatorArgs<'a> {
 
     /// The physical expressions for the aggregate function's arguments.
     /// Use these expressions together with [`Self::schema`] to obtain the
-    /// [`FieldRef`] of each input via `expr.return_field(schema)`.
+    /// [`FieldRef`] of each input via
+    /// [`PhysicalExpr::return_field`](`PhysicalExpr::return_field`).
     ///
     /// Example:
     /// ```ignore
@@ -88,6 +109,27 @@ impl AccumulatorArgs<'_> {
     /// Returns the return type of the aggregate function.
     pub fn return_type(&self) -> &DataType {
         self.return_field.data_type()
+    }
+
+    /// Returns the [`FieldRef`] corresponding to the `index`th aggregate
+    /// argument.
+    pub fn input_field(&self, index: usize) -> Result<FieldRef> {
+        let expr = self.exprs.get(index).ok_or_else(|| {
+            internal_err!(
+                "input_field index {index} is out of bounds for {} arguments",
+                self.exprs.len()
+            )
+        })?;
+
+        expr.return_field(self.schema)
+    }
+
+    /// Returns [`FieldRef`]s for all aggregate arguments in order.
+    pub fn input_fields(&self) -> Result<Vec<FieldRef>> {
+        self.exprs
+            .iter()
+            .map(|expr| expr.return_field(self.schema))
+            .collect()
     }
 }
 

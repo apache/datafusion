@@ -384,9 +384,15 @@ impl AggregateFunctionExpr {
     /// synthesizes a new schema from the literal expressions to preserve
     /// field-level metadata (such as Arrow extension types).
     /// Field order is guaranteed to match the order of input expressions.
-    /// In mixed column and literal inputs, existing physical schema fields
-    /// win; synthesized metadata is only applied when the physical schema
-    /// has no fields.
+    ///
+    /// We intentionally keep the original physical schema whenever it is
+    /// available, even though the effective argument fields can be derived via
+    /// [`AccumulatorArgs::input_fields`]. Physical expressions may reference
+    /// columns that are not one-to-one with the aggregate arguments (for
+    /// example, `SUM(a + b)` references both `a` and `b`). Replacing the schema
+    /// with the synthesized argument fields would prevent those expressions from
+    /// resolving their column references. Synthesizing is therefore limited to
+    /// the literal-only case where no column lookups are required.
     ///
     /// Uses [`std::borrow::Cow`] to avoid allocation when the existing
     /// schema is non-empty. For micro-optimizations, implementers may
