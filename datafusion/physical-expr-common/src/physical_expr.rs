@@ -100,22 +100,20 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         let selection_count = selection.true_count();
 
         if batch.num_rows() == 0 || selection_count == batch.num_rows() {
-            // When evaluating the empty set we should simply delegate to `evaluate`
-            // Additionally, if the selection vector is entirely true, we can skip filtering
+            // Skip filtering logic if possible
             return self.evaluate(batch);
         }
 
         let tmp_result = if selection_count == 0 {
             // Do not call `evaluate` when the selection is empty.
-            // We're already sure we're not evaluating over the empty set due to the previous check.
-            // Reducing a non-empty set to the empty set due to the selection vector and then
-            // calling `evaluate` with the empty set would yield a different answer when evaluating
-            // expressions without column references.
+            // When `evaluate_selection` is being used for conditional, lazy evaluation,
+            // evaluating an expression for a false selection vector may end up unintentionally
+            // evaluating a fallible expression.
             let datatype = self.data_type(batch.schema_ref().as_ref())?;
             ColumnarValue::Array(make_builder(&datatype, 0).finish())
         } else {
-            let tmp_batch = filter_record_batch(batch, selection)?;
-            self.evaluate(&tmp_batch)?
+            let filtered_batch = filter_record_batch(batch, selection)?;
+            self.evaluate(&filtered_batch)?
         };
 
         if let ColumnarValue::Array(a) = tmp_result {
