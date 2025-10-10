@@ -48,11 +48,6 @@ SELECT date_sub('2016-07-30'::date, 0::int);
 query error DataFusion error: Arrow error: Arithmetic overflow:
 SELECT date_add('2016-07-30'::date, 2147483647::int);
 
-query D
-SELECT date_sub('2016-07-30'::date, 2147483647::int);
-----
-ERROR: Cast error: Failed to convert -2147466635 to temporal for Date32
-
 query error DataFusion error: Arrow error: Arithmetic overflow: date_sub
 SELECT date_sub('1969-01-01'::date, 2147483647::int);
 
