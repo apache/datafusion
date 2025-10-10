@@ -23,14 +23,14 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::{make_builder, ArrayBuilder, ArrayRef, BooleanArray};
+use arrow::array::{new_empty_array, ArrayRef, BooleanArray};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -90,48 +90,69 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             self.nullable(input_schema)?,
         )))
     }
-    /// Evaluate an expression against a RecordBatch after first applying a
-    /// validity array
+    /// Evaluate an expression against a RecordBatch after first applying a validity array
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Err` if the expression could not be evaluated or if the length of the
+    /// `selection` validity array and the number of row in `batch` is not equal.
     fn evaluate_selection(
         &self,
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
+        let row_count = batch.num_rows();
+        if row_count != selection.len() {
+            return exec_err!("Selection array length does not match batch row count: {} != {row_count}", selection.len());
+        }
+
         let selection_count = selection.true_count();
 
-        if batch.num_rows() == 0 || selection_count == batch.num_rows() {
-            // Skip filtering logic if possible
+        // First, check if we can avoid filtering altogether.
+        if selection_count == row_count {
+            // All values from the `selection` filter are true and match the input batch.
+            // No need to perform any filtering.
             return self.evaluate(batch);
         }
 
-        let tmp_result = if selection_count == 0 {
+        // Next, prepare the result array for each 'true' row in the selection vector.
+        let filtered_result = if selection_count == 0 {
             // Do not call `evaluate` when the selection is empty.
-            // When `evaluate_selection` is being used for conditional, lazy evaluation,
-            // evaluating an expression for a false selection vector may end up unintentionally
-            // evaluating a fallible expression.
+            // `evaluate_selection` is used to conditionally evaluate expressions.
+            // When the expression in question is fallible, evaluating it with an empty
+            // record batch may trigger a runtime error (e.g. division by zero).
+            //
+            // Instead, create an empty array matching the expected return type.
             let datatype = self.data_type(batch.schema_ref().as_ref())?;
-            ColumnarValue::Array(make_builder(&datatype, 0).finish())
+            ColumnarValue::Array(new_empty_array(&datatype))
         } else {
+            // If we reach this point, there's no other option than to filter the batch.
+            // This is a fairly costly operation since it requires creating partial copies
+            // (worst case of length `row_count - 1`) of all the arrays in the record batch.
+            // The resulting `filtered_batch` will contain `selection_count` rows.
             let filtered_batch = filter_record_batch(batch, selection)?;
             self.evaluate(&filtered_batch)?
         };
 
-        if let ColumnarValue::Array(a) = tmp_result {
-            scatter(selection, a.as_ref()).map(ColumnarValue::Array)
-        } else if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = &tmp_result {
-            // When the scalar is true or false, skip the scatter process
-            if let Some(v) = value {
-                if *v {
-                    Ok(ColumnarValue::from(Arc::new(selection.clone()) as ArrayRef))
-                } else {
-                    Ok(tmp_result)
-                }
-            } else {
-                let array = BooleanArray::from(vec![None; batch.num_rows()]);
-                scatter(selection, &array).map(ColumnarValue::Array)
+        // Finally, scatter the filtered result array so that the indices match the input rows again.
+        match &filtered_result {
+            ColumnarValue::Array(a) => {
+                scatter(selection, a.as_ref()).map(ColumnarValue::Array)
             }
-        } else {
-            Ok(tmp_result)
+            ColumnarValue::Scalar(ScalarValue::Boolean(value)) => {
+                // When the scalar is true or false, skip the scatter process
+                if let Some(v) = value {
+                    if *v {
+                        Ok(ColumnarValue::from(Arc::new(selection.clone()) as ArrayRef))
+                    } else {
+                        Ok(filtered_result)
+                    }
+                } else {
+                    let array = BooleanArray::from(vec![None; row_count]);
+                    scatter(selection, &array).map(ColumnarValue::Array)
+                }
+            }
+            ColumnarValue::Scalar(_) => Ok(filtered_result),
         }
     }
 
@@ -631,21 +652,6 @@ mod test {
             self
         }
 
-        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-            vec![]
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            _children: Vec<Arc<dyn PhysicalExpr>>,
-        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
-            Ok(Arc::new(Self {}))
-        }
-
-        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            f.write_str("TestExpr")
-        }
-
         fn data_type(&self, _schema: &Schema) -> datafusion_common::Result<DataType> {
             Ok(DataType::Int64)
         }
@@ -661,6 +667,21 @@ mod test {
             let data = vec![1; _batch.num_rows()];
             Ok(ColumnarValue::Array(Arc::new(Int64Array::from(data))))
         }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(Self {}))
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.write_str("TestExpr")
+        }
     }
 
     impl Display for TestExpr {
@@ -674,9 +695,9 @@ mod test {
             let expected = $EXPECTED.to_array(1).unwrap();
             let actual = $ACTUAL;
 
-            let  actual_array = actual.to_array(expected.len()).unwrap();
-            let  actual_ref = actual_array.as_ref();
-            let  expected_ref = expected.as_ref();
+            let actual_array = actual.to_array(expected.len()).unwrap();
+            let actual_ref = actual_array.as_ref();
+            let expected_ref = expected.as_ref();
             assert!(
                 actual_ref == expected_ref,
                 "{}: expected: {:?}, actual: {:?}",
@@ -696,16 +717,38 @@ mod test {
 
         // First check that the `evaluate_selection` is the expected one
         let selection_result = expr.evaluate_selection(&batch, selection).unwrap();
-        assert_eq!(expected.to_array(1).unwrap().len(), selection_result.to_array(1).unwrap().len(), "evaluate_selection should output row count should match input record batch");
-        assert_arrays_eq!(expected, &selection_result, "evaluate_selection returned unexpected value");
+        assert_eq!(
+            expected.to_array(1).unwrap().len(),
+            selection_result.to_array(1).unwrap().len(),
+            "evaluate_selection should output row count should match input record batch"
+        );
+        assert_arrays_eq!(
+            expected,
+            &selection_result,
+            "evaluate_selection returned unexpected value"
+        );
 
         // If we're selecting all rows, the result should be the same as calling `evaluate`
         // with the full record batch.
-        if (0..batch.num_rows()).all(|row_idx| row_idx < selection.len() && selection.value(row_idx)) {
+        if (0..batch.num_rows())
+            .all(|row_idx| row_idx < selection.len() && selection.value(row_idx))
+        {
             let empty_result = expr.evaluate(&batch).unwrap();
 
-            assert_arrays_eq!(empty_result, &selection_result, "evaluate_selection does not match unfiltered evaluate result");
+            assert_arrays_eq!(
+                empty_result,
+                &selection_result,
+                "evaluate_selection does not match unfiltered evaluate result"
+            );
         }
+    }
+
+    fn test_evaluate_selection_error(batch: &RecordBatch, selection: &BooleanArray) {
+        let expr = TestExpr {};
+
+        // First check that the `evaluate_selection` is the expected one
+        let selection_result = expr.evaluate_selection(&batch, selection);
+        assert!(selection_result.is_err(), "evaluate_selection should fail");
     }
 
     #[test]
@@ -719,19 +762,17 @@ mod test {
 
     #[test]
     pub fn test_evaluate_selection_with_empty_record_batch_with_larger_false_selection() {
-        test_evaluate_selection(
+        test_evaluate_selection_error(
             &RecordBatch::new_empty(Arc::new(Schema::empty())),
             &BooleanArray::from(vec![false; 10]),
-            &ColumnarValue::Array(Arc::new(Int64Array::new_null(0))),
         );
     }
 
     #[test]
     pub fn test_evaluate_selection_with_empty_record_batch_with_larger_true_selection() {
-        test_evaluate_selection(
+        test_evaluate_selection_error(
             &RecordBatch::new_empty(Arc::new(Schema::empty())),
             &BooleanArray::from(vec![true; 10]),
-            &ColumnarValue::Array(Arc::new(Int64Array::new_null(0))),
         );
     }
 
@@ -747,40 +788,36 @@ mod test {
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_false_selection(
     ) {
-        test_evaluate_selection(
+        test_evaluate_selection_error(
             unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![false; 20]),
-            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![None; 10]))),
         );
     }
 
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_true_selection(
     ) {
-        test_evaluate_selection(
+        test_evaluate_selection_error(
             unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![true; 20]),
-            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![1; 10]))),
         );
     }
 
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_false_selection(
     ) {
-        test_evaluate_selection(
+        test_evaluate_selection_error(
             unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![false; 5]),
-            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![None; 10]))),
         );
     }
 
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_true_selection(
     ) {
-        test_evaluate_selection(
+        test_evaluate_selection_error(
             unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![true; 5]),
-            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![1; 10]))),
         );
     }
 }
