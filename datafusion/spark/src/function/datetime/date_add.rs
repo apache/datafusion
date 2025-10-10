@@ -102,16 +102,19 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
                 days_array,
                 |date, days| {
                     date.checked_add(days as i32)
-                        .ok_or_else(|| ArrowError::ArithmeticOverflow("".to_string()))
+                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_add".to_string()))
                 },
             )?
         }
         DataType::Int16 => {
             let days_array = as_int16_array(days_arg)?;
-            compute::binary::<_, _, _, Date32Type>(
+            compute::ret_binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| date + days as i32,
+                |date, days| {
+                    date.checked_add(days as i32)
+                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_add".to_string()))
+                },
             )?
         }
         DataType::Int32 => {
@@ -121,7 +124,7 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
                 days_array,
                 |date, days| {
                     date.checked_add(days)
-                        .ok_or_else(|| ArrowError::ArithmeticOverflow("".to_string()))
+                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_add".to_string()))
                 },
             )?
         }

@@ -96,7 +96,7 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
                 days_array,
                 |date, days| {
                     date.checked_sub(days as i32)
-                        .ok_or_else(|| ArrowError::ArithmeticOverflow("".to_string()))
+                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_sub".to_string()))
                 },
             )?
         }
@@ -107,7 +107,7 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
                 days_array,
                 |date, days| {
                     date.checked_sub(days as i32)
-                        .ok_or_else(|| ArrowError::ArithmeticOverflow("".to_string()))
+                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_sub".to_string()))
                 },
             )?
         }
@@ -118,7 +118,7 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
                 days_array,
                 |date, days| {
                     date.checked_sub(days)
-                        .ok_or_else(|| ArrowError::ArithmeticOverflow("".to_string()))
+                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_sub".to_string()))
                 },
             )?
         }
