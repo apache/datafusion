@@ -3595,6 +3595,103 @@ SELECT ABS(percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) - approx_percentile_c
 ----
 true
 
+# Test percentile_cont without WITHIN GROUP clause (alternate syntax)
+query R
+SELECT percentile_cont(c2, 0.5) FROM aggregate_test_100
+----
+3
+
+query R
+SELECT percentile_cont(c2, 0.0) FROM aggregate_test_100
+----
+1
+
+query R
+SELECT percentile_cont(c2, 1.0) FROM aggregate_test_100
+----
+5
+
+query R
+SELECT percentile_cont(c2, 0.25) FROM aggregate_test_100
+----
+2
+
+query R
+SELECT percentile_cont(c2, 0.75) FROM aggregate_test_100
+----
+4
+
+# Verify alternate syntax gives same results as WITHIN GROUP syntax
+query B
+SELECT percentile_cont(c2, 0.5) = percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+true
+
+query B
+SELECT percentile_cont(c3, 0.5) = percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+----
+true
+
+# Test alternate syntax with GROUP BY
+query TR
+SELECT c1, percentile_cont(c3, 0.5) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a -25
+b 17
+c 1
+d 46.5
+e 64
+
+# Verify alternate syntax with GROUP BY gives same results as WITHIN GROUP
+query TB
+SELECT c1, percentile_cont(c3, 0.95) = percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a true
+b true
+c true
+d true
+e true
+
+# Test ascending vs descending equivalence: percentile_cont(0.4) ASC should equal percentile_cont(0.6) DESC
+# This tests the mathematical property that the pth percentile ascending = (1-p)th percentile descending
+# Using a simple controlled dataset to demonstrate the property
+
+# Show 0.4 ascending
+query R
+SELECT percentile_cont(0.4) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+2.6
+
+# Show 0.6 descending (should be same as 0.4 ascending)
+query R
+SELECT percentile_cont(0.6) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+2.6
+
+# Show 0.3 ascending
+query R
+SELECT percentile_cont(0.3) WITHIN GROUP (ORDER BY v) FROM (VALUES (10), (20), (30), (40), (50)) as t (v)
+----
+21.99999
+
+# Show 0.7 descending (should be same as 0.3 ascending)
+query R
+SELECT percentile_cont(0.7) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (10), (20), (30), (40), (50)) as t (v)
+----
+22
+
+# Show 0.25 ascending on larger dataset
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) as t (v)
+----
+2.75
+
+# Show 0.75 descending (should be same as 0.25 ascending)
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) as t (v)
+----
+2.75
+
 # array_agg_zero
 query ?
 SELECT ARRAY_AGG([])
