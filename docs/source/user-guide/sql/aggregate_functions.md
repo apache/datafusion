@@ -66,6 +66,7 @@ Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/
 - [median](#median)
 - [min](#min)
 - [percentile_cont](#percentile_cont)
+- [quantile_cont](#quantile_cont)
 - [string_agg](#string_agg)
 - [sum](#sum)
 - [var](#var)
@@ -423,6 +424,14 @@ An alternate syntax is also supported:
 | 45.5                                  |
 +---------------------------------------+
 ```
+
+#### Aliases
+
+- quantile_cont
+
+### `quantile_cont`
+
+_Alias of [percentile_cont](#percentile_cont)._
 
 ### `string_agg`
 
