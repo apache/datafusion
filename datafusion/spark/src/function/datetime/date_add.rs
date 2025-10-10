@@ -109,7 +109,7 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::Int16 => {
             let days_array = as_int16_array(days_arg)?;
-            compute::ret_binary::<_, _, _, Date32Type>(
+            compute::try_binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
                 |date, days| {
