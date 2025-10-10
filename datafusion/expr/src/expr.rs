@@ -1623,7 +1623,7 @@ impl Expr {
     /// ```
     /// # use datafusion_expr::col;
     /// # use std::collections::HashMap;
-    /// # use datafusion_expr::expr::FieldMetadata;
+    /// # use datafusion_common::metadata::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
     /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
@@ -1655,7 +1655,7 @@ impl Expr {
     /// ```
     /// # use datafusion_expr::col;
     /// # use std::collections::HashMap;
-    /// # use datafusion_expr::expr::FieldMetadata;
+    /// # use datafusion_common::metadata::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
     /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
