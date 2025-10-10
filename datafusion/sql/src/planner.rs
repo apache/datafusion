@@ -602,7 +602,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 let inner_data_type = self.convert_data_type(inner_sql_type)?;
-                Ok(Field::new("", DataType::List(inner_data_type), true).into())
+                Ok(Field::new(
+                    "",
+                    DataType::List(
+                        inner_data_type.as_ref().clone().with_name("item").into(),
+                    ),
+                    true,
+                )
+                .into())
             }
             SQLDataType::Array(ArrayElemTypeDef::SquareBracket(
                 inner_sql_type,
@@ -612,12 +619,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Some(array_size) = maybe_array_size {
                     Ok(Field::new(
                         "",
-                        DataType::FixedSizeList(inner_data_type, *array_size as i32),
+                        DataType::FixedSizeList(
+                            inner_data_type.as_ref().clone().with_name("item").into(),
+                            *array_size as i32,
+                        ),
                         true,
                     )
                     .into())
                 } else {
-                    Ok(Field::new("", DataType::List(inner_data_type), true).into())
+                    Ok(Field::new(
+                        "",
+                        DataType::List(
+                            inner_data_type.as_ref().clone().with_name("item").into(),
+                        ),
+                        true,
+                    )
+                    .into())
                 }
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
