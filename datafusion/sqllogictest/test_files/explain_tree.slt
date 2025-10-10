@@ -1696,10 +1696,10 @@ physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
 03)│    --------------------   │
-04)│   ticker ASC NULLS LAST,  │
-05)│       time ASC NULLS      │
-06)│         LASTlimit:        │
-07)│             5             │
+04)│          limit: 5         │
+05)│                           │
+06)│   ticker ASC NULLS LAST,  │
+07)│     time ASC NULLS LAST   │
 08)└─────────────┬─────────────┘
 09)┌─────────────┴─────────────┐
 10)│    CoalesceBatchesExec    │
