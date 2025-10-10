@@ -412,7 +412,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@7ec692fc37da04f8da31c22ba9f3b71ef267e650  # v2.62.24
+        uses: taiki-e/install-action@e30c5b8cfc4910a9f163907c8149ac1e54f1ab11  # v2.62.25
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -739,7 +739,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@7ec692fc37da04f8da31c22ba9f3b71ef267e650  # v2.62.24
+        uses: taiki-e/install-action@e30c5b8cfc4910a9f163907c8149ac1e54f1ab11  # v2.62.25
         with:
           tool: cargo-msrv
 
