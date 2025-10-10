@@ -31,7 +31,7 @@ use hashbrown::HashMap;
 /// # Example: Create [`FieldMetadata`] from a [`Field`]
 /// ```
 /// # use std::collections::HashMap;
-/// # use datafusion_expr::expr::FieldMetadata;
+/// # use datafusion_common::metadata::FieldMetadata;
 /// # use arrow::datatypes::{Field, DataType};
 /// # let field = Field::new("c1", DataType::Int32, true)
 /// #  .with_metadata(HashMap::from([("foo".to_string(), "bar".to_string())]));
@@ -43,7 +43,7 @@ use hashbrown::HashMap;
 ///
 /// # Example: Update a [`Field`] with [`FieldMetadata`]
 /// ```
-/// # use datafusion_expr::expr::FieldMetadata;
+/// # use datafusion_common::metadata::FieldMetadata;
 /// # use arrow::datatypes::{Field, DataType};
 /// # let field = Field::new("c1", DataType::Int32, true);
 /// # let metadata = FieldMetadata::new_from_field(&field);
@@ -96,7 +96,7 @@ impl FieldMetadata {
     ///
     /// # Example usage
     /// ```rust
-    /// use datafusion_expr::expr::FieldMetadata;
+    /// use datafusion_common::metadata::FieldMetadata;
     /// use std::collections::BTreeMap;
     ///
     /// // Create metadata for a literal expression
