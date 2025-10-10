@@ -428,12 +428,13 @@ impl CaseExpr {
             _ => Cow::Owned(prep_null_mask_filter(when_value)),
         };
 
+        // For the true and false/null selection vectors, bypass `evaluate_selection` and merging
+        // results. This avoids materializing the array for the other branch which we will discard
+        // entirely anyway.
         let true_count = when_value.true_count();
         if true_count == batch.num_rows() {
-            // Avoid evaluate_selection when all rows are true
             return self.when_then_expr[0].1.evaluate(batch);
         } else if true_count == 0 {
-            // Avoid evaluate_selection when all rows are false/null
             return self.else_expr.as_ref().unwrap().evaluate(batch);
         }
 
