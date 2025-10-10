@@ -99,11 +99,13 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     ) -> Result<ColumnarValue> {
         let selection_count = selection.true_count();
 
-        let tmp_result = if batch.num_rows() == 0 || selection_count == batch.num_rows() {
+        if batch.num_rows() == 0 || selection_count == batch.num_rows() {
             // When evaluating the empty set we should simply delegate to `evaluate`
             // Additionally, if the selection vector is entirely true, we can skip filtering
-            self.evaluate(batch)?
-        } else if selection_count == 0 {
+            return self.evaluate(batch);
+        }
+
+        let tmp_result = if selection_count == 0 {
             // Do not call `evaluate` when the selection is empty.
             // We're already sure we're not evaluating over the empty set due to the previous check.
             // Reducing a non-empty set to the empty set due to the selection vector and then
@@ -116,10 +118,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             self.evaluate(&tmp_batch)?
         };
 
-        if batch.num_rows() == selection_count {
-            // All values from the `selection` filter are true.
-            Ok(tmp_result)
-        } else if let ColumnarValue::Array(a) = tmp_result {
+        if let ColumnarValue::Array(a) = tmp_result {
             scatter(selection, a.as_ref()).map(ColumnarValue::Array)
         } else if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = &tmp_result {
             // When the scalar is true or false, skip the scatter process
