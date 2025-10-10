@@ -616,9 +616,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 10230               | 5    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269397              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 2670                | 3    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 7166                | 5    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 267261              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1014                | 3    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
