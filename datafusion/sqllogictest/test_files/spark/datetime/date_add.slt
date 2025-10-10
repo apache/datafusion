@@ -59,11 +59,6 @@ SELECT date_add('2016-07-30'::date, 100000::int);
 2290-05-15
 
 query D
-SELECT date_add('2016-07-30'::date, 100000::int);
-----
-2290-05-15
-
-query D
 SELECT date_sub('2016-07-30'::date, 100000::int);
 ----
 1742-10-15
