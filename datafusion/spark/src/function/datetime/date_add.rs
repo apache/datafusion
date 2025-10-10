@@ -101,8 +101,9 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
                 date_array,
                 days_array,
                 |date, days| {
-                    date.checked_add(days as i32)
-                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_add".to_string()))
+                    date.checked_add(days as i32).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_add".to_string())
+                    })
                 },
             )?
         }
@@ -112,8 +113,9 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
                 date_array,
                 days_array,
                 |date, days| {
-                    date.checked_add(days as i32)
-                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_add".to_string()))
+                    date.checked_add(days as i32).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_add".to_string())
+                    })
                 },
             )?
         }
@@ -123,8 +125,9 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
                 date_array,
                 days_array,
                 |date, days| {
-                    date.checked_add(days)
-                        .ok_or_else(|| ArrowError::ArithmeticOverflow("date_add".to_string()))
+                    date.checked_add(days).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_add".to_string())
+                    })
                 },
             )?
         }
