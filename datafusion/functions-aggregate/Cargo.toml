@@ -73,4 +73,3 @@ harness = false
 [[bench]]
 name = "min_max_bytes"
 harness = false
-

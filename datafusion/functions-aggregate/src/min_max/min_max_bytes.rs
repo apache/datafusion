@@ -676,13 +676,12 @@ impl MinMaxBytesState {
     fn resize_min_max(&mut self, total_num_groups: usize) {
         if total_num_groups < self.min_max.len() {
             let truncated = self.min_max.split_off(total_num_groups);
-            for value in truncated {
-                if let Some(bytes) = value {
-                    debug_assert!(self.total_data_bytes >= bytes.len());
-                    debug_assert!(self.populated_groups > 0);
-                    self.total_data_bytes -= bytes.len();
-                    self.populated_groups -= 1;
-                }
+            // iterate only over Some variants
+            for bytes in truncated.into_iter().flatten() {
+                debug_assert!(self.total_data_bytes >= bytes.len());
+                debug_assert!(self.populated_groups > 0);
+                self.total_data_bytes -= bytes.len();
+                self.populated_groups -= 1;
             }
         } else if total_num_groups > self.min_max.len() {
             self.min_max.resize(total_num_groups, None);
@@ -860,9 +859,11 @@ impl MinMaxBytesState {
                         });
 
                         let epoch = self.dense_inline_epoch;
+                        // iterate over the mutable slice instead of indexing by range
                         let marks = &mut self.dense_inline_marks;
-                        for idx in fast_start..=fast_last {
-                            marks[idx] = epoch;
+                        for mark in marks.iter_mut().take(fast_last + 1).skip(fast_start)
+                        {
+                            *mark = epoch;
                         }
                     }
                 }
@@ -898,15 +899,13 @@ impl MinMaxBytesState {
             }
         }
 
-        if fast_path {
-            if fast_rows > 0 {
-                let fast_unique = fast_last.saturating_sub(fast_start).saturating_add(1);
-                unique_groups = fast_unique;
-                max_group_index = Some(match max_group_index {
-                    Some(current_max) => current_max.max(fast_last),
-                    None => fast_last,
-                });
-            }
+        if fast_path && fast_rows > 0 {
+            let fast_unique = fast_last.saturating_sub(fast_start).saturating_add(1);
+            unique_groups = fast_unique;
+            max_group_index = Some(match max_group_index {
+                Some(current_max) => current_max.max(fast_last),
+                None => fast_last,
+            });
         }
 
         // Only prepare marks if we've processed at least one batch already.
@@ -1616,19 +1615,14 @@ impl MinMaxBytesState {
                 Entry::Occupied(_) => {
                     break;
                 }
-                Entry::Vacant(vacant) => {
+                Entry::Vacant(_) => {
                     first_touch = true;
 
                     if !evaluated_dense_candidate {
                         evaluated_dense_candidate = true;
-                        // We need to call an immutable method on `state` below. The
-                        // Vacant guard `vacant` holds a mutable borrow of
-                        // `state.scratch_sparse`, so drop it first to avoid
-                        // borrowing `state` both mutably and immutably at once
-                        // (E0502). After computing the metrics and possibly
-                        // taking action, we'll re-acquire the entry.
-                        drop(vacant);
-
+                        // To avoid holding the VacantEntry guard across an
+                        // immutable call on `state`, re-acquire metrics first
+                        // by snapshotting what we need and then decide.
                         let (potential_unique, potential_max) =
                             state.potential_first_touch_metrics(group_index);
                         if let Some(candidate_limit) = self.evaluate_dense_candidate(
@@ -1640,7 +1634,7 @@ impl MinMaxBytesState {
                                 && self.enable_dense_for_batch(
                                     candidate_limit,
                                     &mut state.scratch_sparse,
-                                    &mut state.scratch_group_ids,
+                                    &mut state.scratch_group_ids[..],
                                 )
                             {
                                 state.dense_activated_this_batch = true;
@@ -1657,9 +1651,8 @@ impl MinMaxBytesState {
                             continue;
                         }
 
-                        // We dropped the Vacant guard above; re-acquire the entry
-                        // to insert now that we're no longer holding a mutable
-                        // borrow during the immutable call.
+                        // insert into the vacant slot now that we've finished
+                        // the immutable checks
                         match state.scratch_sparse.entry(group_index) {
                             Entry::Vacant(vacant) => {
                                 vacant.insert(ScratchLocation::Existing);
@@ -1695,7 +1688,7 @@ impl MinMaxBytesState {
                     && self.enable_dense_for_batch(
                         candidate_limit,
                         &mut state.scratch_sparse,
-                        &mut state.scratch_group_ids,
+                        &mut state.scratch_group_ids[..],
                     )
                 {
                     state.dense_activated_this_batch = true;
@@ -1854,7 +1847,7 @@ impl MinMaxBytesState {
         &mut self,
         candidate_limit: usize,
         scratch_sparse: &mut HashMap<usize, ScratchLocation>,
-        scratch_group_ids: &mut Vec<usize>,
+        scratch_group_ids: &mut [usize],
     ) -> bool {
         if candidate_limit == 0 {
             return false;
@@ -2132,7 +2125,7 @@ mod tests {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
         // Use non-sequential indices to avoid fast path
         let group_indices = vec![0_usize, 2, 1];
-        let values = vec!["a", "b", "c"];
+        let values = ["a", "b", "c"];
 
         for batch in 0..5 {
             let iter = values.iter().map(|value| Some(value.as_bytes()));
@@ -2178,9 +2171,7 @@ mod tests {
         ];
 
         state
-            .update_batch(expanded_values.into_iter(), &expanded_groups, 4, |a, b| {
-                a < b
-            })
+            .update_batch(expanded_values, &expanded_groups, 4, |a, b| a < b)
             .expect("dense batch with new group");
 
         assert!(matches!(state.workload_mode, WorkloadMode::DenseInline));
@@ -2195,7 +2186,7 @@ mod tests {
         // Use a pattern with one extra element to avoid the sequential fast path
         // but maintain sequential core to avoid breaking DenseInline's internal fast path
         let groups = vec![0_usize, 1, 2, 0]; // Sequential + one duplicate
-        let values = vec!["a", "b", "c", "z"]; // Last value won't replace first
+        let values = ["a", "b", "c", "z"]; // Last value won't replace first
 
         state
             .update_batch(
@@ -2228,7 +2219,7 @@ mod tests {
     fn sparse_batch_switches_mode_after_first_update() {
         let mut state = MinMaxBytesState::new(DataType::Utf8);
         let groups = vec![10_usize, 20_usize];
-        let values = vec![Some("b".as_bytes()), Some("a".as_bytes())];
+        let values = [Some("b".as_bytes()), Some("a".as_bytes())];
 
         state
             .update_batch(values.iter().copied(), &groups, 1_000_000, |a, b| a < b)
@@ -2239,7 +2230,7 @@ mod tests {
         assert_eq!(state.min_max[20].as_deref(), Some("a".as_bytes()));
 
         let groups_second = vec![20_usize];
-        let values_second = vec![Some("c".as_bytes())];
+        let values_second = [Some("c".as_bytes())];
 
         state
             .update_batch(
@@ -2262,7 +2253,7 @@ mod tests {
         state.workload_mode = WorkloadMode::SparseOptimized;
 
         let groups = vec![1_000_000_usize, 2_000_000_usize];
-        let values = vec![Some("left".as_bytes()), Some("right".as_bytes())];
+        let values = [Some("left".as_bytes()), Some("right".as_bytes())];
 
         state
             .update_batch(values.iter().copied(), &groups, 2_000_001, |a, b| a < b)
@@ -2297,7 +2288,7 @@ mod tests {
         assert_eq!(state.scratch_dense.len(), 0);
 
         let groups = vec![0_usize, 5_usize];
-        let values = vec![b"apple".as_slice(), b"aardvark".as_slice()];
+        let values = [b"apple".as_slice(), b"aardvark".as_slice()];
 
         state
             .update_batch(
@@ -2668,11 +2659,7 @@ mod tests {
                     |a, b| a < b,
                 )
                 .unwrap_or_else(|err| {
-                    panic!(
-                        "sequential dense batch {step} failed: {err}",
-                        step = step,
-                        err = err
-                    )
+                    panic!("sequential dense batch {step} failed: {err}")
                 });
 
             assert!(state.dense_inline_marks.is_empty());
@@ -2687,7 +2674,7 @@ mod tests {
         let repeats_per_group = 4_usize;
 
         let group_indices: Vec<usize> = (0..total_groups)
-            .flat_map(|group| std::iter::repeat(group).take(repeats_per_group))
+            .flat_map(|group| std::iter::repeat_n(group, repeats_per_group))
             .collect();
         let values: Vec<Vec<u8>> = group_indices
             .iter()

@@ -181,16 +181,15 @@ fn bench_batches<F>(
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
             for (batch_idx, group_indices) in group_batches.iter().enumerate() {
                 let values = with_values(batch_idx);
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(&values),
-                            group_indices,
-                            None,
-                            total_num_groups,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(&values),
+                        group_indices,
+                        None,
+                        total_num_groups,
+                    )
+                    .expect("update batch");
+                black_box(());
             }
         })
     });
@@ -198,53 +197,51 @@ fn bench_batches<F>(
 
 fn min_bytes_single_batch_small(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}")),
     ));
     let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
 
     c.bench_function("min bytes single batch small", |b| {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
-            black_box(
-                accumulator
-                    .update_batch(
-                        std::slice::from_ref(&values),
-                        &group_indices,
-                        None,
-                        BATCH_SIZE,
-                    )
-                    .expect("update batch"),
-            );
+            let _: () = accumulator
+                .update_batch(
+                    std::slice::from_ref(&values),
+                    &group_indices,
+                    None,
+                    BATCH_SIZE,
+                )
+                .expect("update batch");
+            black_box(());
         })
     });
 }
 
 fn min_bytes_single_batch_large(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..LARGE_DENSE_GROUPS).map(|i| format!("value_{:04}", i)),
+        (0..LARGE_DENSE_GROUPS).map(|i| format!("value_{i:04}")),
     ));
     let group_indices: Vec<usize> = (0..LARGE_DENSE_GROUPS).collect();
 
     c.bench_function("min bytes single batch large", |b| {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
-            black_box(
-                accumulator
-                    .update_batch(
-                        std::slice::from_ref(&values),
-                        &group_indices,
-                        None,
-                        LARGE_DENSE_GROUPS,
-                    )
-                    .expect("update batch"),
-            );
+            let _: () = accumulator
+                .update_batch(
+                    std::slice::from_ref(&values),
+                    &group_indices,
+                    None,
+                    LARGE_DENSE_GROUPS,
+                )
+                .expect("update batch");
+            black_box(());
         })
     });
 }
 
 fn min_bytes_multi_batch_large(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}")),
     ));
     let group_batches: Vec<Vec<usize>> = (0..MONOTONIC_BATCHES)
         .map(|batch| {
@@ -257,16 +254,15 @@ fn min_bytes_multi_batch_large(c: &mut Criterion) {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
             for group_indices in &group_batches {
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(&values),
-                            group_indices,
-                            None,
-                            LARGE_DENSE_GROUPS,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(&values),
+                        group_indices,
+                        None,
+                        LARGE_DENSE_GROUPS,
+                    )
+                    .expect("update batch");
+                black_box(());
             }
         })
     });
@@ -274,53 +270,51 @@ fn min_bytes_multi_batch_large(c: &mut Criterion) {
 
 fn min_bytes_sparse_groups(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i % 1024)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}", i = i % 1024)),
     ));
     let group_indices: Vec<usize> = (0..BATCH_SIZE).map(|i| i % SPARSE_GROUPS).collect();
 
     c.bench_function("min bytes sparse groups", |b| {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
-            black_box(
-                accumulator
-                    .update_batch(
-                        std::slice::from_ref(&values),
-                        &group_indices,
-                        None,
-                        LARGE_TOTAL_GROUPS,
-                    )
-                    .expect("update batch"),
-            );
+            let _: () = accumulator
+                .update_batch(
+                    std::slice::from_ref(&values),
+                    &group_indices,
+                    None,
+                    LARGE_TOTAL_GROUPS,
+                )
+                .expect("update batch");
+            black_box(());
         })
     });
 }
 
 fn min_bytes_dense_first_batch(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}")),
     ));
     let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
 
     c.bench_function("min bytes dense first batch", |b| {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
-            black_box(
-                accumulator
-                    .update_batch(
-                        std::slice::from_ref(&values),
-                        &group_indices,
-                        None,
-                        BATCH_SIZE,
-                    )
-                    .expect("update batch"),
-            );
+            let _: () = accumulator
+                .update_batch(
+                    std::slice::from_ref(&values),
+                    &group_indices,
+                    None,
+                    BATCH_SIZE,
+                )
+                .expect("update batch");
+            black_box(());
         })
     });
 }
 
 fn min_bytes_dense_reused_batches(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}")),
     ));
     let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
 
@@ -328,16 +322,15 @@ fn min_bytes_dense_reused_batches(c: &mut Criterion) {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
             for _ in 0..MONOTONIC_BATCHES {
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(&values),
-                            &group_indices,
-                            None,
-                            BATCH_SIZE,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(&values),
+                        &group_indices,
+                        None,
+                        BATCH_SIZE,
+                    )
+                    .expect("update batch");
+                black_box(());
             }
         })
     });
@@ -346,7 +339,7 @@ fn min_bytes_dense_reused_batches(c: &mut Criterion) {
 fn min_bytes_dense_duplicate_groups(c: &mut Criterion) {
     let unique_groups = BATCH_SIZE / 2;
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i / 2)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}", i = i / 2)),
     ));
     let group_indices: Vec<usize> = (0..unique_groups).flat_map(|i| [i, i]).collect();
 
@@ -354,16 +347,15 @@ fn min_bytes_dense_duplicate_groups(c: &mut Criterion) {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
             for _ in 0..MONOTONIC_BATCHES {
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(&values),
-                            &group_indices,
-                            None,
-                            unique_groups,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(&values),
+                        &group_indices,
+                        None,
+                        unique_groups,
+                    )
+                    .expect("update batch");
+                black_box(());
             }
         })
     });
@@ -382,7 +374,7 @@ fn min_bytes_extreme_duplicates(c: &mut Criterion) {
     }
     let values: ArrayRef = Arc::new(StringArray::from(value_strings));
     let group_indices: Vec<usize> = (0..unique_groups)
-        .flat_map(|group| std::iter::repeat(group).take(repeats_per_group))
+        .flat_map(|group| std::iter::repeat_n(group, repeats_per_group))
         .collect();
 
     debug_assert_eq!(values.len(), total_rows);
@@ -392,16 +384,15 @@ fn min_bytes_extreme_duplicates(c: &mut Criterion) {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
             for _ in 0..MONOTONIC_BATCHES {
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(&values),
-                            &group_indices,
-                            None,
-                            unique_groups,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(&values),
+                        &group_indices,
+                        None,
+                        unique_groups,
+                    )
+                    .expect("update batch");
+                black_box(());
             }
         })
     });
@@ -454,16 +445,15 @@ fn min_bytes_sequential_dense_large_allocations(c: &mut Criterion) {
             let mut baseline_size: Option<usize> = None;
 
             for values in &batches {
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(values),
-                            &group_indices,
-                            None,
-                            SEQUENTIAL_DENSE_LARGE_GROUPS,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(values),
+                        &group_indices,
+                        None,
+                        SEQUENTIAL_DENSE_LARGE_GROUPS,
+                    )
+                    .expect("update batch");
+                black_box(());
 
                 let current_size = accumulator.size();
                 if let Some(expected) = baseline_size {
@@ -566,7 +556,7 @@ fn min_bytes_quadratic_growing_total_groups(c: &mut Criterion) {
     // workload that discovers more groups over time. Each batch contains
     // BATCH_SIZE rows with dense group indices in the current domain.
     let base_batch_values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}")),
     ));
 
     c.bench_function("min bytes quadratic growing total groups", |b| {
@@ -580,16 +570,15 @@ fn min_bytes_quadratic_growing_total_groups(c: &mut Criterion) {
                 let group_indices: Vec<usize> =
                     (0..BATCH_SIZE).map(|i| i % total_groups).collect();
 
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(&base_batch_values),
-                            &group_indices,
-                            None,
-                            total_groups,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(&base_batch_values),
+                        &group_indices,
+                        None,
+                        total_groups,
+                    )
+                    .expect("update batch");
+                black_box(());
 
                 total_groups = total_groups.saturating_add(BATCH_SIZE);
             }
@@ -599,7 +588,7 @@ fn min_bytes_quadratic_growing_total_groups(c: &mut Criterion) {
 
 fn min_bytes_monotonic_group_ids(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i % 1024)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}", i = i % 1024)),
     ));
     let group_batches: Vec<Vec<usize>> = (0..MONOTONIC_BATCHES)
         .map(|batch| {
@@ -612,16 +601,15 @@ fn min_bytes_monotonic_group_ids(c: &mut Criterion) {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
             for group_indices in &group_batches {
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(&values),
-                            group_indices,
-                            None,
-                            MONOTONIC_TOTAL_GROUPS,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(&values),
+                        group_indices,
+                        None,
+                        MONOTONIC_TOTAL_GROUPS,
+                    )
+                    .expect("update batch");
+                black_box(());
             }
         })
     });
@@ -633,7 +621,7 @@ fn min_bytes_growing_total_groups(c: &mut Criterion) {
     // workloads where the domain of groups increases over time and exposes
     // alloc/resize behaviour that scales with the historical number of groups.
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..BATCH_SIZE).map(|i| format!("value_{:04}", i % 1024)),
+        (0..BATCH_SIZE).map(|i| format!("value_{i:04}", i = i % 1024)),
     ));
     let group_batches: Vec<Vec<usize>> = (0..MONOTONIC_BATCHES)
         .map(|batch| {
@@ -650,16 +638,15 @@ fn min_bytes_growing_total_groups(c: &mut Criterion) {
                 // accumulator: each batch's total groups equals the highest
                 // group index observed so far plus one.
                 let total_num_groups = (batch_idx + 1) * BATCH_SIZE;
-                black_box(
-                    accumulator
-                        .update_batch(
-                            std::slice::from_ref(&values),
-                            group_indices,
-                            None,
-                            total_num_groups,
-                        )
-                        .expect("update batch"),
-                );
+                let _: () = accumulator
+                    .update_batch(
+                        std::slice::from_ref(&values),
+                        group_indices,
+                        None,
+                        total_num_groups,
+                    )
+                    .expect("update batch");
+                black_box(());
             }
         })
     });
@@ -667,23 +654,22 @@ fn min_bytes_growing_total_groups(c: &mut Criterion) {
 
 fn min_bytes_large_dense_groups(c: &mut Criterion) {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..LARGE_DENSE_GROUPS).map(|i| format!("value_{:04}", i)),
+        (0..LARGE_DENSE_GROUPS).map(|i| format!("value_{i:04}")),
     ));
     let group_indices: Vec<usize> = (0..LARGE_DENSE_GROUPS).collect();
 
     c.bench_function("min bytes large dense groups", |b| {
         b.iter(|| {
             let mut accumulator = prepare_min_accumulator(&DataType::Utf8);
-            black_box(
-                accumulator
-                    .update_batch(
-                        std::slice::from_ref(&values),
-                        &group_indices,
-                        None,
-                        LARGE_DENSE_GROUPS,
-                    )
-                    .expect("update batch"),
-            );
+            let _: () = accumulator
+                .update_batch(
+                    std::slice::from_ref(&values),
+                    &group_indices,
+                    None,
+                    LARGE_DENSE_GROUPS,
+                )
+                .expect("update batch");
+            black_box(());
         })
     });
 }
