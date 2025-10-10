@@ -89,6 +89,7 @@ pub mod sum;
 pub mod variance;
 
 pub mod planner;
+mod utils;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;

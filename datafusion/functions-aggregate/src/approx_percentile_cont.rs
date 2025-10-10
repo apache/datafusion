@@ -45,11 +45,10 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
-use datafusion_functions_aggregate_common::utils::{
-    get_percentile_scalar_value, validate_percentile_expr,
-};
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+
+use crate::utils::{get_percentile_scalar_value, validate_percentile_expr};
 
 create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 

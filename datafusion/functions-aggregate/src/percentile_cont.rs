@@ -48,8 +48,10 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::{validate_percentile_expr, Hashable};
+use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
+
+use crate::utils::validate_percentile_expr;
 
 /// Precision multiplier for linear interpolation calculations.
 ///
