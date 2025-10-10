@@ -422,12 +422,6 @@ impl CaseExpr {
             )
         })?;
 
-        // Treat 'NULL' as false value
-        let when_value = match when_value.null_count() {
-            0 => Cow::Borrowed(when_value),
-            _ => Cow::Owned(prep_null_mask_filter(when_value)),
-        };
-
         // For the true and false/null selection vectors, bypass `evaluate_selection` and merging
         // results. This avoids materializing the array for the other branch which we will discard
         // entirely anyway.
@@ -437,6 +431,12 @@ impl CaseExpr {
         } else if true_count == 0 {
             return self.else_expr.as_ref().unwrap().evaluate(batch);
         }
+
+        // Treat 'NULL' as false value
+        let when_value = match when_value.null_count() {
+            0 => Cow::Borrowed(when_value),
+            _ => Cow::Owned(prep_null_mask_filter(when_value)),
+        };
 
         let then_value = self.when_then_expr[0]
             .1
