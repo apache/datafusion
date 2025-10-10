@@ -5199,3 +5199,108 @@ DROP TABLE t2;
 
 statement ok
 set datafusion.explain.physical_plan_only = false;
+
+# Verifying existence join NLJ benchmarks
+
+query TT
+EXPLAIN
+SELECT t1.*
+FROM range(30000) AS t1
+LEFT SEMI JOIN range(30000) AS t2
+  ON t1.value < t2.value;
+----
+logical_plan
+01)LeftSemi Join:  Filter: t1.value < t2.value
+02)--SubqueryAlias: t1
+03)----TableScan: range() projection=[value]
+04)--SubqueryAlias: t2
+05)----TableScan: range() projection=[value]
+physical_plan
+01)NestedLoopJoinExec: join_type=LeftSemi, filter=value@0 < value@1
+02)--LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+03)--LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+
+query TT
+EXPLAIN
+SELECT t1.*
+FROM range(30000) AS t1
+LEFT ANTI JOIN range(30000) AS t2
+  ON t1.value < t2.value;
+----
+logical_plan
+01)LeftAnti Join:  Filter: t1.value < t2.value
+02)--SubqueryAlias: t1
+03)----TableScan: range() projection=[value]
+04)--SubqueryAlias: t2
+05)----TableScan: range() projection=[value]
+physical_plan
+01)NestedLoopJoinExec: join_type=LeftAnti, filter=value@0 < value@1
+02)--LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+03)--LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+
+query TT
+EXPLAIN
+SELECT t1.*
+FROM range(30000) AS t2
+RIGHT SEMI JOIN range(30000) AS t1
+  ON t2.value < t1.value;
+----
+logical_plan
+01)RightSemi Join:  Filter: t2.value < t1.value
+02)--SubqueryAlias: t2
+03)----TableScan: range() projection=[value]
+04)--SubqueryAlias: t1
+05)----TableScan: range() projection=[value]
+physical_plan
+01)NestedLoopJoinExec: join_type=RightSemi, filter=value@0 < value@1
+02)--LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+03)--LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+
+query TT
+EXPLAIN
+SELECT t1.*
+FROM range(30000) AS t2
+RIGHT ANTI JOIN range(30000) AS t1
+  ON t2.value < t1.value;
+----
+logical_plan
+01)RightAnti Join:  Filter: t2.value < t1.value
+02)--SubqueryAlias: t2
+03)----TableScan: range() projection=[value]
+04)--SubqueryAlias: t1
+05)----TableScan: range() projection=[value]
+physical_plan
+01)NestedLoopJoinExec: join_type=RightAnti, filter=value@0 < value@1
+02)--LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+03)--LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+
+query TT
+EXPLAIN
+SELECT *
+FROM range(30000) AS t2(k2)
+WHERE k2 > 0
+   OR EXISTS (
+       SELECT 1
+       FROM range(30000) AS t1(k1)
+       WHERE t2.k2 > t1.k1
+   );
+----
+logical_plan
+01)Projection: t2.k2
+02)--Filter: t2.k2 > Int64(0) OR __correlated_sq_1.mark
+03)----LeftMark Join:  Filter: t2.k2 > __correlated_sq_1.k1
+04)------SubqueryAlias: t2
+05)--------Projection: range().value AS k2
+06)----------TableScan: range() projection=[value]
+07)------SubqueryAlias: __correlated_sq_1
+08)--------SubqueryAlias: t1
+09)----------Projection: range().value AS k1
+10)------------TableScan: range() projection=[value]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--FilterExec: k2@0 > 0 OR mark@1, projection=[k2@0]
+03)----NestedLoopJoinExec: join_type=LeftMark, filter=k2@0 > k1@1
+04)------ProjectionExec: expr=[value@0 as k2]
+05)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
+06)------ProjectionExec: expr=[value@0 as k1]
+07)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=30000, batch_size=3]
