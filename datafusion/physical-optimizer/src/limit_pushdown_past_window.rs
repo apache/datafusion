@@ -87,7 +87,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                     let Some(end_bound) = bound_to_usize(&frame.end_bound) else {
                         return reset(node, &mut latest_max);
                     };
-                    latest_max = cmp::max(end_bound, latest_max);
+                    latest_max = cmp::max(end_bound + 1, latest_max);
                 }
                 return Ok(Transformed::no(node));
             }
