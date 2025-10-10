@@ -613,3 +613,174 @@ pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
     .expect("infallible closure should not fail");
     is_volatile
 }
+
+#[cfg(test)]
+mod test {
+    use crate::physical_expr::PhysicalExpr;
+    use arrow::array::{Array, BooleanArray, Int64Array, RecordBatch};
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion_expr_common::columnar_value::ColumnarValue;
+    use std::fmt::{Display, Formatter};
+    use std::sync::Arc;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestExpr {}
+
+    impl PhysicalExpr for TestExpr {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(Self {}))
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.write_str("TestExpr")
+        }
+
+        fn data_type(&self, _schema: &Schema) -> datafusion_common::Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn nullable(&self, _schema: &Schema) -> datafusion_common::Result<bool> {
+            Ok(false)
+        }
+
+        fn evaluate(
+            &self,
+            _batch: &RecordBatch,
+        ) -> datafusion_common::Result<ColumnarValue> {
+            let data = vec![1; _batch.num_rows()];
+            Ok(ColumnarValue::Array(Arc::new(Int64Array::from(data))))
+        }
+    }
+
+    impl Display for TestExpr {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.fmt_sql(f)
+        }
+    }
+
+    macro_rules! assert_arrays_eq {
+        ($EXPECTED: expr, $ACTUAL: expr, $MESSAGE: expr) => {
+            let expected = $EXPECTED.to_array(1).unwrap();
+            let actual = $ACTUAL;
+
+            let  actual_array = actual.to_array(expected.len()).unwrap();
+            let  actual_ref = actual_array.as_ref();
+            let  expected_ref = expected.as_ref();
+            assert!(
+                actual_ref == expected_ref,
+                "{}: expected: {:?}, actual: {:?}",
+                $MESSAGE,
+                $EXPECTED,
+                actual_ref
+            );
+        };
+    }
+
+    fn test_evaluate_selection(
+        batch: &RecordBatch,
+        selection: &BooleanArray,
+        expected: &ColumnarValue,
+    ) {
+        let expr = TestExpr {};
+
+        // First check that the `evaluate_selection` is the expected one
+        let selection_result = expr.evaluate_selection(&batch, selection).unwrap();
+        assert_eq!(expected.to_array(1).unwrap().len(), selection_result.to_array(1).unwrap().len(), "evaluate_selection should output row count should match input record batch");
+        assert_arrays_eq!(expected, &selection_result, "evaluate_selection returned unexpected value");
+
+        // If we're selecting all rows, the result should be the same as calling `evaluate`
+        // with the full record batch.
+        if (0..batch.num_rows()).all(|row_idx| row_idx < selection.len() && selection.value(row_idx)) {
+            let empty_result = expr.evaluate(&batch).unwrap();
+
+            assert_arrays_eq!(empty_result, &selection_result, "evaluate_selection does not match unfiltered evaluate result");
+        }
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_empty_record_batch() {
+        test_evaluate_selection(
+            &RecordBatch::new_empty(Arc::new(Schema::empty())),
+            &BooleanArray::from(vec![false; 0]),
+            &ColumnarValue::Array(Arc::new(Int64Array::new_null(0))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_empty_record_batch_with_larger_false_selection() {
+        test_evaluate_selection(
+            &RecordBatch::new_empty(Arc::new(Schema::empty())),
+            &BooleanArray::from(vec![false; 10]),
+            &ColumnarValue::Array(Arc::new(Int64Array::new_null(0))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_empty_record_batch_with_larger_true_selection() {
+        test_evaluate_selection(
+            &RecordBatch::new_empty(Arc::new(Schema::empty())),
+            &BooleanArray::from(vec![true; 10]),
+            &ColumnarValue::Array(Arc::new(Int64Array::new_null(0))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch() {
+        test_evaluate_selection(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![true; 10]),
+            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![1; 10]))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_false_selection(
+    ) {
+        test_evaluate_selection(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![false; 20]),
+            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![None; 10]))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_true_selection(
+    ) {
+        test_evaluate_selection(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![true; 20]),
+            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![1; 10]))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_false_selection(
+    ) {
+        test_evaluate_selection(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![false; 5]),
+            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![None; 10]))),
+        );
+    }
+
+    #[test]
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_true_selection(
+    ) {
+        test_evaluate_selection(
+            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &BooleanArray::from(vec![true; 5]),
+            &ColumnarValue::Array(Arc::new(Int64Array::from(vec![1; 10]))),
+        );
+    }
+}
