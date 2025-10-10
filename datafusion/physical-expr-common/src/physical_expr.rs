@@ -662,9 +662,9 @@ mod test {
 
         fn evaluate(
             &self,
-            _batch: &RecordBatch,
+            batch: &RecordBatch,
         ) -> datafusion_common::Result<ColumnarValue> {
-            let data = vec![1; _batch.num_rows()];
+            let data = vec![1; batch.num_rows()];
             Ok(ColumnarValue::Array(Arc::new(Int64Array::from(data))))
         }
 
@@ -716,7 +716,7 @@ mod test {
         let expr = TestExpr {};
 
         // First check that the `evaluate_selection` is the expected one
-        let selection_result = expr.evaluate_selection(&batch, selection).unwrap();
+        let selection_result = expr.evaluate_selection(batch, selection).unwrap();
         assert_eq!(
             expected.to_array(1).unwrap().len(),
             selection_result.to_array(1).unwrap().len(),
@@ -733,7 +733,7 @@ mod test {
         if (0..batch.num_rows())
             .all(|row_idx| row_idx < selection.len() && selection.value(row_idx))
         {
-            let empty_result = expr.evaluate(&batch).unwrap();
+            let empty_result = expr.evaluate(batch).unwrap();
 
             assert_arrays_eq!(
                 empty_result,
@@ -747,7 +747,7 @@ mod test {
         let expr = TestExpr {};
 
         // First check that the `evaluate_selection` is the expected one
-        let selection_result = expr.evaluate_selection(&batch, selection);
+        let selection_result = expr.evaluate_selection(batch, selection);
         assert!(selection_result.is_err(), "evaluate_selection should fail");
     }
 
