@@ -2006,19 +2006,15 @@ mod tests {
 
         assert!(
             spill_count > 0,
-            "Expected some spilling to occur, but got spill_count={}",
-            spill_count
+            "Expected some spilling to occur, but got spill_count={spill_count}"
         );
         assert!(
             spilled_rows > 0 && spilled_rows < total_rows,
-            "Expected partial spilling (0 < spilled_rows < {}), but got spilled_rows={}",
-            total_rows,
-            spilled_rows
+            "Expected partial spilling (0 < spilled_rows < {total_rows}), but got spilled_rows={spilled_rows}"
         );
         assert!(
             spilled_bytes > 0,
-            "Expected some bytes to be spilled, but got spilled_bytes={}",
-            spilled_bytes
+            "Expected some bytes to be spilled, but got spilled_bytes={spilled_bytes}"
         );
 
         println!(
