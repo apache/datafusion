@@ -17,8 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, FieldMetadata,
-    InList, InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
 use crate::type_coercion::functions::{
@@ -28,6 +28,7 @@ use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
     Result, Spans, TableReference,
@@ -104,9 +105,9 @@ impl ExprSchemable for Expr {
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
+                Expr::Placeholder(Placeholder { field, .. }) => match &field {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
-                    Some(dt) => Ok(dt.clone()),
+                    Some(field) => Ok(field.data_type().clone()),
                 },
                 _ => expr.get_type(schema),
             },
@@ -211,9 +212,9 @@ impl ExprSchemable for Expr {
             )
             .get_result_type(),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
-            Expr::Placeholder(Placeholder { data_type, .. }) => {
-                if let Some(dtype) = data_type {
-                    Ok(dtype.clone())
+            Expr::Placeholder(Placeholder { field, .. }) => {
+                if let Some(field) = field {
+                    Ok(field.data_type().clone())
                 } else {
                     // If the placeholder's type hasn't been specified, treat it as
                     // null (unspecified placeholders generate an error during planning)
@@ -433,18 +434,16 @@ impl ExprSchemable for Expr {
                 ..
             }) => {
                 let field = match &**expr {
-                    Expr::Placeholder(Placeholder { data_type, .. }) => {
-                        match &data_type {
-                            None => schema
-                                .data_type_and_nullable(&Column::from_name(name))
-                                .map(|(d, n)| Field::new(&schema_name, d.clone(), n)),
-                            Some(dt) => Ok(Field::new(
-                                &schema_name,
-                                dt.clone(),
-                                expr.nullable(schema)?,
-                            )),
-                        }
-                    }
+                    Expr::Placeholder(Placeholder { field, .. }) => match &field {
+                        None => schema
+                            .data_type_and_nullable(&Column::from_name(name))
+                            .map(|(d, n)| Field::new(&schema_name, d.clone(), n)),
+                        Some(field) => Ok(field
+                            .as_ref()
+                            .clone()
+                            .with_name(&schema_name)
+                            .with_nullable(expr.nullable(schema)?)),
+                    },
                     _ => expr.to_field(schema).map(|(_, f)| f.as_ref().clone()),
                 }?;
 

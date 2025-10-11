@@ -16,22 +16,23 @@
 // under the License.
 
 use crate::error::{_plan_datafusion_err, _plan_err};
+use crate::metadata::FieldMetadata;
 use crate::{Result, ScalarValue};
-use arrow::datatypes::DataType;
+use arrow::datatypes::FieldRef;
 use std::collections::HashMap;
 
 /// The parameter value corresponding to the placeholder
 #[derive(Debug, Clone)]
 pub enum ParamValues {
     /// For positional query parameters, like `SELECT * FROM test WHERE a > $1 AND b = $2`
-    List(Vec<ScalarValue>),
+    List(Vec<(ScalarValue, Option<FieldMetadata>)>),
     /// For named query parameters, like `SELECT * FROM test WHERE a > $foo AND b = $goo`
-    Map(HashMap<String, ScalarValue>),
+    Map(HashMap<String, (ScalarValue, Option<FieldMetadata>)>),
 }
 
 impl ParamValues {
     /// Verify parameter list length and type
-    pub fn verify(&self, expect: &[DataType]) -> Result<()> {
+    pub fn verify(&self, expect: &[FieldRef]) -> Result<()> {
         match self {
             ParamValues::List(list) => {
                 // Verify if the number of params matches the number of values
@@ -45,14 +46,27 @@ impl ParamValues {
 
                 // Verify if the types of the params matches the types of the values
                 let iter = expect.iter().zip(list.iter());
-                for (i, (param_type, value)) in iter.enumerate() {
-                    if *param_type != value.data_type() {
+                for (i, (param_type, (value, maybe_metadata))) in iter.enumerate() {
+                    if *param_type.data_type() != value.data_type() {
                         return _plan_err!(
                             "Expected parameter of type {}, got {:?} at index {}",
                             param_type,
                             value.data_type(),
                             i
                         );
+                    }
+
+                    if let Some(expected_metadata) = maybe_metadata {
+                        // Probably too strict of a comparison (this is an example of where
+                        // the concept of type equality would be useful)
+                        if &expected_metadata.to_hashmap() != param_type.metadata() {
+                            return _plan_err!(
+                                "Expected parameter with metadata {:?}, got {:?} at index {}",
+                                expected_metadata,
+                                param_type.metadata(),
+                                i
+                            );
+                        }
                     }
                 }
                 Ok(())
@@ -65,7 +79,10 @@ impl ParamValues {
         }
     }
 
-    pub fn get_placeholders_with_values(&self, id: &str) -> Result<ScalarValue> {
+    pub fn get_placeholders_with_values(
+        &self,
+        id: &str,
+    ) -> Result<(ScalarValue, Option<FieldMetadata>)> {
         match self {
             ParamValues::List(list) => {
                 if id.is_empty() {
@@ -99,7 +116,7 @@ impl ParamValues {
 
 impl From<Vec<ScalarValue>> for ParamValues {
     fn from(value: Vec<ScalarValue>) -> Self {
-        Self::List(value)
+        Self::List(value.into_iter().map(|v| (v, None)).collect())
     }
 }
 
@@ -108,8 +125,10 @@ where
     K: Into<String>,
 {
     fn from(value: Vec<(K, ScalarValue)>) -> Self {
-        let value: HashMap<String, ScalarValue> =
-            value.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        let value: HashMap<String, (ScalarValue, Option<FieldMetadata>)> = value
+            .into_iter()
+            .map(|(k, v)| (k.into(), (v, None)))
+            .collect();
         Self::Map(value)
     }
 }
@@ -119,8 +138,10 @@ where
     K: Into<String>,
 {
     fn from(value: HashMap<K, ScalarValue>) -> Self {
-        let value: HashMap<String, ScalarValue> =
-            value.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        let value: HashMap<String, (ScalarValue, Option<FieldMetadata>)> = value
+            .into_iter()
+            .map(|(k, v)| (k.into(), (v, None)))
+            .collect();
         Self::Map(value)
     }
 }
