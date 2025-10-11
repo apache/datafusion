@@ -625,6 +625,7 @@ pub fn create_udwf(
     return_type: Arc<DataType>,
     volatility: Volatility,
     partition_evaluator_factory: PartitionEvaluatorFactory,
+    is_causal: bool,
 ) -> WindowUDF {
     let return_type = Arc::unwrap_or_clone(return_type);
     WindowUDF::from(SimpleWindowUDF::new(
@@ -633,6 +634,7 @@ pub fn create_udwf(
         return_type,
         volatility,
         partition_evaluator_factory,
+        is_causal,
     ))
 }
 
@@ -644,6 +646,7 @@ pub struct SimpleWindowUDF {
     signature: Signature,
     return_type: DataType,
     partition_evaluator_factory: PtrEq<PartitionEvaluatorFactory>,
+    is_causal: bool,
 }
 
 impl Debug for SimpleWindowUDF {
@@ -666,6 +669,7 @@ impl SimpleWindowUDF {
         return_type: DataType,
         volatility: Volatility,
         partition_evaluator_factory: PartitionEvaluatorFactory,
+        is_causal: bool,
     ) -> Self {
         let name = name.into();
         let signature = Signature::exact([input_type].to_vec(), volatility);
@@ -674,6 +678,7 @@ impl SimpleWindowUDF {
             signature,
             return_type,
             partition_evaluator_factory: partition_evaluator_factory.into(),
+            is_causal,
         }
     }
 }
@@ -704,6 +709,10 @@ impl WindowUDFImpl for SimpleWindowUDF {
             self.return_type.clone(),
             true,
         )))
+    }
+
+    fn is_causal(&self) -> bool {
+        self.is_causal
     }
 }
 

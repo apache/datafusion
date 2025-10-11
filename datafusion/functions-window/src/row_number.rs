@@ -121,6 +121,10 @@ impl WindowUDFImpl for RowNumber {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn is_causal(&self) -> bool {
+        true
+    }
 }
 
 /// State for the `row_number` built-in window function.

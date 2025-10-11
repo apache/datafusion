@@ -303,6 +303,10 @@ impl WindowUDFImpl for WindowShift {
             WindowShiftKind::Lead => Some(get_lead_doc()),
         }
     }
+
+    fn is_causal(&self) -> bool {
+        false // TODO: we can grow limit by N
+    }
 }
 
 /// When `lead`/`lag` is evaluated on a `NULL` expression we attempt to

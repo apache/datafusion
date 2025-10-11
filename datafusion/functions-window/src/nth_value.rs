@@ -126,6 +126,10 @@ impl NthValue {
     pub fn nth() -> Self {
         Self::new(NthValueKind::Nth)
     }
+
+    pub fn kind(&self) -> &NthValueKind {
+        &self.kind
+    }
 }
 
 static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
@@ -336,6 +340,10 @@ impl WindowUDFImpl for NthValue {
             NthValueKind::Last => Some(get_last_value_doc()),
             NthValueKind::Nth => Some(get_nth_value_doc()),
         }
+    }
+
+    fn is_causal(&self) -> bool {
+        false // TODO: if argument is literal, we can max(N, limit)
     }
 }
 

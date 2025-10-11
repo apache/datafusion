@@ -240,6 +240,14 @@ impl WindowUDFImpl for Rank {
             RankType::Percent => Some(get_percent_rank_doc()),
         }
     }
+
+    fn is_causal(&self) -> bool {
+        match self.rank_type {
+            RankType::Basic => true,
+            RankType::Dense => true,
+            RankType::Percent => false,
+        }
+    }
 }
 
 /// State for the RANK(rank) built-in window function.

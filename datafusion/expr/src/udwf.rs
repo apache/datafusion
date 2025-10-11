@@ -414,6 +414,9 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// Returns true if this function only needs access to current and previous rows
+    fn is_causal(&self) -> bool;
 }
 
 pub enum ReversedUDWF {
@@ -523,6 +526,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
+
+    fn is_causal(&self) -> bool {
+        self.inner.is_causal()
+    }
 }
 
 #[cfg(test)]
@@ -574,6 +581,10 @@ mod test {
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
         }
+
+        fn is_causal(&self) -> bool {
+            false
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -612,6 +623,10 @@ mod test {
         }
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
+        }
+
+        fn is_causal(&self) -> bool {
+            false
         }
     }
 

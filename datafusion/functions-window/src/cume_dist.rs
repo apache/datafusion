@@ -110,6 +110,10 @@ impl WindowUDFImpl for CumeDist {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn is_causal(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Default)]
