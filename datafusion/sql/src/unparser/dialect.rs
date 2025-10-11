@@ -207,6 +207,13 @@ pub trait Dialect: Send + Sync {
         Ok(None)
     }
 
+    /// Allows the dialect to support the QUALIFY clause
+    ///
+    /// Some dialects, like Postgres, do not support the QUALIFY clause
+    fn supports_qualify(&self) -> bool {
+        true
+    }
+
     /// Allows the dialect to override logic of formatting datetime with tz into string.
     fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, _unit: TimeUnit) -> String {
         dt.to_string()
@@ -274,6 +281,14 @@ impl Dialect for DefaultDialect {
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        true
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('"')
     }
@@ -424,6 +439,10 @@ impl Dialect for DuckDBDialect {
 pub struct MySqlDialect {}
 
 impl Dialect for MySqlDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -485,6 +504,10 @@ impl Dialect for MySqlDialect {
 pub struct SqliteDialect {}
 
 impl Dialect for SqliteDialect {
+    fn supports_qualify(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
