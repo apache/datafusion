@@ -187,15 +187,12 @@ fn randomized_min_matches_reference() {
             assert_eq!(state.min_max.len(), expected.len());
 
             for (group_index, expected_bytes) in expected.iter().enumerate() {
-                let actual = state.min_max[group_index]
-                    .as_ref()
-                    .map(|buffer| buffer.as_slice());
-                let expected = expected_bytes.as_ref().map(|buffer| buffer.as_slice());
+                let actual = state.min_max[group_index].as_deref();
+                let expected = expected_bytes.as_deref();
                 assert_eq!(
-                    actual, expected,
-                    "randomized min mismatch for {:?} in group {group_index} (trial {trial}) history: {:?}",
-                    data_type,
-                    history
+                    actual,
+                    expected,
+                    "randomized min mismatch for {data_type:?} in group {group_index} (trial {trial}) history: {history:?}"
                 );
             }
         }
@@ -376,8 +373,8 @@ fn reproduces_randomized_failure_case() {
     }
 
     assert_eq!(
-        state.min_max[38].as_ref().map(|buffer| buffer.as_slice()),
-        expected[38].as_ref().map(|buffer| buffer.as_slice()),
+        state.min_max[38].as_deref(),
+        expected[38].as_deref(),
         "state should hold expected minimum before re-expansion"
     );
 
@@ -481,7 +478,7 @@ fn reproduces_randomized_failure_case() {
         apply_update(&mut state, &mut expected, 41, groups, values);
     }
 
-    let actual = state.min_max[38].as_ref().map(|buffer| buffer.clone());
+    let actual = state.min_max[38].clone();
     let expected_bytes = expected[38].clone();
     assert_eq!(actual, expected_bytes);
 }
@@ -737,11 +734,13 @@ fn randomized_minimum_matches_baseline_for_byte_types() {
         }
     }
 
+    type Batch = (Vec<usize>, Vec<Option<Vec<u8>>>);
+
     fn generate_batches(
         rng: &mut Lcg,
         total_groups: usize,
         batches: usize,
-    ) -> Vec<(Vec<usize>, Vec<Option<Vec<u8>>>)> {
+    ) -> Vec<Batch> {
         (0..batches)
             .map(|_| {
                 let rows = (rng.next() % 16 + 1) as usize;
@@ -752,7 +751,7 @@ fn randomized_minimum_matches_baseline_for_byte_types() {
                     let group = (rng.next() as usize) % total_groups;
                     groups.push(group);
 
-                    let is_null = rng.next() % 5 == 0;
+                    let is_null = rng.next().is_multiple_of(5);
                     if is_null {
                         values.push(None);
                         continue;
@@ -782,9 +781,7 @@ fn randomized_minimum_matches_baseline_for_byte_types() {
             let payloads = generate_batches(&mut rng, total_groups, batches);
 
             for (batch_index, (groups, values)) in payloads.into_iter().enumerate() {
-                let iter = values
-                    .iter()
-                    .map(|value| value.as_ref().map(|bytes| bytes.as_slice()));
+                let iter = values.iter().map(|value| value.as_deref());
                 state
                     .update_batch(iter, &groups, total_groups, |a, b| a < b)
                     .expect("update batch");
@@ -805,11 +802,8 @@ fn randomized_minimum_matches_baseline_for_byte_types() {
                 }
 
                 for (group_index, expected) in baseline.iter().enumerate() {
-                    assert_eq!(
-                        state.min_max[group_index].as_ref().map(|v| v.as_slice()),
-                        expected.as_ref().map(|v| v.as_slice()),
-                        "case {case}, batch {batch_index}, group {group_index}, type {data_type:?}"
-                    );
+                    assert_eq!(state.min_max[group_index].as_deref(), expected.as_deref(),
+                        "case {case}, batch {batch_index}, group {group_index}, type {data_type:?}");
                 }
             }
         }
