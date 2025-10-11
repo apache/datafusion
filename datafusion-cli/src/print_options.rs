@@ -193,7 +193,16 @@ impl PrintOptions {
             {
                 writeln!(writer, "{OBJECT_STORE_PROFILING_HEADER}")?;
                 for store in self.instrumented_registry.stores() {
-                    writeln!(writer, "{store}")?;
+                    let requests = store.take_requests();
+
+                    if !requests.is_empty() {
+                        writeln!(writer, "{store}")?;
+                        for req in requests.iter() {
+                            writeln!(writer, "{req}")?;
+                        }
+                        // Add an extra blank line to help visually organize the output
+                        writeln!(writer)?;
+                    }
                 }
             }
         }
