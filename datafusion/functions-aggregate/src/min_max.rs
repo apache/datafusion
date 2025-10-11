@@ -18,7 +18,7 @@
 //! [`Max`] and [`MaxAccumulator`] accumulator for the `max` function
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
-mod min_max_bytes;
+pub mod min_max_bytes;
 mod min_max_struct;
 
 use arrow::array::ArrayRef;

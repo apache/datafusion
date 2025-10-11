@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::*;
+use arrow::datatypes::DataType;
+use datafusion_expr::EmitTo;
+use datafusion_functions_aggregate::min_max::min_max_bytes::{
+    BatchStats, MinMaxBytesState, ScratchEntry, ScratchLocation, SimpleSlot,
+    WorkloadMode, DENSE_INLINE_MAX_TOTAL_GROUPS, DENSE_INLINE_STABILITY_THRESHOLD,
+    SPARSE_SWITCH_GROUP_THRESHOLD,
+};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 #[allow(dead_code)]
@@ -1112,8 +1118,8 @@ fn emit_to_all_resets_populated_groups() {
     state.dense_inline_stable_batches = 11;
     state.dense_inline_committed = true;
     state.dense_inline_committed_groups = 3;
-    state.dense_enable_invocations = 13;
-    state.dense_sparse_detours = 3;
+    // Note: dense_enable_invocations and dense_sparse_detours are #[cfg(test)] fields
+    // and not available in integration tests
 
     assert_eq!(state.populated_groups, 2);
 
@@ -1142,8 +1148,8 @@ fn emit_to_all_resets_populated_groups() {
     assert_eq!(state.dense_inline_stable_batches, 0);
     assert!(!state.dense_inline_committed);
     assert_eq!(state.dense_inline_committed_groups, 0);
-    assert_eq!(state.dense_enable_invocations, 0);
-    assert_eq!(state.dense_sparse_detours, 0);
+    // Note: dense_enable_invocations and dense_sparse_detours are #[cfg(test)] fields
+    // and not available in integration tests
 }
 
 #[test]

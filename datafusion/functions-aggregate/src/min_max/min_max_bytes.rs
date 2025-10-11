@@ -58,7 +58,7 @@ use std::sync::Arc;
 ///   scratch machinery (hash-based tracking) introduced by the dense-inline
 ///   heuristics. Optimized for sparse access patterns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WorkloadMode {
+pub enum WorkloadMode {
     /// The accumulator has not yet observed any non-null values and therefore
     /// cannot decide between the simple dense path and the sparse-optimised
     /// implementation.
@@ -79,17 +79,17 @@ enum WorkloadMode {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct BatchStats {
+pub struct BatchStats {
     /// Number of **unique** group ids observed in the processed batch. The
     /// counter is strictly per-batch – duplicates within the batch do not
     /// contribute multiple times and the value intentionally ignores groups
     /// touched in prior batches. This makes the density heuristics resilient to
     /// workloads that repeatedly touch the same domain across many batches.
-    unique_groups: usize,
+    pub unique_groups: usize,
     /// Highest group index encountered in the batch. Unlike `unique_groups`
     /// duplicates matter here because it is used to derive the effective domain
     /// size for density comparisons.
-    max_group_index: Option<usize>,
+    pub max_group_index: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -438,87 +438,87 @@ fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
 ///
 /// See discussion on <https://github.com/apache/datafusion/issues/6906>
 #[derive(Debug)]
-struct MinMaxBytesState {
+pub struct MinMaxBytesState {
     /// The minimum/maximum value for each group
-    min_max: Vec<Option<Vec<u8>>>,
+    pub min_max: Vec<Option<Vec<u8>>>,
     /// The data type of the array
     data_type: DataType,
     /// The total bytes of the string data (for pre-allocating the final array,
     /// and tracking memory usage)
-    total_data_bytes: usize,
+    pub total_data_bytes: usize,
     /// Scratch storage tracking which groups were updated in the current batch
-    scratch_group_ids: Vec<usize>,
+    pub scratch_group_ids: Vec<usize>,
     /// Dense scratch table indexed by group id. Entries are tagged with an
     /// epoch so we can reuse the allocation across batches without clearing it.
-    scratch_dense: Vec<ScratchEntry>,
+    pub scratch_dense: Vec<ScratchEntry>,
     /// Epoch corresponding to the current batch.
-    scratch_epoch: u64,
+    pub scratch_epoch: u64,
     /// Sparse scratch entries keyed by group id describing where the candidate
     /// value for the group is stored during the current batch.
-    scratch_sparse: HashMap<usize, ScratchLocation>,
+    pub scratch_sparse: HashMap<usize, ScratchLocation>,
     /// Upper bound on the dense scratch size we are willing to allocate. The
     /// bound is updated after each batch based on how "dense" the accessed
     /// groups were so that we only pay for dense initialisation when we have
     /// evidence that it will be reused.
-    scratch_dense_limit: usize,
+    pub scratch_dense_limit: usize,
     /// Whether the dense scratch table has been initialised. We defer creating
     /// the dense table until the accumulator has processed at least one batch
     /// so that short-lived accumulators can stick to the sparse path and avoid
     /// zeroing large dense allocations upfront.
-    scratch_dense_enabled: bool,
+    pub scratch_dense_enabled: bool,
     /// Tracks which implementation should be used for future batches.
-    workload_mode: WorkloadMode,
+    pub workload_mode: WorkloadMode,
     /// Number of batches processed so far. Used in conjunction with
     /// `total_groups_seen` when evaluating mode switches.
-    processed_batches: usize,
+    pub processed_batches: usize,
     /// Total number of groups observed across the lifetime of the accumulator.
-    total_groups_seen: usize,
+    pub total_groups_seen: usize,
     /// Highest group index seen so far.
-    lifetime_max_group_index: Option<usize>,
+    pub lifetime_max_group_index: Option<usize>,
     /// Number of groups that currently have a materialised min/max value.
-    populated_groups: usize,
+    pub populated_groups: usize,
     /// Scratch entries reused by the classic simple implementation.
-    simple_slots: Vec<SimpleSlot>,
+    pub simple_slots: Vec<SimpleSlot>,
     /// Epoch used to lazily reset `simple_slots` between batches.
-    simple_epoch: u64,
+    pub simple_epoch: u64,
     /// Reusable list of groups touched by the simple path.
-    simple_touched_groups: Vec<usize>,
+    pub simple_touched_groups: Vec<usize>,
     /// Marker vector used by the dense inline implementation to detect first
     /// touches without clearing a bitmap on every batch.
-    dense_inline_marks: Vec<u64>,
+    pub dense_inline_marks: Vec<u64>,
     /// Whether the dense inline marks vector should be prepared for the current
     /// batch. We keep this disabled for the very first batch processed in dense
     /// inline mode so that short-lived accumulators avoid the upfront
     /// allocation and zeroing costs. Once a batch with values has been
     /// observed we enable the flag so that subsequent batches allocate the mark
     /// table on demand.
-    dense_inline_marks_ready: bool,
+    pub dense_inline_marks_ready: bool,
     /// Epoch associated with `dense_inline_marks`.
-    dense_inline_epoch: u64,
+    pub dense_inline_epoch: u64,
     /// Number of consecutive batches processed while remaining in
     /// `DenseInline` mode.
-    dense_inline_stable_batches: usize,
+    pub dense_inline_stable_batches: usize,
     /// Whether the accumulator has committed to the dense inline fast path and
     /// no longer needs to track per-batch statistics.
-    dense_inline_committed: bool,
+    pub dense_inline_committed: bool,
     /// Total number of groups observed when the dense inline fast path was
     /// committed. If the group domain grows beyond this value we need to
     /// reconsider the workload mode.
-    dense_inline_committed_groups: usize,
+    pub dense_inline_committed_groups: usize,
     #[cfg(test)]
-    dense_enable_invocations: usize,
+    pub dense_enable_invocations: usize,
     #[cfg(test)]
-    dense_sparse_detours: usize,
+    pub dense_sparse_detours: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SimpleSlot {
-    epoch: u64,
-    location: SimpleLocation,
+pub struct SimpleSlot {
+    pub epoch: u64,
+    pub location: SimpleLocation,
 }
 
 impl SimpleSlot {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             epoch: 0,
             location: SimpleLocation::Untouched,
@@ -527,26 +527,26 @@ impl SimpleSlot {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum SimpleLocation {
+pub enum SimpleLocation {
     Untouched,
     Existing,
     Batch(usize),
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ScratchLocation {
+pub enum ScratchLocation {
     Existing,
     Batch(usize),
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ScratchEntry {
-    epoch: u64,
-    location: ScratchLocation,
+pub struct ScratchEntry {
+    pub epoch: u64,
+    pub location: ScratchLocation,
 }
 
 impl ScratchEntry {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             epoch: 0,
             location: ScratchLocation::Existing,
@@ -581,7 +581,7 @@ const SCRATCH_DENSE_GROWTH_STEP: usize = 1024;
 /// DenseInline epoch vector consumes ≈ 800 KiB, which is still significantly
 /// smaller than the multi-vector Simple mode and avoids its cache penalties.
 ///
-const DENSE_INLINE_MAX_TOTAL_GROUPS: usize = 100_000;
+pub const DENSE_INLINE_MAX_TOTAL_GROUPS: usize = 100_000;
 /// Minimum observed density (in percent) required to remain on the inline dense
 /// path.
 const DENSE_INLINE_MIN_DENSITY_PERCENT: usize = 50;
@@ -601,7 +601,7 @@ const SIMPLE_MODE_MAX_TOTAL_GROUPS: usize = 100_000;
 const SIMPLE_MODE_MIN_DENSITY_PERCENT: usize = 10;
 /// Threshold after which the accumulator reevaluates whether it should switch
 /// to the sparse implementation.
-const SPARSE_SWITCH_GROUP_THRESHOLD: usize = 100_000;
+pub const SPARSE_SWITCH_GROUP_THRESHOLD: usize = 100_000;
 /// Maximum density (in percent) tolerated before switching from the simple path
 /// to the sparse implementation.
 const SPARSE_SWITCH_MAX_DENSITY_PERCENT: usize = 1;
@@ -614,7 +614,7 @@ const SCRATCH_DENSE_ENABLE_MULTIPLIER: usize = 8;
 
 /// After this many consecutive batches we consider DenseInline stable and
 /// disable per-batch statistics tracking.
-const DENSE_INLINE_STABILITY_THRESHOLD: usize = 3;
+pub const DENSE_INLINE_STABILITY_THRESHOLD: usize = 3;
 
 /// Implement the MinMaxBytesAccumulator with a comparison function
 /// for comparing strings
@@ -623,7 +623,7 @@ impl MinMaxBytesState {
     ///
     /// # Arguments:
     /// * `data_type`: The data type of the arrays that will be passed to this accumulator
-    fn new(data_type: DataType) -> Self {
+    pub fn new(data_type: DataType) -> Self {
         Self {
             min_max: vec![],
             data_type,
@@ -656,7 +656,7 @@ impl MinMaxBytesState {
     }
 
     /// Set the specified group to the given value, updating memory usage appropriately
-    fn set_value(&mut self, group_index: usize, new_val: &[u8]) {
+    pub fn set_value(&mut self, group_index: usize, new_val: &[u8]) {
         match self.min_max[group_index].as_mut() {
             None => {
                 self.min_max[group_index] = Some(new_val.to_vec());
@@ -673,7 +673,7 @@ impl MinMaxBytesState {
         }
     }
 
-    fn resize_min_max(&mut self, total_num_groups: usize) {
+    pub fn resize_min_max(&mut self, total_num_groups: usize) {
         if total_num_groups < self.min_max.len() {
             let truncated = self.min_max.split_off(total_num_groups);
             // iterate only over Some variants
@@ -689,7 +689,7 @@ impl MinMaxBytesState {
     }
 
     /// Dispatch to the appropriate implementation based on workload mode.
-    fn update_batch<'a, F, I>(
+    pub fn update_batch<'a, F, I>(
         &mut self,
         iter: I,
         group_indices: &[usize],
@@ -945,7 +945,7 @@ impl MinMaxBytesState {
     /// to achieve zero overhead for the common dense case. Each group appears at most
     /// once per batch so we can evaluate the winning value in a single pass and update
     /// `self.min_max` immediately when the new value beats the current minimum/maximum.
-    fn update_batch_sequential_dense<'a, F, I>(
+    pub fn update_batch_sequential_dense<'a, F, I>(
         &mut self,
         iter: I,
         group_indices: &[usize],
@@ -1181,7 +1181,7 @@ impl MinMaxBytesState {
     /// * `total_num_groups` is the logical domain configured by the execution
     ///   plan. It acts as an upper bound for allocations and is used alongside
     ///   `unique_groups` to reason about per-batch density.
-    fn record_batch_stats(&mut self, stats: BatchStats, total_num_groups: usize) {
+    pub fn record_batch_stats(&mut self, stats: BatchStats, total_num_groups: usize) {
         self.processed_batches = self.processed_batches.saturating_add(1);
         if stats.unique_groups == 0 {
             return;
@@ -1952,7 +1952,7 @@ impl MinMaxBytesState {
     ///
     /// - `data_capacity`: the total length of all strings and their contents,
     /// - `min_maxes`: the actual min/max values for each group
-    fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
+    pub fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
         match emit_to {
             EmitTo::All => {
                 let total_bytes = std::mem::take(&mut self.total_data_bytes);
@@ -2059,7 +2059,7 @@ impl MinMaxBytesState {
         self.dense_inline_committed_groups = 0;
     }
 
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         let mut size = size_of::<Self>();
 
         size = size.saturating_add(self.total_data_bytes);
