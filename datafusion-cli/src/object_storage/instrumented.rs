@@ -22,19 +22,22 @@ use std::{
         atomic::{AtomicU8, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use async_trait::async_trait;
+use chrono::Utc;
 use datafusion::{
+    common::instant::Instant,
     error::DataFusionError,
     execution::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    path::Path, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use url::Url;
 
 /// The profiling mode to use for an [`InstrumentedObjectStore`] instance. Collecting profiling
@@ -81,6 +84,7 @@ impl From<u8> for InstrumentedObjectStoreMode {
 pub struct InstrumentedObjectStore {
     inner: Arc<dyn ObjectStore>,
     instrument_mode: AtomicU8,
+    requests: Mutex<Vec<RequestDetails>>,
 }
 
 impl InstrumentedObjectStore {
@@ -89,11 +93,45 @@ impl InstrumentedObjectStore {
         Self {
             inner: object_store,
             instrument_mode,
+            requests: Mutex::new(Vec::new()),
         }
     }
 
     fn set_instrument_mode(&self, mode: InstrumentedObjectStoreMode) {
         self.instrument_mode.store(mode as u8, Ordering::Relaxed)
+    }
+
+    /// Returns all [`RequestDetails`] accumulated in this [`InstrumentedObjectStore`] and clears
+    /// the stored requests
+    pub fn take_requests(&self) -> Vec<RequestDetails> {
+        let mut req = self.requests.lock();
+
+        req.drain(..).collect()
+    }
+
+    async fn instrumented_get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> Result<GetResult> {
+        let timestamp = Utc::now();
+        let range = options.range.clone();
+
+        let start = Instant::now();
+        let ret = self.inner.get_opts(location, options).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::Get,
+            path: location.clone(),
+            timestamp,
+            duration: Some(elapsed),
+            size: Some((ret.range.end - ret.range.start) as usize),
+            range,
+            extra_display: None,
+        });
+
+        Ok(ret)
     }
 }
 
@@ -129,6 +167,12 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        if self.instrument_mode.load(Ordering::Relaxed)
+            != InstrumentedObjectStoreMode::Disabled as u8
+        {
+            return self.instrumented_get_opts(location, options).await;
+        }
+
         self.inner.get_opts(location, options).await
     }
 
@@ -154,6 +198,55 @@ impl ObjectStore for InstrumentedObjectStore {
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         self.inner.head(location).await
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+enum Operation {
+    _Copy,
+    _Delete,
+    Get,
+    _Head,
+    _List,
+    _Put,
+}
+
+/// Holds profiling details about individual requests made through an [`InstrumentedObjectStore`]
+#[derive(Debug)]
+pub struct RequestDetails {
+    op: Operation,
+    path: Path,
+    timestamp: chrono::DateTime<Utc>,
+    duration: Option<Duration>,
+    size: Option<usize>,
+    range: Option<GetRange>,
+    extra_display: Option<String>,
+}
+
+impl fmt::Display for RequestDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output_parts = vec![format!(
+            "{} operation={:?}",
+            self.timestamp.to_rfc3339(),
+            self.op
+        )];
+
+        if let Some(d) = self.duration {
+            output_parts.push(format!("duration={:.6}s", d.as_secs_f32()));
+        }
+        if let Some(s) = self.size {
+            output_parts.push(format!("size={s}"));
+        }
+        if let Some(r) = &self.range {
+            output_parts.push(format!("range: {r}"));
+        }
+        output_parts.push(format!("path={}", self.path));
+
+        if let Some(ed) = &self.extra_display {
+            output_parts.push(ed.clone());
+        }
+
+        write!(f, "{}", output_parts.join(" "))
     }
 }
 
@@ -274,5 +367,57 @@ mod tests {
         let fetched = reg.get_store(&url);
         assert!(fetched.is_ok());
         assert_eq!(reg.stores().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn instrumented_store() {
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let mode = AtomicU8::new(InstrumentedObjectStoreMode::default() as u8);
+        let instrumented = InstrumentedObjectStore::new(store, mode);
+
+        // Load the test store with some data we can read
+        let path = Path::from("test/data");
+        let payload = PutPayload::from_static(b"test_data");
+        instrumented.put(&path, payload).await.unwrap();
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.get(&path).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Enabled);
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.get(&path).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let mut requests = instrumented.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Get);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert_eq!(request.size, Some(9));
+        assert_eq!(request.range, None);
+        assert!(request.extra_display.is_none());
+    }
+
+    #[test]
+    fn request_details() {
+        let rd = RequestDetails {
+            op: Operation::Get,
+            path: Path::from("test"),
+            timestamp: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            duration: Some(Duration::new(5, 0)),
+            size: Some(10),
+            range: Some((..10).into()),
+            extra_display: Some(String::from("extra info")),
+        };
+
+        assert_eq!(
+            format!("{rd}"),
+            "1970-01-01T00:00:00+00:00 operation=Get duration=5.000000s size=10 range: bytes=0-9 path=test extra info"
+        );
     }
 }
