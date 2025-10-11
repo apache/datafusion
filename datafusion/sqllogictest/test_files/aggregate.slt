@@ -144,7 +144,7 @@ statement error Failed to coerce arguments to satisfy a call to 'approx_percenti
 SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
+statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
 statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
@@ -156,10 +156,10 @@ SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c3) FROM aggre
 statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Float64, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
-statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
+statement error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
 SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
-statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
+statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
 SELECT approx_percentile_cont(0.95, c5) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for approx_percentile_cont
@@ -3355,6 +3355,342 @@ b 5
 c 4
 d 4
 e 4
+
+#####################
+## percentile_cont tests (exact percentile calculation)
+#####################
+
+# Test error conditions for percentile_cont
+statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
+SELECT percentile_cont(1.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
+SELECT percentile_cont(-0.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be a literal
+SELECT percentile_cont(c2) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) IGNORE NULLS FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) RESPECT NULLS FROM aggregate_test_100
+
+statement error DataFusion error: This feature is not implemented: Only a single ordering expression is permitted in a WITHIN GROUP clause
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3, c2) FROM aggregate_test_100
+
+# Not supported over sliding windows
+query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause cannot be used together
+SELECT percentile_cont(0.5)
+WITHIN GROUP (ORDER BY c3)
+OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM aggregate_test_100
+
+# Test basic percentile_cont with WITHIN GROUP syntax
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+3
+
+query R
+SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+1
+
+query R
+SELECT percentile_cont(1.0) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+5
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+2
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+4
+
+# Test that percentile_cont(0.5) equals median
+query I
+SELECT median(c2) FROM aggregate_test_100
+----
+3
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+3
+
+# Test with descending order
+query R
+SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
+----
+-101.25
+
+query R
+SELECT percentile_cont(0.05) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
+----
+118.099998
+
+# Test with GROUP BY
+query TR
+SELECT c1, percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a -25
+b 17
+c 1
+d 46.5
+e 64
+
+query TR
+SELECT c1, percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a 65
+b 68
+c 118
+d 123.299998
+e 112
+
+# Test with NULLs
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v)
+----
+2
+
+# Test with all NULLs
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v)
+----
+NULL
+
+# Test with empty set
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1)) as t (v) WHERE v > 10
+----
+NULL
+
+# Test with single value
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (42)) as t (v)
+----
+42
+
+# Test with float values for interpolation
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0), (3.0), (4.0)) as t (v)
+----
+2.5
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0), (3.0), (4.0)) as t (v)
+----
+1.75
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0), (3.0), (4.0)) as t (v)
+----
+3.25
+
+# Test with various numeric types
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c7) FROM aggregate_test_100
+----
+134.5
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c8) FROM aggregate_test_100
+----
+30634
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c11) FROM aggregate_test_100
+----
+0.4906719
+
+# Test edge case with two values (tests interpolation)
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.0)) as t (v)
+----
+15
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.0)) as t (v)
+----
+12.5
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.0)) as t (v)
+----
+17.5
+
+# Test integer inputs requiring interpolation (should return float)
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+2.5
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+1.75
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+3.25
+
+# Test with exact percentile values (no interpolation needed)
+query R
+SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+1
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+2
+
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+3
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+4
+
+query R
+SELECT percentile_cont(1.0) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+5
+
+# Test with negative numbers
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
+----
+0
+
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
+----
+-5
+
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
+----
+5
+
+# Test comparison: percentile_cont should give exact results
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+----
+15.5
+
+# Compare with approx_percentile_cont (should be close but may not be exact)
+query B
+SELECT ABS(percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) - approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c3)) < 5 FROM aggregate_test_100
+----
+true
+
+# Test percentile_cont without WITHIN GROUP clause (alternate syntax)
+query R
+SELECT percentile_cont(c2, 0.5) FROM aggregate_test_100
+----
+3
+
+query R
+SELECT percentile_cont(c2, 0.0) FROM aggregate_test_100
+----
+1
+
+query R
+SELECT percentile_cont(c2, 1.0) FROM aggregate_test_100
+----
+5
+
+query R
+SELECT percentile_cont(c2, 0.25) FROM aggregate_test_100
+----
+2
+
+query R
+SELECT percentile_cont(c2, 0.75) FROM aggregate_test_100
+----
+4
+
+# Verify alternate syntax gives same results as WITHIN GROUP syntax
+query B
+SELECT percentile_cont(c2, 0.5) = percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+true
+
+query B
+SELECT percentile_cont(c3, 0.5) = percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+----
+true
+
+# Test alternate syntax with GROUP BY
+query TR
+SELECT c1, percentile_cont(c3, 0.5) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a -25
+b 17
+c 1
+d 46.5
+e 64
+
+# Verify alternate syntax with GROUP BY gives same results as WITHIN GROUP
+query TB
+SELECT c1, percentile_cont(c3, 0.95) = percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a true
+b true
+c true
+d true
+e true
+
+# Test ascending vs descending equivalence: percentile_cont(0.4) ASC should equal percentile_cont(0.6) DESC
+# This tests the mathematical property that the pth percentile ascending = (1-p)th percentile descending
+# Using a simple controlled dataset to demonstrate the property
+
+# Show 0.4 ascending
+query R
+SELECT percentile_cont(0.4) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+2.6
+
+# Show 0.6 descending (should be same as 0.4 ascending)
+query R
+SELECT percentile_cont(0.6) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+2.6
+
+# Show 0.3 ascending
+query R
+SELECT percentile_cont(0.3) WITHIN GROUP (ORDER BY v) FROM (VALUES (10), (20), (30), (40), (50)) as t (v)
+----
+21.99999
+
+# Show 0.7 descending (should be same as 0.3 ascending)
+query R
+SELECT percentile_cont(0.7) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (10), (20), (30), (40), (50)) as t (v)
+----
+22
+
+# Show 0.25 ascending on larger dataset
+query R
+SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) as t (v)
+----
+2.75
+
+# Show 0.75 descending (should be same as 0.25 ascending)
+query R
+SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) as t (v)
+----
+2.75
 
 # array_agg_zero
 query ?
