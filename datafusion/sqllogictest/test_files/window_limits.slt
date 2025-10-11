@@ -1,0 +1,77 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE null_cases(
+  c1 BIGINT NULL,
+  c2 DOUBLE NULL,
+  c3 BIGINT NULL
+)
+STORED AS CSV
+LOCATION '../core/tests/data/null_cases.csv'
+OPTIONS ('format.has_header' 'true');
+
+### This is the same table as
+### execute_with_partition with 4 partitions
+statement ok
+CREATE EXTERNAL TABLE test (c1 int, c2 bigint, c3 boolean)
+STORED AS CSV LOCATION '../core/tests/data/partitioned_csv'
+OPTIONS('format.has_header' 'false');
+
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query I
+SELECT LEAD(c9) OVER (ORDER BY c9 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM aggregate_test_100 LIMIT 5
+----
+63044568
+141047417
+141680161
+145294611
+225513085
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query I
+SELECT LEAD(c9) OVER (ORDER BY c9 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM aggregate_test_100 LIMIT 5
+----
+63044568
+141047417
+141680161
+145294611
+225513085
