@@ -105,6 +105,7 @@ impl ArrayReplace {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace")],
         }
@@ -186,6 +187,7 @@ impl ArrayReplaceN {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace_n")],
         }
@@ -265,6 +267,7 @@ impl ArrayReplaceAll {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace_all")],
         }
