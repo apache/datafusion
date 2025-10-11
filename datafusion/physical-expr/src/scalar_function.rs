@@ -45,8 +45,8 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
-    Volatility,
+    expr_vec_fmt, ColumnarValue, DeferredScalarFunctionArg, DeferredScalarFunctionArgs,
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, Volatility,
 };
 
 /// Physical expression of a scalar function
@@ -257,38 +257,55 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let args = self
-            .args
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .collect::<Result<Vec<_>>>()?;
-
         let arg_fields = self
             .args
             .iter()
             .map(|e| e.return_field(batch.schema_ref()))
             .collect::<Result<Vec<_>>>()?;
 
-        let input_empty = args.is_empty();
-        let input_all_scalar = args
-            .iter()
-            .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+        let (output, all_args_were_scalar) = if self.fun.short_circuits() {
+            // Prepare for lazy argument evaluation
+            let args = self
+                .args
+                .iter()
+                .map(|e| DeferredScalarFunctionArg::lazy(e, batch))
+                .collect::<Vec<DeferredScalarFunctionArg>>();
 
-        // evaluate the function
-        let output = self.fun.invoke_with_args(ScalarFunctionArgs {
-            args,
-            arg_fields,
-            number_rows: batch.num_rows(),
-            return_field: Arc::clone(&self.return_field),
-            config_options: Arc::clone(&self.config_options),
-        })?;
+            let result =
+                self.fun
+                    .invoke_with_deferred_args(DeferredScalarFunctionArgs {
+                        args,
+                        arg_fields,
+                        number_rows: batch.num_rows(),
+                        return_field: Arc::clone(&self.return_field),
+                        config_options: Arc::clone(&self.config_options),
+                    })?;
+            (result.value, result.all_args_were_scalar)
+        } else {
+            // Eagerly evaluate all arguments
+            let args = self
+                .args
+                .iter()
+                .map(|e| e.evaluate(batch))
+                .collect::<Result<Vec<_>>>()?;
+
+            let args = ScalarFunctionArgs {
+                args,
+                arg_fields,
+                number_rows: batch.num_rows(),
+                return_field: Arc::clone(&self.return_field),
+                config_options: Arc::clone(&self.config_options),
+            };
+            let all_args_were_scalar = args.all_args_are_scalar();
+            (self.fun.invoke_with_args(args)?, all_args_were_scalar)
+        };
 
         if let ColumnarValue::Array(array) = &output {
             if array.len() != batch.num_rows() {
                 // If the arguments are a non-empty slice of scalar values, we can assume that
                 // returning a one-element array is equivalent to returning a scalar.
                 let preserve_scalar =
-                    array.len() == 1 && !input_empty && input_all_scalar;
+                    array.len() == 1 && !self.args.is_empty() && all_args_were_scalar;
                 return if preserve_scalar {
                     ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
                 } else {

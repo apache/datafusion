@@ -176,7 +176,9 @@ pub trait CSEController {
 
     /// Splits the children to normal and conditionally evaluated ones or returns `None`
     /// if all are always evaluated.
-    fn conditional_children(node: &Self::Node) -> Option<ChildrenList<&Self::Node>>;
+    fn conditional_children(
+        node: &Self::Node,
+    ) -> Result<Option<ChildrenList<&Self::Node>>>;
 
     // Returns true if a node is valid. If a node is invalid then it can't be eliminated.
     // Validity is propagated up which means no subtree can be eliminated that contains
@@ -362,7 +364,7 @@ where
         } else {
             // If we are already in a node that can short-circuit then start new
             // traversals on its normal conditional children.
-            match C::conditional_children(node) {
+            match C::conditional_children(node)? {
                 Some((normal, conditional)) => {
                     normal
                         .into_iter()
@@ -713,8 +715,8 @@ mod test {
 
         fn conditional_children(
             _: &Self::Node,
-        ) -> Option<(Vec<&Self::Node>, Vec<&Self::Node>)> {
-            None
+        ) -> Result<Option<(Vec<&Self::Node>, Vec<&Self::Node>)>> {
+            Ok(None)
         }
 
         fn is_valid(_node: &Self::Node) -> bool {
