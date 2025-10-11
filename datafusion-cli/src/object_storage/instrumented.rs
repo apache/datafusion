@@ -390,9 +390,17 @@ mod tests {
         let _ = instrumented.get(&path).await.unwrap();
         assert_eq!(instrumented.requests.lock().len(), 1);
 
-        let requests = instrumented.take_requests();
+        let mut requests = instrumented.take_requests();
         assert_eq!(requests.len(), 1);
         assert!(instrumented.requests.lock().is_empty());
+
+        let request = requests.pop().unwrap();
+        assert_eq!(request.op, Operation::Get);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert_eq!(request.size, Some(9));
+        assert_eq!(request.range, None);
+        assert!(request.extra_display.is_none());
     }
 
     #[test]
