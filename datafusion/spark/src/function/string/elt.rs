@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, AsArray, PrimitiveArray, StringArray, StringBuilder,
 };
-use arrow::compute::cast;
+use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{Int64, Utf8};
 use arrow::datatypes::{DataType, Int64Type};
 use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
@@ -78,6 +78,12 @@ impl ScalarUDFImpl for SparkElt {
             );
         }
 
+        let idx_dt: &DataType = &arg_types[0];
+        if *idx_dt != Int64 && !can_cast_types(idx_dt, &Int64) {
+            return Err(DataFusionError::Plan(format!(
+                "ELT index must be Int64 (or castable to Int64), got {idx_dt:?}"
+            )));
+        }
         let mut coerced = Vec::with_capacity(arg_types.len());
         coerced.push(Int64);
 
