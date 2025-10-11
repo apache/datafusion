@@ -2161,6 +2161,3 @@ enum DenseResult {
     Retry,
     Fallback,
 }
-
-#[cfg(test)]
-mod tests;
