@@ -95,7 +95,7 @@ pub fn checked_add_i64_hardware(a: i64, b: i64) -> Result<i64, ArrowError> {
 
             asm!(
                 "add {result}, {b}",      // result = a + b, sets overflow flag
-                "seto {overflow:l}",      // Set overflow byte if OF=1
+                "seto {overflow}",       // Set overflow byte if OF=1
                 result = inout(reg) a => result,  // Start with a, get result
                 b = in(reg) b,
                 overflow = out(reg_byte) overflow,
@@ -165,7 +165,7 @@ pub fn checked_sub_i64_hardware(a: i64, b: i64) -> Result<i64, ArrowError> {
 
             asm!(
                 "sub {result}, {b}",      // result = a - b, sets overflow flag
-                "seto {overflow:l}",      // Set overflow byte if OF=1
+                "seto {overflow}",       // Set overflow byte if OF=1
                 result = inout(reg) a => result,
                 b = in(reg) b,
                 overflow = out(reg_byte) overflow,
@@ -249,7 +249,7 @@ pub fn checked_mul_i64_hardware(a: i64, b: i64) -> Result<i64, ArrowError> {
 
             asm!(
                 "imul {result}, {b}",     // result = a * b, sets OF on overflow
-                "seto {overflow:l}",      // Set overflow byte if OF=1
+                "seto {overflow}",       // Set overflow byte if OF=1
                 result = inout(reg) a => result,
                 b = in(reg) b,
                 overflow = out(reg_byte) overflow,
@@ -288,7 +288,7 @@ pub fn checked_add_i32_hardware(a: i32, b: i32) -> Result<i32, ArrowError> {
 
             asm!(
                 "add {result:e}, {b:e}",  // 32-bit add, sets overflow flag
-                "seto {overflow:l}",      // Set overflow byte if OF=1
+                "seto {overflow}",       // Set overflow byte if OF=1
                 result = inout(reg) a => result,
                 b = in(reg) b,
                 overflow = out(reg_byte) overflow,

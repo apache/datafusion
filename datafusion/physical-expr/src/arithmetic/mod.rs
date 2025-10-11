@@ -27,7 +27,6 @@ pub mod compile_time;
 pub mod hardware_optimized;
 pub mod integration_tests;
 pub mod intelligent;
-pub mod performance_report;
 pub mod simd_simple;
 pub mod simple;
 
