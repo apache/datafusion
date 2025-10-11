@@ -198,6 +198,11 @@ impl GeneratedSessionContextBuilder {
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
             &ScalarValue::Float64(Some(self.skip_partial_params.ratio_threshold)),
         );
+        // Disable overflow checking for fuzz tests to avoid random overflow errors
+        session_config = session_config.set(
+            "datafusion.execution.fail_on_overflow",
+            &ScalarValue::Boolean(Some(false)),
+        );
 
         let ctx = SessionContext::new_with_config(session_config);
         ctx.register_table(self.table_name, self.table_provider)?;

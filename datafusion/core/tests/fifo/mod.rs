@@ -145,10 +145,12 @@ mod unix_test {
     #[tokio::test]
     async fn unbounded_file_with_swapped_join() -> Result<()> {
         // Create session context
-        let config = SessionConfig::new()
+        let mut config = SessionConfig::new()
             .with_batch_size(TEST_BATCH_SIZE)
             .with_collect_statistics(false)
             .with_target_partitions(1);
+        // Disable overflow checking for this performance-critical streaming test
+        config.options_mut().execution.fail_on_overflow = false;
         let ctx = SessionContext::new_with_config(config);
         // To make unbounded deterministic
         let waiting = Arc::new(AtomicBool::new(true));
@@ -224,10 +226,12 @@ mod unix_test {
     #[tokio::test]
     async fn unbounded_file_with_symmetric_join() -> Result<()> {
         // Create session context
-        let config = SessionConfig::new()
+        let mut config = SessionConfig::new()
             .with_batch_size(TEST_BATCH_SIZE)
             .set_bool("datafusion.execution.coalesce_batches", false)
             .with_target_partitions(1);
+        // Disable overflow checking for this performance-critical streaming test
+        config.options_mut().execution.fail_on_overflow = false;
         let ctx = SessionContext::new_with_config(config);
 
         // Create a new temporary FIFO file
@@ -331,7 +335,9 @@ mod unix_test {
         let waiting = Arc::new(AtomicBool::new(true));
         let waiting_thread = waiting.clone();
         // create local execution context
-        let config = SessionConfig::new().with_batch_size(TEST_BATCH_SIZE);
+        let mut config = SessionConfig::new().with_batch_size(TEST_BATCH_SIZE);
+        // Disable overflow checking for this performance-critical streaming test
+        config.options_mut().execution.fail_on_overflow = false;
         let ctx = SessionContext::new_with_config(config);
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;

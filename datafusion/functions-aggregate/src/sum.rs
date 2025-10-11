@@ -44,7 +44,9 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
     SetMonotonicity, Signature, Volatility,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::{
+    FalliblePrimitiveGroupsAccumulator, PrimitiveGroupsAccumulator,
+};
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
 
@@ -55,6 +57,75 @@ make_udaf_expr_and_func!(
     "Returns the sum of a group of values.",
     sum_udaf
 );
+
+/// Helper function for overflow checking in groups accumulator
+fn checked_add_with_overflow_check_for_groups<T: ArrowNumericType>(
+    a: T::Native,
+    b: T::Native,
+    data_type: &DataType,
+) -> Result<T::Native> {
+    use arrow::datatypes::*;
+    match data_type {
+        DataType::Int64 => {
+            let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+            let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+            match a_i64.checked_add(b_i64) {
+                Some(result) => {
+                    Ok(unsafe { std::mem::transmute_copy::<i64, T::Native>(&result) })
+                }
+                None => exec_err!("Sum operation overflowed"),
+            }
+        }
+        DataType::UInt64 => {
+            let a_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&a) };
+            let b_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&b) };
+            match a_u64.checked_add(b_u64) {
+                Some(result) => {
+                    Ok(unsafe { std::mem::transmute_copy::<u64, T::Native>(&result) })
+                }
+                None => exec_err!("Sum operation overflowed"),
+            }
+        }
+        DataType::Float64 => {
+            // For floats, we don't check overflow - return the normal addition
+            Ok(a.add_wrapping(b))
+        }
+        DataType::Decimal32(_, _) => {
+            let a_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&a) };
+            let b_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&b) };
+            match a_i32.checked_add(b_i32) {
+                Some(result) => {
+                    Ok(unsafe { std::mem::transmute_copy::<i32, T::Native>(&result) })
+                }
+                None => exec_err!("Sum operation overflowed"),
+            }
+        }
+        DataType::Decimal64(_, _) => {
+            let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+            let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+            match a_i64.checked_add(b_i64) {
+                Some(result) => {
+                    Ok(unsafe { std::mem::transmute_copy::<i64, T::Native>(&result) })
+                }
+                None => exec_err!("Sum operation overflowed"),
+            }
+        }
+        DataType::Decimal128(_, _) => {
+            let a_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&a) };
+            let b_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&b) };
+            match a_i128.checked_add(b_i128) {
+                Some(result) => {
+                    Ok(unsafe { std::mem::transmute_copy::<i128, T::Native>(&result) })
+                }
+                None => exec_err!("Sum operation overflowed"),
+            }
+        }
+        _ => {
+            // For other types, fallback to wrapping addition
+            Ok(a.add_wrapping(b))
+        }
+    }
+}
 
 pub fn sum_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
@@ -225,7 +296,10 @@ impl AggregateUDFImpl for Sum {
         } else {
             macro_rules! helper {
                 ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
+                    Ok(Box::new(SumAccumulator::<$t>::new(
+                        $dt.clone(),
+                        args.fail_on_overflow,
+                    )))
                 };
             }
             downcast_sum!(args, helper)
@@ -259,12 +333,29 @@ impl AggregateUDFImpl for Sum {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        let fail_on_overflow = args.fail_on_overflow;
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
-                Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
-                    &$dt,
-                    |x, y| *x = x.add_wrapping(y),
-                )))
+                if fail_on_overflow {
+                    let data_type = $dt.clone();
+                    Ok(Box::new(FalliblePrimitiveGroupsAccumulator::<$t, _>::new(
+                        &$dt,
+                        move |x, y| {
+                            match checked_add_with_overflow_check_for_groups::<$t>(*x, y, &data_type) {
+                                Ok(result) => {
+                                    *x = result;
+                                    Ok(())
+                                }
+                                Err(e) => Err(e),
+                            }
+                        },
+                    )))
+                } else {
+                    Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
+                        &$dt,
+                        |x, y| *x = x.add_wrapping(y),
+                    )))
+                }
             };
         }
         downcast_sum!(args, helper)
@@ -286,7 +377,10 @@ impl AggregateUDFImpl for Sum {
             // non‐distinct path: existing sliding sum
             macro_rules! helper {
                 ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
+                    Ok(Box::new(SlidingSumAccumulator::<$t>::new(
+                        $dt.clone(),
+                        args.fail_on_overflow,
+                    )))
                 };
             }
             downcast_sum!(args, helper)
@@ -322,6 +416,7 @@ impl AggregateUDFImpl for Sum {
 struct SumAccumulator<T: ArrowNumericType> {
     sum: Option<T::Native>,
     data_type: DataType,
+    fail_on_overflow: bool,
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for SumAccumulator<T> {
@@ -331,11 +426,105 @@ impl<T: ArrowNumericType> std::fmt::Debug for SumAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> SumAccumulator<T> {
-    fn new(data_type: DataType) -> Self {
+    fn new(data_type: DataType, fail_on_overflow: bool) -> Self {
         Self {
             sum: None,
             data_type,
+            fail_on_overflow,
         }
+    }
+
+    fn checked_add_with_overflow_check(
+        &self,
+        a: T::Native,
+        b: T::Native,
+    ) -> Result<T::Native> {
+        use arrow::datatypes::*;
+        match self.data_type {
+            DataType::Int64 => {
+                let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+                let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+                match a_i64.checked_add(b_i64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            DataType::UInt64 => {
+                let a_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&a) };
+                let b_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&b) };
+                match a_u64.checked_add(b_u64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<u64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            DataType::Float64 => {
+                // For floats, we don't check overflow - return the normal addition
+                Ok(a.add_wrapping(b))
+            }
+            DataType::Decimal32(_, _) => {
+                let a_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&a) };
+                let b_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&b) };
+                match a_i32.checked_add(b_i32) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i32, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            DataType::Decimal64(_, _) => {
+                let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+                let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+                match a_i64.checked_add(b_i64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            DataType::Decimal128(_, _) => {
+                let a_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&a) };
+                let b_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&b) };
+                match a_i128.checked_add(b_i128) {
+                    Some(result) => Ok(unsafe {
+                        std::mem::transmute_copy::<i128, T::Native>(&result)
+                    }),
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            _ => {
+                // For other types, fallback to wrapping addition
+                Ok(a.add_wrapping(b))
+            }
+        }
+    }
+
+    fn checked_add_with_overflow_check_for_batch(
+        &self,
+        a: T::Native,
+        b: T::Native,
+    ) -> Result<T::Native> {
+        // Reuse the same logic as the main overflow check
+        self.checked_add_with_overflow_check(a, b)
     }
 }
 
@@ -346,9 +535,30 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        if let Some(x) = arrow::compute::sum(values) {
-            let v = self.sum.get_or_insert_with(|| T::Native::usize_as(0));
-            *v = v.add_wrapping(x);
+
+        if self.fail_on_overflow {
+            // For overflow checking, manually iterate through values to detect overflow early
+            let mut batch_sum = T::Native::usize_as(0);
+            for i in 0..values.len() {
+                if values.is_valid(i) {
+                    let value = values.value(i);
+                    batch_sum =
+                        self.checked_add_with_overflow_check_for_batch(batch_sum, value)?;
+                }
+            }
+
+            // Only add the batch sum if we had any values
+            if values.len() > values.null_count() {
+                let current_sum = self.sum.unwrap_or_else(|| T::Native::usize_as(0));
+                self.sum =
+                    Some(self.checked_add_with_overflow_check(current_sum, batch_sum)?);
+            }
+        } else {
+            // For non-overflow checking, use fast Arrow compute
+            if let Some(x) = arrow::compute::sum(values) {
+                let current_sum = self.sum.unwrap_or_else(|| T::Native::usize_as(0));
+                self.sum = Some(current_sum.add_wrapping(x));
+            }
         }
         Ok(())
     }
@@ -373,6 +583,7 @@ struct SlidingSumAccumulator<T: ArrowNumericType> {
     sum: T::Native,
     count: u64,
     data_type: DataType,
+    fail_on_overflow: bool,
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for SlidingSumAccumulator<T> {
@@ -382,11 +593,180 @@ impl<T: ArrowNumericType> std::fmt::Debug for SlidingSumAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> SlidingSumAccumulator<T> {
-    fn new(data_type: DataType) -> Self {
+    fn new(data_type: DataType, fail_on_overflow: bool) -> Self {
         Self {
             sum: T::Native::usize_as(0),
             count: 0,
             data_type,
+            fail_on_overflow,
+        }
+    }
+
+    fn checked_add_with_overflow_check(
+        &self,
+        a: T::Native,
+        b: T::Native,
+    ) -> Result<T::Native> {
+        use arrow::datatypes::*;
+        match self.data_type {
+            DataType::Int64 => {
+                let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+                let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+                match a_i64.checked_add(b_i64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            DataType::UInt64 => {
+                let a_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&a) };
+                let b_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&b) };
+                match a_u64.checked_add(b_u64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<u64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            DataType::Float64 => {
+                // For floats, we don't check overflow - return the normal addition
+                Ok(a.add_wrapping(b))
+            }
+            DataType::Decimal32(_, _) => {
+                let a_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&a) };
+                let b_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&b) };
+                match a_i32.checked_add(b_i32) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i32, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            DataType::Decimal64(_, _) => {
+                let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+                let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+                match a_i64.checked_add(b_i64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            DataType::Decimal128(_, _) => {
+                let a_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&a) };
+                let b_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&b) };
+                match a_i128.checked_add(b_i128) {
+                    Some(result) => Ok(unsafe {
+                        std::mem::transmute_copy::<i128, T::Native>(&result)
+                    }),
+                    None => exec_err!("Sum operation overflowed"),
+                }
+            }
+            _ => {
+                // For other types, fallback to wrapping addition
+                Ok(a.add_wrapping(b))
+            }
+        }
+    }
+
+    fn checked_sub_with_overflow_check(
+        &self,
+        a: T::Native,
+        b: T::Native,
+    ) -> Result<T::Native> {
+        use arrow::datatypes::*;
+        match self.data_type {
+            DataType::Int64 => {
+                let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+                let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+                match a_i64.checked_sub(b_i64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed during retraction"),
+                }
+            }
+            DataType::UInt64 => {
+                let a_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&a) };
+                let b_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&b) };
+                match a_u64.checked_sub(b_u64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<u64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed during retraction"),
+                }
+            }
+            DataType::Float64 => {
+                // For floats, we don't check overflow - return the normal subtraction
+                Ok(a.sub_wrapping(b))
+            }
+            DataType::Decimal32(_, _) => {
+                let a_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&a) };
+                let b_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&b) };
+                match a_i32.checked_sub(b_i32) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i32, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed during retraction"),
+                }
+            }
+            DataType::Decimal64(_, _) => {
+                let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+                let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+                match a_i64.checked_sub(b_i64) {
+                    Some(result) => {
+                        Ok(
+                            unsafe {
+                                std::mem::transmute_copy::<i64, T::Native>(&result)
+                            },
+                        )
+                    }
+                    None => exec_err!("Sum operation overflowed during retraction"),
+                }
+            }
+            DataType::Decimal128(_, _) => {
+                let a_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&a) };
+                let b_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&b) };
+                match a_i128.checked_sub(b_i128) {
+                    Some(result) => Ok(unsafe {
+                        std::mem::transmute_copy::<i128, T::Native>(&result)
+                    }),
+                    None => exec_err!("Sum operation overflowed during retraction"),
+                }
+            }
+            _ => {
+                // For other types, fallback to wrapping subtraction
+                Ok(a.sub_wrapping(b))
+            }
         }
     }
 }
@@ -400,7 +780,11 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
         let values = values[0].as_primitive::<T>();
         self.count += (values.len() - values.null_count()) as u64;
         if let Some(x) = arrow::compute::sum(values) {
-            self.sum = self.sum.add_wrapping(x)
+            if self.fail_on_overflow {
+                self.sum = self.checked_add_with_overflow_check(self.sum, x)?;
+            } else {
+                self.sum = self.sum.add_wrapping(x);
+            }
         }
         Ok(())
     }
@@ -408,7 +792,11 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let values = states[0].as_primitive::<T>();
         if let Some(x) = arrow::compute::sum(values) {
-            self.sum = self.sum.add_wrapping(x)
+            if self.fail_on_overflow {
+                self.sum = self.checked_add_with_overflow_check(self.sum, x)?;
+            } else {
+                self.sum = self.sum.add_wrapping(x);
+            }
         }
         if let Some(x) = arrow::compute::sum(states[1].as_primitive::<UInt64Type>()) {
             self.count += x;
@@ -428,7 +816,11 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
         if let Some(x) = arrow::compute::sum(values) {
-            self.sum = self.sum.sub_wrapping(x)
+            if self.fail_on_overflow {
+                self.sum = self.checked_sub_with_overflow_check(self.sum, x)?;
+            } else {
+                self.sum = self.sum.sub_wrapping(x);
+            }
         }
         self.count -= (values.len() - values.null_count()) as u64;
         Ok(())

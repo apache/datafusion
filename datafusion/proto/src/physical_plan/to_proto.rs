@@ -73,6 +73,7 @@ pub fn serialize_physical_aggr_expr(
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition: (!buf.is_empty()).then_some(buf),
                 human_display: aggr_expr.human_display().to_string(),
+                fail_on_overflow: aggr_expr.fail_on_overflow(),
             },
         )),
     })
@@ -248,6 +249,7 @@ pub fn serialize_physical_expr(
             l: Some(Box::new(serialize_physical_expr(expr.left(), codec)?)),
             r: Some(Box::new(serialize_physical_expr(expr.right(), codec)?)),
             op: format!("{:?}", expr.op()),
+            fail_on_overflow: expr.fail_on_overflow(),
         });
 
         Ok(protobuf::PhysicalExprNode {

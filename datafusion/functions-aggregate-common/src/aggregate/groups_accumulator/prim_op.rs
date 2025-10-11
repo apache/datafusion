@@ -18,7 +18,7 @@
 use std::mem::size_of;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
@@ -42,6 +42,35 @@ pub struct PrimitiveGroupsAccumulator<T, F>
 where
     T: ArrowPrimitiveType + Send,
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
+{
+    /// values per group, stored as the native type
+    values: Vec<T::Native>,
+
+    /// The output type (needed for Decimal precision and scale)
+    data_type: DataType,
+
+    /// The starting value for new groups
+    starting_value: T::Native,
+
+    /// Track nulls in the input / filters
+    null_state: NullState,
+
+    /// Function that computes the primitive result
+    prim_fn: F,
+}
+
+/// An accumulator that implements a single operation over
+/// [`ArrowPrimitiveType`] where the accumulated state is the same as
+/// the input type, but the operation can fail (such as `Sum` with overflow checking)
+///
+/// F: The function to apply to two elements. The first argument is
+/// the existing value and should be updated with the second value.
+/// The function returns a Result to handle potential errors.
+#[derive(Debug)]
+pub struct FalliblePrimitiveGroupsAccumulator<T, F>
+where
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) -> Result<(), DataFusionError> + Send + Sync,
 {
     /// values per group, stored as the native type
     values: Vec<T::Native>,
@@ -188,6 +217,145 @@ where
             .map_err(DataFusionError::from)?
             .with_data_type(self.data_type.clone());
 
+        Ok(vec![Arc::new(state_values)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+    }
+}
+
+impl<T, F> FalliblePrimitiveGroupsAccumulator<T, F>
+where
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) -> Result<(), DataFusionError> + Send + Sync,
+{
+    pub fn new(data_type: &DataType, prim_fn: F) -> Self {
+        Self {
+            values: vec![],
+            data_type: data_type.clone(),
+            null_state: NullState::new(),
+            starting_value: T::default_value(),
+            prim_fn,
+        }
+    }
+
+    /// Set the starting values for new groups
+    pub fn with_starting_value(mut self, starting_value: T::Native) -> Self {
+        self.starting_value = starting_value;
+        self
+    }
+}
+
+impl<T, F> GroupsAccumulator for FalliblePrimitiveGroupsAccumulator<T, F>
+where
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) -> Result<(), DataFusionError> + Send + Sync,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values[0].as_primitive::<T>();
+
+        // update values
+        self.values.resize(total_num_groups, self.starting_value);
+
+        // NullState dispatches / handles tracking nulls and groups that saw no values
+        self.null_state.accumulate_fallible(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                let value = &mut self.values[group_index];
+                (self.prim_fn)(value, new_value)
+            },
+        )?;
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let values = emit_to.take_needed(&mut self.values);
+        let nulls = self.null_state.build(emit_to);
+        let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
+            .with_data_type(self.data_type.clone());
+        Ok(Arc::new(values))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        self.evaluate(emit_to).map(|arr| vec![arr])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        // update / merge are the same
+        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    /// Converts an input batch directly to a state batch
+    ///
+    /// The state is:
+    /// - self.prim_fn for all non null, non filtered values
+    /// - null otherwise
+    ///
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = values[0].as_primitive::<T>().clone();
+
+        // Initializing state with starting values
+        let initial_state =
+            PrimitiveArray::<T>::from_value(self.starting_value, values.len());
+
+        // Recalculating values in case there is filter
+        let values = match opt_filter {
+            None => values,
+            Some(filter) => {
+                let (filter_values, filter_nulls) = filter.clone().into_parts();
+                // Calculating filter mask as a result of bitand of filter, and converting it to null buffer
+                let filter_bool = match filter_nulls {
+                    Some(filter_nulls) => filter_nulls.inner() & &filter_values,
+                    None => filter_values,
+                };
+                let filter_nulls = NullBuffer::from(filter_bool);
+
+                // Rebuilding input values with a new nulls mask, which is equal to
+                // the union of original nulls and filter mask
+                let (dt, values_buf, original_nulls) = values.into_parts();
+                let nulls_buf =
+                    NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
+                PrimitiveArray::<T>::new(values_buf, nulls_buf).with_data_type(dt)
+            }
+        };
+
+        // Apply the fallible function to each element
+        let mut result_values = initial_state.values().to_vec();
+        for (i, value) in values.iter().enumerate() {
+            if let Some(v) = value {
+                (self.prim_fn)(&mut result_values[i], v)?;
+            }
+        }
+        let initial_state =
+            PrimitiveArray::<T>::new(result_values.into(), values.nulls().cloned());
+
+        let state_values = initial_state.with_data_type(self.data_type.clone());
         Ok(vec![Arc::new(state_values)])
     }
 

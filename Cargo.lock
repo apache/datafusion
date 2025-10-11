@@ -2410,6 +2410,7 @@ dependencies = [
  "indexmap 2.11.4",
  "insta",
  "itertools 0.14.0",
+ "lazy_static",
  "parking_lot",
  "paste",
  "petgraph 0.8.3",

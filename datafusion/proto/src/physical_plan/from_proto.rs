@@ -224,8 +224,8 @@ pub fn parse_physical_expr(
         }
         ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
-        ExprType::BinaryExpr(binary_expr) => {
-            Arc::new(BinaryExpr::new_with_overflow_check(
+        ExprType::BinaryExpr(binary_expr) => Arc::new(
+            BinaryExpr::new_with_overflow_check(
                 parse_required_physical_expr(
                     binary_expr.l.as_deref(),
                     ctx,
@@ -241,8 +241,9 @@ pub fn parse_physical_expr(
                     input_schema,
                     codec,
                 )?,
-            ))
-        }
+            )
+            .with_fail_on_overflow(binary_expr.fail_on_overflow),
+        ),
         ExprType::AggregateExpr(_) => {
             return not_impl_err!(
                 "Cannot convert aggregate expr node to physical expression"

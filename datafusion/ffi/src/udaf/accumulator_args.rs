@@ -52,6 +52,7 @@ pub struct FFI_AccumulatorArgs {
     is_reversed: bool,
     name: RString,
     physical_expr_def: RVec<u8>,
+    fail_on_overflow: bool,
 }
 
 impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
@@ -76,6 +77,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             fun_definition: None,
             aggregate_function: None,
             human_display: args.name.to_string(),
+            fail_on_overflow: args.fail_on_overflow,
         };
         let physical_expr_def = physical_expr_def.encode_to_vec().into();
 
@@ -85,6 +87,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             is_reversed: args.is_reversed,
             name: args.name.into(),
             physical_expr_def,
+            fail_on_overflow: args.fail_on_overflow,
         })
     }
 }
@@ -102,6 +105,7 @@ pub struct ForeignAccumulatorArgs {
     pub name: String,
     pub is_distinct: bool,
     pub exprs: Vec<Arc<dyn PhysicalExpr>>,
+    pub fail_on_overflow: bool,
 }
 
 impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
@@ -137,6 +141,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
             name: value.name.to_string(),
             is_distinct: proto_def.distinct,
             exprs,
+            fail_on_overflow: proto_def.fail_on_overflow,
         })
     }
 }
@@ -152,6 +157,7 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
             name: value.name.as_str(),
             is_distinct: value.is_distinct,
             exprs: &value.exprs,
+            fail_on_overflow: value.fail_on_overflow,
         }
     }
 }
@@ -177,6 +183,7 @@ mod tests {
             name: "round_trip",
             is_distinct: true,
             exprs: &[col("a", &schema)?],
+            fail_on_overflow: false,
         };
         let orig_str = format!("{orig_args:?}");
 

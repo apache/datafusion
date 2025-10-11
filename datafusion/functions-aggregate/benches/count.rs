@@ -42,6 +42,7 @@ fn prepare_group_accumulator() -> Box<dyn GroupsAccumulator> {
         name: "COUNT(f)",
         is_distinct: false,
         exprs: &[col("f", &schema).unwrap()],
+        fail_on_overflow: false,
     };
     let count_fn = Count::new();
 
@@ -65,6 +66,7 @@ fn prepare_accumulator() -> Box<dyn Accumulator> {
         name: "COUNT(f)",
         is_distinct: true,
         exprs: &[col("f", &schema).unwrap()],
+        fail_on_overflow: false,
     };
     let count_fn = Count::new();
 

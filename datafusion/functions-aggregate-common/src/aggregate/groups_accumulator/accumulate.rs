@@ -23,6 +23,7 @@ use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::EmitTo;
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
@@ -231,6 +232,36 @@ impl NullState {
         };
         NullBuffer::new(nulls)
     }
+
+    /// Invokes `value_fn(group_index, value)` for each non null, non
+    /// filtered value in `values`, while tracking which groups have
+    /// seen null inputs and which groups have seen any inputs. This version
+    /// supports fallible value functions that can return errors.
+    ///
+    /// When value_fn is called it also sets
+    ///
+    /// 1. `self.seen_values[group_index]` to true for all rows that had a non null value
+    pub fn accumulate_fallible<T, F>(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        mut value_fn: F,
+    ) -> Result<()>
+    where
+        T: ArrowPrimitiveType + Send,
+        F: FnMut(usize, T::Native) -> Result<(), DataFusionError> + Send,
+    {
+        // ensure the seen_values is big enough (start everything at
+        // "not seen" valid)
+        let seen_values =
+            initialize_builder(&mut self.seen_values, total_num_groups, false);
+        accumulate_fallible(group_indices, values, opt_filter, |group_index, value| {
+            seen_values.set_bit(group_index, true);
+            value_fn(group_index, value)
+        })
+    }
 }
 
 /// Invokes `value_fn(group_index, value)` for each non null, non
@@ -369,6 +400,82 @@ pub fn accumulate<T, F>(
                 })
         }
     }
+}
+
+/// Invokes `value_fn(group_index, value)` for each non null, non
+/// filtered value of `value`. This version supports fallible value functions.
+///
+/// # Arguments:
+///
+/// * `group_indices`:  To which groups do the rows in `values` belong, (aka group_index)
+/// * `values`: the input arguments to the accumulator
+/// * `opt_filter`: if present, only rows for which is Some(true) are included
+/// * `value_fn`: function invoked for  (group_index, value) where value is non null
+pub fn accumulate_fallible<T, F>(
+    group_indices: &[usize],
+    values: &PrimitiveArray<T>,
+    opt_filter: Option<&BooleanArray>,
+    mut value_fn: F,
+) -> Result<()>
+where
+    T: ArrowPrimitiveType + Send,
+    F: FnMut(usize, T::Native) -> Result<(), DataFusionError>,
+{
+    assert_eq!(group_indices.len(), values.len());
+
+    match (values.null_count() > 0, opt_filter) {
+        // no nulls, no filter,
+        (false, None) => {
+            group_indices
+                .iter()
+                .zip(values.values().iter())
+                .try_for_each(|(&group_index, new_value)| {
+                    value_fn(group_index, *new_value)
+                })?;
+        }
+        // nulls, no filter
+        (true, None) => {
+            group_indices.iter().zip(values.iter()).try_for_each(
+                |(&group_index, new_value)| {
+                    if let Some(new_value) = new_value {
+                        value_fn(group_index, new_value)
+                    } else {
+                        Ok(())
+                    }
+                },
+            )?;
+        }
+        // no nulls, but a filter
+        (false, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            filter
+                .iter()
+                .zip(group_indices.iter())
+                .zip(values.values().iter())
+                .try_for_each(|((filter_value, &group_index), new_value)| {
+                    if let Some(true) = filter_value {
+                        value_fn(group_index, *new_value)
+                    } else {
+                        Ok(())
+                    }
+                })?;
+        }
+        // both null values and filters
+        (true, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            filter
+                .iter()
+                .zip(group_indices.iter())
+                .zip(values.iter())
+                .try_for_each(|((filter_value, &group_index), new_value)| {
+                    match (filter_value, new_value) {
+                        (Some(true), Some(new_value)) => value_fn(group_index, new_value),
+                        _ => Ok(()),
+                    }
+                })?;
+        }
+    }
+    Ok(())
 }
 
 /// Accumulates with multiple accumulate(value) columns. (e.g. `corr(c1, c2)`)
