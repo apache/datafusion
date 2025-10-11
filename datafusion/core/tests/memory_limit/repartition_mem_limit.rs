@@ -33,7 +33,7 @@ use itertools::Itertools;
 /// The idea is to make a real world query with a relatively low memory limit and
 /// then drive one partition at a time, simulating dissimilar execution speed in partitions.
 /// Just as some examples of real world scenarios where this can happen consider
-/// lopsided groups in a group by especially if one partitions spills and others dont',
+/// lopsided groups in a group by especially if one partitions spills and others don't,
 /// or in distributed systems if one upstream node is slower than others.
 #[tokio::test]
 async fn test_repartition_memory_limit() {
