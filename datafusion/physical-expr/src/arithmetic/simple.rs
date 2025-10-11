@@ -18,7 +18,7 @@
 //! Simplified ultra-fast arithmetic with overflow detection
 
 use arrow::array::{Array, AsArray, PrimitiveArray};
-use arrow::compute::kernels::numeric::add;
+use arrow::compute::kernels::numeric::{add, mul, sub};
 use arrow::datatypes::Int64Type;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -57,9 +57,15 @@ pub fn ultra_fast_checked_add(
                 .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
         _ => {
-            // Handle scalar cases with existing DataFusion logic
-            let left_array = left.to_array(1)?;
-            let right_array = right.to_array(1)?;
+            // Handle scalar cases - determine the correct length for array expansion
+            let length = match (left, right) {
+                (ColumnarValue::Array(arr), ColumnarValue::Scalar(_)) => arr.len(),
+                (ColumnarValue::Scalar(_), ColumnarValue::Array(arr)) => arr.len(),
+                _ => 1, // Both scalars
+            };
+
+            let left_array = left.to_array(length)?;
+            let right_array = right.to_array(length)?;
             add(&left_array, &right_array)
                 .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
@@ -92,21 +98,23 @@ pub fn ultra_fast_checked_sub(
                 return Ok(Arc::new(result_array));
             }
 
-            // For non-Int64 types, we don't have overflow checking implemented yet
-            // Use addition with negation as a workaround
-            Err(DataFusionError::NotImplemented(
-                "Subtraction overflow checking not implemented for non-Int64 types"
-                    .to_string(),
-            ))
+            // For non-Int64 types, fall back to standard Arrow functions
+            // This ensures compatibility with all existing DataFusion operations
+            sub(left_array, right_array)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
         _ => {
-            // Handle scalar cases by converting to arrays and using SIMD path
-            let left_array = left.to_array(1)?;
-            let right_array = right.to_array(1)?;
-            ultra_fast_checked_sub(
-                &ColumnarValue::Array(left_array),
-                &ColumnarValue::Array(right_array),
-            )
+            // Handle scalar cases - determine the correct length for array expansion
+            let length = match (left, right) {
+                (ColumnarValue::Array(arr), ColumnarValue::Scalar(_)) => arr.len(),
+                (ColumnarValue::Scalar(_), ColumnarValue::Array(arr)) => arr.len(),
+                _ => 1, // Both scalars
+            };
+
+            let left_array = left.to_array(length)?;
+            let right_array = right.to_array(length)?;
+            sub(&left_array, &right_array)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
     }
 }
@@ -137,20 +145,22 @@ pub fn ultra_fast_checked_mul(
                 return Ok(Arc::new(result_array));
             }
 
-            // For non-Int64 types, we don't have overflow checking implemented yet
-            Err(DataFusionError::NotImplemented(
-                "Multiplication overflow checking not implemented for non-Int64 types"
-                    .to_string(),
-            ))
+            // For non-Int64 types, fall back to standard Arrow functions
+            mul(left_array, right_array)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
         _ => {
-            // Handle scalar cases by converting to arrays and using SIMD path
-            let left_array = left.to_array(1)?;
-            let right_array = right.to_array(1)?;
-            ultra_fast_checked_mul(
-                &ColumnarValue::Array(left_array),
-                &ColumnarValue::Array(right_array),
-            )
+            // Handle scalar cases - determine the correct length for array expansion
+            let length = match (left, right) {
+                (ColumnarValue::Array(arr), ColumnarValue::Scalar(_)) => arr.len(),
+                (ColumnarValue::Scalar(_), ColumnarValue::Array(arr)) => arr.len(),
+                _ => 1, // Both scalars
+            };
+
+            let left_array = left.to_array(length)?;
+            let right_array = right.to_array(length)?;
+            mul(&left_array, &right_array)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
     }
 }

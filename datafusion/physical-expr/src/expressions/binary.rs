@@ -1404,27 +1404,55 @@ impl PhysicalExpr for BinaryExpr {
         match self.op {
             Operator::Plus => {
                 if self.fail_on_overflow {
-                    // Use intelligent arithmetic with compile-time analysis and adaptive optimization
-                    return crate::arithmetic::intelligent_checked_add(&lhs, &rhs, None)
+                    // Only use intelligent overflow checking for Int64 types
+                    // For other types, use standard Arrow functions which handle overflow appropriately
+                    if matches!(left_data_type, DataType::Int64)
+                        && matches!(right_data_type, DataType::Int64)
+                    {
+                        return crate::arithmetic::intelligent_checked_add(
+                            &lhs, &rhs, None,
+                        )
                         .map(ColumnarValue::Array);
+                    } else {
+                        // Use Arrow's standard add function for non-Int64 types
+                        return apply(&lhs, &rhs, add);
+                    }
                 } else {
                     return apply(&lhs, &rhs, add_wrapping);
                 }
             }
             Operator::Minus => {
                 if self.fail_on_overflow {
-                    // Use intelligent arithmetic with compile-time analysis and adaptive optimization
-                    return crate::arithmetic::intelligent_checked_sub(&lhs, &rhs, None)
+                    // Only use intelligent overflow checking for Int64 types
+                    // For other types, use standard Arrow functions which handle overflow appropriately
+                    if matches!(left_data_type, DataType::Int64)
+                        && matches!(right_data_type, DataType::Int64)
+                    {
+                        return crate::arithmetic::intelligent_checked_sub(
+                            &lhs, &rhs, None,
+                        )
                         .map(ColumnarValue::Array);
+                    } else {
+                        return apply(&lhs, &rhs, sub);
+                    }
                 } else {
                     return apply(&lhs, &rhs, sub_wrapping);
                 }
             }
             Operator::Multiply => {
                 if self.fail_on_overflow {
-                    // Use intelligent arithmetic with compile-time analysis and adaptive optimization
-                    return crate::arithmetic::intelligent_checked_mul(&lhs, &rhs, None)
+                    // Only use intelligent overflow checking for Int64 types
+                    // For other types, use standard Arrow functions which handle overflow appropriately
+                    if matches!(left_data_type, DataType::Int64)
+                        && matches!(right_data_type, DataType::Int64)
+                    {
+                        return crate::arithmetic::intelligent_checked_mul(
+                            &lhs, &rhs, None,
+                        )
                         .map(ColumnarValue::Array);
+                    } else {
+                        return apply(&lhs, &rhs, mul);
+                    }
                 } else {
                     return apply(&lhs, &rhs, mul_wrapping);
                 }

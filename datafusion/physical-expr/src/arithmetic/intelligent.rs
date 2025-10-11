@@ -21,7 +21,7 @@
 //! to achieve ultra-low overhead arithmetic overflow detection.
 
 use arrow::array::{Array, AsArray, PrimitiveArray};
-use arrow::compute::kernels::numeric::add;
+use arrow::compute::kernels::numeric::{add, mul, sub};
 use arrow::datatypes::Int64Type;
 use arrow::error::ArrowError;
 use datafusion_common::instant::Instant;
@@ -42,7 +42,20 @@ pub fn intelligent_checked_add(
 ) -> Result<Arc<dyn Array>> {
     match (left, right) {
         (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
-            let batch_size = left_array.len().min(right_array.len());
+            // PRIORITY: Check array lengths first to avoid any length mismatch errors
+            if left_array.len() != right_array.len() {
+                return add(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
+
+            // Check if both arrays are Int64 - if not, fall back to standard Arrow functions immediately
+            if !matches!(left_array.data_type(), arrow::datatypes::DataType::Int64)
+                || !matches!(right_array.data_type(), arrow::datatypes::DataType::Int64)
+            {
+                return add(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
+            let batch_size = left_array.len();
 
             // ULTRA-FAST PATH: Optimized thresholds based on benchmark results
             if batch_size <= 500 {
@@ -120,9 +133,15 @@ pub fn intelligent_checked_add(
             }
         }
         _ => {
-            // Handle scalar cases
-            let left_array = left.to_array(1)?;
-            let right_array = right.to_array(1)?;
+            // Handle scalar cases - determine the correct length for array expansion
+            let length = match (left, right) {
+                (ColumnarValue::Array(arr), ColumnarValue::Scalar(_)) => arr.len(),
+                (ColumnarValue::Scalar(_), ColumnarValue::Array(arr)) => arr.len(),
+                _ => 1, // Both scalars
+            };
+
+            let left_array = left.to_array(length)?;
+            let right_array = right.to_array(length)?;
             add(&left_array, &right_array)
                 .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
@@ -139,7 +158,20 @@ pub fn intelligent_checked_sub(
 
     match (left, right) {
         (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
-            let batch_size = left_array.len().min(right_array.len());
+            // PRIORITY: Check array lengths first to avoid any length mismatch errors
+            if left_array.len() != right_array.len() {
+                return sub(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
+
+            // Check if both arrays are Int64 - if not, fall back to standard Arrow functions immediately
+            if !matches!(left_array.data_type(), arrow::datatypes::DataType::Int64)
+                || !matches!(right_array.data_type(), arrow::datatypes::DataType::Int64)
+            {
+                return sub(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
+            let batch_size = left_array.len();
 
             // Compile-time safety check
             if let Some(SafetyCategory::ProveablySafe) = compile_time_safety {
@@ -177,13 +209,17 @@ pub fn intelligent_checked_sub(
             result
         }
         _ => {
-            // Handle scalar cases
-            let left_array = left.to_array(1)?;
-            let right_array = right.to_array(1)?;
-            super::simple::ultra_fast_checked_sub(
-                &ColumnarValue::Array(left_array),
-                &ColumnarValue::Array(right_array),
-            )
+            // Handle scalar cases - determine the correct length for array expansion
+            let length = match (left, right) {
+                (ColumnarValue::Array(arr), ColumnarValue::Scalar(_)) => arr.len(),
+                (ColumnarValue::Scalar(_), ColumnarValue::Array(arr)) => arr.len(),
+                _ => 1, // Both scalars
+            };
+
+            let left_array = left.to_array(length)?;
+            let right_array = right.to_array(length)?;
+            sub(&left_array, &right_array)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
     }
 }
@@ -198,7 +234,22 @@ pub fn intelligent_checked_mul(
 
     match (left, right) {
         (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
-            let batch_size = left_array.len().min(right_array.len());
+            // PRIORITY: Check array lengths first to avoid any length mismatch errors
+            if left_array.len() != right_array.len() {
+                return mul(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
+
+            // Check if both arrays are Int64 - if not, fall back to standard Arrow functions immediately
+            if !matches!(left_array.data_type(), arrow::datatypes::DataType::Int64)
+                || !matches!(right_array.data_type(), arrow::datatypes::DataType::Int64)
+            {
+                return mul(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
+
+            // Arrays have same length and are both Int64, continue with our overflow checking
+            let batch_size = left_array.len();
 
             // Multiplication is always risky, be more conservative
             if let Some(SafetyCategory::ProveablySafe) = compile_time_safety {
@@ -242,13 +293,17 @@ pub fn intelligent_checked_mul(
             result
         }
         _ => {
-            // Handle scalar cases
-            let left_array = left.to_array(1)?;
-            let right_array = right.to_array(1)?;
-            super::simple::ultra_fast_checked_mul(
-                &ColumnarValue::Array(left_array),
-                &ColumnarValue::Array(right_array),
-            )
+            // Handle scalar cases - determine the correct length for array expansion
+            let length = match (left, right) {
+                (ColumnarValue::Array(arr), ColumnarValue::Scalar(_)) => arr.len(),
+                (ColumnarValue::Scalar(_), ColumnarValue::Array(arr)) => arr.len(),
+                _ => 1, // Both scalars
+            };
+
+            let left_array = left.to_array(length)?;
+            let right_array = right.to_array(length)?;
+            mul(&left_array, &right_array)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         }
     }
 }
@@ -283,7 +338,17 @@ fn execute_minimal_check_add(
         left.as_primitive_opt::<Int64Type>(),
         right.as_primitive_opt::<Int64Type>(),
     ) {
-        let len = left_i64.len().min(right_i64.len());
+        // Validate arrays have the same length (standard Arrow requirement)
+        if left_i64.len() != right_i64.len() {
+            return Err(DataFusionError::ArrowError(
+                Box::new(ArrowError::ComputeError(
+                    "Cannot perform a binary operation on arrays of different length"
+                        .to_string(),
+                )),
+                None,
+            ));
+        }
+        let len = left_i64.len();
 
         // Quick sample check: test first, middle, and last elements
         let sample_indices = if len <= 3 {
@@ -324,9 +389,20 @@ fn execute_hardware_optimized_add(
         left.as_primitive_opt::<Int64Type>(),
         right.as_primitive_opt::<Int64Type>(),
     ) {
+        // Validate arrays have the same length (standard Arrow requirement)
+        if left_i64.len() != right_i64.len() {
+            return Err(DataFusionError::ArrowError(
+                Box::new(ArrowError::ComputeError(
+                    "Cannot perform a binary operation on arrays of different length"
+                        .to_string(),
+                )),
+                None,
+            ));
+        }
+
         let left_values = left_i64.values();
         let right_values = right_i64.values();
-        let len = left_values.len().min(right_values.len());
+        let len = left_values.len();
 
         // SIMPLIFIED: Direct vectorized checked addition without unnecessary complexity
         let mut result = Vec::with_capacity(len);
@@ -401,9 +477,20 @@ fn execute_simplified_selective_add(
         left.as_primitive_opt::<Int64Type>(),
         right.as_primitive_opt::<Int64Type>(),
     ) {
+        // Validate arrays have the same length (standard Arrow requirement)
+        if left_i64.len() != right_i64.len() {
+            return Err(DataFusionError::ArrowError(
+                Box::new(ArrowError::ComputeError(
+                    "Cannot perform a binary operation on arrays of different length"
+                        .to_string(),
+                )),
+                None,
+            ));
+        }
+
         let left_values = left_i64.values();
         let right_values = right_i64.values();
-        let len = left_values.len().min(right_values.len());
+        let len = left_values.len();
 
         // SIMPLIFIED: Quick 3-sample check to determine strategy (no expensive categorization)
         let sample_safe = if len > 2 {
@@ -487,7 +574,7 @@ fn execute_safe_subtraction(
     right: &Arc<dyn Array>,
 ) -> Result<Arc<dyn Array>> {
     // For provably safe operations, we can use Arrow's standard subtraction
-    add(left, right).map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+    sub(left, right).map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
 /// Execute hardware-optimized subtraction
@@ -586,9 +673,14 @@ fn detect_runtime_safety_patterns(
         left.as_primitive_opt::<Int64Type>(),
         right.as_primitive_opt::<Int64Type>(),
     ) {
+        // For safety analysis, mismatched lengths indicate potential issue
+        if left_i64.len() != right_i64.len() {
+            return Some(SafetyCategory::Unknown); // Different lengths = unknown safety
+        }
+
         let left_values = left_i64.values();
         let right_values = right_i64.values();
-        let len = left_values.len().min(right_values.len());
+        let len = left_values.len();
 
         // Sample-based analysis (much faster than full scan)
         let sample_size = (len / 10).clamp(1, 100); // Sample 10% up to 100 elements

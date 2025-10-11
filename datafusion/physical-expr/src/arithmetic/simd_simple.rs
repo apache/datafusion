@@ -24,7 +24,13 @@ use arrow::error::ArrowError;
 
 /// Optimized batch addition with fast overflow detection - REDESIGNED
 pub fn simd_checked_add_i64(left: &[i64], right: &[i64]) -> Result<Vec<i64>, ArrowError> {
-    let len = std::cmp::min(left.len(), right.len());
+    // Validate arrays have the same length (standard Arrow requirement)
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform a binary operation on arrays of different length".to_string(),
+        ));
+    }
+    let len = left.len();
     let mut result = Vec::with_capacity(len);
 
     // Optimized chunk size for vectorization
@@ -71,7 +77,13 @@ pub fn simd_checked_add_i64(left: &[i64], right: &[i64]) -> Result<Vec<i64>, Arr
 
 /// Optimized batch subtraction with fast overflow detection - REDESIGNED
 pub fn simd_checked_sub_i64(left: &[i64], right: &[i64]) -> Result<Vec<i64>, ArrowError> {
-    let len = std::cmp::min(left.len(), right.len());
+    // Validate arrays have the same length (standard Arrow requirement)
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform a binary operation on arrays of different length".to_string(),
+        ));
+    }
+    let len = left.len();
     let mut result = Vec::with_capacity(len);
 
     const CHUNK_SIZE: usize = 32;
@@ -115,7 +127,13 @@ pub fn simd_checked_sub_i64(left: &[i64], right: &[i64]) -> Result<Vec<i64>, Arr
 
 /// Optimized batch multiplication with overflow detection
 pub fn simd_checked_mul_i64(left: &[i64], right: &[i64]) -> Result<Vec<i64>, ArrowError> {
-    let len = std::cmp::min(left.len(), right.len());
+    // Validate arrays have the same length (standard Arrow requirement)
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform a binary operation on arrays of different length".to_string(),
+        ));
+    }
+    let len = left.len();
     let mut result = Vec::with_capacity(len);
 
     const CHUNK_SIZE: usize = 8;
