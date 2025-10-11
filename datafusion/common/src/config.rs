@@ -22,10 +22,14 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::ExplainFormat;
+use crate::format::{
+    DFCompression, DFDurationFormat, DFEnabledStatistics, DFEncoding, ExplainFormat,
+    NullOrdering, SQLDialect,
+};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
+use arrow::util::display::DurationFormat;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -34,6 +38,8 @@ use std::str::FromStr;
 
 #[cfg(feature = "parquet_encryption")]
 use hex;
+use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::properties::EnabledStatistics;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -258,7 +264,9 @@ config_namespace! {
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
-        pub dialect: String, default = "generic".to_string()
+        // TODO
+        // pub dialect: String, default = "generic".to_string()
+        pub dialect: SQLDialect, default = SQLDialect::Generic
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
         /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
@@ -288,7 +296,7 @@ config_namespace! {
         ///
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
-        pub default_null_ordering: String, default = "nulls_max".to_string()
+        pub default_null_ordering: NullOrdering, default = NullOrdering::NullsMax
     }
 }
 
@@ -308,9 +316,9 @@ impl FromStr for SpillCompression {
             "zstd" => Ok(Self::Zstd),
             "lz4_frame" => Ok(Self::Lz4Frame),
             "uncompressed" | "" => Ok(Self::Uncompressed),
-            other => Err(DataFusionError::Configuration(format!(
-                "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4_frame, uncompressed"
-            ))),
+            other => {
+                Err(DataFusionError::Configuration(format!("Invalid spill file compression type. Expected 'lz4_frame', 'uncompressed' or 'zstd'. Got '{other}'")))
+            },
         }
     }
 }
@@ -442,7 +450,7 @@ config_namespace! {
         /// This is a soft max, so it can be exceeded slightly. There also
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
-        pub soft_max_rows_per_output_file: usize, default = 50000000
+        pub soft_max_rows_per_output_file: usize, default = 50_000_000
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
@@ -450,7 +458,7 @@ config_namespace! {
         /// memory consumption
         pub max_buffered_batches_per_output_file: usize, default = 2
 
-        /// Should sub directories be ignored when scanning directories for data
+        /// Should subdirectories be ignored when scanning directories for data
         /// files. Defaults to true (ignores subdirectories), consistent with
         /// Hive. Note that this setting does not affect reading partitioned
         /// tables (e.g. `/table/year=2021/month=01/data.parquet`).
@@ -601,7 +609,7 @@ config_namespace! {
         ///
         /// Note that this default setting is not the same as
         /// the default parquet writer setting.
-        pub compression: Option<String>, transform = str::to_lowercase, default = Some("zstd(3)".into())
+        pub compression: Option<DFCompression>, default = Some(DFCompression::default())
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
@@ -614,7 +622,7 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
+        pub statistics_enabled: Option<DFEnabledStatistics>, default = Some(DFEnabledStatistics(EnabledStatistics::Page))
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
@@ -640,7 +648,7 @@ config_namespace! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub encoding: Option<String>, transform = str::to_lowercase, default = None
+        pub encoding: Option<DFEncoding>, default = None
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
@@ -929,7 +937,7 @@ config_namespace! {
         /// Time format for time arrays
         pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
         /// Duration format. Can be either `"pretty"` or `"ISO8601"`
-        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
+        pub duration_format: DFDurationFormat, default = DFDurationFormat(DurationFormat::Pretty)
         /// Show types in visual representation batches
         pub types_info: bool, default = false
     }
@@ -938,17 +946,7 @@ config_namespace! {
 impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
     type Error = DataFusionError;
     fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
-        let duration_format = match self.duration_format.as_str() {
-            "pretty" => arrow::util::display::DurationFormat::Pretty,
-            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
-            _ => {
-                return _config_err!(
-                    "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    self.duration_format
-                )
-            }
-        };
-
+        let duration_format = self.duration_format.0;
         Ok(arrow::util::display::FormatOptions::new()
             .with_display_error(self.safe)
             .with_null(&self.null)
@@ -2122,7 +2120,7 @@ config_namespace_with_hashmap! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
-        pub encoding: Option<String>, default = None
+        pub encoding: Option<DFEncoding>, default = None
 
         /// Sets if dictionary encoding is enabled for the column path. If NULL, uses
         /// default parquet options
@@ -2133,13 +2131,13 @@ config_namespace_with_hashmap! {
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
-        pub compression: Option<String>, transform = str::to_lowercase, default = None
+        pub compression: Option<DFCompression>, default = None
 
         /// Sets if statistics are enabled for the column
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet options
-        pub statistics_enabled: Option<String>, default = None
+        pub statistics_enabled: Option<DFEnabledStatistics>, default = None
 
         /// Sets bloom filter false positive probability for the column path. If NULL, uses
         /// default parquet options
