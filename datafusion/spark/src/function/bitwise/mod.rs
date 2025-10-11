@@ -40,7 +40,11 @@ pub mod expr_fn {
         "Returns the number of bits set in the binary representation of the argument.",
         col
     ));
-    export_functions!((bit_not, "Returns the result of a bitwise negation operation on the argument, where each bit in the binary representation is flipped, following two's complement arithmetic for signed integers.", col));
+    export_functions!((
+        bit_not,
+        "Returns the result of a bitwise negation operation on the argument, where each bit in the binary representation is flipped, following two's complement arithmetic for signed integers.",
+        col
+    ));
     export_functions!((
         shiftleft,
         "Shifts the bits of the first argument left by the number of positions specified by the second argument. If the shift amount is negative or greater than or equal to the bit width, it is normalized to the bit width (i.e., pmod(shift, bit_width)).",
