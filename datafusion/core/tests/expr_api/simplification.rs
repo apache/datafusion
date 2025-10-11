@@ -107,7 +107,7 @@ fn test_table_scan() -> LogicalPlan {
         Field::new("d", DataType::UInt32, false),
         Field::new("e", DataType::UInt32, true),
     ]);
-    table_scan(Some("test"), &schema, None)
+    table_scan(Some("test"), schema, None)
         .expect("creating scan")
         .build()
         .expect("building plan")
@@ -324,7 +324,7 @@ fn select_date_plus_interval() -> Result<()> {
 fn simplify_project_scalar_fn() -> Result<()> {
     // Issue https://github.com/apache/datafusion/issues/5996
     let schema = Schema::new(vec![Field::new("f", DataType::Float64, false)]);
-    let plan = table_scan(Some("test"), &schema, None)?
+    let plan = table_scan(Some("test"), schema, None)?
         .project(vec![power(col("f"), lit(1.0))])?
         .build()?;
 
@@ -350,7 +350,7 @@ fn simplify_scan_predicate() -> Result<()> {
     ]);
     let plan = table_scan_with_filters(
         Some("test"),
-        &schema,
+        schema,
         None,
         vec![col("g").eq(power(col("f"), lit(1.0)))],
     )?
