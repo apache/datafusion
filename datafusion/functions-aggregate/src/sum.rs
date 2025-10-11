@@ -108,6 +108,18 @@ macro_rules! downcast_sum {
     };
 }
 
+/// Properties for [`Sum`]
+#[derive(Default, Debug, PartialEq, Eq, Hash)]
+pub struct SumProperties {
+    /// Whether to maintain the precision of decimal types
+    /// If `false`, the new precision of this [`Sum`] will be calculated as
+    /// `MIN(<max decimal precision>, <precision of first argument> + 10)` (similar to Spark).
+    /// If `true`, the new precision will be the same as the precision of the first argument.
+    ///
+    /// The default value is `false`.
+    pub maintains_decimal_precision: bool,
+}
+
 #[user_doc(
     doc_section(label = "General Functions"),
     description = "Returns the sum of all values in the specified column.",
@@ -125,12 +137,21 @@ macro_rules! downcast_sum {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Sum {
     signature: Signature,
+    properties: SumProperties,
 }
 
 impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            properties: SumProperties::default(),
+        }
+    }
+
+    pub fn new_with_properties(properties: SumProperties) -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+            properties,
         }
     }
 }
@@ -180,34 +201,46 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        macro_rules! new_with_precision {
+            ($dt:expr,$max:expr,$precision:expr,$scale:expr) => {
+                if self.properties.maintains_decimal_precision {
+                    $dt($precision, $scale)
+                } else {
+                    // In Spark, the resulting decimal precision is bounded
+                    // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+                    let new_precision = $max.min($precision + 10);
+                    $dt(new_precision, $scale)
+                }
+            };
+        }
         match &arg_types[0] {
             DataType::Int64 => Ok(DataType::Int64),
             DataType::UInt64 => Ok(DataType::UInt64),
             DataType::Float64 => Ok(DataType::Float64),
-            DataType::Decimal32(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                let new_precision = DECIMAL32_MAX_PRECISION.min(*precision + 10);
-                Ok(DataType::Decimal32(new_precision, *scale))
-            }
-            DataType::Decimal64(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                let new_precision = DECIMAL64_MAX_PRECISION.min(*precision + 10);
-                Ok(DataType::Decimal64(new_precision, *scale))
-            }
-            DataType::Decimal128(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
-                Ok(DataType::Decimal128(new_precision, *scale))
-            }
-            DataType::Decimal256(precision, scale) => {
-                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
-                Ok(DataType::Decimal256(new_precision, *scale))
-            }
+            DataType::Decimal32(precision, scale) => Ok(new_with_precision!(
+                DataType::Decimal32,
+                DECIMAL32_MAX_PRECISION,
+                *precision,
+                *scale
+            )),
+            DataType::Decimal64(precision, scale) => Ok(new_with_precision!(
+                DataType::Decimal64,
+                DECIMAL64_MAX_PRECISION,
+                *precision,
+                *scale
+            )),
+            DataType::Decimal128(precision, scale) => Ok(new_with_precision!(
+                DataType::Decimal128,
+                DECIMAL128_MAX_PRECISION,
+                *precision,
+                *scale
+            )),
+            DataType::Decimal256(precision, scale) => Ok(new_with_precision!(
+                DataType::Decimal256,
+                DECIMAL256_MAX_PRECISION,
+                *precision,
+                *scale
+            )),
             other => {
                 exec_err!("[return_type] SUM not supported for {}", other)
             }
