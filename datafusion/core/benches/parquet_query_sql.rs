@@ -166,11 +166,12 @@ fn generate_file() -> NamedTempFile {
     }
 
     let metadata = writer.close().unwrap();
+    let file_metadata = metadata.file_metadata();
     assert_eq!(
-        metadata.num_rows as usize,
+        file_metadata.num_rows() as usize,
         WRITE_RECORD_BATCH_SIZE * NUM_BATCHES
     );
-    assert_eq!(metadata.row_groups.len(), EXPECTED_ROW_GROUPS);
+    assert_eq!(metadata.row_groups().len(), EXPECTED_ROW_GROUPS);
 
     println!(
         "Generated parquet file in {} seconds",
