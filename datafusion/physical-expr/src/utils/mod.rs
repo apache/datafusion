@@ -279,9 +279,10 @@ pub(crate) mod tests {
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+    use datafusion_common::{
+        exec_err, internal_datafusion_err, DataFusionError, ScalarValue,
+    };
     use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_common::{exec_err, internal_datafusion_err, ScalarValue};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
