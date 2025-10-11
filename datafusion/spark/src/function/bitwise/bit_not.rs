@@ -18,10 +18,10 @@
 use arrow::compute::kernels::bitwise;
 use arrow::datatypes::{Int16Type, Int32Type, Int64Type, Int8Type};
 use arrow::{array::*, datatypes::DataType};
-use datafusion::common::{plan_err, Result};
-use datafusion::functions::utils::make_scalar_function;
-use datafusion::logical_expr::{ColumnarValue, TypeSignature, Volatility};
-use datafusion::logical_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_common::{plan_err, Result};
+use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_functions::utils::make_scalar_function;
 use std::{any::Any, sync::Arc};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -80,19 +80,23 @@ pub fn spark_bit_not(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = args[0].as_ref();
     match array.data_type() {
         DataType::Int8 => {
-            let result: Int8Array = bitwise::bitwise_not(&array.as_primitive::<Int8Type>())?;
+            let result: Int8Array =
+                bitwise::bitwise_not(&array.as_primitive::<Int8Type>())?;
             Ok(Arc::new(result))
         }
         DataType::Int16 => {
-            let result: Int16Array = bitwise::bitwise_not(&array.as_primitive::<Int16Type>())?;
+            let result: Int16Array =
+                bitwise::bitwise_not(&array.as_primitive::<Int16Type>())?;
             Ok(Arc::new(result))
         }
         DataType::Int32 => {
-            let result: Int32Array = bitwise::bitwise_not(&array.as_primitive::<Int32Type>())?;
+            let result: Int32Array =
+                bitwise::bitwise_not(&array.as_primitive::<Int32Type>())?;
             Ok(Arc::new(result))
         }
         DataType::Int64 => {
-            let result: Int64Array = bitwise::bitwise_not(&array.as_primitive::<Int64Type>())?;
+            let result: Int64Array =
+                bitwise::bitwise_not(&array.as_primitive::<Int64Type>())?;
             Ok(Arc::new(result))
         }
         _ => {
