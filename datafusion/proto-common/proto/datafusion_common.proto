@@ -581,6 +581,10 @@ message ParquetOptions {
   oneof coerce_int96_opt {
     string coerce_int96 = 32;
   }
+
+  oneof max_predicate_cache_size_opt {
+    uint64 max_predicate_cache_size = 33;
+  }
 }
 
 enum JoinSide {

@@ -368,10 +368,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 }
             }
             other => {
-                exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp",
-                    other
-                )
+                exec_err!("Unsupported data type {other} for function to_timestamp")
             }
         }
     }
@@ -424,7 +421,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             }
             other => {
                 exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp_seconds",
+                    "Unsupported data type {} for function to_timestamp_seconds",
                     other
                 )
             }
@@ -482,7 +479,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             ),
             other => {
                 exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp_millis",
+                    "Unsupported data type {} for function to_timestamp_millis",
                     other
                 )
             }
@@ -540,7 +537,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             ),
             other => {
                 exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp_micros",
+                    "Unsupported data type {} for function to_timestamp_micros",
                     other
                 )
             }
@@ -597,7 +594,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             }
             other => {
                 exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp_nanos",
+                    "Unsupported data type {} for function to_timestamp_nanos",
                     other
                 )
             }
@@ -956,7 +953,7 @@ mod tests {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
             let actual = string_to_datetime_formatted(&Utc, s, f)
                 .unwrap_err()
-                .to_string();
+                .strip_backtrace();
             assert_eq!(actual, expected)
         }
     }
@@ -984,7 +981,7 @@ mod tests {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
             let actual = string_to_datetime_formatted(&Utc, s, f)
                 .unwrap_err()
-                .to_string();
+                .strip_backtrace();
             assert_eq!(actual, expected)
         }
     }

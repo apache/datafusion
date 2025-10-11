@@ -390,7 +390,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
 }
@@ -398,6 +398,12 @@ pub enum Expr {
 impl Default for Expr {
     fn default() -> Self {
         Expr::Literal(ScalarValue::Null, None)
+    }
+}
+
+impl AsRef<Expr> for Expr {
+    fn as_ref(&self) -> &Expr {
+        self
     }
 }
 
@@ -2871,8 +2877,8 @@ impl HashNode for Expr {
             Expr::Placeholder(place_holder) => {
                 place_holder.hash(state);
             }
-            Expr::OuterReferenceColumn(data_type, column) => {
-                data_type.hash(state);
+            Expr::OuterReferenceColumn(field, column) => {
+                field.hash(state);
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
@@ -3482,10 +3488,10 @@ impl Display for Expr {
                 write!(f, "END")
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                write!(f, "CAST({expr} AS {data_type:?})")
+                write!(f, "CAST({expr} AS {data_type})")
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
-                write!(f, "TRY_CAST({expr} AS {data_type:?})")
+                write!(f, "TRY_CAST({expr} AS {data_type})")
             }
             Expr::Not(expr) => write!(f, "NOT {expr}"),
             Expr::Negative(expr) => write!(f, "(- {expr})"),
@@ -4103,10 +4109,64 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/16199 for details
-        assert_eq!(size_of::<Expr>(), 128);
+        assert_eq!(size_of::<Expr>(), 112);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);
         assert_eq!(size_of::<Arc<Expr>>(), 8);
+    }
+
+    #[test]
+    fn test_accept_exprs() {
+        fn accept_exprs<E: AsRef<Expr>>(_: &[E]) {}
+
+        let expr = || -> Expr { lit(1) };
+
+        // Call accept_exprs with owned expressions
+        let owned_exprs = vec![expr(), expr()];
+        accept_exprs(&owned_exprs);
+
+        // Call accept_exprs with expressions from expr tree
+        let udf = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::new_from_impl(TestUDF {})),
+            args: vec![expr(), expr()],
+        });
+        let Expr::ScalarFunction(scalar) = &udf else {
+            unreachable!()
+        };
+        accept_exprs(&scalar.args);
+
+        // Call accept_exprs with expressions collected from expr tree, without cloning
+        let mut collected_refs: Vec<&Expr> = scalar.args.iter().collect();
+        collected_refs.extend(&owned_exprs);
+        accept_exprs(&collected_refs);
+
+        // test helpers
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUDF {}
+        impl ScalarUDFImpl for TestUDF {
+            fn as_any(&self) -> &dyn Any {
+                unimplemented!()
+            }
+
+            fn name(&self) -> &str {
+                unimplemented!()
+            }
+
+            fn signature(&self) -> &Signature {
+                unimplemented!()
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                unimplemented!()
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                unimplemented!()
+            }
+        }
     }
 }

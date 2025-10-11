@@ -57,8 +57,8 @@ use datafusion::{
 };
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    context, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    DataFusionError, Result, TableReference, ToDFSchema,
+    context, internal_datafusion_err, internal_err, not_impl_err, plan_err, Result,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::{
     dml,
@@ -229,9 +229,9 @@ fn from_table_reference(
     error_context: &str,
 ) -> Result<TableReference> {
     let table_ref = table_ref.ok_or_else(|| {
-        DataFusionError::Internal(format!(
+        internal_datafusion_err!(
             "Protobuf deserialization error, {error_context} was missing required field name."
-        ))
+        )
     })?;
 
     Ok(table_ref.clone().try_into()?)
@@ -281,9 +281,8 @@ impl AsLogicalPlan for LogicalPlanNode {
     where
         Self: Sized,
     {
-        LogicalPlanNode::decode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to decode logical plan: {e:?}"))
-        })
+        LogicalPlanNode::decode(buf)
+            .map_err(|e| internal_datafusion_err!("failed to decode logical plan: {e:?}"))
     }
 
     fn try_encode<B>(&self, buf: &mut B) -> Result<()>
@@ -291,9 +290,8 @@ impl AsLogicalPlan for LogicalPlanNode {
         B: BufMut,
         Self: Sized,
     {
-        self.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
-        })
+        self.encode(buf)
+            .map_err(|e| internal_datafusion_err!("failed to encode logical plan: {e:?}"))
     }
 
     fn try_into_logical_plan(
@@ -378,16 +376,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::ListingScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
-
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| schema.index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
 
                 let filters =
                     from_proto::parse_exprs(&scan.filters, ctx, extension_codec)?;
@@ -496,6 +484,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ListingTableScan")?;
 
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| provider.schema().index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
+
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
                     provider_as_source(Arc::new(provider)),
@@ -581,15 +579,15 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateExternalTable(create_extern_table) => {
                 let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
+                    internal_datafusion_err!(
                         "Protobuf deserialization error, CreateExternalTableNode was missing required field schema."
-                    ))
+                    )
                 })?;
 
                 let constraints = (create_extern_table.constraints.clone()).ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, CreateExternalTableNode was missing required table constraints.",
-                    ))
+                    internal_datafusion_err!(
+                        "Protobuf deserialization error, CreateExternalTableNode was missing required table constraints."
+                    )
                 })?;
                 let definition = if !create_extern_table.definition.is_empty() {
                     Some(create_extern_table.definition.clone())
@@ -632,6 +630,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .clone(),
                         order_exprs,
                         if_not_exists: create_extern_table.if_not_exists,
+                        or_replace: create_extern_table.or_replace,
                         temporary: create_extern_table.temporary,
                         definition,
                         unbounded: create_extern_table.unbounded,
@@ -643,9 +642,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateView(create_view) => {
                 let plan = create_view
-                    .input.clone().ok_or_else(|| DataFusionError::Internal(String::from(
-                    "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
-                )))?
+                    .input.clone().ok_or_else(|| internal_datafusion_err!(
+                    "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input."
+                ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
                 let definition = if !create_view.definition.is_empty() {
                     Some(create_view.definition.clone())
@@ -663,9 +662,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, CreateCatalogSchemaNode was missing required field schema.",
-                    ))
+                    internal_datafusion_err!(
+                        "Protobuf deserialization error, CreateCatalogSchemaNode was missing required field schema."
+                    )
                 })?;
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
@@ -678,9 +677,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateCatalog(create_catalog) => {
                 let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, CreateCatalogNode was missing required field schema.",
-                    ))
+                    internal_datafusion_err!(
+                        "Protobuf deserialization error, CreateCatalogNode was missing required field schema."
+                    )
                 })?;
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
@@ -789,9 +788,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Union(union) => {
                 if union.inputs.len() < 2 {
-                    return  Err( DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, Union was require at least two input.",
-                    )));
+                    return internal_err!(
+                        "Protobuf deserialization error, Union was require at least two input."
+                    );
                 }
                 let (first, rest) = union.inputs.split_first().unwrap();
                 let mut builder = LogicalPlanBuilder::from(
@@ -931,17 +930,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let static_term = recursive_query_node
                     .static_term
                     .as_ref()
-                    .ok_or_else(|| DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, RecursiveQueryNode was missing required field static_term.",
-                    )))?
+                    .ok_or_else(|| internal_datafusion_err!(
+                        "Protobuf deserialization error, RecursiveQueryNode was missing required field static_term."
+                    ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
                 let recursive_term = recursive_query_node
                     .recursive_term
                     .as_ref()
-                    .ok_or_else(|| DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, RecursiveQueryNode was missing required field recursive_term.",
-                    )))?
+                    .ok_or_else(|| internal_datafusion_err!(
+                        "Protobuf deserialization error, RecursiveQueryNode was missing required field recursive_term."
+                    ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
                 Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
@@ -1469,6 +1468,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema: df_schema,
                     table_partition_cols,
                     if_not_exists,
+                    or_replace,
                     definition,
                     order_exprs,
                     unbounded,
@@ -1502,6 +1502,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
+                            or_replace: *or_replace,
                             temporary: *temporary,
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),

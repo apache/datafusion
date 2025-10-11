@@ -1070,7 +1070,6 @@ mod tests {
         .into_iter()
         .collect();
 
-        //let valid_array = vec![true, false, false, true, false, tru
         let null_buffer = Buffer::from([0b00101001u8]);
         let load4 = load4
             .into_data()

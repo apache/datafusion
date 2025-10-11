@@ -58,7 +58,6 @@ impl Cardinality {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![],
         }
     }
 }
@@ -83,7 +82,6 @@ impl Cardinality {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Cardinality {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for Cardinality {
@@ -112,10 +110,6 @@ impl ScalarUDFImpl for Cardinality {
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         make_scalar_function(cardinality_inner)(&args.args)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 
     fn documentation(&self) -> Option<&Documentation> {

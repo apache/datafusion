@@ -25,11 +25,9 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Null},
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -75,15 +73,7 @@ impl Default for Flatten {
 impl Flatten {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::Array {
-                        arguments: vec![ArrayFunctionArgument::Array],
-                        array_coercion: Some(ListCoercion::FixedSizedListToList),
-                    },
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![],
         }
     }
@@ -104,7 +94,7 @@ impl ScalarUDFImpl for Flatten {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let data_type = match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => match field.data_type() {
+            List(field) => match field.data_type() {
                 List(field) | FixedSizeList(field, _) => List(Arc::clone(field)),
                 _ => arg_types[0].clone(),
             },

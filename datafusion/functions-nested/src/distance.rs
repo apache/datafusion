@@ -30,13 +30,11 @@ use datafusion_common::cast::{
     as_int64_array,
 };
 use datafusion_common::utils::{coerced_type_with_base_type_only, ListCoercion};
-use datafusion_common::{
-    exec_err, internal_datafusion_err, plan_err, utils::take_function_args, Result,
-};
+use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;

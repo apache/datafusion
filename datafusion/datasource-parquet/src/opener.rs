@@ -24,7 +24,6 @@ use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use arrow::array::RecordBatch;
-use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use std::pin::Pin;
@@ -51,10 +50,11 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
+use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -106,23 +106,28 @@ pub(super) struct ParquetOpener {
     #[cfg(feature = "parquet_encryption")]
     pub encryption_factory:
         Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
+    /// Maximum size of the predicate cache, in bytes. If none, uses
+    /// the arrow-rs default.
+    pub max_predicate_cache_size: Option<usize>,
 }
 
 impl FileOpener for ParquetOpener {
-    fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
-        let file_range = file_meta.range.clone();
-        let extensions = file_meta.extensions.clone();
-        let file_location = file_meta.location().clone();
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+        let file_range = partitioned_file.range.clone();
+        let extensions = partitioned_file.extensions.clone();
+        let file_location = partitioned_file.object_meta.location.clone();
         let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
 
-        let metadata_size_hint = file_meta.metadata_size_hint.or(self.metadata_size_hint);
+        let metadata_size_hint = partitioned_file
+            .metadata_size_hint
+            .or(self.metadata_size_hint);
 
         let mut async_file_reader: Box<dyn AsyncFileReader> =
             self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
-                file_meta.clone(),
+                partitioned_file.clone(),
                 metadata_size_hint,
                 &self.metrics,
             )?;
@@ -154,6 +159,7 @@ impl FileOpener for ParquetOpener {
         let enable_page_index = self.enable_page_index;
         #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
+        let max_predicate_cache_size = self.max_predicate_cache_size;
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -173,15 +179,14 @@ impl FileOpener for ParquetOpener {
                 .as_ref()
                 .map(|p| {
                     Ok::<_, DataFusionError>(
-                        (is_dynamic_physical_expr(p) | file.has_statistics()).then_some(
-                            FilePruner::new(
+                        (is_dynamic_physical_expr(p) | partitioned_file.has_statistics())
+                            .then_some(FilePruner::new(
                                 Arc::clone(p),
                                 &logical_file_schema,
                                 partition_fields.clone(),
-                                file.clone(),
+                                partitioned_file.clone(),
                                 predicate_creation_errors.clone(),
-                            )?,
-                        ),
+                            )?),
                     )
                 })
                 .transpose()?
@@ -261,7 +266,7 @@ impl FileOpener for ParquetOpener {
                         let partition_values = partition_fields
                             .iter()
                             .cloned()
-                            .zip(file.partition_values)
+                            .zip(partitioned_file.partition_values)
                             .collect_vec();
                         let expr = expr_adapter_factory
                             .create(
@@ -404,27 +409,64 @@ impl FileOpener for ParquetOpener {
                 builder = builder.with_limit(limit)
             }
 
+            if let Some(max_predicate_cache_size) = max_predicate_cache_size {
+                builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
+            }
+
+            // metrics from the arrow reader itself
+            let arrow_reader_metrics = ArrowReaderMetrics::enabled();
+
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
                 .with_row_groups(row_group_indexes)
+                .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
-            let stream = stream
-                .map_err(DataFusionError::from)
-                .map(move |b| b.and_then(|b| schema_mapping.map_batch(b)));
+            let files_ranges_pruned_statistics =
+                file_metrics.files_ranges_pruned_statistics.clone();
+            let predicate_cache_inner_records =
+                file_metrics.predicate_cache_inner_records.clone();
+            let predicate_cache_records = file_metrics.predicate_cache_records.clone();
+
+            let stream = stream.map_err(DataFusionError::from).map(move |b| {
+                b.and_then(|b| {
+                    copy_arrow_reader_metrics(
+                        &arrow_reader_metrics,
+                        &predicate_cache_inner_records,
+                        &predicate_cache_records,
+                    );
+                    schema_mapping.map_batch(b)
+                })
+            });
 
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
                     stream,
                     file_pruner,
-                    file_metrics.files_ranges_pruned_statistics.clone(),
+                    files_ranges_pruned_statistics,
                 )
                 .boxed())
             } else {
                 Ok(stream.boxed())
             }
         }))
+    }
+}
+
+/// Copies metrics from ArrowReaderMetrics (the metrics collected by the
+/// arrow-rs parquet reader) to the parquet file metrics for DataFusion
+fn copy_arrow_reader_metrics(
+    arrow_reader_metrics: &ArrowReaderMetrics,
+    predicate_cache_inner_records: &Count,
+    predicate_cache_records: &Count,
+) {
+    if let Some(v) = arrow_reader_metrics.records_read_from_inner() {
+        predicate_cache_inner_records.add(v);
+    }
+
+    if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
+        predicate_cache_records.add(v);
     }
 }
 
@@ -658,8 +700,8 @@ async fn load_page_index<T: AsyncFileReader>(
     if missing_column_index || missing_offset_index {
         let m = Arc::try_unwrap(Arc::clone(parquet_metadata))
             .unwrap_or_else(|e| e.as_ref().clone());
-        let mut reader =
-            ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
+        let mut reader = ParquetMetaDataReader::new_with_metadata(m)
+            .with_page_index_policy(PageIndexPolicy::Optional);
         reader.load_page_index(input).await?;
         let new_parquet_metadata = reader.finish()?;
         let new_arrow_reader =
@@ -692,13 +734,11 @@ mod test {
         datatypes::{DataType, Field, Schema, SchemaRef},
     };
     use bytes::{BufMut, BytesMut};
-    use chrono::Utc;
     use datafusion_common::{
         assert_batches_eq, record_batch, stats::Precision, ColumnStatistics,
         DataFusionError, ScalarValue, Statistics,
     };
     use datafusion_datasource::{
-        file_meta::FileMeta,
         file_stream::FileOpener,
         schema_adapter::{
             DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
@@ -713,7 +753,7 @@ mod test {
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
     use futures::{Stream, StreamExt};
-    use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
+    use object_store::{memory::InMemory, path::Path, ObjectStore};
     use parquet::arrow::ArrowWriter;
 
     use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
@@ -790,7 +830,7 @@ mod test {
 
         let schema = batch.schema();
         let file = PartitionedFile::new(
-            "file.parquet".to_string(),
+            "test.parquet".to_string(),
             u64::try_from(data_size).unwrap(),
         )
         .with_statistics(Arc::new(
@@ -830,31 +870,15 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
-        };
-
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("test.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
         };
 
         // A filter on "a" should not exclude any rows even if it matches the data
         let expr = col("a").eq(lit(1));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -863,7 +887,7 @@ mod test {
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -919,20 +943,8 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
-        };
-
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("part=1/file.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
         };
 
         // Filter should match the partition value
@@ -941,11 +953,7 @@ mod test {
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -956,7 +964,7 @@ mod test {
         // Otherwise we assume it already happened at the planning stage and won't re-do the work here
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1024,30 +1032,15 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
-        };
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("part=1/file.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
         };
 
         // Filter should match the partition value and file statistics
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1056,11 +1049,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1069,11 +1058,7 @@ mod test {
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(7.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1082,7 +1067,7 @@ mod test {
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1139,31 +1124,15 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
-        };
-
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("part=1/file.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
         };
 
         // Filter should match the partition value and data value
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1172,11 +1141,7 @@ mod test {
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1185,11 +1150,7 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 1);
@@ -1198,7 +1159,7 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1255,31 +1216,15 @@ mod test {
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
+                max_predicate_cache_size: None,
             }
-        };
-
-        let make_meta = || FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("part=1/file.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
         };
 
         // Filter should NOT match the stats but the file is never attempted to be pruned because the filters are not dynamic
         let expr = col("part").eq(lit(2));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1287,11 +1232,7 @@ mod test {
         // If we make the filter dynamic, it should prune
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(make_meta(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
@@ -1400,19 +1341,6 @@ mod test {
             Field::new("b", DataType::Float64, false),
         ]));
 
-        let file_meta = FileMeta {
-            object_meta: ObjectMeta {
-                location: Path::from("test.parquet"),
-                last_modified: Utc::now(),
-                size: u64::try_from(data_size).unwrap(),
-                e_tag: None,
-                version: None,
-            },
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
-
         let make_opener = |predicate| ParquetOpener {
             partition_index: 0,
             projection: Arc::new([0, 1]),
@@ -1438,15 +1366,12 @@ mod test {
             expr_adapter_factory: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
+            max_predicate_cache_size: None,
         };
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener
-            .open(file_meta.clone(), file.clone())
-            .unwrap()
-            .await
-            .unwrap();
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let batches = collect_batches(stream).await;
 
         #[rustfmt::skip]

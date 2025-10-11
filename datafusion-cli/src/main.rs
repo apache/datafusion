@@ -32,6 +32,9 @@ use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
+use datafusion_cli::object_storage::instrumented::{
+    InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
+};
 use datafusion_cli::{
     exec,
     pool_type::PoolType,
@@ -145,6 +148,13 @@ struct Args {
         value_parser(extract_disk_limit)
     )]
     disk_limit: Option<usize>,
+
+    #[clap(
+        long,
+        help = "Specify the default object_store_profiling mode, defaults to 'disabled'.\n[possible values: disabled, enabled]",
+        default_value_t = InstrumentedObjectStoreMode::Disabled
+    )]
+    object_store_profiling: InstrumentedObjectStoreMode,
 }
 
 #[tokio::main]
@@ -206,6 +216,12 @@ async fn main_inner() -> Result<()> {
         rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
 
+    let instrumented_registry = Arc::new(
+        InstrumentedObjectStoreRegistry::new()
+            .with_profile_mode(args.object_store_profiling),
+    );
+    rt_builder = rt_builder.with_object_store_registry(instrumented_registry.clone());
+
     let runtime_env = rt_builder.build_arc()?;
 
     // enable dynamic file query
@@ -233,6 +249,7 @@ async fn main_inner() -> Result<()> {
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
+        instrumented_registry: Arc::clone(&instrumented_registry),
     };
 
     let commands = args.command;
@@ -571,15 +588,15 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&rbs),@r#"
+        assert_snapshot!(batches_to_string(&rbs),@r"
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | alltypes_plain.parquet            | 1851            | 10181               | 2    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 881634              | 2    | page_index=true  |
+        | alltypes_tiny_pages.parquet       | 454233          | 881418              | 2    | page_index=true  |
         | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        "#);
+        ");
 
         // increase the number of hits
         ctx.sql("select * from alltypes_plain")
@@ -602,15 +619,15 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&rbs),@r#"
+        assert_snapshot!(batches_to_string(&rbs),@r"
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | alltypes_plain.parquet            | 1851            | 10181               | 5    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 881634              | 2    | page_index=true  |
+        | alltypes_tiny_pages.parquet       | 454233          | 881418              | 2    | page_index=true  |
         | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 3    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        "#);
+        ");
 
         Ok(())
     }

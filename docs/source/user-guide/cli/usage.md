@@ -63,6 +63,10 @@ OPTIONS:
     -d, --disk-limit <DISK_LIMIT>
             Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
 
+      --object-store-profiling <OBJECT_STORE_PROFILING>
+          Specify the default object_store_profiling mode, defaults to 'disabled'.
+          [possible values: disabled, enabled] [default: Disabled]
+
     -p, --data-path <DATA_PATH>
             Path to your data, default to current directory
 
@@ -120,6 +124,12 @@ Available commands inside DataFusion CLI are:
 
 ```bash
 > \h function
+```
+
+- Object Store Profiling Mode
+
+```bash
+> \object_store_profiling [disabled|enabled]
 ```
 
 ## Supported SQL

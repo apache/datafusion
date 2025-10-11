@@ -174,10 +174,12 @@ impl SpillManager {
     pub fn read_spill_as_stream(
         &self,
         spill_file_path: RefCountedTempFile,
+        max_record_batch_memory: Option<usize>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = Box::pin(cooperative(SpillReaderStream::new(
             Arc::clone(&self.schema),
             spill_file_path,
+            max_record_batch_memory,
         )));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))

@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_expr::binary::BinaryTypeCoercer;
-use itertools::izip;
+use itertools::{izip, Itertools as _};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 
@@ -29,8 +29,9 @@ use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
@@ -252,7 +253,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             if dt.is_integer() || dt.is_null() {
                 expr.cast_to(&DataType::Int64, schema)
             } else {
-                plan_err!("Expected {expr_name} to be an integer or null, but got {dt:?}")
+                plan_err!("Expected {expr_name} to be an integer or null, but got {dt}")
             }
         }
 
@@ -351,9 +352,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
-                        "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
-                    ),
+                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
+                    plan_datafusion_err!(
+                    "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+                ),
                 )?;
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
@@ -439,23 +441,23 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let low_type = low.get_type(self.schema)?;
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
+                        internal_datafusion_err!(
                             "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
-                        ))
+                        )
                     })?;
                 let high_type = high.get_type(self.schema)?;
                 let high_coerced_type = comparison_coercion(&expr_type, &high_type)
                     .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
+                        internal_datafusion_err!(
                             "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                        ))
+                        )
                     })?;
                 let coercion_type =
                     comparison_coercion(&low_coerced_type, &high_coerced_type)
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                            ))
+                            )
                         })?;
                 Ok(Transformed::yes(Expr::Between(Between::new(
                     Box::new(expr.cast_to(&coercion_type, self.schema)?),
@@ -478,7 +480,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => plan_err!(
-                        "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
+                        "Can not find compatible types to compare {expr_data_type} with [{}]", list_data_types.iter().join(", ")
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
@@ -685,7 +687,7 @@ fn coerce_scalar_range_aware(
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
             coerce_scalar(largest_type, value).map_or_else(
-                |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
+                |_| exec_err!("Cannot cast {value:?} to {target_type}"),
                 |_| ScalarValue::try_from(target_type),
             )
         } else {
@@ -737,7 +739,7 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
     } else {
-        internal_err!("Cannot run range queries on datatype: {col_type:?}")
+        internal_err!("Cannot run range queries on datatype: {col_type}")
     }
 }
 
@@ -896,8 +898,9 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
                 get_coerce_type_for_case_expression(&when_types, Some(case_type));
             coerced_type.ok_or_else(|| {
                 plan_datafusion_err!(
-                    "Failed to coerce case ({case_type:?}) and when ({when_types:?}) \
-                     to common types in CASE WHEN expression"
+                    "Failed to coerce case ({case_type}) and when ({}) \
+                     to common types in CASE WHEN expression",
+                    when_types.iter().join(", ")
                 )
             })
         })
@@ -905,10 +908,19 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     let then_else_coerce_type =
         get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(
             || {
-                plan_datafusion_err!(
-                    "Failed to coerce then ({then_types:?}) and else ({else_type:?}) \
-                     to common types in CASE WHEN expression"
-                )
+                if let Some(else_type) = else_type {
+                    plan_datafusion_err!(
+                        "Failed to coerce then ({}) and else ({else_type}) \
+                         to common types in CASE WHEN expression",
+                        then_types.iter().join(", ")
+                    )
+                } else {
+                    plan_datafusion_err!(
+                        "Failed to coerce then ({}) and else (None) \
+                         to common types in CASE WHEN expression",
+                        then_types.iter().join(", ")
+                    )
+                }
             },
         )?;
 
@@ -1681,7 +1693,7 @@ mod test {
 
         let err = Projection::try_new(vec![udaf], empty).err().unwrap();
         assert!(
-            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'MY_AVG' function: coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
+            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'MY_AVG' function: coercion from Utf8 to the signature Uniform(1, [Float64]) failed")
         );
         Ok(())
     }
@@ -1742,7 +1754,7 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed"));
+        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from Utf8 to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed"));
         Ok(())
     }
 
@@ -2231,7 +2243,7 @@ mod test {
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
-            @"Error during planning: Failed to coerce case (Interval(MonthDayNano)) and when ([Float32, Binary, Utf8]) to common types in CASE WHEN expression"
+            @"Error during planning: Failed to coerce case (Interval(MonthDayNano)) and when (Float32, Binary, Utf8) to common types in CASE WHEN expression"
         );
 
         let case = Case {
@@ -2246,7 +2258,7 @@ mod test {
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
-            @"Error during planning: Failed to coerce then ([Date32, Float32, Binary]) and else (Some(Timestamp(Nanosecond, None))) to common types in CASE WHEN expression"
+            @"Error during planning: Failed to coerce then (Date32, Float32, Binary) and else (Timestamp(Nanosecond, None)) to common types in CASE WHEN expression"
         );
 
         Ok(())

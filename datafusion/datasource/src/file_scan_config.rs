@@ -18,11 +18,6 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
-use std::{
-    any::Any, borrow::Cow, collections::HashMap, fmt::Debug, fmt::Formatter,
-    fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
-};
-
 use crate::file_groups::FileGroup;
 #[allow(unused_imports)]
 use crate::schema_adapter::SchemaAdapterFactory;
@@ -42,28 +37,33 @@ use arrow::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    exec_err, ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue,
-    Statistics,
+    exec_datafusion_err, exec_err, internal_datafusion_err, ColumnStatistics,
+    Constraints, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
-use datafusion_physical_expr::{expressions::Column, utils::reassign_predicate_columns};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::{expressions::Column, utils::reassign_expr_columns};
+use datafusion_physical_expr::{split_conjunction, EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::projection::ProjectionExpr;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
+    filter_pushdown::FilterPushdownPropagation,
     metrics::ExecutionPlanMetricsSet,
     projection::{all_alias_free_columns, new_projections_for_columns},
     DisplayAs, DisplayFormatType,
 };
-use datafusion_physical_plan::{
-    filter::collect_columns_from_predicate, filter_pushdown::FilterPushdownPropagation,
+use std::{
+    any::Any, borrow::Cow, collections::HashMap, fmt::Debug, fmt::Formatter,
+    fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
 };
 
+use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
 use log::{debug, warn};
@@ -377,8 +377,8 @@ impl FileScanConfigBuilder {
     /// Add a file as a single group
     ///
     /// See [`Self::with_file_groups`] for more information.
-    pub fn with_file(self, file: PartitionedFile) -> Self {
-        self.with_file_group(FileGroup::new(vec![file]))
+    pub fn with_file(self, partitioned_file: PartitionedFile) -> Self {
+        self.with_file_group(FileGroup::new(vec![partitioned_file]))
     }
 
     /// Set the output ordering of the files
@@ -588,27 +588,14 @@ impl DataSource for FileScanConfig {
         if let Some(filter) = self.file_source.filter() {
             // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
             // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
-            match reassign_predicate_columns(filter, &schema, true) {
-                Ok(filter) => {
-                    match Self::add_filter_equivalence_info(
-                        filter,
-                        &mut eq_properties,
-                        &schema,
-                    ) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            warn!("Failed to add filter equivalence info: {e}");
-                            #[cfg(debug_assertions)]
-                            panic!("Failed to add filter equivalence info: {e}");
-                        }
-                    }
-                }
+            match Self::add_filter_equivalence_info(filter, &mut eq_properties, &schema) {
+                Ok(()) => {}
                 Err(e) => {
-                    warn!("Failed to reassign predicate columns: {e}");
+                    warn!("Failed to add filter equivalence info: {e}");
                     #[cfg(debug_assertions)]
-                    panic!("Failed to reassign predicate columns: {e}");
+                    panic!("Failed to add filter equivalence info: {e}");
                 }
-            };
+            }
         }
         eq_properties
     }
@@ -764,24 +751,24 @@ impl FileScanConfig {
         eq_properties: &mut EquivalenceProperties,
         schema: &Schema,
     ) -> Result<()> {
-        macro_rules! ignore_dangling_col {
-            ($col:expr) => {
-                if let Some(col) = $col.as_any().downcast_ref::<Column>() {
-                    if schema.index_of(col.name()).is_err() {
-                        continue;
-                    }
-                }
-            };
-        }
-
-        let (equal_pairs, _) = collect_columns_from_predicate(&filter);
-        for (lhs, rhs) in equal_pairs {
+        // Gather valid equality pairs from the filter expression
+        let equal_pairs = split_conjunction(&filter).into_iter().filter_map(|expr| {
             // Ignore any binary expressions that reference non-existent columns in the current schema
             // (e.g. due to unnecessary projections being removed)
-            ignore_dangling_col!(lhs);
-            ignore_dangling_col!(rhs);
-            eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
+            reassign_expr_columns(Arc::clone(expr), schema)
+                .ok()
+                .and_then(|expr| match expr.as_any().downcast_ref::<BinaryExpr>() {
+                    Some(expr) if expr.op() == &Operator::Eq => {
+                        Some((Arc::clone(expr.left()), Arc::clone(expr.right())))
+                    }
+                    _ => None,
+                })
+        });
+
+        for (lhs, rhs) in equal_pairs {
+            eq_properties.add_equal_conditions(lhs, rhs)?
         }
+
         Ok(())
     }
 
@@ -889,8 +876,8 @@ impl FileScanConfig {
         target_partitions: usize,
     ) -> Result<Vec<FileGroup>> {
         if target_partitions == 0 {
-            return Err(DataFusionError::Internal(
-                "target_partitions must be greater than 0".to_string(),
+            return Err(internal_datafusion_err!(
+                "target_partitions must be greater than 0"
             ));
         }
 
@@ -1136,12 +1123,9 @@ impl PartitionColumnProjector {
 
         let mut cols = file_batch.columns().to_vec();
         for &(pidx, sidx) in &self.projected_partition_indexes {
-            let p_value =
-                partition_values
-                    .get(pidx)
-                    .ok_or(DataFusionError::Execution(
-                        "Invalid partitioning found on disk".to_string(),
-                    ))?;
+            let p_value = partition_values.get(pidx).ok_or_else(|| {
+                exec_datafusion_err!("Invalid partitioning found on disk")
+            })?;
 
             let mut partition_value = Cow::Borrowed(p_value);
 
@@ -1384,30 +1368,11 @@ fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
 ) -> Vec<LexOrdering> {
+    let projected_orderings =
+        project_orderings(&base_config.output_ordering, projected_schema);
+
     let mut all_orderings = vec![];
-    for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let name = col.name();
-                if let Some((idx, _)) = projected_schema.column_with_name(name) {
-                    // Compute the new sort expression (with correct index) after projection:
-                    new_ordering.push(PhysicalSortExpr::new(
-                        Arc::new(Column::new(name, idx)),
-                        *options,
-                    ));
-                    continue;
-                }
-            }
-            // Cannot find expression in the projected_schema, stop iterating
-            // since rest of the orderings are violated
-            break;
-        }
-
-        let Some(new_ordering) = LexOrdering::new(new_ordering) else {
-            continue;
-        };
-
+    for new_ordering in projected_orderings {
         // Check if any file groups are not sorted
         if base_config.file_groups.iter().any(|group| {
             if group.len() <= 1 {
@@ -1480,6 +1445,7 @@ mod tests {
     use datafusion_expr::{Operator, SortExpr};
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     /// Returns the column names on the schema
     pub fn columns(schema: &Schema) -> Vec<String> {

@@ -118,7 +118,7 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
                 .invoke_with_args(args)?
                 .cast_to(&DataType::Int64, None),
             other => {
-                exec_err!("Unsupported data type {:?} for function to_unixtime", other)
+                exec_err!("Unsupported data type {} for function to_unixtime", other)
             }
         }
     }

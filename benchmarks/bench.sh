@@ -125,6 +125,9 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
+hj:                     Benchmark for simple hash joins, testing various join scenarios
+compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
+
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Supported Configuration (Environment Variables)
@@ -304,6 +307,13 @@ main() {
                     # nlj uses range() function, no data generation needed
                     echo "NLJ benchmark does not require data generation"
                     ;;
+                hj)
+                    # hj uses range() function, no data generation needed
+                    echo "HJ benchmark does not require data generation"
+                    ;;
+                compile_profile)
+                    data_tpch "1"
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -313,20 +323,32 @@ main() {
         run)
             # Parse positional parameters
             BENCHMARK=${ARG2:-"${BENCHMARK}"}
+            EXTRA_ARGS=("${POSITIONAL_ARGS[@]:2}")
+            PROFILE_ARGS=()
+            QUERY=""
+            QUERY_ARG=""
+            if [ "$BENCHMARK" = "compile_profile" ]; then
+                PROFILE_ARGS=("${EXTRA_ARGS[@]}")
+            else
+                QUERY=${EXTRA_ARGS[0]}
+                if [ -n "$QUERY" ]; then
+                    QUERY_ARG="--query ${QUERY}"
+                fi
+            fi
             BRANCH_NAME=$(cd "${DATAFUSION_DIR}" && git rev-parse --abbrev-ref HEAD)
             BRANCH_NAME=${BRANCH_NAME//\//_} # mind blowing syntax to replace / with _
             RESULTS_NAME=${RESULTS_NAME:-"${BRANCH_NAME}"}
             RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$RESULTS_NAME"}
 
-            # Optional query filter to run specific query
-            QUERY=${ARG3}
-            QUERY_ARG=$([ -n "$QUERY" ] && echo "--query ${QUERY}" || echo "")
-
             echo "***************************"
             echo "DataFusion Benchmark Script"
             echo "COMMAND: ${COMMAND}"
             echo "BENCHMARK: ${BENCHMARK}"
-            echo "QUERY: ${QUERY:-All}"
+            if [ "$BENCHMARK" = "compile_profile" ]; then
+                echo "PROFILES: ${PROFILE_ARGS[*]:-All}"
+            else
+                echo "QUERY: ${QUERY:-All}"
+            fi
             echo "DATAFUSION_DIR: ${DATAFUSION_DIR}"
             echo "BRANCH_NAME: ${BRANCH_NAME}"
             echo "DATA_DIR: ${DATA_DIR}"
@@ -361,6 +383,7 @@ main() {
                     run_imdb
                     run_external_aggr
                     run_nlj
+                    run_hj
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -467,6 +490,12 @@ main() {
                     ;;
                 nlj)
                     run_nlj
+                    ;;
+                hj)
+                    run_hj
+                    ;;
+                compile_profile)
+                    run_compile_profile "${PROFILE_ARGS[@]}"
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -591,6 +620,20 @@ run_tpch_mem() {
     echo "Running tpch_mem benchmark..."
     # -m means in memory
     debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the compile profile benchmark helper
+run_compile_profile() {
+    local profiles=("$@")
+    local runner="${SCRIPT_DIR}/compile_profile.py"
+    local data_path="${DATA_DIR}/tpch_sf1"
+
+    echo "Running compile profile benchmark..."
+    local cmd=(python3 "${runner}" --data "${data_path}")
+    if [ ${#profiles[@]} -gt 0 ]; then
+        cmd+=(--profiles "${profiles[@]}")
+    fi
+    debug_run "${cmd[@]}"
 }
 
 # Runs the cancellation benchmark
@@ -1101,6 +1144,14 @@ run_nlj() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running nlj benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the hj benchmark
+run_hj() {
+    RESULTS_FILE="${RESULTS_DIR}/hj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running hj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 

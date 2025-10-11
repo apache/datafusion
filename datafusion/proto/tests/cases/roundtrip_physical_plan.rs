@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::fmt::{Display, Formatter};
-use std::ops::Deref;
 
 use std::sync::Arc;
 use std::vec;
@@ -53,7 +52,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::execution::FunctionRegistry;
+use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
@@ -100,7 +99,8 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, NullEquality, Result, UnnestOptions,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, NullEquality,
+    Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -138,9 +138,8 @@ fn roundtrip_test_and_return(
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
             .expect("to proto");
-    let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(ctx, runtime.deref(), codec)
+        .try_into_physical_plan(&ctx.task_ctx(), codec)
         .expect("from proto");
 
     pretty_assertions::assert_eq!(
@@ -1024,7 +1023,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             &self,
             _buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
-            _registry: &dyn FunctionRegistry,
+            _ctx: &TaskContext,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unreachable!()
         }
@@ -1132,7 +1131,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("No extension codec provided")
     }
@@ -1148,7 +1147,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         if name == "regex_udf" {
             let proto = MyRegexUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to decode regex_udf: {err}"))
+                internal_datafusion_err!("failed to decode regex_udf: {err}")
             })?;
 
             Ok(Arc::new(ScalarUDF::from(MyRegexUdf::new(proto.pattern))))
@@ -1163,9 +1162,9 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
             let proto = MyRegexUdfNode {
                 pattern: udf.pattern.clone(),
             };
-            proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udf: {err}"))
-            })?;
+            proto
+                .encode(buf)
+                .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         }
         Ok(())
     }
@@ -1173,9 +1172,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         if name == "aggregate_udf" {
             let proto = MyAggregateUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "failed to decode aggregate_udf: {err}"
-                ))
+                internal_datafusion_err!("failed to decode aggregate_udf: {err}")
             })?;
 
             Ok(Arc::new(AggregateUDF::from(MyAggregateUDF::new(
@@ -1193,7 +1190,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
                 result: udf.result.clone(),
             };
             proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udf: {err:?}"))
+                internal_datafusion_err!("failed to encode udf: {err:?}")
             })?;
         }
         Ok(())
@@ -1202,7 +1199,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
         if name == "custom_udwf" {
             let proto = CustomUDWFNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to decode custom_udwf: {err}"))
+                internal_datafusion_err!("failed to decode custom_udwf: {err}")
             })?;
 
             Ok(Arc::new(WindowUDF::from(CustomUDWF::new(proto.payload))))
@@ -1220,7 +1217,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
                 payload: udwf.payload.clone(),
             };
             proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udwf: {err:?}"))
+                internal_datafusion_err!("failed to encode udwf: {err:?}")
             })?;
         }
         Ok(())
@@ -1736,11 +1733,8 @@ async fn roundtrip_coalesce() -> Result<()> {
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored = node.try_into_physical_plan(
-        &ctx,
-        ctx.runtime_env().as_ref(),
-        &DefaultPhysicalExtensionCodec {},
-    )?;
+    let restored =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     assert_eq!(
         plan.schema(),
@@ -1775,11 +1769,8 @@ async fn roundtrip_generate_series() -> Result<()> {
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored = node.try_into_physical_plan(
-        &ctx,
-        ctx.runtime_env().as_ref(),
-        &DefaultPhysicalExtensionCodec {},
-    )?;
+    let restored =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     assert_eq!(
         plan.schema(),
@@ -1901,11 +1892,7 @@ async fn roundtrip_physical_plan_node() {
             .unwrap();
 
     let plan = node
-        .try_into_physical_plan(
-            &ctx,
-            &ctx.runtime_env(),
-            &DefaultPhysicalExtensionCodec {},
-        )
+        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
@@ -1985,7 +1972,7 @@ async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
 
             // deserialize the physical plan
             let _deserialized_plan =
-                proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
+                proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
         }
     }
 
@@ -2104,8 +2091,7 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
     // This will fail with the bug, but should succeed when fixed
-    let _deserialized_plan =
-        proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
+    let _deserialized_plan = proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
     Ok(())
 }
 
@@ -2133,11 +2119,8 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let unoptimized = node.try_into_physical_plan(
-        &ctx,
-        ctx.runtime_env().as_ref(),
-        &DefaultPhysicalExtensionCodec {},
-    )?;
+    let unoptimized =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     let physical_planner =
         datafusion::physical_planner::DefaultPhysicalPlanner::default();

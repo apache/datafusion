@@ -32,6 +32,7 @@ use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
@@ -45,6 +46,7 @@ use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
 use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
+use datafusion::datasource::DefaultTableSource;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::count::count_udaf;
@@ -76,14 +78,14 @@ use datafusion_expr::expr::{
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable, Literal,
-    LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    LogicalPlan, LogicalPlanBuilder, Operator, PartitionEvaluator, ScalarUDF, Signature,
+    TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
-    approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
-    nth_value,
+    approx_distinct, array_agg, avg, avg_distinct, bit_and, bit_or, bit_xor, bool_and,
+    bool_or, corr, nth_value,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -190,9 +192,8 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
-        let msg = TestTableProto::decode(buf).map_err(|_| {
-            DataFusionError::Internal("Error decoding test table".to_string())
-        })?;
+        let msg = TestTableProto::decode(buf)
+            .map_err(|_| internal_datafusion_err!("Error decoding test table"))?;
         assert_eq!(msg.table_name, table_ref.to_string());
         let provider = TestTableProvider {
             url: msg.url,
@@ -216,9 +217,8 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             url: table.url.clone(),
             table_name: table_ref.to_string(),
         };
-        msg.encode(buf).map_err(|_| {
-            DataFusionError::Internal("Error encoding test table".to_string())
-        })
+        msg.encode(buf)
+            .map_err(|_| internal_datafusion_err!("Error encoding test table"))
     }
 }
 
@@ -967,10 +967,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         functions_window::nth_value::last_value(lit(1)),
         functions_window::nth_value::nth_value(lit(1), 1),
         avg(lit(1.5)),
+        avg_distinct(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
         corr(lit(1.5), lit(2.2)),
         sum(lit(1)),
+        sum_distinct(lit(1)),
         max(lit(1)),
         median(lit(2)),
         min(lit(2)),
@@ -1161,7 +1163,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
     ) -> Result<Extension> {
         if let Some((input, _)) = inputs.split_first() {
             let proto = proto::TopKPlanProto::decode(buf).map_err(|e| {
-                DataFusionError::Internal(format!("failed to decode logical plan: {e:?}"))
+                internal_datafusion_err!("failed to decode logical plan: {e:?}")
             })?;
 
             if let Some(expr) = proto.expr.as_ref() {
@@ -1190,7 +1192,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
             };
 
             proto.encode(buf).map_err(|e| {
-                DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
+                internal_datafusion_err!("failed to encode logical plan: {e:?}")
             })?;
 
             Ok(())
@@ -1258,7 +1260,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         if name == "regex_udf" {
             let proto = MyRegexUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to decode regex_udf: {err}"))
+                internal_datafusion_err!("failed to decode regex_udf: {err}")
             })?;
 
             Ok(Arc::new(ScalarUDF::from(MyRegexUdf::new(proto.pattern))))
@@ -1273,18 +1275,16 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         let proto = MyRegexUdfNode {
             pattern: udf.pattern.clone(),
         };
-        proto.encode(buf).map_err(|err| {
-            DataFusionError::Internal(format!("failed to encode udf: {err}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         if name == "aggregate_udf" {
             let proto = MyAggregateUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "failed to decode aggregate_udf: {err}"
-                ))
+                internal_datafusion_err!("failed to decode aggregate_udf: {err}")
             })?;
 
             Ok(Arc::new(AggregateUDF::from(MyAggregateUDF::new(
@@ -1301,9 +1301,9 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         let proto = MyAggregateUdfNode {
             result: udf.result.clone(),
         };
-        proto.encode(buf).map_err(|err| {
-            DataFusionError::Internal(format!("failed to encode udf: {err}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
 }
@@ -1587,7 +1587,7 @@ fn round_trip_scalar_values_and_data_types() {
         assert_eq!(
             dt, roundtrip,
             "DataType was not the same after round trip!\n\n\
-                        Input: {dt:?}\n\nRoundtrip: {roundtrip:?}"
+                        Input: {dt}\n\nRoundtrip: {roundtrip:?}"
         );
     }
 }
@@ -2277,7 +2277,7 @@ fn roundtrip_scalar_udf() {
             if name == "dummy" {
                 Ok(Arc::new(dummy_udf()))
             } else {
-                Err(DataFusionError::Internal(format!("UDF {name} not found")))
+                Err(internal_datafusion_err!("UDF {name} not found"))
             }
         }
     }
@@ -2666,6 +2666,44 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(plan, new_plan);
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_custom_listing_tables_schema_table_scan_projection() -> Result<()> {
+    let ctx = SessionContext::new();
+    // Make sure during round-trip, constraint information is preserved
+    let file_format = JsonFormat::default();
+    let table_partition_cols = vec![("part".to_owned(), DataType::Int64)];
+    let data = "../core/tests/data/partitioned_table_json";
+    let listing_table_url = ListingTableUrl::parse(data)?;
+    let listing_options = ListingOptions::new(Arc::new(file_format))
+        .with_table_partition_cols(table_partition_cols);
+
+    let config = ListingTableConfig::new(listing_table_url)
+        .with_listing_options(listing_options)
+        .infer_schema(&ctx.state())
+        .await?;
+
+    let listing_table: Arc<dyn TableProvider> = Arc::new(ListingTable::try_new(config)?);
+
+    let projection = ["part", "value"]
+        .iter()
+        .map(|field_name| listing_table.schema().index_of(field_name))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let plan = LogicalPlanBuilder::scan(
+        "hive_style",
+        Arc::new(DefaultTableSource::new(listing_table)),
+        Some(projection),
+    )?
+    .limit(0, Some(1))?
+    .build()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
+
     assert_eq!(plan, new_plan);
     Ok(())
 }

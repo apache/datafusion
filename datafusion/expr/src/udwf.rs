@@ -358,6 +358,13 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Or, a closure with two arguments:
     /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
     /// * 'info': [crate::simplify::SimplifyInfo]
+    ///
+    /// # Notes
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         None
     }
@@ -523,37 +530,6 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
-}
-
-// Window UDF doc sections for use in public documentation
-pub mod window_doc_sections {
-    use datafusion_doc::DocSection;
-
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_AGGREGATE,
-            DOC_SECTION_RANKING,
-            DOC_SECTION_ANALYTICAL,
-        ]
-    }
-
-    pub const DOC_SECTION_AGGREGATE: DocSection = DocSection {
-        include: true,
-        label: "Aggregate Functions",
-        description: Some("All aggregate functions can be used as window functions."),
-    };
-
-    pub const DOC_SECTION_RANKING: DocSection = DocSection {
-        include: true,
-        label: "Ranking Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_ANALYTICAL: DocSection = DocSection {
-        include: true,
-        label: "Analytical Functions",
-        description: None,
-    };
 }
 
 #[cfg(test)]

@@ -1928,6 +1928,14 @@ impl FunctionRegistry for SessionState {
         self.expr_planners.push(expr_planner);
         Ok(())
     }
+
+    fn udafs(&self) -> HashSet<String> {
+        self.aggregate_functions.keys().cloned().collect()
+    }
+
+    fn udwfs(&self) -> HashSet<String> {
+        self.window_functions.keys().cloned().collect()
+    }
 }
 
 impl OptimizerConfig for SessionState {

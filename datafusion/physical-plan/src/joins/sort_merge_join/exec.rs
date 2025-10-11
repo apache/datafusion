@@ -351,15 +351,22 @@ impl DisplayAs for SortMergeJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
+                let display_null_equality =
+                    if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                        ", NullsEqual: true"
+                    } else {
+                        ""
+                    };
                 write!(
                     f,
-                    "SortMergeJoin: join_type={:?}, on=[{}]{}",
+                    "SortMergeJoin: join_type={:?}, on=[{}]{}{}",
                     self.join_type,
                     on,
-                    self.filter.as_ref().map_or("".to_string(), |f| format!(
-                        ", filter={}",
-                        f.expression()
-                    ))
+                    self.filter.as_ref().map_or_else(
+                        || "".to_string(),
+                        |f| format!(", filter={}", f.expression())
+                    ),
+                    display_null_equality,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -375,7 +382,13 @@ impl DisplayAs for SortMergeJoinExec {
                 if self.join_type() != JoinType::Inner {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
-                writeln!(f, "on={on}")
+                writeln!(f, "on={on}")?;
+
+                if matches!(self.null_equality(), NullEquality::NullEqualsNull) {
+                    writeln!(f, "NullsEqual: true")?;
+                }
+
+                Ok(())
             }
         }
     }
