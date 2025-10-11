@@ -21,10 +21,8 @@
 mod min_max_bytes;
 mod min_max_struct;
 
-// Note: test helpers for `min_max_bytes` are declared in
-// `min_max/min_max_bytes.rs` via `#[path = "tests.rs"] pub(super) mod tests;`.
-// We previously re-exported them here which caused a duplicate `tests` module
-// name; that re-export is unnecessary and removed to avoid compiler warnings.
+#[cfg(test)]
+mod tests;
 
 use self::{
     min_max_bytes::MinMaxBytesAccumulator, min_max_struct::MinMaxStructAccumulator,
@@ -1007,7 +1005,7 @@ pub use datafusion_functions_aggregate_common::min_max::{
 };
 
 #[cfg(test)]
-mod tests {
+mod inline_tests {
     use super::*;
     use arrow::{
         array::{
