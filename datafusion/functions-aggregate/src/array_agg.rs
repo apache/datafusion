@@ -687,13 +687,16 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 
         // Convert array to Scalars to sort them easily. Convert back to array at evaluation.
         let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-        for v in array_agg_res.into_iter() {
-            partition_values.push(v.into());
+        for maybe_v in array_agg_res.into_iter() {
+            if let Some(v) = maybe_v {
+                partition_values.push(v.into());
+            } else {
+                partition_values.push(vec![].into());
+            }
         }
 
         let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
-
-        for partition_ordering_rows in orderings.into_iter() {
+        for partition_ordering_rows in orderings.into_iter().flatten() {
             // Extract value from struct to ordering_rows for each group/partition
             let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
                     if let ScalarValue::Struct(s) = ordering_row {

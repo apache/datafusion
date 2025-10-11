@@ -3246,6 +3246,8 @@ impl ScalarValue {
 
     /// Retrieve ScalarValue for each row in `array`
     ///
+    /// Elements in `array` may be NULL, in which case the corresponding element in the returned vector is None.
+    ///
     /// Example 1: Array (ScalarValue::Int32)
     /// ```
     /// use datafusion_common::ScalarValue;
@@ -3262,15 +3264,15 @@ impl ScalarValue {
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
     /// let expected = vec![
-    /// vec![
-    ///     ScalarValue::Int32(Some(1)),
-    ///     ScalarValue::Int32(Some(2)),
-    ///     ScalarValue::Int32(Some(3)),
-    /// ],
-    /// vec![
-    ///    ScalarValue::Int32(Some(4)),
-    ///    ScalarValue::Int32(Some(5)),
-    /// ],
+    ///     Some(vec![
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(2)),
+    ///         ScalarValue::Int32(Some(3)),
+    ///     ]),
+    ///     Some(vec![
+    ///         ScalarValue::Int32(Some(4)),
+    ///         ScalarValue::Int32(Some(5)),
+    ///     ]),
     /// ];
     ///
     /// assert_eq!(scalar_vec, expected);
@@ -3303,28 +3305,62 @@ impl ScalarValue {
     /// ]);
     ///
     /// let expected = vec![
-    ///   vec![
+    ///   Some(vec![
     ///     ScalarValue::List(Arc::new(l1)),
     ///     ScalarValue::List(Arc::new(l2)),
-    ///   ],
+    ///   ]),
     /// ];
     ///
     /// assert_eq!(scalar_vec, expected);
     /// ```
-    pub fn convert_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
+    ///
+    /// Example 3: Nullable array
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::ListArray;
+    /// use arrow::datatypes::{DataType, Int32Type};
+    ///
+    /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///    Some(vec![Some(1), Some(2), Some(3)]),
+    ///    None,
+    ///    Some(vec![Some(4), Some(5)])
+    /// ]);
+    ///
+    /// // Convert the array into Scalar Values for each row
+    /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
+    ///
+    /// let expected = vec![
+    ///     Some(vec![
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(2)),
+    ///         ScalarValue::Int32(Some(3)),
+    ///     ]),
+    ///     None,
+    ///     Some(vec![
+    ///         ScalarValue::Int32(Some(4)),
+    ///         ScalarValue::Int32(Some(5)),
+    ///     ]),
+    /// ];
+    ///
+    /// assert_eq!(scalar_vec, expected);
+    /// ```
+    pub fn convert_array_to_scalar_vec(
+        array: &dyn Array,
+    ) -> Result<Vec<Option<Vec<Self>>>> {
         fn generic_collect<OffsetSize: OffsetSizeTrait>(
             array: &dyn Array,
-        ) -> Result<Vec<Vec<ScalarValue>>> {
+        ) -> Result<Vec<Option<Vec<ScalarValue>>>> {
             array
                 .as_list::<OffsetSize>()
                 .iter()
-                .map(|nested_array| match nested_array {
-                    Some(nested_array) => (0..nested_array.len())
-                        .map(|i| ScalarValue::try_from_array(&nested_array, i))
-                        .collect::<Result<Vec<_>>>(),
-                    // TODO: what can we put for null?
-                    //       https://github.com/apache/datafusion/issues/17749
-                    None => Ok(vec![]),
+                .map(|nested_array| {
+                    nested_array
+                        .map(|array| {
+                            (0..array.len())
+                                .map(|i| ScalarValue::try_from_array(&array, i))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()
                 })
                 .collect()
         }
@@ -9021,7 +9057,7 @@ mod tests {
 
     #[test]
     fn test_convert_array_to_scalar_vec() {
-        // Regular ListArray
+        // 1: Regular ListArray
         let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2)]),
             None,
@@ -9031,17 +9067,20 @@ mod tests {
         assert_eq!(
             converted,
             vec![
-                vec![ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))],
-                vec![],
-                vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![
                     ScalarValue::Int64(Some(3)),
                     ScalarValue::Int64(None),
                     ScalarValue::Int64(Some(4))
-                ],
+                ]),
             ]
         );
 
-        // Regular LargeListArray
+        // 2: Regular LargeListArray
         let large_list = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2)]),
             None,
@@ -9051,17 +9090,20 @@ mod tests {
         assert_eq!(
             converted,
             vec![
-                vec![ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))],
-                vec![],
-                vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![
                     ScalarValue::Int64(Some(3)),
                     ScalarValue::Int64(None),
                     ScalarValue::Int64(Some(4))
-                ],
+                ]),
             ]
         );
 
-        // Funky (null slot has non-zero list offsets)
+        // 3: Funky (null slot has non-zero list offsets)
         // Offsets + Values looks like this: [[1, 2], [3, 4], [5]]
         // But with NullBuffer it's like this: [[1, 2], NULL, [5]]
         let funky = ListArray::new(
@@ -9074,9 +9116,63 @@ mod tests {
         assert_eq!(
             converted,
             vec![
-                vec![ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))],
-                vec![],
-                vec![ScalarValue::Int64(Some(5))],
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![ScalarValue::Int64(Some(5))]),
+            ]
+        );
+
+        // 4: Offsets + Values looks like this: [[1, 2], [], [5]]
+        // But with NullBuffer it's like this: [[1, 2], NULL, [5]]
+        // The converted result is: [[1, 2], None, [5]]
+        let array4 = ListArray::new(
+            Field::new_list_field(DataType::Int64, true).into(),
+            OffsetBuffer::new(vec![0, 2, 2, 5].into()),
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let converted = ScalarValue::convert_array_to_scalar_vec(&array4).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                None,
+                Some(vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(Some(4)),
+                    ScalarValue::Int64(Some(5)),
+                ]),
+            ]
+        );
+
+        // 5: Offsets + Values looks like this: [[1, 2], [], [5]]
+        // Same as 4, but the middle array is not null, so after conversion it's empty.
+        let array5 = ListArray::new(
+            Field::new_list_field(DataType::Int64, true).into(),
+            OffsetBuffer::new(vec![0, 2, 2, 5].into()),
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Some(NullBuffer::from(vec![true, true, true])),
+        );
+        let converted = ScalarValue::convert_array_to_scalar_vec(&array5).unwrap();
+        assert_eq!(
+            converted,
+            vec![
+                Some(vec![
+                    ScalarValue::Int64(Some(1)),
+                    ScalarValue::Int64(Some(2))
+                ]),
+                Some(vec![]),
+                Some(vec![
+                    ScalarValue::Int64(Some(3)),
+                    ScalarValue::Int64(Some(4)),
+                    ScalarValue::Int64(Some(5)),
+                ]),
             ]
         );
     }
