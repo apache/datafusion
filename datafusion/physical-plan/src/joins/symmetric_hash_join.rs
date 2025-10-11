@@ -524,8 +524,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             context.session_config().enforce_batch_size_in_joins();
 
         let reservation = Arc::new(Mutex::new(
-            MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
-                .register(context.memory_pool()),
+            MemoryConsumer::new(format!(
+                "SymmetricHashJoinStream[partition={partition}]"
+            ))
+            .register(context.memory_pool()),
         ));
         if let Some(g) = graph.as_ref() {
             reservation.lock().try_grow(g.size())?;
