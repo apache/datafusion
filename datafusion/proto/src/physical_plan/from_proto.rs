@@ -517,14 +517,17 @@ pub fn parse_protobuf_file_scan_config(
     // Remove partition columns from the schema after recreating table_partition_cols
     // because the partition columns are not in the file. They are present to allow
     // the partition column types to be reconstructed after serde.
-    let file_schema = Arc::new(Schema::new(
-        schema
-            .fields()
-            .iter()
-            .filter(|field| !table_partition_cols.contains(field))
-            .cloned()
-            .collect::<Vec<_>>(),
-    ));
+    let file_schema = Arc::new(
+        Schema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !table_partition_cols.contains(field))
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+        .with_metadata(schema.metadata.clone()),
+    );
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
