@@ -73,6 +73,16 @@ true
 ##########
 ## Current time Tests
 ##########
+statement ok
+SET TIME ZONE = '+08'
+
+query T
+select arrow_typeof(now());
+----
+Timestamp(Nanosecond, Some("+08"))
+
+statement ok
+SET TIME ZONE = '+00'
 
 query B
 select cast(now() as time) = current_time();
