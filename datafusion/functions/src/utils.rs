@@ -19,6 +19,7 @@ use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray}
 use arrow::compute::try_binary;
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
+use arrow_buffer::i256;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
@@ -189,6 +190,24 @@ pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
                 "Cannot get a power of {scale}"
             ))),
         }
+    }
+}
+
+/// Converts Decimal256 components (value and scale) to an unscaled i256
+pub fn decimal256_to_i256(value: i256, scale: i8) -> Result<i256, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        let divisor = i256::from_i128(10)
+            .checked_pow(scale as u32)
+            .ok_or_else(|| {
+                ArrowError::ComputeError(format!("Cannot get a power of {scale}"))
+            })?;
+        Ok(value / divisor)
     }
 }
 
