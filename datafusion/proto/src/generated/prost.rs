@@ -1335,6 +1335,8 @@ pub struct PhysicalAggregateExprNode {
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(string, tag = "8")]
     pub human_display: ::prost::alloc::string::String,
+    #[prost(bool, tag = "9")]
+    pub fail_on_overflow: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,
@@ -1412,6 +1414,8 @@ pub struct PhysicalBinaryExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
+    #[prost(bool, tag = "4")]
+    pub fail_on_overflow: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {

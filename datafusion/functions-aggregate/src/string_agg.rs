@@ -599,6 +599,7 @@ mod tests {
                     Arc::new(Column::new("col", 0)),
                     Arc::new(Literal::new(ScalarValue::Utf8(Some(self.sep.to_string())))),
                 ],
+                fail_on_overflow: false,
             })
         }
 

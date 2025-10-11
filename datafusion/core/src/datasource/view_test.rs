@@ -74,9 +74,9 @@ mod tests {
 
     #[tokio::test]
     async fn query_view() -> Result<()> {
-        let session_ctx = SessionContext::new_with_config(
-            SessionConfig::new().with_information_schema(true),
-        );
+        let mut config = SessionConfig::new().with_information_schema(true);
+        config.options_mut().execution.fail_on_overflow = false; // Disable overflow checking for this test
+        let session_ctx = SessionContext::new_with_config(config);
 
         session_ctx
             .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")

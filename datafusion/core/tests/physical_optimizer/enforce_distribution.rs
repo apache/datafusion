@@ -42,8 +42,9 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::expressions::{binary, lit, BinaryExpr, Column, Literal};
+use datafusion_physical_expr::expressions::{self, lit, BinaryExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -69,6 +70,16 @@ use datafusion_physical_plan::{
     get_plan_string, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
     PlanProperties, Statistics,
 };
+
+fn binary_expr(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let exec_props = ExecutionProps::new();
+    expressions::binary(lhs, op, rhs, schema, &exec_props)
+}
 
 /// Models operators like BoundedWindowExec that require an input
 /// ordering but is easy to construct
@@ -314,7 +325,7 @@ fn hash_join_exec(
 }
 
 fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    let predicate = Arc::new(BinaryExpr::new(
+    let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
         col("c", &schema()).unwrap(),
         Operator::Eq,
         Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
@@ -1023,7 +1034,7 @@ fn multi_hash_join_key_ordering() -> Result<()> {
         &JoinType::Inner,
     );
 
-    let predicate: Arc<dyn PhysicalExpr> = binary(
+    let predicate: Arc<dyn PhysicalExpr> = binary_expr(
         col("c", top_join.schema().deref())?,
         Operator::Gt,
         lit(1i64),
@@ -2211,7 +2222,7 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
 fn repartition_transitively_with_projection() -> Result<()> {
     let schema = schema();
     let proj_exprs = vec![ProjectionExpr {
-        expr: Arc::new(BinaryExpr::new(
+        expr: Arc::new(BinaryExpr::new_with_overflow_check(
             col("a", &schema)?,
             Operator::Plus,
             col("b", &schema)?,

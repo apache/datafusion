@@ -65,7 +65,7 @@ fn filter_exec(
     input: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     Ok(Arc::new(FilterExec::try_new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("c3", schema.as_ref()).unwrap(),
             Operator::Gt,
             lit(0),

@@ -89,7 +89,7 @@ fn test_pushdown_volatile_functions_not_allowed() {
     // Use random() as an example of a volatile function
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
     let cfg = Arc::new(ConfigOptions::default());
-    let predicate = Arc::new(BinaryExpr::new(
+    let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new_with_schema("a", &schema()).unwrap()),
         Operator::Eq,
         Arc::new(
@@ -347,7 +347,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
     // Filter on probe side column: e = 'ba'
     let right_filter = col_lit_predicate("e", "ba", &join_schema);
     // Filter that references both sides: a = d (should not be pushed down)
-    let cross_filter = Arc::new(BinaryExpr::new(
+    let cross_filter = Arc::new(BinaryExpr::new_with_overflow_check(
         col("a", &join_schema).unwrap(),
         Operator::Eq,
         col("d", &join_schema).unwrap(),
@@ -1611,7 +1611,7 @@ async fn test_hashjoin_parent_filter_pushdown() {
     // Filter on probe side column: e = 'ba'
     let right_filter = col_lit_predicate("e", "ba", &join_schema);
     // Filter that references both sides: a = d (should not be pushed down)
-    let cross_filter = Arc::new(BinaryExpr::new(
+    let cross_filter = Arc::new(BinaryExpr::new_with_overflow_check(
         col("a", &join_schema).unwrap(),
         Operator::Eq,
         col("d", &join_schema).unwrap(),
@@ -1725,7 +1725,7 @@ fn col_lit_predicate(
     schema: &Schema,
 ) -> Arc<dyn PhysicalExpr> {
     let scalar_value = scalar_value.into();
-    Arc::new(BinaryExpr::new(
+    Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new_with_schema(column_name, schema).unwrap()),
         Operator::Eq,
         Arc::new(Literal::new(scalar_value)),

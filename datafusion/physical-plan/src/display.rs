@@ -86,6 +86,7 @@ pub enum DisplayFormatType {
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Field, Schema, DataType};
 /// # use datafusion_expr::Operator;
+/// # use datafusion_expr::execution_props::ExecutionProps;
 /// # use datafusion_physical_expr::expressions::{binary, col, lit};
 /// # use datafusion_physical_plan::{displayable, ExecutionPlan};
 /// # use datafusion_physical_plan::empty::EmptyExec;
@@ -93,7 +94,7 @@ pub enum DisplayFormatType {
 /// # let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
 /// # let plan = EmptyExec::new(Arc::new(schema));
 /// # let i = col("i", &plan.schema()).unwrap();
-/// # let predicate = binary(i, Operator::Eq, lit(1), &plan.schema()).unwrap();
+/// # let predicate = binary(i, Operator::Eq, lit(1), &plan.schema(), &ExecutionProps::new()).unwrap();
 /// # let plan: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, Arc::new(plan)).unwrap());
 /// // Get a one line description (Displayable)
 /// let display_plan = displayable(plan.as_ref());

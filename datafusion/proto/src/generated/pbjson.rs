@@ -14728,6 +14728,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         if !self.human_display.is_empty() {
             len += 1;
         }
+        if self.fail_on_overflow {
+            len += 1;
+        }
         if self.aggregate_function.is_some() {
             len += 1;
         }
@@ -14751,6 +14754,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         }
         if !self.human_display.is_empty() {
             struct_ser.serialize_field("humanDisplay", &self.human_display)?;
+        }
+        if self.fail_on_overflow {
+            struct_ser.serialize_field("failOnOverflow", &self.fail_on_overflow)?;
         }
         if let Some(v) = self.aggregate_function.as_ref() {
             match v {
@@ -14779,6 +14785,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             "funDefinition",
             "human_display",
             "humanDisplay",
+            "fail_on_overflow",
+            "failOnOverflow",
             "user_defined_aggr_function",
             "userDefinedAggrFunction",
         ];
@@ -14791,6 +14799,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             IgnoreNulls,
             FunDefinition,
             HumanDisplay,
+            FailOnOverflow,
             UserDefinedAggrFunction,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -14819,6 +14828,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             "ignoreNulls" | "ignore_nulls" => Ok(GeneratedField::IgnoreNulls),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
                             "humanDisplay" | "human_display" => Ok(GeneratedField::HumanDisplay),
+                            "failOnOverflow" | "fail_on_overflow" => Ok(GeneratedField::FailOnOverflow),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -14845,6 +14855,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 let mut ignore_nulls__ = None;
                 let mut fun_definition__ = None;
                 let mut human_display__ = None;
+                let mut fail_on_overflow__ = None;
                 let mut aggregate_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -14886,6 +14897,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             }
                             human_display__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::FailOnOverflow => {
+                            if fail_on_overflow__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("failOnOverflow"));
+                            }
+                            fail_on_overflow__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::UserDefinedAggrFunction => {
                             if aggregate_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
@@ -14901,6 +14918,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     ignore_nulls: ignore_nulls__.unwrap_or_default(),
                     fun_definition: fun_definition__,
                     human_display: human_display__.unwrap_or_default(),
+                    fail_on_overflow: fail_on_overflow__.unwrap_or_default(),
                     aggregate_function: aggregate_function__,
                 })
             }
@@ -15033,6 +15051,9 @@ impl serde::Serialize for PhysicalBinaryExprNode {
         if !self.op.is_empty() {
             len += 1;
         }
+        if self.fail_on_overflow {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalBinaryExprNode", len)?;
         if let Some(v) = self.l.as_ref() {
             struct_ser.serialize_field("l", v)?;
@@ -15042,6 +15063,9 @@ impl serde::Serialize for PhysicalBinaryExprNode {
         }
         if !self.op.is_empty() {
             struct_ser.serialize_field("op", &self.op)?;
+        }
+        if self.fail_on_overflow {
+            struct_ser.serialize_field("failOnOverflow", &self.fail_on_overflow)?;
         }
         struct_ser.end()
     }
@@ -15056,6 +15080,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
             "l",
             "r",
             "op",
+            "fail_on_overflow",
+            "failOnOverflow",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15063,6 +15089,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
             L,
             R,
             Op,
+            FailOnOverflow,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15087,6 +15114,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                             "l" => Ok(GeneratedField::L),
                             "r" => Ok(GeneratedField::R),
                             "op" => Ok(GeneratedField::Op),
+                            "failOnOverflow" | "fail_on_overflow" => Ok(GeneratedField::FailOnOverflow),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15109,6 +15137,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                 let mut l__ = None;
                 let mut r__ = None;
                 let mut op__ = None;
+                let mut fail_on_overflow__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::L => {
@@ -15129,12 +15158,19 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                             }
                             op__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::FailOnOverflow => {
+                            if fail_on_overflow__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("failOnOverflow"));
+                            }
+                            fail_on_overflow__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PhysicalBinaryExprNode {
                     l: l__,
                     r: r__,
                     op: op__.unwrap_or_default(),
+                    fail_on_overflow: fail_on_overflow__.unwrap_or_default(),
                 })
             }
         }

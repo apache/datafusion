@@ -62,7 +62,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let batch = RecordBatch::try_new(Arc::new(schema), vec![c1, c2, c3]).unwrap();
 
     // use same predicate for all benchmarks
-    let predicate = Arc::new(BinaryExpr::new(
+    let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
         make_col("c1", 0),
         Operator::LtEq,
         make_lit_i32(500),

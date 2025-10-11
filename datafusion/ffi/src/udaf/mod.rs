@@ -711,6 +711,7 @@ mod tests {
             name: "round_trip",
             is_distinct: true,
             exprs: &[col("a", &schema)?],
+            fail_on_overflow: false,
         };
         let mut accumulator = foreign_udaf.accumulator(acc_args)?;
         let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
@@ -788,6 +789,7 @@ mod tests {
             name: "round_trip",
             is_distinct: false,
             exprs: &[col("a", &schema)?],
+            fail_on_overflow: false,
         };
 
         let mut accumulator = foreign_udaf.create_sliding_accumulator(acc_args)?;

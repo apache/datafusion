@@ -877,6 +877,7 @@ message PhysicalAggregateExprNode {
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
   string human_display = 8;
+  bool fail_on_overflow = 9;
 }
 
 message PhysicalWindowExprNode {
@@ -916,6 +917,7 @@ message PhysicalBinaryExprNode {
   PhysicalExprNode l = 1;
   PhysicalExprNode r = 2;
   string op = 3;
+  bool fail_on_overflow = 4;
 }
 
 message PhysicalDateTimeIntervalExprNode {

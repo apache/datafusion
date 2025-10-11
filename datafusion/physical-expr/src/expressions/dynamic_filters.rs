@@ -353,11 +353,14 @@ mod test {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let expr = Arc::new(BinaryExpr::new(
-            col("a", &table_schema).unwrap(),
-            datafusion_expr::Operator::Eq,
-            lit(42) as Arc<dyn PhysicalExpr>,
-        ));
+        let expr = Arc::new(
+            BinaryExpr::new_with_overflow_check(
+                col("a", &table_schema).unwrap(),
+                datafusion_expr::Operator::Eq,
+                lit(42) as Arc<dyn PhysicalExpr>,
+            )
+            .with_fail_on_overflow(false),
+        );
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![col("a", &table_schema).unwrap()],
             expr as Arc<dyn PhysicalExpr>,
@@ -427,11 +430,14 @@ mod test {
         assert!(arr_1.eq(&expected));
         // Now lets update the expression
         // Note that we update the *original* expression and that should be reflected in both the derived expressions
-        let new_expr = Arc::new(BinaryExpr::new(
-            col("a", &table_schema).unwrap(),
-            datafusion_expr::Operator::Gt,
-            lit(43) as Arc<dyn PhysicalExpr>,
-        ));
+        let new_expr = Arc::new(
+            BinaryExpr::new_with_overflow_check(
+                col("a", &table_schema).unwrap(),
+                datafusion_expr::Operator::Gt,
+                lit(43) as Arc<dyn PhysicalExpr>,
+            )
+            .with_fail_on_overflow(false),
+        );
         dynamic_filter
             .update(Arc::clone(&new_expr) as Arc<dyn PhysicalExpr>)
             .expect("Failed to update expression");

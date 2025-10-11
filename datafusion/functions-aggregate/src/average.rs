@@ -181,7 +181,11 @@ impl AggregateUDFImpl for Avg {
             }
         } else {
             match (&data_type, acc_args.return_type()) {
-                (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
+                (Float64, Float64) => Ok(Box::new(AvgAccumulator {
+                    sum: None,
+                    count: 0,
+                    fail_on_overflow: acc_args.fail_on_overflow,
+                })),
                 (
                     Decimal32(sum_precision, sum_scale),
                     Decimal32(target_precision, target_scale),
@@ -192,6 +196,7 @@ impl AggregateUDFImpl for Avg {
                     sum_precision: *sum_precision,
                     target_precision: *target_precision,
                     target_scale: *target_scale,
+                    fail_on_overflow: acc_args.fail_on_overflow,
                 })),
                 (
                     Decimal64(sum_precision, sum_scale),
@@ -203,6 +208,7 @@ impl AggregateUDFImpl for Avg {
                     sum_precision: *sum_precision,
                     target_precision: *target_precision,
                     target_scale: *target_scale,
+                    fail_on_overflow: acc_args.fail_on_overflow,
                 })),
                 (
                     Decimal128(sum_precision, sum_scale),
@@ -214,6 +220,7 @@ impl AggregateUDFImpl for Avg {
                     sum_precision: *sum_precision,
                     target_precision: *target_precision,
                     target_scale: *target_scale,
+                    fail_on_overflow: acc_args.fail_on_overflow,
                 })),
 
                 (
@@ -226,6 +233,7 @@ impl AggregateUDFImpl for Avg {
                     sum_precision: *sum_precision,
                     target_precision: *target_precision,
                     target_scale: *target_scale,
+                    fail_on_overflow: acc_args.fail_on_overflow,
                 })),
 
                 (Duration(time_unit), Duration(result_unit)) => {
@@ -234,6 +242,7 @@ impl AggregateUDFImpl for Avg {
                         count: 0,
                         time_unit: *time_unit,
                         result_unit: *result_unit,
+                        fail_on_overflow: acc_args.fail_on_overflow,
                     }))
                 }
 
@@ -463,10 +472,22 @@ impl AggregateUDFImpl for Avg {
 }
 
 /// An accumulator to compute the average
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AvgAccumulator {
     sum: Option<f64>,
     count: u64,
+    fail_on_overflow: bool,
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for AvgAccumulator {
+    fn default() -> Self {
+        Self {
+            sum: None,
+            count: 0,
+            fail_on_overflow: false,
+        }
+    }
 }
 
 impl Accumulator for AvgAccumulator {
@@ -475,7 +496,20 @@ impl Accumulator for AvgAccumulator {
         self.count += (values.len() - values.null_count()) as u64;
         if let Some(x) = sum(values) {
             let v = self.sum.get_or_insert(0.);
-            *v += x;
+            if self.fail_on_overflow {
+                // Check for overflow in floating point addition
+                let new_sum = *v + x;
+                if new_sum.is_infinite() && v.is_finite() && x.is_finite() {
+                    return exec_err!(
+                        "Average sum operation overflowed: {} + {} resulted in infinity",
+                        v,
+                        x
+                    );
+                }
+                *v = new_sum;
+            } else {
+                *v += x;
+            }
         }
         Ok(())
     }
@@ -531,6 +565,117 @@ struct DecimalAvgAccumulator<T: DecimalType + ArrowNumericType + Debug> {
     sum_precision: u8,
     target_precision: u8,
     target_scale: i8,
+    fail_on_overflow: bool,
+}
+
+impl<T: DecimalType + ArrowNumericType + Debug> DecimalAvgAccumulator<T> {
+    fn checked_add_with_overflow_check(
+        &self,
+        a: T::Native,
+        b: T::Native,
+    ) -> Result<T::Native> {
+        use arrow::datatypes::*;
+        if self.fail_on_overflow {
+            // Check the specific decimal type to determine the underlying storage type
+            match std::any::TypeId::of::<T>() {
+                id if id == std::any::TypeId::of::<Decimal32Type>() => {
+                    let a_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&a) };
+                    let b_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&b) };
+                    match a_i32.checked_add(b_i32) {
+                        Some(result) => Ok(unsafe {
+                            std::mem::transmute_copy::<i32, T::Native>(&result)
+                        }),
+                        None => exec_err!("Average sum operation overflowed"),
+                    }
+                }
+                id if id == std::any::TypeId::of::<Decimal64Type>() => {
+                    let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+                    let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+                    match a_i64.checked_add(b_i64) {
+                        Some(result) => Ok(unsafe {
+                            std::mem::transmute_copy::<i64, T::Native>(&result)
+                        }),
+                        None => exec_err!("Average sum operation overflowed"),
+                    }
+                }
+                id if id == std::any::TypeId::of::<Decimal128Type>() => {
+                    let a_i128 =
+                        unsafe { std::mem::transmute_copy::<T::Native, i128>(&a) };
+                    let b_i128 =
+                        unsafe { std::mem::transmute_copy::<T::Native, i128>(&b) };
+                    match a_i128.checked_add(b_i128) {
+                        Some(result) => Ok(unsafe {
+                            std::mem::transmute_copy::<i128, T::Native>(&result)
+                        }),
+                        None => exec_err!("Average sum operation overflowed"),
+                    }
+                }
+                _ => {
+                    // For Decimal256 and other types, fallback to wrapping addition
+                    Ok(a.add_wrapping(b))
+                }
+            }
+        } else {
+            Ok(a.add_wrapping(b))
+        }
+    }
+
+    fn checked_sub_with_overflow_check(
+        &self,
+        a: T::Native,
+        b: T::Native,
+    ) -> Result<T::Native> {
+        use arrow::datatypes::*;
+        if self.fail_on_overflow {
+            // Check the specific decimal type to determine the underlying storage type
+            match std::any::TypeId::of::<T>() {
+                id if id == std::any::TypeId::of::<Decimal32Type>() => {
+                    let a_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&a) };
+                    let b_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&b) };
+                    match a_i32.checked_sub(b_i32) {
+                        Some(result) => Ok(unsafe {
+                            std::mem::transmute_copy::<i32, T::Native>(&result)
+                        }),
+                        None => exec_err!(
+                            "Average sum operation overflowed during retraction"
+                        ),
+                    }
+                }
+                id if id == std::any::TypeId::of::<Decimal64Type>() => {
+                    let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+                    let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+                    match a_i64.checked_sub(b_i64) {
+                        Some(result) => Ok(unsafe {
+                            std::mem::transmute_copy::<i64, T::Native>(&result)
+                        }),
+                        None => exec_err!(
+                            "Average sum operation overflowed during retraction"
+                        ),
+                    }
+                }
+                id if id == std::any::TypeId::of::<Decimal128Type>() => {
+                    let a_i128 =
+                        unsafe { std::mem::transmute_copy::<T::Native, i128>(&a) };
+                    let b_i128 =
+                        unsafe { std::mem::transmute_copy::<T::Native, i128>(&b) };
+                    match a_i128.checked_sub(b_i128) {
+                        Some(result) => Ok(unsafe {
+                            std::mem::transmute_copy::<i128, T::Native>(&result)
+                        }),
+                        None => exec_err!(
+                            "Average sum operation overflowed during retraction"
+                        ),
+                    }
+                }
+                _ => {
+                    // For Decimal256 and other types, fallback to wrapping subtraction
+                    Ok(a.sub_wrapping(b))
+                }
+            }
+        } else {
+            Ok(a.sub_wrapping(b))
+        }
+    }
 }
 
 impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumulator<T> {
@@ -539,8 +684,12 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
         self.count += (values.len() - values.null_count()) as u64;
 
         if let Some(x) = sum(values) {
-            let v = self.sum.get_or_insert_with(T::Native::default);
-            self.sum = Some(v.add_wrapping(x));
+            let current_sum = self.sum.unwrap_or_default();
+            if self.fail_on_overflow {
+                self.sum = Some(self.checked_add_with_overflow_check(current_sum, x)?);
+            } else {
+                self.sum = Some(current_sum.add_wrapping(x));
+            }
         }
         Ok(())
     }
@@ -584,8 +733,12 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
 
         // sums are summed
         if let Some(x) = sum(states[1].as_primitive::<T>()) {
-            let v = self.sum.get_or_insert_with(T::Native::default);
-            self.sum = Some(v.add_wrapping(x));
+            let current_sum = self.sum.unwrap_or_default();
+            if self.fail_on_overflow {
+                self.sum = Some(self.checked_add_with_overflow_check(current_sum, x)?);
+            } else {
+                self.sum = Some(current_sum.add_wrapping(x));
+            }
         }
         Ok(())
     }
@@ -593,7 +746,12 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
         let values = values[0].as_primitive::<T>();
         self.count -= (values.len() - values.null_count()) as u64;
         if let Some(x) = sum(values) {
-            self.sum = Some(self.sum.unwrap().sub_wrapping(x));
+            let current_sum = self.sum.unwrap();
+            if self.fail_on_overflow {
+                self.sum = Some(self.checked_sub_with_overflow_check(current_sum, x)?);
+            } else {
+                self.sum = Some(current_sum.sub_wrapping(x));
+            }
         }
         Ok(())
     }
@@ -610,6 +768,7 @@ struct DurationAvgAccumulator {
     count: u64,
     time_unit: TimeUnit,
     result_unit: TimeUnit,
+    fail_on_overflow: bool,
 }
 
 impl Accumulator for DurationAvgAccumulator {
@@ -626,7 +785,20 @@ impl Accumulator for DurationAvgAccumulator {
 
         if let Some(x) = sum_value {
             let v = self.sum.get_or_insert(0);
-            *v += x;
+            if self.fail_on_overflow {
+                match v.checked_add(x) {
+                    Some(new_sum) => *v = new_sum,
+                    None => {
+                        return exec_err!(
+                            "Duration average sum operation overflowed: {} + {}",
+                            v,
+                            x
+                        )
+                    }
+                }
+            } else {
+                *v += x;
+            }
         }
         Ok(())
     }

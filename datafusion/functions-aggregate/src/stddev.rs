@@ -452,6 +452,7 @@ mod tests {
             is_distinct: false,
             is_reversed: false,
             exprs: &[col("a", schema)?],
+            fail_on_overflow: false,
         };
 
         let args2 = AccumulatorArgs {
@@ -463,6 +464,7 @@ mod tests {
             is_distinct: false,
             is_reversed: false,
             exprs: &[col("a", schema)?],
+            fail_on_overflow: false,
         };
 
         let mut accum1 = agg1.accumulator(args1)?;

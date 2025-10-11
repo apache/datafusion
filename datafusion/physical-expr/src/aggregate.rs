@@ -75,6 +75,8 @@ pub struct AggregateExprBuilder {
     is_distinct: bool,
     /// Whether the expression is reversed
     is_reversed: bool,
+    /// Whether to fail on arithmetic overflow
+    fail_on_overflow: bool,
 }
 
 impl AggregateExprBuilder {
@@ -89,6 +91,7 @@ impl AggregateExprBuilder {
             ignore_nulls: false,
             is_distinct: false,
             is_reversed: false,
+            fail_on_overflow: true,
         }
     }
 
@@ -197,6 +200,7 @@ impl AggregateExprBuilder {
             ignore_nulls,
             is_distinct,
             is_reversed,
+            fail_on_overflow,
         } = self;
         if args.is_empty() {
             return internal_err!("args should not be empty");
@@ -245,6 +249,7 @@ impl AggregateExprBuilder {
             input_fields: input_exprs_fields,
             is_reversed,
             is_nullable,
+            fail_on_overflow,
         })
     }
 
@@ -297,6 +302,11 @@ impl AggregateExprBuilder {
         self.ignore_nulls = ignore_nulls;
         self
     }
+
+    pub fn with_fail_on_overflow(mut self, fail_on_overflow: bool) -> Self {
+        self.fail_on_overflow = fail_on_overflow;
+        self
+    }
 }
 
 /// Physical aggregate expression of a UDAF.
@@ -323,6 +333,7 @@ pub struct AggregateFunctionExpr {
     is_reversed: bool,
     input_fields: Vec<FieldRef>,
     is_nullable: bool,
+    fail_on_overflow: bool,
 }
 
 impl AggregateFunctionExpr {
@@ -367,6 +378,11 @@ impl AggregateFunctionExpr {
         self.is_nullable
     }
 
+    /// Return if the aggregation should fail on overflow
+    pub fn fail_on_overflow(&self) -> bool {
+        self.fail_on_overflow
+    }
+
     /// the field of the final result of this aggregation.
     pub fn field(&self) -> FieldRef {
         self.return_field
@@ -389,6 +405,7 @@ impl AggregateFunctionExpr {
             name: &self.name,
             is_reversed: self.is_reversed,
             exprs: &self.args,
+            fail_on_overflow: self.fail_on_overflow,
         };
 
         self.fun.accumulator(acc_args)
@@ -458,6 +475,7 @@ impl AggregateFunctionExpr {
             .with_ignore_nulls(self.ignore_nulls)
             .with_distinct(self.is_distinct)
             .with_reversed(self.is_reversed)
+            .with_fail_on_overflow(self.fail_on_overflow)
             .build()
             .map(Some)
     }
@@ -473,6 +491,7 @@ impl AggregateFunctionExpr {
             name: &self.name,
             is_reversed: self.is_reversed,
             exprs: &self.args,
+            fail_on_overflow: self.fail_on_overflow,
         };
 
         let accumulator = self.fun.create_sliding_accumulator(args)?;
@@ -542,6 +561,7 @@ impl AggregateFunctionExpr {
             name: &self.name,
             is_reversed: self.is_reversed,
             exprs: &self.args,
+            fail_on_overflow: self.fail_on_overflow,
         };
         self.fun.groups_accumulator_supported(args)
     }
@@ -561,6 +581,7 @@ impl AggregateFunctionExpr {
             name: &self.name,
             is_reversed: self.is_reversed,
             exprs: &self.args,
+            fail_on_overflow: self.fail_on_overflow,
         };
         self.fun.create_groups_accumulator(args)
     }
@@ -650,6 +671,7 @@ impl AggregateFunctionExpr {
             is_reversed: false,
             input_fields: self.input_fields.clone(),
             is_nullable: self.is_nullable,
+            fail_on_overflow: self.fail_on_overflow,
         })
     }
 

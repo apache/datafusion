@@ -1,0 +1,187 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Simplified ultra-fast arithmetic with overflow detection
+
+use arrow::array::{Array, AsArray, PrimitiveArray};
+use arrow::compute::kernels::numeric::add;
+use arrow::datatypes::Int64Type;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
+use std::sync::Arc;
+
+use super::simd_simple;
+
+/// Ultra-fast overflow-checked addition
+pub fn ultra_fast_checked_add(
+    left: &ColumnarValue,
+    right: &ColumnarValue,
+) -> Result<Arc<dyn Array>> {
+    match (left, right) {
+        (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
+            // Use optimized path for Int64 arrays
+            if let (Some(left_i64), Some(right_i64)) = (
+                left_array.as_primitive_opt::<Int64Type>(),
+                right_array.as_primitive_opt::<Int64Type>(),
+            ) {
+                let result = simd_simple::simd_checked_add_i64(
+                    left_i64.values(),
+                    right_i64.values(),
+                )
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+                let result_array = PrimitiveArray::<Int64Type>::new(
+                    result.into(),
+                    left_i64.nulls().cloned(),
+                );
+
+                return Ok(Arc::new(result_array));
+            }
+
+            // Fallback to Arrow's implementation
+            add(left_array, right_array)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+        }
+        _ => {
+            // Handle scalar cases with existing DataFusion logic
+            let left_array = left.to_array(1)?;
+            let right_array = right.to_array(1)?;
+            add(&left_array, &right_array)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+        }
+    }
+}
+
+/// Ultra-fast overflow-checked subtraction
+pub fn ultra_fast_checked_sub(
+    left: &ColumnarValue,
+    right: &ColumnarValue,
+) -> Result<Arc<dyn Array>> {
+    match (left, right) {
+        (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
+            // Use optimized path for Int64 arrays
+            if let (Some(left_i64), Some(right_i64)) = (
+                left_array.as_primitive_opt::<Int64Type>(),
+                right_array.as_primitive_opt::<Int64Type>(),
+            ) {
+                let result = simd_simple::simd_checked_sub_i64(
+                    left_i64.values(),
+                    right_i64.values(),
+                )
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+                let result_array = PrimitiveArray::<Int64Type>::new(
+                    result.into(),
+                    left_i64.nulls().cloned(),
+                );
+
+                return Ok(Arc::new(result_array));
+            }
+
+            // For non-Int64 types, we don't have overflow checking implemented yet
+            // Use addition with negation as a workaround
+            Err(DataFusionError::NotImplemented(
+                "Subtraction overflow checking not implemented for non-Int64 types"
+                    .to_string(),
+            ))
+        }
+        _ => {
+            // Handle scalar cases by converting to arrays and using SIMD path
+            let left_array = left.to_array(1)?;
+            let right_array = right.to_array(1)?;
+            ultra_fast_checked_sub(
+                &ColumnarValue::Array(left_array),
+                &ColumnarValue::Array(right_array),
+            )
+        }
+    }
+}
+
+/// Ultra-fast overflow-checked multiplication
+pub fn ultra_fast_checked_mul(
+    left: &ColumnarValue,
+    right: &ColumnarValue,
+) -> Result<Arc<dyn Array>> {
+    match (left, right) {
+        (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
+            // Use optimized path for Int64 arrays
+            if let (Some(left_i64), Some(right_i64)) = (
+                left_array.as_primitive_opt::<Int64Type>(),
+                right_array.as_primitive_opt::<Int64Type>(),
+            ) {
+                let result = simd_simple::simd_checked_mul_i64(
+                    left_i64.values(),
+                    right_i64.values(),
+                )
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+                let result_array = PrimitiveArray::<Int64Type>::new(
+                    result.into(),
+                    left_i64.nulls().cloned(),
+                );
+
+                return Ok(Arc::new(result_array));
+            }
+
+            // For non-Int64 types, we don't have overflow checking implemented yet
+            Err(DataFusionError::NotImplemented(
+                "Multiplication overflow checking not implemented for non-Int64 types"
+                    .to_string(),
+            ))
+        }
+        _ => {
+            // Handle scalar cases by converting to arrays and using SIMD path
+            let left_array = left.to_array(1)?;
+            let right_array = right.to_array(1)?;
+            ultra_fast_checked_mul(
+                &ColumnarValue::Array(left_array),
+                &ColumnarValue::Array(right_array),
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int64Array;
+
+    #[test]
+    fn test_ultra_fast_add() {
+        let left = Int64Array::from(vec![1, 2, 3, 4]);
+        let right = Int64Array::from(vec![10, 20, 30, 40]);
+
+        let left_val = ColumnarValue::Array(Arc::new(left));
+        let right_val = ColumnarValue::Array(Arc::new(right));
+
+        let result = ultra_fast_checked_add(&left_val, &right_val).unwrap();
+        let result_array = result.as_primitive::<Int64Type>();
+
+        assert_eq!(result_array.values(), &[11, 22, 33, 44]);
+    }
+
+    #[test]
+    fn test_overflow_detection() {
+        let left = Int64Array::from(vec![i64::MAX]);
+        let right = Int64Array::from(vec![1]);
+
+        let left_val = ColumnarValue::Array(Arc::new(left));
+        let right_val = ColumnarValue::Array(Arc::new(right));
+
+        assert!(ultra_fast_checked_add(&left_val, &right_val).is_err());
+    }
+}

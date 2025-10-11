@@ -67,6 +67,13 @@ pub struct AccumulatorArgs<'a> {
 
     /// The physical expression of arguments the aggregate function takes.
     pub exprs: &'a [Arc<dyn PhysicalExpr>],
+
+    /// Whether to fail on arithmetic overflow.
+    ///
+    /// When set to true, aggregate functions should return an error on overflow
+    /// (e.g. integer overflow in SUM). When set to false, overflow should wrap around.
+    /// Defaults to true to follow SQL standard behavior.
+    pub fail_on_overflow: bool,
 }
 
 impl AccumulatorArgs<'_> {
