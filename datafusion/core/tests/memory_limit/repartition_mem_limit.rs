@@ -31,7 +31,7 @@ use itertools::Itertools;
 
 /// End to end test for spilling in RepartitionExec.
 /// The idea is to make a real world query with a relatively low memory limit and
-/// then drive one partition at a time, simulating dissimlar execution speed in partitions.
+/// then drive one partition at a time, simulating dissimilar execution speed in partitions.
 /// Just as some examples of real world scenarios where this can happen consider
 /// lopsided groups in a group by especially if one partitions spills and others dont',
 /// or in distributed systems if one upstream node is slower than others.
