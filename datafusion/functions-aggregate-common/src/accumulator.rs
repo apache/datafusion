@@ -58,6 +58,24 @@ pub struct AccumulatorArgs<'a> {
     /// recover the effective [`FieldRef`]s without interacting with the raw
     /// schema directly, matching the ergonomics of other function argument
     /// structs.
+    ///
+    /// ### Relation to other function argument structs
+    ///
+    /// Scalar and window functions see arguments *after* their `PhysicalExpr`s
+    /// have been evaluated. As a consequence, [`ScalarFunctionArgs`](datafusion_expr::ScalarFunctionArgs) and
+    /// [`PartitionEvaluatorArgs`](datafusion_functions_window_common::partition::PartitionEvaluatorArgs)
+    /// only expose the already-computed [`FieldRef`]s for each argument. In
+    /// contrast, an accumulator is constructed before any batches have been
+    /// processed, so the planner cannot simply hand the UDAF pre-evaluated
+    /// arguments. Instead we provide both the physical schema and the original
+    /// argument expressions; the accumulator can then call
+    /// [`PhysicalExpr::return_field`] when it needs the logical argument field.
+    ///
+    /// This is why expressions such as `SUM(a + b)` require the schema even
+    /// though scalar functions also support `SIN(a + b)`. The scalar version
+    /// receives the evaluated `a + b` as a [`ColumnarValue`](datafusion_expr::ColumnarValue), while the
+    /// aggregate still holds the unevaluated `PhysicalExpr` and must resolve it
+    /// against the physical schema when computing its metadata.
     pub schema: &'a Schema,
 
     /// Whether to ignore nulls.
