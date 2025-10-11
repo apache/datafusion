@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_datafusion_err, Result};
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
 use itertools::izip;
 use std::mem::size_of;
@@ -201,10 +201,10 @@ where
         self.buffer.append_slice(value);
 
         if self.buffer.len() > self.max_buffer_size {
-            return Err(DataFusionError::Execution(format!(
+            return Err(exec_datafusion_err!(
                 "offset overflow, buffer size > {}",
                 self.max_buffer_size
-            )));
+            ));
         }
 
         self.offsets.push(O::usize_as(self.buffer.len()));
@@ -633,7 +633,7 @@ mod tests {
         //   - exist not null, input not null; values not equal
         //   - exist not null, input not null; values equal
 
-        // Define PrimitiveGroupValueBuilder
+        // Define ByteGroupValueBuilder
         let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
         let builder_array = Arc::new(StringArray::from(vec![
             None,

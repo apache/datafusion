@@ -19,7 +19,7 @@ use crate::{
     config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
     runtime_env::RuntimeEnv,
 };
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, plan_datafusion_err, Result};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::collections::HashSet;
@@ -168,9 +168,9 @@ impl FunctionRegistry for TaskContext {
         let result = self.window_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            internal_datafusion_err!(
                 "There is no UDWF named \"{name}\" in the TaskContext"
-            ))
+            )
         })
     }
     fn register_udaf(
