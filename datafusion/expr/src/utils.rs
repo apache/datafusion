@@ -936,7 +936,7 @@ pub fn generate_signature_error_msg(
 ) -> String {
     let candidate_signatures = func_signature
         .type_signature
-        .to_string_repr()
+        .to_string_repr_with_names(func_signature.parameter_names.as_deref())
         .iter()
         .map(|args_str| format!("\t{func_name}({args_str})"))
         .collect::<Vec<String>>()
@@ -1713,5 +1713,65 @@ mod tests {
         let list_union_type =
             DataType::List(Arc::new(Field::new("my_union", union_type, true)));
         assert!(!can_hash(&list_union_type));
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_with_parameter_names() {
+        use datafusion_expr_common::signature::{TypeSignature, Volatility};
+
+        // Create a signature like substr with parameter names
+        let sig = Signature::one_of(
+            vec![TypeSignature::Any(2), TypeSignature::Any(3)],
+            Volatility::Immutable,
+        )
+        .with_parameter_names(vec![
+            "str".to_string(),
+            "start_pos".to_string(),
+            "length".to_string(),
+        ])
+        .expect("valid parameter names");
+
+        // Generate error message with only 1 argument provided
+        let error_msg = generate_signature_error_msg("substr", sig, &[DataType::Utf8]);
+
+        // Error message should contain parameter names
+        assert!(
+            error_msg.contains("str, start_pos"),
+            "Expected 'str, start_pos' in error message, got: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("str, start_pos, length"),
+            "Expected 'str, start_pos, length' in error message, got: {}",
+            error_msg
+        );
+
+        // Should NOT contain generic "Any" types
+        assert!(
+            !error_msg.contains("Any, Any"),
+            "Should not contain 'Any, Any', got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_generate_signature_error_msg_without_parameter_names() {
+        use datafusion_expr_common::signature::{TypeSignature, Volatility};
+
+        // Create a signature without parameter names
+        let sig = Signature::one_of(
+            vec![TypeSignature::Any(2), TypeSignature::Any(3)],
+            Volatility::Immutable,
+        );
+
+        // Generate error message
+        let error_msg = generate_signature_error_msg("my_func", sig, &[DataType::Int32]);
+
+        // Should contain generic "Any" types when no parameter names
+        assert!(
+            error_msg.contains("Any, Any"),
+            "Expected 'Any, Any' without parameter names, got: {}",
+            error_msg
+        );
     }
 }
