@@ -156,6 +156,7 @@ pub fn split_files(
     chunks
 }
 
+#[derive(Debug)]
 pub struct Partition {
     /// The path to the partition, including the table prefix
     path: Path,
@@ -245,7 +246,16 @@ async fn prune_partitions(
     partition_cols: &[(String, DataType)],
 ) -> Result<Vec<Partition>> {
     if filters.is_empty() {
-        return Ok(partitions);
+        // prune partitions which don't contain the partition columns
+        return Ok(partitions
+            .into_iter()
+            .filter(|p| {
+                let cols = partition_cols.iter().map(|x| x.0.as_str());
+                !parse_partitions_for_path(table_path, &p.path, cols)
+                    .unwrap_or_default()
+                    .is_empty()
+            })
+            .collect());
     }
 
     let mut builders: Vec<_> = (0..partition_cols.len())
@@ -432,6 +442,7 @@ pub async fn pruned_partition_list<'a>(
     }
 
     let partition_prefix = evaluate_partition_prefix(partition_cols, filters);
+
     let partitions =
         list_partitions(store, table_path, partition_cols.len(), partition_prefix)
             .await?;
@@ -502,12 +513,12 @@ where
     let subpath = table_path.strip_prefix(file_path)?;
 
     let mut part_values = vec![];
-    for (part, pn) in subpath.zip(table_partition_cols) {
+    for (part, expected_partition) in subpath.zip(table_partition_cols) {
         match part.split_once('=') {
-            Some((name, val)) if name == pn => part_values.push(val),
+            Some((name, val)) if name == expected_partition => part_values.push(val),
             _ => {
                 debug!(
-                    "Ignoring file: file_path='{file_path}', table_path='{table_path}', part='{part}', partition_col='{pn}'",
+                    "Ignoring file: file_path='{file_path}', table_path='{table_path}', part='{part}', partition_col='{expected_partition}'",
                 );
                 return None;
             }
@@ -594,6 +605,8 @@ mod tests {
             ("tablepath/mypartition=val1/notparquetfile", 100),
             ("tablepath/mypartition=val1/ignoresemptyfile.parquet", 0),
             ("tablepath/file.parquet", 100),
+            ("tablepath/notapartition/file.parquet", 100),
+            ("tablepath/notmypartition=val1/file.parquet", 100),
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
@@ -619,6 +632,8 @@ mod tests {
             ("tablepath/mypartition=val2/file.parquet", 100),
             ("tablepath/mypartition=val1/ignoresemptyfile.parquet", 0),
             ("tablepath/mypartition=val1/other=val3/file.parquet", 100),
+            ("tablepath/notapartition/file.parquet", 100),
+            ("tablepath/notmypartition=val1/file.parquet", 100),
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
