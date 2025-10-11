@@ -218,10 +218,12 @@ async fn test_parameter_invalid_types() -> Result<()> {
         .with_param_values(vec![ScalarValue::from(4_i32)])?
         .collect()
         .await;
-    assert_eq!(
-        results.unwrap_err().strip_backtrace(),
-        "type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) = Int32"
-);
+    assert_snapshot!(results.unwrap_err().strip_backtrace(),
+        @r#"
+    type_coercion
+    caused by
+    Error during planning: Cannot infer common argument type for comparison operation List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) = Int32
+    "#);
     Ok(())
 }
 

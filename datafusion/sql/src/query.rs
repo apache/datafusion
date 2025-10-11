@@ -28,8 +28,9 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Ident, LimitClause, Offset, OffsetRows, OrderBy, OrderByExpr,
-    OrderByKind, PipeOperator, Query, SelectInto, SetExpr,
+    Expr as SQLExpr, ExprWithAliasAndOrderBy, Ident, LimitClause, Offset, OffsetRows,
+    OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto, SetExpr,
+    SetOperator, SetQuantifier, TableAlias,
 };
 use sqlparser::tokenizer::Span;
 
@@ -146,9 +147,81 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .collect();
                 self.project(plan, all_exprs)
             }
+            PipeOperator::As { alias } => self.apply_table_alias(
+                plan,
+                TableAlias {
+                    name: alias,
+                    // Apply to all fields
+                    columns: vec![],
+                },
+            ),
+            PipeOperator::Union {
+                set_quantifier,
+                queries,
+            } => self.pipe_operator_set(
+                plan,
+                SetOperator::Union,
+                set_quantifier,
+                queries,
+                planner_context,
+            ),
+            PipeOperator::Intersect {
+                set_quantifier,
+                queries,
+            } => self.pipe_operator_set(
+                plan,
+                SetOperator::Intersect,
+                set_quantifier,
+                queries,
+                planner_context,
+            ),
+            PipeOperator::Except {
+                set_quantifier,
+                queries,
+            } => self.pipe_operator_set(
+                plan,
+                SetOperator::Except,
+                set_quantifier,
+                queries,
+                planner_context,
+            ),
+            PipeOperator::Aggregate {
+                full_table_exprs,
+                group_by_expr,
+            } => self.pipe_operator_aggregate(
+                plan,
+                full_table_exprs,
+                group_by_expr,
+                planner_context,
+            ),
+            PipeOperator::Join(join) => {
+                self.parse_relation_join(plan, join, planner_context)
+            }
 
             x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }
+    }
+
+    /// Handle Union/Intersect/Except pipe operators
+    fn pipe_operator_set(
+        &self,
+        mut plan: LogicalPlan,
+        set_operator: SetOperator,
+        set_quantifier: SetQuantifier,
+        queries: Vec<Query>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        for query in queries {
+            let right_plan = self.query_to_plan(query, planner_context)?;
+            plan = self.set_operation_to_plan(
+                set_operator,
+                plan,
+                right_plan,
+                set_quantifier,
+            )?;
+        }
+
+        Ok(plan)
     }
 
     /// Wrap a plan in a limit
@@ -227,6 +300,45 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
+    /// Handle AGGREGATE pipe operator
+    fn pipe_operator_aggregate(
+        &self,
+        plan: LogicalPlan,
+        full_table_exprs: Vec<ExprWithAliasAndOrderBy>,
+        group_by_expr: Vec<ExprWithAliasAndOrderBy>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        let plan_schema = plan.schema();
+        let process_expr =
+            |expr_with_alias_and_order_by: ExprWithAliasAndOrderBy,
+             planner_context: &mut PlannerContext| {
+                let expr_with_alias = expr_with_alias_and_order_by.expr;
+                let sql_expr = expr_with_alias.expr;
+                let alias = expr_with_alias.alias;
+
+                let df_expr = self.sql_to_expr(sql_expr, plan_schema, planner_context)?;
+
+                match alias {
+                    Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
+                    None => Ok(df_expr),
+                }
+            };
+
+        let aggr_exprs: Vec<Expr> = full_table_exprs
+            .into_iter()
+            .map(|e| process_expr(e, planner_context))
+            .collect::<Result<Vec<_>>>()?;
+
+        let group_by_exprs: Vec<Expr> = group_by_expr
+            .into_iter()
+            .map(|e| process_expr(e, planner_context))
+            .collect::<Result<Vec<_>>>()?;
+
+        LogicalPlanBuilder::from(plan)
+            .aggregate(group_by_exprs, aggr_exprs)?
+            .build()
+    }
+
     /// Wrap the logical plan in a `SelectInto`
     fn select_into(
         &self,
@@ -281,7 +393,7 @@ pub(crate) fn to_order_by_exprs_with_select(
                             quote_style: None,
                             span: Span::empty(),
                         }),
-                        options: order_by_options.clone(),
+                        options: order_by_options,
                         with_fill: None,
                     }),
                     // TODO: Support other types of expressions
