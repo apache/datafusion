@@ -84,8 +84,8 @@ async fn dml_output_schema() {
     ctx.sql("CREATE TABLE test (x int)").await.unwrap();
     let sql = "INSERT INTO test VALUES (1)";
     let df = ctx.sql(sql).await.unwrap();
-    let count_schema = Schema::new(vec![Field::new("count", DataType::UInt64, false)]);
-    assert_eq!(Schema::from(df.schema()), count_schema);
+    let count_schema = &Schema::new(vec![Field::new("count", DataType::UInt64, false)]);
+    assert_eq!(df.schema().as_arrow(), count_schema);
 }
 
 #[tokio::test]

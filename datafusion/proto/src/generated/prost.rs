@@ -86,7 +86,7 @@ pub struct LogicalExtensionNode {
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<LogicalPlanNode>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProjectionColumns {
     #[prost(string, repeated, tag = "1")]
     pub columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
@@ -185,7 +185,7 @@ pub struct ProjectionNode {
 }
 /// Nested message and enum types in `ProjectionNode`.
 pub mod projection_node {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum OptionalAlias {
         #[prost(string, tag = "3")]
         Alias(::prost::alloc::string::String),
@@ -232,7 +232,7 @@ pub struct HashRepartition {
     #[prost(uint64, tag = "2")]
     pub partition_count: u64,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EmptyRelationNode {
     #[prost(bool, tag = "1")]
     pub produce_one_row: bool,
@@ -251,6 +251,8 @@ pub struct CreateExternalTableNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
+    #[prost(bool, tag = "15")]
+    pub or_replace: bool,
     #[prost(bool, tag = "14")]
     pub temporary: bool,
     #[prost(string, tag = "7")]
@@ -485,7 +487,7 @@ pub struct UnnestNode {
     #[prost(message, optional, tag = "7")]
     pub options: ::core::option::Option<UnnestOptions>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ColumnUnnestListItem {
     #[prost(uint32, tag = "1")]
     pub input_index: u32,
@@ -497,7 +499,7 @@ pub struct ColumnUnnestListRecursions {
     #[prost(message, repeated, tag = "2")]
     pub recursions: ::prost::alloc::vec::Vec<ColumnUnnestListRecursion>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ColumnUnnestListRecursion {
     #[prost(message, optional, tag = "1")]
     pub output_column: ::core::option::Option<super::datafusion_common::Column>,
@@ -511,7 +513,7 @@ pub struct UnnestOptions {
     #[prost(message, repeated, tag = "2")]
     pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RecursionUnnestOption {
     #[prost(message, optional, tag = "1")]
     pub output_column: ::core::option::Option<super::datafusion_common::Column>,
@@ -640,7 +642,7 @@ pub mod logical_expr_node {
         Unnest(super::Unnest),
     }
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Wildcard {
     #[prost(message, optional, tag = "1")]
     pub qualifier: ::core::option::Option<TableReference>,
@@ -821,7 +823,7 @@ pub struct WindowExprNode {
 }
 /// Nested message and enum types in `WindowExprNode`.
 pub mod window_expr_node {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum WindowFunction {
         /// BuiltInWindowFunction built_in_function = 2;
         #[prost(string, tag = "3")]
@@ -941,27 +943,27 @@ pub struct WindowFrameBound {
     #[prost(message, optional, tag = "2")]
     pub bound_value: ::core::option::Option<super::datafusion_common::ScalarValue>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FixedSizeBinary {
     #[prost(int32, tag = "1")]
     pub length: i32,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnalyzedLogicalPlanType {
     #[prost(string, tag = "1")]
     pub analyzer_name: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OptimizedLogicalPlanType {
     #[prost(string, tag = "1")]
     pub optimizer_name: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OptimizedPhysicalPlanType {
     #[prost(string, tag = "1")]
     pub optimizer_name: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PlanType {
     #[prost(
         oneof = "plan_type::PlanTypeEnum",
@@ -971,7 +973,7 @@ pub struct PlanType {
 }
 /// Nested message and enum types in `PlanType`.
 pub mod plan_type {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum PlanTypeEnum {
         #[prost(message, tag = "1")]
         InitialLogicalPlan(super::super::datafusion_common::EmptyMessage),
@@ -1001,26 +1003,26 @@ pub mod plan_type {
         PhysicalPlanError(super::super::datafusion_common::EmptyMessage),
     }
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StringifiedPlan {
     #[prost(message, optional, tag = "1")]
     pub plan_type: ::core::option::Option<PlanType>,
     #[prost(string, tag = "2")]
     pub plan: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BareTableReference {
     #[prost(string, tag = "1")]
     pub table: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PartialTableReference {
     #[prost(string, tag = "1")]
     pub schema: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub table: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FullTableReference {
     #[prost(string, tag = "1")]
     pub catalog: ::prost::alloc::string::String,
@@ -1029,7 +1031,7 @@ pub struct FullTableReference {
     #[prost(string, tag = "3")]
     pub table: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TableReference {
     #[prost(oneof = "table_reference::TableReferenceEnum", tags = "1, 2, 3")]
     pub table_reference_enum: ::core::option::Option<
@@ -1038,7 +1040,7 @@ pub struct TableReference {
 }
 /// Nested message and enum types in `TableReference`.
 pub mod table_reference {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum TableReferenceEnum {
         #[prost(message, tag = "1")]
         Bare(super::BareTableReference),
@@ -1053,7 +1055,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1125,6 +1127,12 @@ pub mod physical_plan_node {
         JsonScan(super::JsonScanExecNode),
         #[prost(message, tag = "32")]
         Cooperative(::prost::alloc::boxed::Box<super::CooperativeExecNode>),
+        #[prost(message, tag = "33")]
+        GenerateSeries(super::GenerateSeriesNode),
+        #[prost(message, tag = "34")]
+        SortMergeJoin(::prost::alloc::boxed::Box<super::SortMergeJoinExecNode>),
+        #[prost(message, tag = "35")]
+        MemoryScan(super::MemoryScanExecNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1226,7 +1234,7 @@ pub struct UnnestExecNode {
     #[prost(message, optional, tag = "5")]
     pub options: ::core::option::Option<UnnestOptions>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListUnnest {
     #[prost(uint32, tag = "1")]
     pub index_in_input_schema: u32,
@@ -1334,7 +1342,7 @@ pub struct PhysicalAggregateExprNode {
 }
 /// Nested message and enum types in `PhysicalAggregateExprNode`.
 pub mod physical_aggregate_expr_node {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum AggregateFunction {
         #[prost(string, tag = "4")]
         UserDefinedAggrFunction(::prost::alloc::string::String),
@@ -1354,6 +1362,10 @@ pub struct PhysicalWindowExprNode {
     pub name: ::prost::alloc::string::String,
     #[prost(bytes = "vec", optional, tag = "9")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bool, tag = "11")]
+    pub ignore_nulls: bool,
+    #[prost(bool, tag = "12")]
+    pub distinct: bool,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "3, 10")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
@@ -1361,7 +1373,7 @@ pub struct PhysicalWindowExprNode {
 }
 /// Nested message and enum types in `PhysicalWindowExprNode`.
 pub mod physical_window_expr_node {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum WindowFunction {
         /// BuiltInWindowFunction built_in_function = 2;
         #[prost(string, tag = "3")]
@@ -1497,7 +1509,7 @@ pub struct FileGroup {
     #[prost(message, repeated, tag = "1")]
     pub files: ::prost::alloc::vec::Vec<PartitionedFile>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ScanLimit {
     /// wrap into a message to make it optional
     #[prost(uint32, tag = "1")]
@@ -1554,6 +1566,8 @@ pub struct CsvScanExecNode {
     pub quote: ::prost::alloc::string::String,
     #[prost(bool, tag = "7")]
     pub newlines_in_values: bool,
+    #[prost(bool, tag = "8")]
+    pub truncate_rows: bool,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
@@ -1561,12 +1575,12 @@ pub struct CsvScanExecNode {
 }
 /// Nested message and enum types in `CsvScanExecNode`.
 pub mod csv_scan_exec_node {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum OptionalEscape {
         #[prost(string, tag = "5")]
         Escape(::prost::alloc::string::String),
     }
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum OptionalComment {
         #[prost(string, tag = "6")]
         Comment(::prost::alloc::string::String),
@@ -1581,6 +1595,21 @@ pub struct JsonScanExecNode {
 pub struct AvroScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryScanExecNode {
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    pub partitions: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint32, repeated, tag = "3")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, repeated, tag = "4")]
+    pub sort_information: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
+    #[prost(bool, tag = "5")]
+    pub show_sizes: bool,
+    #[prost(uint32, optional, tag = "6")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CooperativeExecNode {
@@ -1664,14 +1693,14 @@ pub struct CrossJoinExecNode {
     #[prost(message, optional, boxed, tag = "2")]
     pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PhysicalColumn {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
     #[prost(uint32, tag = "2")]
     pub index: u32,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnknownColumn {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
@@ -1702,7 +1731,7 @@ pub struct ProjectionExecNode {
     #[prost(string, repeated, tag = "3")]
     pub expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PartiallySortedInputOrderMode {
     #[prost(uint64, repeated, tag = "6")]
     pub columns: ::prost::alloc::vec::Vec<u64>,
@@ -1722,7 +1751,7 @@ pub struct WindowAggExecNode {
 /// Nested message and enum types in `WindowAggExecNode`.
 pub mod window_agg_exec_node {
     /// Set optional to `None` for `BoundedWindowAggExec`.
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum InputOrderMode {
         #[prost(message, tag = "7")]
         Linear(super::super::datafusion_common::EmptyMessage),
@@ -1742,7 +1771,7 @@ pub struct MaybePhysicalSortExprs {
     #[prost(message, repeated, tag = "1")]
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AggLimit {
     /// wrap into a message to make it optional
     #[prost(uint64, tag = "1")]
@@ -1888,7 +1917,7 @@ pub struct JoinFilter {
     #[prost(message, optional, tag = "3")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ColumnIndex {
     #[prost(uint32, tag = "1")]
     pub index: u32,
@@ -1912,7 +1941,7 @@ pub struct PartitionedFile {
     #[prost(message, optional, tag = "6")]
     pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileRange {
     #[prost(int64, tag = "1")]
     pub start: i64,
@@ -1949,6 +1978,96 @@ pub struct CteWorkTableScanNode {
     pub name: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GenerateSeriesArgsContainsNull {
+    #[prost(enumeration = "GenerateSeriesName", tag = "1")]
+    pub name: i32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GenerateSeriesArgsInt64 {
+    #[prost(int64, tag = "1")]
+    pub start: i64,
+    #[prost(int64, tag = "2")]
+    pub end: i64,
+    #[prost(int64, tag = "3")]
+    pub step: i64,
+    #[prost(bool, tag = "4")]
+    pub include_end: bool,
+    #[prost(enumeration = "GenerateSeriesName", tag = "5")]
+    pub name: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GenerateSeriesArgsTimestamp {
+    #[prost(int64, tag = "1")]
+    pub start: i64,
+    #[prost(int64, tag = "2")]
+    pub end: i64,
+    #[prost(message, optional, tag = "3")]
+    pub step: ::core::option::Option<
+        super::datafusion_common::IntervalMonthDayNanoValue,
+    >,
+    #[prost(string, optional, tag = "4")]
+    pub tz: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, tag = "5")]
+    pub include_end: bool,
+    #[prost(enumeration = "GenerateSeriesName", tag = "6")]
+    pub name: i32,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GenerateSeriesArgsDate {
+    #[prost(int64, tag = "1")]
+    pub start: i64,
+    #[prost(int64, tag = "2")]
+    pub end: i64,
+    #[prost(message, optional, tag = "3")]
+    pub step: ::core::option::Option<
+        super::datafusion_common::IntervalMonthDayNanoValue,
+    >,
+    #[prost(bool, tag = "4")]
+    pub include_end: bool,
+    #[prost(enumeration = "GenerateSeriesName", tag = "5")]
+    pub name: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GenerateSeriesNode {
+    #[prost(message, optional, tag = "1")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint32, tag = "2")]
+    pub target_batch_size: u32,
+    #[prost(oneof = "generate_series_node::Args", tags = "3, 4, 5, 6")]
+    pub args: ::core::option::Option<generate_series_node::Args>,
+}
+/// Nested message and enum types in `GenerateSeriesNode`.
+pub mod generate_series_node {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Args {
+        #[prost(message, tag = "3")]
+        ContainsNull(super::GenerateSeriesArgsContainsNull),
+        #[prost(message, tag = "4")]
+        Int64Args(super::GenerateSeriesArgsInt64),
+        #[prost(message, tag = "5")]
+        TimestampArgs(super::GenerateSeriesArgsTimestamp),
+        #[prost(message, tag = "6")]
+        DateArgs(super::GenerateSeriesArgsDate),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SortMergeJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "4")]
+    pub join_type: i32,
+    #[prost(message, optional, tag = "5")]
+    pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(message, repeated, tag = "6")]
+    pub sort_options: ::prost::alloc::vec::Vec<SortExprNode>,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2149,6 +2268,32 @@ impl AggregateMode {
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
             "SINGLE" => Some(Self::Single),
             "SINGLE_PARTITIONED" => Some(Self::SinglePartitioned),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GenerateSeriesName {
+    GsGenerateSeries = 0,
+    GsRange = 1,
+}
+impl GenerateSeriesName {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::GsGenerateSeries => "GS_GENERATE_SERIES",
+            Self::GsRange => "GS_RANGE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GS_GENERATE_SERIES" => Some(Self::GsGenerateSeries),
+            "GS_RANGE" => Some(Self::GsRange),
             _ => None,
         }
     }

@@ -48,7 +48,7 @@ mod tests {
     use datafusion_physical_plan::{collect, ExecutionPlan};
 
     use arrow::array::{
-        BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
+        Array, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
     };
     use arrow::compute::concat_batches;
     use arrow::csv::ReaderBuilder;
@@ -60,6 +60,7 @@ mod tests {
     use futures::stream::BoxStream;
     use futures::StreamExt;
     use insta::assert_snapshot;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
@@ -104,6 +105,14 @@ mod tests {
         }
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+            self.get_opts(location, GetOptions::default()).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            _opts: GetOptions,
+        ) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
             let len = bytes.len() as u64;
             let range = 0..len * self.max_iterations;
@@ -128,14 +137,6 @@ mod tests {
                 range: Default::default(),
                 attributes: Attributes::default(),
             })
-        }
-
-        async fn get_opts(
-            &self,
-            _location: &Path,
-            _opts: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            unimplemented!()
         }
 
         async fn get_ranges(
@@ -467,6 +468,59 @@ mod tests {
             vec!["c1: Float64", "c2: Utf8", "c3: Utf8", "c4: Int64",],
             actual_fields
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_stream_null_chunks() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        // a stream where each line is read as a separate chunk,
+        // data type for each chunk is inferred separately.
+        // +----+-----+----+
+        // | c1 | c2  | c3 |
+        // +----+-----+----+
+        // | 1  | 1.0 |    |  type: Int64, Float64, Null
+        // |    |     |    |  type: Null, Null, Null
+        // +----+-----+----+
+        let chunked_object_store = Arc::new(ChunkedStore::new(
+            Arc::new(VariableStream::new(
+                Bytes::from(
+                    r#"c1,c2,c3
+1,1.0,
+,,
+"#,
+                ),
+                1,
+            )),
+            1,
+        ));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        let csv_format = CsvFormat::default().with_has_header(true);
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(chunked_object_store as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        let actual_fields: Vec<_> = inferred_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+
+        // ensure null chunks don't skew type inference
+        assert_eq!(vec!["c1: Int64", "c2: Float64", "c3: Null"], actual_fields);
         Ok(())
     }
 
@@ -818,6 +872,48 @@ mod tests {
             ++
             ++
         "###);
+
+        Ok(())
+    }
+
+    /// Read multiple csv files (some are empty) with header
+    ///
+    /// some_empty_with_header
+    /// ├── a_empty.csv
+    /// ├── b.csv
+    /// └── c_nulls_column.csv
+    ///
+    /// a_empty.csv:
+    /// c1,c2,c3
+    ///
+    /// b.csv:
+    /// c1,c2,c3
+    /// 1,1,1
+    /// 2,2,2
+    ///
+    /// c_nulls_column.csv:
+    /// c1,c2,c3
+    /// 3,3,
+    #[tokio::test]
+    async fn test_csv_some_empty_with_header() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.register_csv(
+            "some_empty_with_header",
+            "tests/data/empty_files/some_empty_with_header",
+            CsvReadOptions::new().has_header(true),
+        )
+        .await?;
+
+        let query = "select sum(c3) from some_empty_with_header;";
+        let query_result = ctx.sql(query).await?.collect().await?;
+
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        +--------------------------------+
+        | sum(some_empty_with_header.c3) |
+        +--------------------------------+
+        | 3                              |
+        +--------------------------------+
+        ");
 
         Ok(())
     }
@@ -1233,7 +1329,7 @@ mod tests {
     fn csv_values(line_number: usize) -> (i32, f64, bool, String) {
         let int_value = line_number as i32;
         let float_value = line_number as f64;
-        let bool_value = line_number % 2 == 0;
+        let bool_value = line_number.is_multiple_of(2);
         let char_value = format!("{line_number}-string");
         (int_value, float_value, bool_value, char_value)
     }
@@ -1255,5 +1351,182 @@ mod tests {
             .with_batch_size(batch_size)
             .build_decoder();
         DecoderDeserializer::new(CsvDecoder::new(decoder))
+    }
+
+    fn csv_deserializer_with_truncated(
+        batch_size: usize,
+        schema: &Arc<Schema>,
+    ) -> impl BatchDeserializer<Bytes> {
+        // using Arrow's ReaderBuilder and enabling truncated_rows
+        let decoder = ReaderBuilder::new(schema.clone())
+            .with_batch_size(batch_size)
+            .with_truncated_rows(true) // <- enable runtime truncated_rows
+            .build_decoder();
+        DecoderDeserializer::new(CsvDecoder::new(decoder))
+    }
+
+    #[tokio::test]
+    async fn infer_schema_with_truncated_rows_true() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        // CSV: header has 3 columns, but first data row has only 2 columns, second row has 3
+        let csv_data = Bytes::from("a,b,c\n1,2\n3,4,5\n");
+        let variable_object_store = Arc::new(VariableStream::new(csv_data, 1));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        // Construct CsvFormat and enable truncated_rows via CsvOptions
+        let csv_options = CsvOptions::default().with_truncated_rows(true);
+        let csv_format = CsvFormat::default()
+            .with_has_header(true)
+            .with_options(csv_options)
+            .with_schema_infer_max_rec(10);
+
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        // header has 3 columns; inferred schema should also have 3
+        assert_eq!(inferred_schema.fields().len(), 3);
+
+        // inferred columns should be nullable
+        for f in inferred_schema.fields() {
+            assert!(f.is_nullable());
+        }
+
+        Ok(())
+    }
+    #[test]
+    fn test_decoder_truncated_rows_runtime() -> Result<()> {
+        // Synchronous test: Decoder API used here is synchronous
+        let schema = csv_schema(); // helper already defined in file
+
+        // Construct a decoder that enables truncated_rows at runtime
+        let mut deserializer = csv_deserializer_with_truncated(10, &schema);
+
+        // Provide two rows: first row complete, second row missing last column
+        let input = Bytes::from("0,0.0,true,0-string\n1,1.0,true\n");
+        deserializer.digest(input);
+
+        // Finish and collect output
+        deserializer.finish();
+
+        let output = deserializer.next()?;
+        match output {
+            DeserializerOutput::RecordBatch(batch) => {
+                // ensure at least two rows present
+                assert!(batch.num_rows() >= 2);
+                // column 4 (index 3) should be a StringArray where second row is NULL
+                let col4 = batch
+                    .column(3)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("column 4 should be StringArray");
+
+                // first row present, second row should be null
+                assert!(!col4.is_null(0));
+                assert!(col4.is_null(1));
+            }
+            other => panic!("expected RecordBatch but got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema_truncated_rows_false_error() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        // CSV: header has 4 cols, first data row has 3 cols -> truncated at end
+        let csv_data = Bytes::from("id,a,b,c\n1,foo,bar\n2,foo,bar,baz\n");
+        let variable_object_store = Arc::new(VariableStream::new(csv_data, 1));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        // CsvFormat without enabling truncated_rows (default behavior = false)
+        let csv_format = CsvFormat::default()
+            .with_has_header(true)
+            .with_schema_infer_max_rec(10);
+
+        let res = csv_format
+            .infer_schema(
+                &state,
+                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await;
+
+        // Expect an error due to unequal lengths / incorrect number of fields
+        assert!(
+            res.is_err(),
+            "expected infer_schema to error on truncated rows when disabled"
+        );
+
+        // Optional: check message contains indicative text (two known possibilities)
+        if let Err(err) = res {
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("Encountered unequal lengths")
+                    || msg.contains("incorrect number of fields"),
+                "unexpected error message: {msg}",
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_csv_truncated_rows_via_tempfile() -> Result<()> {
+        use std::io::Write;
+
+        // create a SessionContext
+        let ctx = SessionContext::new();
+
+        // Create a temp file with a .csv suffix so the reader accepts it
+        let mut tmp = tempfile::Builder::new().suffix(".csv").tempfile()?; // ensures path ends with .csv
+                                                                           // CSV has header "a,b,c". First data row is truncated (only "1,2"), second row is complete.
+        write!(tmp, "a,b,c\n1,2\n3,4,5\n")?;
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        // Build CsvReadOptions: header present, enable truncated_rows.
+        // (Use the exact builder method your crate exposes: `truncated_rows(true)` here,
+        //  if the method name differs in your codebase use the appropriate one.)
+        let options = CsvReadOptions::default().truncated_rows(true);
+
+        println!("options: {}, path: {path}", options.truncated_rows);
+
+        // Call the API under test
+        let df = ctx.read_csv(&path, options).await?;
+
+        // Collect the results and combine batches so we can inspect columns
+        let batches = df.collect().await?;
+        let combined = concat_batches(&batches[0].schema(), &batches)?;
+
+        // Column 'c' is the 3rd column (index 2). The first data row was truncated -> should be NULL.
+        let col_c = combined.column(2);
+        assert!(
+            col_c.is_null(0),
+            "expected first row column 'c' to be NULL due to truncated row"
+        );
+
+        // Also ensure we read at least one row
+        assert!(combined.num_rows() >= 2);
+
+        Ok(())
     }
 }

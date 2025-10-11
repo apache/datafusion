@@ -681,7 +681,7 @@ select col2, col4 from t1 full outer join t2 on col1 = col3
 query TT
 explain select * from t1 join t2 on false;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
 # Make batch size smaller than table row number. to introduce parallelism to the plan.
@@ -1503,3 +1503,13 @@ drop table t1;
 
 statement ok
 drop table t0;
+
+# SQLancer fuzzed query (https://github.com/apache/datafusion/issues/14015)
+statement ok
+create table t1(v1 int, v2 int);
+
+query error DataFusion error: Schema error: No field named tt1.v2. Valid fields are tt1.v1.
+select v1 from t1 as tt1 natural join t1 as tt2 group by v1 order by v2;
+
+statement ok
+drop table t1;

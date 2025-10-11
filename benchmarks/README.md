@@ -87,6 +87,39 @@ To run for specific query, for example Q21
 ./bench.sh run tpch10 21
 ```
 
+## Compile profile benchmark
+
+Generate the data required for the compile profile helper (TPC-H SF=1):
+
+```shell
+./bench.sh data compile_profile
+```
+
+Run the benchmark across all default Cargo profiles (`dev`, `release`, `ci`, `release-nonlto`):
+
+```shell
+./bench.sh run compile_profile
+```
+
+Limit the run to a single profile:
+
+```shell
+./bench.sh run compile_profile dev
+```
+
+Or specify a subset of profiles:
+
+```shell
+./bench.sh run compile_profile dev release
+```
+
+You can also invoke the helper directly if you need to customise arguments further:
+
+```shell
+./benchmarks/compile_profile.py --profiles dev release --data /path/to/tpch_sf1
+```
+
+
 ## Benchmark with modified configurations
 
 ### Select join algorithm
@@ -440,37 +473,6 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 
 The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience.
 
-## Cancellation
-
-Test performance of cancelling queries.
-
-Queries in DataFusion should stop executing "quickly" after they are
-cancelled (the output stream is dropped).
-
-The queries are executed on a synthetic dataset generated during
-the benchmark execution that is an anonymized version of a
-real-world data set.
-
-The query is an anonymized version of a real-world query, and the
-test starts the query then cancels it and reports how long it takes
-for the runtime to fully exit.
-
-Example output:
-
-```
-Using 7 files found on disk
-Starting to load data into in-memory object store
-Done loading data into in-memory object store
-in main, sleeping
-Starting spawned
-Creating logical plan...
-Creating physical plan...
-Executing physical plan...
-Getting results...
-cancelling thread
-done dropping runtime in 83.531417ms
-```
-
 ## ClickBench
 
 The ClickBench[1] benchmarks are widely cited in the industry and
@@ -740,4 +742,65 @@ For example, to run query 1 with the small data generated above:
 
 ```bash
 cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/window.sql --query 1
+```
+
+# Micro-Benchmarks
+
+## Nested Loop Join
+
+This benchmark focuses on the performance of queries with nested loop joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Different queries are included to test nested loop joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run nlj
+```
+
+## Hash Join
+
+This benchmark focuses on the performance of queries with nested hash joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Several queries are included to test hash joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run hj
+```
+
+## Cancellation
+
+Test performance of cancelling queries.
+
+Queries in DataFusion should stop executing "quickly" after they are
+cancelled (the output stream is dropped).
+
+The queries are executed on a synthetic dataset generated during
+the benchmark execution that is an anonymized version of a
+real-world data set.
+
+The query is an anonymized version of a real-world query, and the
+test starts the query then cancels it and reports how long it takes
+for the runtime to fully exit.
+
+Example output:
+
+```
+Using 7 files found on disk
+Starting to load data into in-memory object store
+Done loading data into in-memory object store
+in main, sleeping
+Starting spawned
+Creating logical plan...
+Creating physical plan...
+Executing physical plan...
+Getting results...
+cancelling thread
+done dropping runtime in 83.531417ms
 ```

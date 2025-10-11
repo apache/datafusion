@@ -21,15 +21,21 @@
 
 ## Running Tests
 
-Tests can be run using `cargo`
+First check out test files with
 
 ```shell
-cargo test
+git submodule update --init
+```
+
+Then run all the tests with
+
+```shell
+cargo test --all-targets
 ```
 
 ## Running Storage Integration Tests
 
-By default, storage integration tests are not run. These test use the `testcontainers` crate to start up a local MinIO server using docker on port 9000.
+By default, storage integration tests are not run. These tests use the `testcontainers` crate to start up a local MinIO server using Docker on port 9000.
 
 To run them you will need to set `TEST_STORAGE_INTEGRATION`:
 
@@ -49,6 +55,6 @@ If you see an error mentioning "failed to load IMDS session token" such as
 > ---- object_storage::tests::s3_object_store_builder_resolves_region_when_none_provided stdout ----
 > Error: ObjectStore(Generic { store: "S3", source: "Error getting credentials from provider: an error occurred while loading credentials: failed to load IMDS session token" })
 
-You my need to disable trying to fetch S3 credentials from the environment using the `AWS_EC2_METADATA_DISABLED`, for example:
+You may need to disable trying to fetch S3 credentials from the environment using the `AWS_EC2_METADATA_DISABLED`, for example:
 
 > $ AWS_EC2_METADATA_DISABLED=true TEST_STORAGE_INTEGRATION=1 cargo test

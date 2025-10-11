@@ -31,7 +31,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#sha2>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSha2 {
     signature: Signature,
     aliases: Vec<String>,

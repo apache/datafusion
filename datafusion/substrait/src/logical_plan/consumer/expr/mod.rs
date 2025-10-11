@@ -93,7 +93,7 @@ pub async fn from_substrait_rex(
                 consumer.consume_dynamic_parameter(expr, input_schema).await
             }
         },
-        None => substrait_err!("Expression must set rex_type: {:?}", expression),
+        None => substrait_err!("Expression must set rex_type: {expression:?}"),
     }
 }
 

@@ -466,6 +466,7 @@ impl Unparser<'_> {
                             "Offset operator only valid in a statement context."
                         );
                     };
+
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
                         value: self.expr_to_sql(skip)?,
@@ -695,13 +696,6 @@ impl Unparser<'_> {
                     join_filters.as_ref(),
                 )?;
 
-                self.select_to_sql_recursively(
-                    right_plan.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
-
                 let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected
                 {
                     Some(select.pop_projections())
@@ -799,7 +793,7 @@ impl Unparser<'_> {
 
                             let projection = left_projection
                                 .into_iter()
-                                .chain(right_projection.into_iter())
+                                .chain(right_projection)
                                 .collect();
                             select.projection(projection);
                         }

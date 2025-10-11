@@ -167,7 +167,7 @@ In conclusion, for queries under a very tight memory limit, it's recommended to
 set `target_partitions` and `batch_size` to smaller values.
 
 ```sql
--- Query still gets paralleized, but each partition will have more memory to use
+-- Query still gets parallelized, but each partition will have more memory to use
 SET datafusion.execution.target_partitions = 4;
 -- Smaller than the default '8192', while still keep the benefit of vectorized execution
 SET datafusion.execution.batch_size = 1024;

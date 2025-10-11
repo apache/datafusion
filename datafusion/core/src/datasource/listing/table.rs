@@ -23,13 +23,13 @@ use super::{
 };
 use crate::{
     datasource::file_format::{file_compression_type::FileCompressionType, FileFormat},
-    datasource::{create_ordering, physical_plan::FileSinkConfig},
+    datasource::physical_plan::FileSinkConfig,
     execution::context::SessionState,
 };
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
-use datafusion_catalog::{Session, TableProvider};
+use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
     stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
@@ -45,16 +45,19 @@ use datafusion_execution::{
     cache::{cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache},
     config::SessionConfig,
 };
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
+use datafusion_physical_expr::create_lex_ordering;
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
 use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
+
 /// Indicates the source of the schema for a [`ListingTable`]
 // PartialEq required for assert_eq! in tests
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -215,16 +218,16 @@ impl ListingTableConfig {
     ) -> Result<(String, Option<String>)> {
         let mut exts = path.rsplit('.');
 
-        let splitted = exts.next().unwrap_or("");
+        let split = exts.next().unwrap_or("");
 
-        let file_compression_type = FileCompressionType::from_str(splitted)
+        let file_compression_type = FileCompressionType::from_str(split)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
         if file_compression_type.is_compressed() {
-            let splitted2 = exts.next().unwrap_or("");
-            Ok((splitted2.to_string(), Some(splitted.to_string())))
+            let split2 = exts.next().unwrap_or("");
+            Ok((split2.to_string(), Some(split.to_string())))
         } else {
-            Ok((splitted.to_string(), None))
+            Ok((split.to_string(), None))
         }
     }
 
@@ -502,7 +505,7 @@ impl ListingOptions {
     ///
     /// Currently this sets `target_partitions` and `collect_stat`
     /// but if more options are added in the future that need to be coordinated
-    /// they will be synchronized thorugh this method.
+    /// they will be synchronized through this method.
     pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
         self = self.with_target_partitions(config.target_partitions());
         self = self.with_collect_stat(config.collect_statistics());
@@ -802,6 +805,9 @@ impl ListingOptions {
                     .rev()
                     .skip(1) // get parents only; skip the file itself
                     .rev()
+                    // Partitions are expected to follow the format "column_name=value", so we
+                    // should ignore any path part that cannot be parsed into the expected format
+                    .filter(|s| s.contains('='))
                     .map(|s| s.split('=').take(1).collect())
                     .collect_vec()
             })
@@ -819,13 +825,26 @@ impl ListingOptions {
     }
 }
 
-/// Reads data from one or more files as a single table.
+/// Built in [`TableProvider`] that reads data from one or more files as a single table.
 ///
-/// Implements [`TableProvider`], a DataFusion data source. The files are read
-/// using an  [`ObjectStore`] instance, for example from local files or objects
-/// from AWS S3.
+/// The files are read using an  [`ObjectStore`] instance, for example from
+/// local files or objects from AWS S3.
 ///
-/// # Reading Directories
+/// # Features:
+/// * Reading multiple files as a single table
+/// * Hive style partitioning (e.g., directories named `date=2024-06-01`)
+/// * Merges schemas from files with compatible but not identical schemas (see [`ListingTableConfig::file_schema`])
+/// * `limit`, `filter` and `projection` pushdown for formats that support it (e.g.,
+///   Parquet)
+/// * Statistics collection and pruning based on file metadata
+/// * Pre-existing sort order (see [`ListingOptions::file_sort_order`])
+/// * Metadata caching to speed up repeated queries (see [`FileMetadataCache`])
+/// * Statistics caching (see [`FileStatisticsCache`])
+///
+/// [`FileMetadataCache`]: datafusion_execution::cache::cache_manager::FileMetadataCache
+///
+/// # Reading Directories and Hive Style Partitioning
+///
 /// For example, given the `table1` directory (or object store prefix)
 ///
 /// ```text
@@ -861,15 +880,22 @@ impl ListingOptions {
 /// If the query has a predicate like `WHERE date = '2024-06-01'`
 /// only the corresponding directory will be read.
 ///
-/// `ListingTable` also supports limit, filter and projection pushdown for formats that
-/// support it as such as Parquet.
-///
 /// # See Also
 ///
 /// 1. [`ListingTableConfig`]: Configuration options
 /// 1. [`DataSourceExec`]: `ExecutionPlan` used by `ListingTable`
 ///
 /// [`DataSourceExec`]: crate::datasource::source::DataSourceExec
+///
+/// # Caching Metadata
+///
+/// Some formats, such as Parquet, use the `FileMetadataCache` to cache file
+/// metadata that is needed to execute but expensive to read, such as row
+/// groups and statistics. The cache is scoped to the [`SessionContext`] and can
+/// be configured via the [runtime config options].
+///
+/// [`SessionContext`]: crate::prelude::SessionContext
+/// [runtime config options]: https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings
 ///
 /// # Example: Read a directory of parquet files using a [`ListingTable`]
 ///
@@ -931,10 +957,16 @@ pub struct ListingTable {
     table_schema: SchemaRef,
     /// Indicates how the schema was derived (inferred or explicitly specified)
     schema_source: SchemaSource,
+    /// Options used to configure the listing table such as the file format
+    /// and partitioning information
     options: ListingOptions,
+    /// The SQL definition for this table, if any
     definition: Option<String>,
+    /// Cache for collected file statistics
     collected_statistics: FileStatisticsCache,
+    /// Constraints applied to this table
     constraints: Constraints,
+    /// Column default expressions for columns that are not physically present in the data files
     column_defaults: HashMap<String, Expr>,
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
@@ -1100,14 +1132,21 @@ impl ListingTable {
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
-    fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
-        create_ordering(&self.table_schema, &self.options.file_sort_order)
+    fn try_create_output_ordering(
+        &self,
+        execution_props: &ExecutionProps,
+    ) -> Result<Vec<LexOrdering>> {
+        create_lex_ordering(
+            &self.table_schema,
+            &self.options.file_sort_order,
+            execution_props,
+        )
     }
 }
 
-// Expressions can be used for parttion pruning if they can be evaluated using
-// only the partiton columns and there are partition columns.
-fn can_be_evaluted_for_partition_pruning(
+// Expressions can be used for partition pruning if they can be evaluated using
+// only the partition columns and there are partition columns.
+fn can_be_evaluated_for_partition_pruning(
     partition_column_names: &[&str],
     expr: &Expr,
 ) -> bool {
@@ -1140,6 +1179,22 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let options = ScanArgs::default()
+            .with_projection(projection.map(|p| p.as_slice()))
+            .with_filters(Some(filters))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.into_inner())
+    }
+
+    async fn scan_with_args<'a>(
+        &self,
+        state: &dyn Session,
+        args: ScanArgs<'a>,
+    ) -> Result<ScanResult> {
+        let projection = args.projection().map(|p| p.to_vec());
+        let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
+        let limit = args.limit();
+
         // extract types of partition columns
         let table_partition_cols = self
             .options
@@ -1152,11 +1207,12 @@ impl TableProvider for ListingTable {
             .iter()
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
+
         // If the filters can be resolved using only partition cols, there is no need to
         // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
         let (partition_filters, filters): (Vec<_>, Vec<_>) =
             filters.iter().cloned().partition(|filter| {
-                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+                can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });
 
         // We should not limit the number of partitioned files to scan if there are filters and limit
@@ -1169,11 +1225,11 @@ impl TableProvider for ListingTable {
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
-            let projected_schema = project_schema(&self.schema(), projection)?;
-            return Ok(Arc::new(EmptyExec::new(projected_schema)));
+            let projected_schema = project_schema(&self.schema(), projection.as_ref())?;
+            return Ok(ScanResult::new(Arc::new(EmptyExec::new(projected_schema))));
         }
 
-        let output_ordering = self.try_create_output_ordering()?;
+        let output_ordering = self.try_create_output_ordering(state.execution_props())?;
         match state
             .config_options()
             .execution
@@ -1204,13 +1260,16 @@ impl TableProvider for ListingTable {
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
         else {
-            return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
+            return Ok(ScanResult::new(Arc::new(EmptyExec::new(Arc::new(
+                Schema::empty(),
+            )))));
         };
 
         let file_source = self.create_file_source_with_schema_adapter()?;
 
         // create the execution plan
-        self.options
+        let plan = self
+            .options
             .format
             .create_physical_plan(
                 state,
@@ -1222,14 +1281,16 @@ impl TableProvider for ListingTable {
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
                 .with_statistics(statistics)
-                .with_projection(projection.cloned())
+                .with_projection(projection)
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
                 .with_expr_adapter(self.expr_adapter_factory.clone())
                 .build(),
             )
-            .await
+            .await?;
+
+        Ok(ScanResult::new(plan))
     }
 
     fn supports_filters_pushdown(
@@ -1245,7 +1306,7 @@ impl TableProvider for ListingTable {
         filters
             .iter()
             .map(|filter| {
-                if can_be_evaluted_for_partition_pruning(&partition_column_names, filter)
+                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
                 {
                     // if filter can be handled by partition pruning, it is exact
                     return Ok(TableProviderFilterPushDown::Exact);
@@ -1308,7 +1369,7 @@ impl TableProvider for ListingTable {
             file_extension: self.options().format.get_ext(),
         };
 
-        let orderings = self.try_create_output_ordering()?;
+        let orderings = self.try_create_output_ordering(state.execution_props())?;
         // It is sufficient to pass only one of the equivalent orderings:
         let order_requirements = orderings.into_iter().next().map(Into::into);
 
@@ -1536,6 +1597,7 @@ mod tests {
         SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
+    use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::{collect, ExecutionPlanProperties};
     use rstest::rstest;
@@ -1668,29 +1730,44 @@ mod tests {
 
         use crate::datasource::file_format::parquet::ParquetFormat;
         use datafusion_physical_plan::expressions::col as physical_col;
+        use datafusion_physical_plan::expressions::lit as physical_lit;
         use std::ops::Add;
 
         // (file_sort_order, expected_result)
         let cases = vec![
-            (vec![], Ok(Vec::<LexOrdering>::new())),
+            (
+                vec![],
+                Ok::<Vec<LexOrdering>, DataFusionError>(Vec::<LexOrdering>::new()),
+            ),
             // sort expr, but non column
             (
-                vec![vec![
-                    col("int_col").add(lit(1)).sort(true, true),
-                ]],
-                Err("Expected single column reference in sort_order[0][0], got int_col + Int32(1)"),
+                vec![vec![col("int_col").add(lit(1)).sort(true, true)]],
+                Ok(vec![[PhysicalSortExpr {
+                    expr: binary(
+                        physical_col("int_col", &schema).unwrap(),
+                        Operator::Plus,
+                        physical_lit(1),
+                        &schema,
+                    )
+                    .unwrap(),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: true,
+                    },
+                }]
+                .into()]),
             ),
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
                 Ok(vec![[PhysicalSortExpr {
-                            expr: physical_col("string_col", &schema).unwrap(),
-                            options: SortOptions {
-                                descending: false,
-                                nulls_first: false,
-                            },
-                        }].into(),
-                ])
+                    expr: physical_col("string_col", &schema).unwrap(),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                }]
+                .into()]),
             ),
             // ok with two columns, different options
             (
@@ -1699,14 +1776,18 @@ mod tests {
                     col("int_col").sort(false, true),
                 ]],
                 Ok(vec![[
-                            PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
-                                        .asc()
-                                        .nulls_last(),
-                            PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
-                                        .desc()
-                                        .nulls_first()
-                        ].into(),
-                ])
+                    PhysicalSortExpr::new_default(
+                        physical_col("string_col", &schema).unwrap(),
+                    )
+                    .asc()
+                    .nulls_last(),
+                    PhysicalSortExpr::new_default(
+                        physical_col("int_col", &schema).unwrap(),
+                    )
+                    .desc()
+                    .nulls_first(),
+                ]
+                .into()]),
             ),
         ];
 
@@ -1719,7 +1800,8 @@ mod tests {
 
             let table =
                 ListingTable::try_new(config.clone()).expect("Creating the table");
-            let ordering_result = table.try_create_output_ordering();
+            let ordering_result =
+                table.try_create_output_ordering(state.execution_props());
 
             match (expected_result, ordering_result) {
                 (Ok(expected), Ok(result)) => {

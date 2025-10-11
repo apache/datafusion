@@ -51,7 +51,7 @@ impl ViewTable {
     /// Notes: the `LogicalPlan` is not validated or type coerced. If this is
     /// needed it should be done after calling this function.
     pub fn new(logical_plan: LogicalPlan, definition: Option<String>) -> Self {
-        let table_schema = logical_plan.schema().as_ref().to_owned().into();
+        let table_schema = Arc::clone(logical_plan.schema().inner());
         Self {
             logical_plan,
             table_schema,
@@ -87,7 +87,7 @@ impl TableProvider for ViewTable {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+    fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.logical_plan))
     }
 

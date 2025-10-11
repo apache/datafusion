@@ -37,6 +37,7 @@ use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
 use crate::coalesce_async_exec_input::CoalesceAsyncExecInput;
+use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_physical_plan::ExecutionPlan;
@@ -59,7 +60,7 @@ pub trait PhysicalOptimizerRule: Debug {
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
-    /// A flag to indicate whether the physical planner should valid the rule will not
+    /// A flag to indicate whether the physical planner should validate that the rule will not
     /// change the schema of the plan after the rewriting.
     /// Some of the optimization rules might change the nullable properties of the schema
     /// and should disable the schema check.
@@ -131,6 +132,10 @@ impl PhysicalOptimizer {
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
             Arc::new(TopKAggregation::new()),
+            // Tries to push limits down through window functions, growing as appropriate
+            // This can possibly be combined with [LimitPushdown]
+            // It needs to come after [EnforceSorting]
+            Arc::new(LimitPushPastWindows::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.

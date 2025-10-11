@@ -82,7 +82,7 @@ logical_plan
 query TT
 EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col = 6;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # TODO: x = 7 AND x < 2 should simplify to false
 query TT
@@ -207,7 +207,7 @@ logical_plan
 query TT
 EXPLAIN SELECT * FROM test_data WHERE int_col = 5 AND int_col = 6;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # (x > 5 OR y < 10) AND (x > 6 OR y < 8)
 # This is more complex but could still benefit from some simplification

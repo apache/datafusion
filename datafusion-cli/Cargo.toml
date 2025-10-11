@@ -37,20 +37,22 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.3"
-aws-credential-types = "1.2.5"
-clap = { version = "4.5.43", features = ["derive", "cargo"] }
+aws-config = "1.8.6"
+aws-credential-types = "1.2.6"
+clap = { version = "4.5.47", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",
+    "compression",
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
     "nested_expressions",
     "parquet",
+    "parquet_encryption",
     "recursive_protection",
     "regex_expressions",
+    "sql",
     "unicode_expressions",
-    "compression",
 ] }
 dirs = "6.0.0"
 env_logger = { workspace = true }
@@ -66,11 +68,9 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 url = { workspace = true }
 
 [dev-dependencies]
-assert_cmd = "2.0"
 ctor = { workspace = true }
 insta = { workspace = true }
 insta-cmd = "0.6.0"
-predicates = "3.0"
 rstest = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio"] }

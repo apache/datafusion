@@ -81,22 +81,29 @@ trait UdfPointer: Deref {
     fn hash_value(&self) -> u64;
 }
 
-macro_rules! impl_for_udf_eq {
-    ($udf:ty) => {
-        impl UdfPointer for Arc<$udf> {
-            fn equals(&self, other: &$udf) -> bool {
-                self.as_ref().equals(other)
-            }
+impl UdfPointer for Arc<dyn ScalarUDFImpl + '_> {
+    fn equals(&self, other: &(dyn ScalarUDFImpl + '_)) -> bool {
+        self.as_ref().dyn_eq(other.as_any())
+    }
 
-            fn hash_value(&self) -> u64 {
-                self.as_ref().hash_value()
-            }
-        }
-    };
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.as_ref().dyn_hash(hasher);
+        hasher.finish()
+    }
 }
 
-impl_for_udf_eq!(dyn AggregateUDFImpl + '_);
-impl_for_udf_eq!(dyn ScalarUDFImpl + '_);
+impl UdfPointer for Arc<dyn AggregateUDFImpl + '_> {
+    fn equals(&self, other: &(dyn AggregateUDFImpl + '_)) -> bool {
+        self.as_ref().dyn_eq(other.as_any())
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.as_ref().dyn_hash(hasher);
+        hasher.finish()
+    }
+}
 
 impl UdfPointer for Arc<dyn WindowUDFImpl + '_> {
     fn equals(&self, other: &(dyn WindowUDFImpl + '_)) -> bool {
@@ -120,7 +127,7 @@ mod tests {
     use std::any::Any;
     use std::hash::DefaultHasher;
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
         name: &'static str,

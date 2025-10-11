@@ -29,7 +29,7 @@ use datafusion_expr::{
 
 /// Spark-compatible `luhn_check` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#luhn_check>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkLuhnCheck {
     signature: Signature,
 }
@@ -149,5 +149,5 @@ fn luhn_check_impl(input: &str) -> bool {
         alt = !alt;
     }
 
-    digits_processed > 0 && sum % 10 == 0
+    digits_processed > 0 && sum.is_multiple_of(10)
 }

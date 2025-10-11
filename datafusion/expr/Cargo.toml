@@ -38,23 +38,26 @@ workspace = true
 name = "datafusion_expr"
 
 [features]
+default = ["sql"]
 recursive_protection = ["dep:recursive"]
+sql = ["sqlparser"]
 
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = false }
 datafusion-doc = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 indexmap = { workspace = true }
+itertools = { workspace = true }
 paste = "^1.0"
 recursive = { workspace = true, optional = true }
 serde_json = { workspace = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 
 [dev-dependencies]
 ctor = { workspace = true }

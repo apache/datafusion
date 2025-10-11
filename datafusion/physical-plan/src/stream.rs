@@ -38,6 +38,7 @@ use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
@@ -84,6 +85,15 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.join_set.spawn(task);
     }
 
+    /// Same as [`Self::spawn`] but it spawns the task on the provided runtime
+    pub fn spawn_on<F>(&mut self, task: F, handle: &Handle)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.join_set.spawn_on(task, handle);
+    }
+
     /// Spawn a blocking task that will be aborted if this builder (or the stream
     /// built from it) are dropped.
     ///
@@ -95,6 +105,15 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         F: Send + 'static,
     {
         self.join_set.spawn_blocking(f);
+    }
+
+    /// Same as [`Self::spawn_blocking`] but it spawns the blocking task on the provided runtime
+    pub fn spawn_blocking_on<F>(&mut self, f: F, handle: &Handle)
+    where
+        F: FnOnce() -> Result<()>,
+        F: Send + 'static,
+    {
+        self.join_set.spawn_blocking_on(f, handle);
     }
 
     /// Create a stream of all data written to `tx`
@@ -248,6 +267,15 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn(task)
     }
 
+    /// Same as [`Self::spawn`] but it spawns the task on the provided runtime.
+    pub fn spawn_on<F>(&mut self, task: F, handle: &Handle)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.inner.spawn_on(task, handle)
+    }
+
     /// Spawn a blocking task tied to the builder and stream.
     ///
     /// # Drop / Cancel Behavior
@@ -273,6 +301,15 @@ impl RecordBatchReceiverStreamBuilder {
         F: Send + 'static,
     {
         self.inner.spawn_blocking(f)
+    }
+
+    /// Same as [`Self::spawn_blocking`] but it spawns the blocking task on the provided runtime.
+    pub fn spawn_blocking_on<F>(&mut self, f: F, handle: &Handle)
+    where
+        F: FnOnce() -> Result<()>,
+        F: Send + 'static,
+    {
+        self.inner.spawn_blocking_on(f, handle)
     }
 
     /// Runs the `partition` of the `input` ExecutionPlan on the
@@ -591,7 +628,7 @@ impl BatchSplitStream {
         let to_take = remaining.min(self.batch_size);
         let out = batch.slice(self.offset, to_take);
 
-        self.metrics.batches_splitted.add(1);
+        self.metrics.batches_split.add(1);
         self.offset += to_take;
         if self.offset < batch.num_rows() {
             // More data remains in this batch, store it back
@@ -821,5 +858,68 @@ mod test {
                 "Got the limit of {num_batches} batches before seeing panic"
             );
         }
+    }
+
+    #[test]
+    fn record_batch_receiver_stream_builder_spawn_on_runtime() {
+        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let mut builder =
+            RecordBatchReceiverStreamBuilder::new(Arc::new(Schema::empty()), 10);
+
+        let tx1 = builder.tx();
+        builder.spawn_on(
+            async move {
+                tx1.send(Ok(RecordBatch::new_empty(Arc::new(Schema::empty()))))
+                    .await
+                    .unwrap();
+
+                Ok(())
+            },
+            tokio_runtime.handle(),
+        );
+
+        let tx2 = builder.tx();
+        builder.spawn_blocking_on(
+            move || {
+                tx2.blocking_send(Ok(RecordBatch::new_empty(Arc::new(Schema::empty()))))
+                    .unwrap();
+
+                Ok(())
+            },
+            tokio_runtime.handle(),
+        );
+
+        let mut stream = builder.build();
+
+        let mut number_of_batches = 0;
+
+        loop {
+            let poll = stream.poll_next_unpin(&mut Context::from_waker(
+                futures::task::noop_waker_ref(),
+            ));
+
+            match poll {
+                Poll::Ready(None) => {
+                    break;
+                }
+                Poll::Ready(Some(Ok(batch))) => {
+                    number_of_batches += 1;
+                    assert_eq!(batch.num_rows(), 0);
+                }
+                Poll::Ready(Some(Err(e))) => panic!("Unexpected error: {e}"),
+                Poll::Pending => {
+                    continue;
+                }
+            }
+        }
+
+        assert_eq!(
+            number_of_batches, 2,
+            "Should have received exactly one empty batch"
+        );
     }
 }

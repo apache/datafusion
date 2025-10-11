@@ -175,6 +175,34 @@ select * from partitioned_insert_test order by a,b,c
 1 20 200
 2 20 200
 
+statement count 0
+CREATE EXTERNAL TABLE
+partitioned_insert_test_readback
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned/';
+
+query TTT
+describe partitioned_insert_test_readback;
+----
+c Int64 YES
+a Dictionary(UInt16, Utf8) NO
+b Dictionary(UInt16, Utf8) NO
+
+query ITT
+select * from partitioned_insert_test_readback order by a,b,c;
+----
+1 10 100
+1 10 200
+1 20 100
+2 20 100
+1 20 200
+2 20 200
+
+query I
+select count(*) from partitioned_insert_test_readback where b=100;
+----
+3
+
 statement ok
 CREATE EXTERNAL TABLE
 partitioned_insert_test_verify(c bigint)
@@ -329,6 +357,41 @@ INSERT INTO directory_test values (1, 2), (3, 4);
 
 query II
 select * from directory_test;
+----
+1 2
+3 4
+
+statement count 0
+CREATE EXTERNAL TABLE
+directory_with_dots_test(a bigint, b bigint)
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/external_versioned_parquet_table.v0/';
+
+query I
+INSERT INTO directory_with_dots_test values (1, 2), (3, 4);
+----
+2
+
+query II
+select * from directory_with_dots_test;
+----
+1 2
+3 4
+
+statement count 0
+CREATE EXTERNAL TABLE
+directory_with_dots_readback
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/external_versioned_parquet_table.v0/';
+
+query TTT
+describe directory_with_dots_readback
+----
+a Int64 YES
+b Int64 YES
+
+query II
+select * from directory_with_dots_readback
 ----
 1 2
 3 4

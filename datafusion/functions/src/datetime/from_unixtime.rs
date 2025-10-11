@@ -46,7 +46,7 @@ use datafusion_macros::user_doc;
         description = "Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FromUnixtimeFunc {
     signature: Signature,
 }
@@ -133,7 +133,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
 
         if args[0].data_type() != Int64 {
             return exec_err!(
-                "Unsupported data type {:?} for function from_unixtime",
+                "Unsupported data type {} for function from_unixtime",
                 args[0].data_type()
             );
         }
@@ -145,7 +145,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
                     .cast_to(&Timestamp(Second, Some(Arc::from(tz.to_string()))), None),
                 _ => {
                     exec_err!(
-                        "Unsupported data type {:?} for function from_unixtime",
+                        "Unsupported data type {} for function from_unixtime",
                         args[1].data_type()
                     )
                 }

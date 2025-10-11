@@ -440,6 +440,8 @@ impl PartialOrd for dyn WindowUDFImpl {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -523,37 +525,6 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     }
 }
 
-// Window UDF doc sections for use in public documentation
-pub mod window_doc_sections {
-    use datafusion_doc::DocSection;
-
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_AGGREGATE,
-            DOC_SECTION_RANKING,
-            DOC_SECTION_ANALYTICAL,
-        ]
-    }
-
-    pub const DOC_SECTION_AGGREGATE: DocSection = DocSection {
-        include: true,
-        label: "Aggregate Functions",
-        description: Some("All aggregate functions can be used as window functions."),
-    };
-
-    pub const DOC_SECTION_RANKING: DocSection = DocSection {
-        include: true,
-        label: "Ranking Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_ANALYTICAL: DocSection = DocSection {
-        include: true,
-        label: "Analytical Functions",
-        description: None,
-    };
-}
-
 #[cfg(test)]
 mod test {
     use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
@@ -564,6 +535,7 @@ mod test {
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::any::Any;
     use std::cmp::Ordering;
+    use std::hash::{DefaultHasher, Hash, Hasher};
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AWindowUDF {
@@ -650,6 +622,7 @@ mod test {
         let eq = a1 == a2;
         assert!(eq);
         assert_eq!(a1, a2);
+        assert_eq!(hash(a1), hash(a2));
     }
 
     #[test]
@@ -661,5 +634,11 @@ mod test {
         let b1 = WindowUDF::from(BWindowUDF::new());
         assert!(a1 < b1);
         assert!(!(a1 == b1));
+    }
+
+    fn hash<T: Hash>(value: T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
     }
 }

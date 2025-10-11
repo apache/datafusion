@@ -1741,16 +1741,19 @@ mod tests {
     }
 
     fn check_result(actual_batch: &RecordBatch, expected_batch: &RecordBatch) {
-        let formatted_actual_batch = pretty_format_batches(&[actual_batch.clone()])
-            .unwrap()
-            .to_string();
+        let formatted_actual_batch =
+            pretty_format_batches(std::slice::from_ref(actual_batch))
+                .unwrap()
+                .to_string();
         let mut formatted_actual_batch_sorted: Vec<&str> =
             formatted_actual_batch.trim().lines().collect();
         formatted_actual_batch_sorted.sort_unstable();
 
-        let formatted_expected_batch = pretty_format_batches(&[expected_batch.clone()])
-            .unwrap()
-            .to_string();
+        let formatted_expected_batch =
+            pretty_format_batches(std::slice::from_ref(expected_batch))
+                .unwrap()
+                .to_string();
+
         let mut formatted_expected_batch_sorted: Vec<&str> =
             formatted_expected_batch.trim().lines().collect();
         formatted_expected_batch_sorted.sort_unstable();

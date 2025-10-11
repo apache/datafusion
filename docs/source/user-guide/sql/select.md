@@ -35,10 +35,12 @@ DataFusion supports the following syntax for queries:
 [ [WHERE](#where-clause) condition ] <br/>
 [ [GROUP BY](#group-by-clause) grouping_element [, ...] ] <br/>
 [ [HAVING](#having-clause) condition] <br/>
+[ [QUALIFY](#qualify-clause) condition] <br/>
 [ [UNION](#union-clause) [ ALL | select ] <br/>
 [ [ORDER BY](#order-by-clause) expression [ ASC | DESC ][, ...] ] <br/>
 [ [LIMIT](#limit-clause) count ] <br/>
 [ [EXCLUDE | EXCEPT](#exclude-and-except-clause) ] <br/>
+[Pipe operators](#pipe-operators) <br/>
 
 </code>
 
@@ -261,6 +263,14 @@ Example:
 SELECT a, b, MAX(c) FROM table GROUP BY a, b HAVING MAX(c) > 10
 ```
 
+## QUALIFY clause
+
+Example:
+
+```sql
+SELECT ROW_NUMBER() OVER (PARTITION BY region) AS rk FROM table QUALIFY rk > 1;
+```
+
 ## UNION clause
 
 Example:
@@ -317,4 +327,190 @@ FROM table;
 ```sql
 SELECT * EXCLUDE(age, person)
 FROM table;
+```
+
+## Pipe operators
+
+Some SQL dialects (e.g. BigQuery) support the pipe operator `|>`.
+The SQL dialect can be set like this:
+
+```sql
+set datafusion.sql_parser.dialect = 'BigQuery';
+```
+
+DataFusion currently supports the following pipe operators:
+
+- [WHERE](#pipe_where)
+- [ORDER BY](#pipe_order_by)
+- [LIMIT](#pipe_limit)
+- [SELECT](#pipe_select)
+- [EXTEND](#pipe_extend)
+- [AS](#pipe_as)
+- [UNION](#pipe_union)
+- [INTERSECT](#pipe_intersect)
+- [EXCEPT](#pipe_except)
+- [AGGREGATE](#pipe_aggregate)
+
+(pipe_where)=
+
+### WHERE
+
+```sql
+select * from range(0,10)
+|> where value < 2;
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
++-------+
+```
+
+(pipe_order_by)=
+
+### ORDER BY
+
+```sql
+select * from range(0,3)
+|> order by value desc;
++-------+
+| value |
++-------+
+| 2     |
+| 1     |
+| 0     |
++-------+
+```
+
+(pipe_limit)=
+
+### LIMIT
+
+```sql
+select * from range(0,3)
+|> order by value desc
+|> limit 1;
++-------+
+| value |
++-------+
+| 2     |
++-------+
+```
+
+(pipe_select)=
+
+### SELECT
+
+```sql
+select * from range(0,3)
+|> select value + 10;
++---------------------------+
+| range().value + Int64(10) |
++---------------------------+
+| 10                        |
+| 11                        |
+| 12                        |
++---------------------------+
+```
+
+(pipe_extend)=
+
+### EXTEND
+
+```sql
+select * from range(0,3)
+|> extend -value AS minus_value;
++-------+-------------+
+| value | minus_value |
++-------+-------------+
+| 0     | 0           |
+| 1     | -1          |
+| 2     | -2          |
++-------+-------------+
+```
+
+(pipe_as)=
+
+### AS
+
+```sql
+select * from range(0,3)
+|> as my_range
+|> SELECT my_range.value;
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
++-------+
+```
+
+(pipe_union)=
+
+### UNION
+
+```sql
+select * from range(0,3)
+|> union all (
+  select * from range(3,6)
+);
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
+| 3     |
+| 4     |
+| 5     |
++-------+
+```
+
+(pipe_intersect)=
+
+### INTERSECT
+
+```sql
+select * from range(0,100)
+|> INTERSECT DISTINCT (
+  select 3
+);
++-------+
+| value |
++-------+
+| 3     |
++-------+
+```
+
+(pipe_except)=
+
+### EXCEPT
+
+```sql
+select * from range(0,10)
+|> EXCEPT DISTINCT (select * from range(5,10));
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
+| 3     |
+| 4     |
++-------+
+```
+
+(pipe_aggregate)=
+
+### AGGREGATE
+
+```sql
+select * from range(0,3)
+|> aggregate sum(value) AS total;
++-------+
+| total |
++-------+
+| 3     |
++-------+
 ```

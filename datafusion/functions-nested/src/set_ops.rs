@@ -94,7 +94,7 @@ make_udf_expr_and_func!(
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayUnion {
     signature: Signature,
     aliases: Vec<String>,
@@ -185,7 +185,7 @@ impl ScalarUDFImpl for ArrayUnion {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayIntersect {
     signature: Signature,
     aliases: Vec<String>,
@@ -260,7 +260,7 @@ impl ScalarUDFImpl for ArrayIntersect {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayDistinct {
     signature: Signature,
     aliases: Vec<String>,

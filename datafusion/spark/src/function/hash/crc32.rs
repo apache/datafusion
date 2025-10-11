@@ -31,7 +31,7 @@ use datafusion_expr::{
 use datafusion_functions::utils::make_scalar_function;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#crc32>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCrc32 {
     signature: Signature,
 }

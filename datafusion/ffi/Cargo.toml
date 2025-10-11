@@ -50,7 +50,7 @@ datafusion-proto-common = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }
-semver = "1.0.26"
+semver = "1.0.27"
 tokio = { workspace = true }
 
 [dev-dependencies]

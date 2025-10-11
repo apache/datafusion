@@ -30,7 +30,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBitCount {
     signature: Signature,
 }
@@ -140,7 +140,7 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
         }
         _ => {
             plan_err!(
-                "bit_count function does not support data type: {:?}",
+                "bit_count function does not support data type: {}",
                 value_array.data_type()
             )
         }

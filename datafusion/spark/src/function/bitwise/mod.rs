@@ -17,12 +17,16 @@
 
 pub mod bit_count;
 pub mod bit_get;
+pub mod bit_shift;
 pub mod bit_not;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
+make_udf_function!(bit_shift::SparkShiftLeft, shiftleft);
+make_udf_function!(bit_shift::SparkShiftRight, shiftright);
+make_udf_function!(bit_shift::SparkShiftRightUnsigned, shiftrightunsigned);
 make_udf_function!(bit_get::SparkBitGet, bit_get);
 make_udf_function!(bit_count::SparkBitCount, bit_count);
 make_udf_function!(bit_not::SparkBitNot, bit_not);
@@ -37,8 +41,30 @@ pub mod expr_fn {
         col
     ));
     export_functions!((bit_not, "Returns the result of a bitwise negation operation on the argument, where each bit in the binary representation is flipped, following two's complement arithmetic for signed integers.", col));
+    export_functions!((
+        shiftleft,
+        "Shifts the bits of the first argument left by the number of positions specified by the second argument. If the shift amount is negative or greater than or equal to the bit width, it is normalized to the bit width (i.e., pmod(shift, bit_width)).",
+        value shift
+    ));
+    export_functions!((
+        shiftright,
+        "Shifts the bits of the first argument right by the number of positions specified by the second argument (arithmetic/signed shift). If the shift amount is negative or greater than or equal to the bit width, it is normalized to the bit width (i.e., pmod(shift, bit_width)).",
+        value shift
+    ));
+    export_functions!((
+        shiftrightunsigned,
+        "Shifts the bits of the first argument right by the number of positions specified by the second argument (logical/unsigned shift). If the shift amount is negative or greater than or equal to the bit width, it is normalized to the bit width (i.e., pmod(shift, bit_width)).",
+        value shift
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![bit_get(), bit_count(), bit_not()]
+    vec![
+        bit_get(),
+        bit_count(),
+        bit_not(),
+        shiftleft(),
+        shiftright(),
+        shiftrightunsigned(),
+    ]
 }

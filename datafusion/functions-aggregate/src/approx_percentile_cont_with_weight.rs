@@ -21,6 +21,7 @@ use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
+use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
@@ -30,8 +31,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Expr, Signature,
-    TypeSignature,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
 };
 use datafusion_functions_aggregate_common::tdigest::{Centroid, TDigest};
 use datafusion_macros::user_doc;
@@ -86,6 +86,16 @@ pub fn approx_percentile_cont_with_weight(
 +--------------------------------------------------------------------------------------------------+
 | 78.5                                                                                             |
 +--------------------------------------------------------------------------------------------------+
+```
+An alternative syntax is also supported:
+
+```sql
+> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
++--------------------------------------------------+
+| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
++--------------------------------------------------+
+| 78.5                                             |
++--------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The"),
     argument(
@@ -238,8 +248,6 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]
@@ -261,15 +269,37 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let means = &values[0];
-        let weights = &values[1];
+        let mut means = Arc::clone(&values[0]);
+        let mut weights = Arc::clone(&values[1]);
+        // If nulls are present in either array, need to filter those rows out in both arrays
+        match (means.null_count() > 0, weights.null_count() > 0) {
+            // Both have nulls
+            (true, true) => {
+                let predicate = and(&is_not_null(&means)?, &is_not_null(&weights)?)?;
+                means = filter(&means, &predicate)?;
+                weights = filter(&weights, &predicate)?;
+            }
+            // Only one has nulls
+            (false, true) => {
+                let predicate = &is_not_null(&weights)?;
+                means = filter(&means, predicate)?;
+                weights = filter(&weights, predicate)?;
+            }
+            (true, false) => {
+                let predicate = &is_not_null(&means)?;
+                means = filter(&means, predicate)?;
+                weights = filter(&weights, predicate)?;
+            }
+            // No nulls
+            (false, false) => {}
+        }
         debug_assert_eq!(
             means.len(),
             weights.len(),
             "invalid number of values in means and weights"
         );
-        let means_f64 = ApproxPercentileAccumulator::convert_to_float(means)?;
-        let weights_f64 = ApproxPercentileAccumulator::convert_to_float(weights)?;
+        let means_f64 = ApproxPercentileAccumulator::convert_to_float(&means)?;
+        let weights_f64 = ApproxPercentileAccumulator::convert_to_float(&weights)?;
         let mut digests: Vec<TDigest> = vec![];
         for (mean, weight) in means_f64.iter().zip(weights_f64.iter()) {
             digests.push(TDigest::new_with_centroid(

@@ -38,9 +38,17 @@ use crate::utils::make_scalar_function;
 Negative numbers return `-1`.
 Zero and positive numbers return `1`."#,
     syntax_example = "signum(numeric_expression)",
-    standard_argument(name = "numeric_expression", prefix = "Numeric")
+    standard_argument(name = "numeric_expression", prefix = "Numeric"),
+    sql_example = r#"```sql
+> SELECT signum(-42);
++-------------+
+| signum(-42) |
++-------------+
+| -1          |
++-------------+
+```"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SignumFunc {
     signature: Signature,
 }

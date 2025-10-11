@@ -737,7 +737,7 @@ mod tests {
         ] {
             let async_provider = MockAsyncCatalogProviderList::default();
             let cached_provider = async_provider
-                .resolve(&[table_ref.clone()], &test_config())
+                .resolve(std::slice::from_ref(table_ref), &test_config())
                 .await
                 .unwrap();
 

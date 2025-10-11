@@ -72,7 +72,7 @@ async fn check_stats_precision_with_filter_pushdown() {
     // source operator after the appropriate optimizer pass.
     let filter_expr = Expr::gt(col("id"), lit(1));
     let exec_with_filter = table
-        .scan(&state, None, &[filter_expr.clone()], None)
+        .scan(&state, None, std::slice::from_ref(&filter_expr), None)
         .await
         .unwrap();
 

@@ -222,7 +222,9 @@ impl FileOpener for JsonOpener {
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
 
-                    Ok(futures::stream::iter(reader).boxed())
+                    Ok(futures::stream::iter(reader)
+                        .map(|r| r.map_err(Into::into))
+                        .boxed())
                 }
                 GetResultPayload::Stream(s) => {
                     let s = s.map_err(DataFusionError::from);
@@ -232,10 +234,11 @@ impl FileOpener for JsonOpener {
                         .build_decoder()?;
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    Ok(deserialize_stream(
+                    let stream = deserialize_stream(
                         input,
                         DecoderDeserializer::new(JsonDecoder::new(decoder)),
-                    ))
+                    );
+                    Ok(stream.map_err(Into::into).boxed())
                 }
             }
         }))

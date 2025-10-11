@@ -31,8 +31,8 @@ use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator,
-    Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
@@ -155,8 +155,6 @@ impl AggregateUDFImpl for Stddev {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 make_udaf_expr_and_func!(
@@ -182,6 +180,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV_POP population aggregate expression
+#[derive(PartialEq, Eq, Hash)]
 pub struct StddevPop {
     signature: Signature,
 }

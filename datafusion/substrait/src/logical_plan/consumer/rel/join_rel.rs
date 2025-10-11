@@ -145,9 +145,11 @@ fn from_substrait_jointype(join_type: i32) -> datafusion::common::Result<JoinTyp
             join_rel::JoinType::LeftSemi => Ok(JoinType::LeftSemi),
             join_rel::JoinType::LeftMark => Ok(JoinType::LeftMark),
             join_rel::JoinType::RightMark => Ok(JoinType::RightMark),
+            join_rel::JoinType::RightAnti => Ok(JoinType::RightAnti),
+            join_rel::JoinType::RightSemi => Ok(JoinType::RightSemi),
             _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {
-        plan_err!("invalid join type variant {join_type:?}")
+        plan_err!("invalid join type variant {join_type}")
     }
 }

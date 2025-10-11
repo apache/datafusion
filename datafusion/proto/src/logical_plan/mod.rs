@@ -632,6 +632,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .clone(),
                         order_exprs,
                         if_not_exists: create_extern_table.if_not_exists,
+                        or_replace: create_extern_table.or_replace,
                         temporary: create_extern_table.temporary,
                         definition,
                         unbounded: create_extern_table.unbounded,
@@ -1425,7 +1426,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?;
 
                 // Assumed common usize field was batch size
-                // Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
+                // Used u64 to avoid any nastiness involving large values, most data clusters are probably uniformly 64 bits any ways
                 use protobuf::repartition_node::PartitionMethod;
 
                 let pb_partition_method = match partitioning_scheme {
@@ -1469,6 +1470,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema: df_schema,
                     table_partition_cols,
                     if_not_exists,
+                    or_replace,
                     definition,
                     order_exprs,
                     unbounded,
@@ -1502,6 +1504,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
+                            or_replace: *or_replace,
                             temporary: *temporary,
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),

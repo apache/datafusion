@@ -19,7 +19,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
@@ -115,7 +115,7 @@
 //!  let bytes = physical_plan_to_bytes(physical_plan.clone())?;
 //!
 //!  // Decode bytes from somewhere (over network, etc.) back to ExecutionPlan
-//!  let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
+//!  let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
 //!  assert_eq!(format!("{:?}", physical_plan), format!("{:?}", physical_round_trip));
 //! # Ok(())
 //! # }

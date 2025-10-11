@@ -22,13 +22,18 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
+use arrow::array::BooleanArray;
 use arrow::array::{new_empty_array, Array, ArrayRef};
+use arrow::compute::filter as arrow_filter;
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::SortOptions;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::compare_rows;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
 };
@@ -183,6 +188,9 @@ pub trait AggregateWindowExpr: WindowExpr {
     /// (non-sliding) expressions will return sliding (normal) accumulators.
     fn get_accumulator(&self) -> Result<Box<dyn Accumulator>>;
 
+    /// Optional FILTER (WHERE ...) predicate for this window aggregate.
+    fn filter_expr(&self) -> Option<&Arc<dyn PhysicalExpr>>;
+
     /// Given current range and the last range, calculates the accumulator
     /// result for the range of interest.
     fn get_aggregate_result_inside_range(
@@ -191,6 +199,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         cur_range: &Range<usize>,
         value_slice: &[ArrayRef],
         accumulator: &mut Box<dyn Accumulator>,
+        filter_mask: Option<&BooleanArray>,
     ) -> Result<ScalarValue>;
 
     /// Indicates whether this window function always produces the same result
@@ -291,12 +300,33 @@ pub trait AggregateWindowExpr: WindowExpr {
     ) -> Result<ArrayRef> {
         let values = self.evaluate_args(record_batch)?;
 
+        // Evaluate filter mask once per record batch if present
+        let filter_mask_arr: Option<ArrayRef> = match self.filter_expr() {
+            Some(expr) => {
+                let value = expr.evaluate(record_batch)?;
+                Some(value.into_array(record_batch.num_rows())?)
+            }
+            None => None,
+        };
+
+        // Borrow boolean view from the owned array
+        let filter_mask: Option<&BooleanArray> = match filter_mask_arr.as_deref() {
+            Some(arr) => Some(as_boolean_array(arr)?),
+            None => None,
+        };
+
         if self.is_constant_in_partition() {
             if not_end {
                 let field = self.field()?;
                 let out_type = field.data_type();
                 return Ok(new_empty_array(out_type));
             }
+            let values = if let Some(mask) = filter_mask {
+                // Apply mask to all argument arrays before a single update
+                filter_arrays(&values, mask)?
+            } else {
+                values
+            };
             accumulator.update_batch(&values)?;
             let value = accumulator.evaluate()?;
             return value.to_array_of_size(record_batch.num_rows());
@@ -334,6 +364,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 &cur_range,
                 &values,
                 accumulator,
+                filter_mask,
             )?;
             // Update last range
             *last_range = cur_range;
@@ -349,6 +380,21 @@ pub trait AggregateWindowExpr: WindowExpr {
             ScalarValue::iter_to_array(row_wise_results)
         }
     }
+}
+
+/// Filters a single array with the provided boolean mask.
+pub(crate) fn filter_array(array: &ArrayRef, mask: &BooleanArray) -> Result<ArrayRef> {
+    arrow_filter(array.as_ref(), mask)
+        .map(|a| a as ArrayRef)
+        .map_err(|e| arrow_datafusion_err!(e))
+}
+
+/// Filters a list of arrays with the provided boolean mask.
+pub(crate) fn filter_arrays(
+    arrays: &[ArrayRef],
+    mask: &BooleanArray,
+) -> Result<Vec<ArrayRef>> {
+    arrays.iter().map(|arr| filter_array(arr, mask)).collect()
 }
 
 /// Determines whether the end bound calculation for a window frame context is

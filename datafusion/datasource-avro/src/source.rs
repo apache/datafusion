@@ -169,12 +169,16 @@ mod private {
                 match r.payload {
                     GetResultPayload::File(file, _) => {
                         let reader = config.open(file)?;
-                        Ok(futures::stream::iter(reader).boxed())
+                        Ok(futures::stream::iter(reader)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
                         let reader = config.open(bytes.reader())?;
-                        Ok(futures::stream::iter(reader).boxed())
+                        Ok(futures::stream::iter(reader)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
                     }
                 }
             }))

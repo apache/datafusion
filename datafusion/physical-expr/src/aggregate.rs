@@ -110,7 +110,7 @@ impl AggregateExprBuilder {
     /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
     /// # use arrow::datatypes::Field;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     /// # struct FirstValueUdf {
     /// #     signature: Signature,
     /// # }

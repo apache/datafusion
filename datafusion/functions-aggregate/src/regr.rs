@@ -29,12 +29,12 @@ use datafusion_common::{
     downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, HashMap, Result,
     ScalarValue,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
+use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use std::any::Any;
 use std::fmt::Debug;
@@ -527,8 +527,6 @@ impl AggregateUDFImpl for Regr {
     fn documentation(&self) -> Option<&Documentation> {
         self.regr_type.documentation()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 /// `RegrAccumulator` is used to compute linear regression aggregate functions

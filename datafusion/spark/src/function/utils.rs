@@ -34,13 +34,13 @@ pub mod test {
                 .enumerate()
                 .map(|(idx, arg)| {
 
-                let nullable = match arg {
-                    datafusion_expr::ColumnarValue::Scalar(scalar) => scalar.is_null(),
-                    datafusion_expr::ColumnarValue::Array(a) => a.null_count() > 0,
-                };
+                    let nullable = match arg {
+                        datafusion_expr::ColumnarValue::Scalar(scalar) => scalar.is_null(),
+                        datafusion_expr::ColumnarValue::Array(a) => a.null_count() > 0,
+                    };
 
                 std::sync::Arc::new(arrow::datatypes::Field::new(format!("arg_{idx}"), arg.data_type(), nullable))
-            })
+                })
                 .collect::<Vec<_>>();
 
             let cardinality = $ARGS
@@ -52,8 +52,8 @@ pub mod test {
                 .unwrap_or(1);
 
             let scalar_arguments = $ARGS.iter().map(|arg| match arg {
-                datafusion_expr::ColumnarValue::Scalar(scalar) => Some(scalar.clone()),
-                datafusion_expr::ColumnarValue::Array(_) => None,
+                    datafusion_expr::ColumnarValue::Scalar(scalar) => Some(scalar.clone()),
+                    datafusion_expr::ColumnarValue::Array(_) => None,
             }).collect::<Vec<_>>();
             let scalar_arguments_refs = scalar_arguments.iter().map(|arg| arg.as_ref()).collect::<Vec<_>>();
 
@@ -65,43 +65,56 @@ pub mod test {
 
             match expected {
                 Ok(expected) => {
-                    let return_field = return_field.unwrap();
-                    assert_eq!(return_field.data_type(), &$EXPECTED_DATA_TYPE);
+                    if let Ok(return_field) = return_field {
+                        assert_eq!(return_field.data_type(), &$EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
-                        args: $ARGS,
-                        number_rows: cardinality,
-                        return_field,
-                        arg_fields: arg_fields.clone(),
-                        config_options: $CONFIG_OPTIONS,
-                    });
-                    assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
-
-                    let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
-                    let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().expect("Failed to convert to type");
-                    assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
-
-                    // value is correct
-                    match expected {
-                        Some(v) => assert_eq!(result.value(0), v),
-                        None => assert!(result.is_null(0)),
-                    };
-                }
-                Err(expected_error) => {
-                    if return_field.is_err() {
-                        match return_field {
-                            Ok(_) => assert!(false, "expected error"),
-                            Err(error) => { datafusion_common::assert_contains!(expected_error.strip_backtrace(), error.strip_backtrace()); }
-                        }
-                    }
-                    else {
-                        let return_field = return_field.unwrap();
-
-                        // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
                         match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
                             args: $ARGS,
                             number_rows: cardinality,
                             return_field,
+                            arg_fields: arg_fields.clone(),
+                            config_options: $CONFIG_OPTIONS,
+                        }) {
+                            Ok(col_value) => {
+                                match col_value.to_array(cardinality) {
+                                    Ok(array) => {
+                                        let result = array
+                                            .as_any()
+                                            .downcast_ref::<$ARRAY_TYPE>()
+                                            .expect("Failed to convert to type");
+                                        assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
+
+                                       // value is correct
+                                        match expected {
+                                            Some(v) => assert_eq!(result.value(0), v),
+                                            None => assert!(result.is_null(0)),
+                                        };
+                                    }
+                                    Err(err) => {
+                                        panic!("Failed to convert to array: {err}");
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                panic!("function returned an error: {err}");
+                            }
+                        }
+                    } else {
+                        panic!("Expected return_field to be Ok but got Err");
+                    }
+                }
+                Err(expected_error) => {
+                    if let Err(error) = &return_field {
+                        datafusion_common::assert_contains!(
+                            expected_error.strip_backtrace(),
+                            error.strip_backtrace()
+                        );
+                    } else if let Ok(value) = return_field {
+                        // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs {
+                            args: $ARGS,
+                            number_rows: cardinality,
+                            return_field: value,
                             arg_fields,
                             config_options: $CONFIG_OPTIONS,
                         }) {

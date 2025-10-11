@@ -332,7 +332,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -390,7 +390,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -452,7 +452,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c1").eq(lit(1_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -514,7 +514,7 @@ mod tests {
         let metric = get_value(&metrics, "pushdown_rows_pruned");
         assert_eq!(metric, 3, "Expected all rows to be pruned");
 
-        // If we excplicitly allow nulls the rest of the predicate should work
+        // If we explicitly allow nulls the rest of the predicate should work
         let filter = col("c2").is_null().and(col("c3").eq(lit(7_i32)));
         let rt = RoundTrip::new()
             .with_table_schema(table_schema.clone())
@@ -2018,14 +2018,14 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         fs::create_dir(&out_dir).unwrap();
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        let schema: Schema = df.schema().into();
+        let schema = Arc::clone(df.schema().inner());
         // Register a listing table - this will use all files in the directory as data sources
         // for the query
         ctx.register_listing_table(
             "my_table",
             &out_dir,
             listing_options,
-            Some(Arc::new(schema)),
+            Some(schema),
             None,
         )
         .await

@@ -17,9 +17,9 @@
   under the License.
 -->
 
-# DataFusion Logical Plan and Expressions
+# Apache DataFusion Logical Plan and Expressions
 
-[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
 This crate is a submodule of DataFusion that provides data types and utilities for logical plans and expressions.
 
@@ -27,5 +27,6 @@ Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no
 reason to use this crate directly in your project as well.
 
-[df]: https://crates.io/crates/datafusion
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion

@@ -121,7 +121,7 @@ pub trait TableSource: Sync + Send {
     /// Get the Logical plan of this table provider, if available.
     ///
     /// For example, a view may have a logical plan, but a CSV file does not.
-    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+    fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 

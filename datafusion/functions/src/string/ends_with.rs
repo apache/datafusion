@@ -52,7 +52,7 @@ use datafusion_macros::user_doc;
     standard_argument(name = "str", prefix = "String"),
     argument(name = "substr", description = "Substring to test for.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct EndsWithFunc {
     signature: Signature,
 }

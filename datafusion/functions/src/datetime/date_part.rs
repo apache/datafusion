@@ -79,7 +79,7 @@ use datafusion_macros::user_doc;
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DatePartFunc {
     signature: Signature,
     aliases: Vec<String>,

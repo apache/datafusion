@@ -46,7 +46,7 @@ use datafusion_physical_plan::coop::make_cooperative;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -54,6 +54,7 @@ use datafusion_physical_plan::union::InterleaveExec;
 use futures::StreamExt;
 use parking_lot::RwLock;
 use rstest::rstest;
+use std::any::Any;
 use std::error::Error;
 use std::fmt::Formatter;
 use std::ops::Range;
@@ -80,6 +81,10 @@ impl std::fmt::Display for RangeBatchGenerator {
 }
 
 impl LazyBatchGenerator for RangeBatchGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn boundedness(&self) -> Boundedness {
         self.boundedness
     }
@@ -429,7 +434,7 @@ async fn interleave_then_filter_all_yields(
     let mut infinite_children = vec![];
 
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    for thr in 1..32 {
+    for threshold in 1..32 {
         // One infinite exec:
         let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
@@ -439,7 +444,7 @@ async fn interleave_then_filter_all_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
         let filter_expr = binary(
             binary(
                 binary(
@@ -449,7 +454,7 @@ async fn interleave_then_filter_all_yields(
                     &inf.schema(),
                 )?,
                 Modulo,
-                lit(thr as i64),
+                lit(threshold as i64),
                 &inf.schema(),
             )?,
             Eq,
@@ -485,7 +490,7 @@ async fn interleave_then_aggregate_yields(
     let mut infinite_children = vec![];
 
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    for thr in 1..32 {
+    for threshold in 1..32 {
         // One infinite exec:
         let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
@@ -495,7 +500,7 @@ async fn interleave_then_aggregate_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
         let filter_expr = binary(
             binary(
                 binary(
@@ -505,7 +510,7 @@ async fn interleave_then_aggregate_yields(
                     &inf.schema(),
                 )?,
                 Modulo,
-                lit(thr as i64),
+                lit(threshold as i64),
                 &inf.schema(),
             )?,
             Eq,
@@ -646,7 +651,7 @@ async fn join_agg_yields(
     // Project only one column (“value” from the left side) because we just want to sum that
     let input_schema = join.schema();
 
-    let proj_expr = vec![(
+    let proj_expr = vec![ProjectionExpr::new(
         Arc::new(Column::new_with_schema("value", &input_schema)?) as _,
         "value".to_string(),
     )];

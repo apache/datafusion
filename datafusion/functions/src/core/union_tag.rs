@@ -43,7 +43,7 @@ use std::sync::Arc;
 ```"#,
     standard_argument(name = "union", prefix = "Union")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UnionTagFunc {
     signature: Signature,
 }
@@ -136,7 +136,7 @@ impl ScalarUDFImpl for UnionTagFunc {
                     })
                     .ok_or_else(|| {
                         exec_datafusion_err!(
-                            "union_tag: union scalar with unknow type_id {value_type_id}"
+                            "union_tag: union scalar with unknown type_id {value_type_id}"
                         )
                     }),
                 None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(

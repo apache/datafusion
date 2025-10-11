@@ -38,7 +38,10 @@ use datafusion_common::{
     Result, TableReference,
 };
 
+#[cfg(not(feature = "sql"))]
+use crate::expr::{ExceptSelectItem, ExcludeSelectItem};
 use indexmap::IndexSet;
+#[cfg(feature = "sql")]
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -690,7 +693,23 @@ where
     err
 }
 
-/// Create field meta-data from an expression, for use in a result set schema
+/// Create schema fields from an expression list, for use in result set schema construction
+///
+/// This function converts a list of expressions into a list of complete schema fields,
+/// making comprehensive determinations about each field's properties including:
+/// - **Data type**: Resolved based on expression type and input schema context
+/// - **Nullability**: Determined by expression-specific nullability rules
+/// - **Metadata**: Computed based on expression type (preserving, merging, or generating new metadata)
+/// - **Table reference scoping**: Establishing proper qualified field references
+///
+/// Each expression is converted to a field by calling [`Expr::to_field`], which performs
+/// the complete field resolution process for all field properties.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of `(Option<TableReference>, Arc<Field>)` tuples,
+/// where each Field contains complete schema information (type, nullability, metadata)
+/// and proper table reference scoping for the corresponding expression.
 pub fn exprlist_to_fields<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
@@ -1225,6 +1244,9 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 }
 
 /// merge inputs schema into a single schema.
+///
+/// This function merges schemas from multiple logical plan inputs using [`DFSchema::merge`].
+/// Refer to that documentation for details on precedence and metadata handling.
 pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
     if inputs.len() == 1 {
         inputs[0].schema().as_ref().clone()
@@ -1262,87 +1284,6 @@ pub fn collect_subquery_cols(
     })
 }
 
-/// Generates implementation of `equals` and `hash_value` methods for a trait, delegating
-/// to [`PartialEq`] and [`Hash`] implementations on Self.
-/// Meant to be used with traits representing user-defined functions (UDFs).
-///
-/// Example showing generation of [`ScalarUDFImpl::equals`] and [`ScalarUDFImpl::hash_value`]
-/// implementations.
-///
-/// ```
-/// # use arrow::datatypes::DataType;
-/// # use datafusion_expr::{udf_equals_hash, ScalarFunctionArgs, ScalarUDFImpl};
-/// # use datafusion_expr_common::columnar_value::ColumnarValue;
-/// # use datafusion_expr_common::signature::Signature;
-/// # use std::any::Any;
-///
-/// // Implementing Eq & Hash is a prerequisite for using this macro,
-/// // but the implementation can be derived.
-/// #[derive(Debug, PartialEq, Eq, Hash)]
-/// struct VarcharToTimestampTz {
-///     safe: bool,
-/// }
-///
-/// impl ScalarUDFImpl for VarcharToTimestampTz {
-///     /* other methods omitted for brevity */
-/// #    fn as_any(&self) -> &dyn Any {
-/// #        self
-/// #    }
-/// #
-/// #    fn name(&self) -> &str {
-/// #        "varchar_to_timestamp_tz"
-/// #    }
-/// #
-/// #    fn signature(&self) -> &Signature {
-/// #        todo!()
-/// #    }
-/// #
-/// #    fn return_type(
-/// #        &self,
-/// #        _arg_types: &[DataType],
-/// #    ) -> datafusion_common::Result<DataType> {
-/// #        todo!()
-/// #    }
-/// #
-/// #    fn invoke_with_args(
-/// #        &self,
-/// #        args: ScalarFunctionArgs,
-/// #    ) -> datafusion_common::Result<ColumnarValue> {
-/// #        todo!()
-/// #    }
-/// #
-///     udf_equals_hash!(ScalarUDFImpl);
-/// }
-/// ```
-///
-/// [`ScalarUDFImpl::equals`]: crate::ScalarUDFImpl::equals
-/// [`ScalarUDFImpl::hash_value`]: crate::ScalarUDFImpl::hash_value
-#[macro_export]
-macro_rules! udf_equals_hash {
-    ($udf_type:tt) => {
-        fn equals(&self, other: &dyn $udf_type) -> bool {
-            use ::core::any::Any;
-            use ::core::cmp::{Eq, PartialEq};
-            let Some(other) = <dyn Any + 'static>::downcast_ref::<Self>(other.as_any())
-            else {
-                return false;
-            };
-            fn assert_self_impls_eq<T: Eq>() {}
-            assert_self_impls_eq::<Self>();
-            PartialEq::eq(self, other)
-        }
-
-        fn hash_value(&self) -> u64 {
-            use ::std::any::type_name;
-            use ::std::hash::{DefaultHasher, Hash, Hasher};
-            let hasher = &mut DefaultHasher::new();
-            type_name::<Self>().hash(hasher);
-            Hash::hash(self, hasher);
-            Hasher::finish(hasher)
-        }
-    };
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1351,13 +1292,9 @@ mod tests {
         expr::WindowFunction,
         expr_vec_fmt, grouping_set, lit, rollup,
         test::function_stub::{max_udaf, min_udaf, sum_udaf},
-        Cast, ExprFunctionExt, ScalarFunctionArgs, ScalarUDFImpl,
-        WindowFunctionDefinition,
+        Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
-    use datafusion_expr_common::columnar_value::ColumnarValue;
-    use datafusion_expr_common::signature::Volatility;
-    use std::any::Any;
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -1776,92 +1713,5 @@ mod tests {
         let list_union_type =
             DataType::List(Arc::new(Field::new("my_union", union_type, true)));
         assert!(!can_hash(&list_union_type));
-    }
-
-    #[test]
-    fn test_udf_equals_hash() {
-        #[derive(Debug, PartialEq, Hash)]
-        struct StatefulFunctionWithEqHash {
-            signature: Signature,
-            state: bool,
-        }
-        impl ScalarUDFImpl for StatefulFunctionWithEqHash {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-            fn name(&self) -> &str {
-                "StatefulFunctionWithEqHash"
-            }
-            fn signature(&self) -> &Signature {
-                &self.signature
-            }
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                todo!()
-            }
-            fn invoke_with_args(
-                &self,
-                _args: ScalarFunctionArgs,
-            ) -> Result<ColumnarValue> {
-                todo!()
-            }
-        }
-
-        #[derive(Debug, PartialEq, Eq, Hash)]
-        struct StatefulFunctionWithEqHashWithUdfEqualsHash {
-            signature: Signature,
-            state: bool,
-        }
-        impl ScalarUDFImpl for StatefulFunctionWithEqHashWithUdfEqualsHash {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-            fn name(&self) -> &str {
-                "StatefulFunctionWithEqHashWithUdfEqualsHash"
-            }
-            fn signature(&self) -> &Signature {
-                &self.signature
-            }
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                todo!()
-            }
-            fn invoke_with_args(
-                &self,
-                _args: ScalarFunctionArgs,
-            ) -> Result<ColumnarValue> {
-                todo!()
-            }
-            udf_equals_hash!(ScalarUDFImpl);
-        }
-
-        let signature = Signature::exact(vec![DataType::Utf8], Volatility::Immutable);
-
-        // Sadly, without `udf_equals_hash!` macro, the equals and hash_value ignore state fields,
-        // even though the struct implements `PartialEq` and `Hash`.
-        let a: Box<dyn ScalarUDFImpl> = Box::new(StatefulFunctionWithEqHash {
-            signature: signature.clone(),
-            state: true,
-        });
-        let b: Box<dyn ScalarUDFImpl> = Box::new(StatefulFunctionWithEqHash {
-            signature: signature.clone(),
-            state: false,
-        });
-        assert!(a.equals(b.as_ref()));
-        assert_eq!(a.hash_value(), b.hash_value());
-
-        // With udf_equals_hash! macro, the equals and hash_value compare the state.
-        // even though the struct implements `PartialEq` and `Hash`.
-        let a: Box<dyn ScalarUDFImpl> =
-            Box::new(StatefulFunctionWithEqHashWithUdfEqualsHash {
-                signature: signature.clone(),
-                state: true,
-            });
-        let b: Box<dyn ScalarUDFImpl> =
-            Box::new(StatefulFunctionWithEqHashWithUdfEqualsHash {
-                signature: signature.clone(),
-                state: false,
-            });
-        assert!(!a.equals(b.as_ref()));
-        // This could be true, but it's very unlikely that boolean true and false hash the same
-        assert_ne!(a.hash_value(), b.hash_value());
     }
 }

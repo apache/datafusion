@@ -795,7 +795,7 @@ physical_plan
 query TT
 EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x > NULL;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
 query TT
@@ -831,7 +831,7 @@ create table t(x int) as values (1), (2), (3);
 query TT
 explain select x from t where x IN (1,2,3) AND x IN (4,5);
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
 query TT
@@ -854,7 +854,7 @@ physical_plan
 query TT
 explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
 query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery\(InSubquery \{ expr: Literal\(Int64\(NULL\), None\), subquery: <subquery>, negated: false \}\)

@@ -67,6 +67,7 @@ impl<'a> CustomElement<'a> {
 // - When used inside `BinaryHeap` it is a min-heap.
 impl Ord for CustomElement<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
+        // TODO Ord/PartialOrd is not consistent with PartialEq; PartialOrd contract is violated
         // Compares according to custom ordering
         self.ordering(&self.ordering, &other.ordering)
             // Convert max heap to min heap

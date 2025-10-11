@@ -65,6 +65,8 @@
 //! The optimizer rule currently checks the plan for exchange-like operators and leave operators
 //! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
+use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr::PhysicalExpr;
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
 use std::any::Any;
@@ -73,6 +75,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::execution_plan::CardinalityEffect::{self, Equal};
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
@@ -288,6 +294,24 @@ impl ExecutionPlan for CooperativeExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         Equal
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 }
 

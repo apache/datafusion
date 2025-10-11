@@ -304,6 +304,26 @@ SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'x
 fooxx
 
 query T
+SELECT regexp_replace(arrow_cast('foobar', 'LargeUtf8'), 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace(arrow_cast('foobar', 'Utf8View'), 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace('foobar', arrow_cast('bar', 'LargeUtf8'), 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace('foobar', arrow_cast('bar', 'Utf8View'), 'xx', 'gi')
+----
+fooxx
+
+query T
 SELECT repeat('foo', 3)
 ----
 foofoofoo

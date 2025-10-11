@@ -56,7 +56,7 @@ fn convert_to_state_bench(
         b.iter(|| {
             black_box(
                 accumulator
-                    .convert_to_state(&[values.clone()], opt_filter)
+                    .convert_to_state(std::slice::from_ref(&values), opt_filter)
                     .unwrap(),
             )
         })

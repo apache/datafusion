@@ -523,7 +523,7 @@ query RRR rowsort
 select log(a, 64) a, log(b), log(10, b) from unsigned_integers;
 ----
 3 NULL NULL
-3.7855785 4 4
+3.785578521429 4 4
 6 3 3
 Infinity 2 2
 

@@ -46,8 +46,8 @@ avro = ["datafusion/avro", "datafusion-common/avro"]
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
-datafusion = { workspace = true, default-features = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion = { workspace = true, default-features = false }
+datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-proto-common = { workspace = true }
 object_store = { workspace = true }
@@ -55,7 +55,14 @@ pbjson = { workspace = true, optional = true }
 prost = { workspace = true }
 serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
+
 [dev-dependencies]
+datafusion = { workspace = true, default-features = false, features = [
+    "sql",
+    "datetime_expressions",
+    "nested_expressions",
+    "unicode_expressions",
+] }
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window-common = { workspace = true }

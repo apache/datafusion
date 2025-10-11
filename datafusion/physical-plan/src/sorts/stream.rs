@@ -100,7 +100,7 @@ impl ReusableRows {
     // save the Rows
     fn save(&mut self, stream_idx: usize, rows: Arc<Rows>) {
         self.inner[stream_idx][1] = Some(Arc::clone(&rows));
-        // swap the curent with the previous one, so that the next poll can reuse the Rows from the previous poll
+        // swap the current with the previous one, so that the next poll can reuse the Rows from the previous poll
         let [a, b] = &mut self.inner[stream_idx];
         std::mem::swap(a, b);
     }

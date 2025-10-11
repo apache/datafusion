@@ -221,7 +221,7 @@ SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
                         For `make_map`: The list of values to be mapped to the corresponding keys."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MapFunc {
     signature: Signature,
 }

@@ -64,7 +64,7 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
 
     match container {
         Ok(container) => {
-            // We wait for MinIO to be healthy and preprare test files. We do it via CLI to avoid s3 dependency
+            // We wait for MinIO to be healthy and prepare test files. We do it via CLI to avoid s3 dependency
             let commands = [
                 ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
                 ExecCommand::new([
@@ -219,8 +219,8 @@ fn test_cli_top_memory_consumers<'a>(
     settings.set_snapshot_suffix(snapshot_name);
 
     settings.add_filter(
-        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B",
-        "Consumer(can spill: bool) consumed XB",
+        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B, peak .*?B",
+        "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
         r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
@@ -330,5 +330,70 @@ SELECT COUNT(*) FROM hits;
     assert_cmd_snapshot!(cli()
         .env("RUST_LOG", "warn")
         .env_remove("AWS_ENDPOINT")
+        .pass_stdin(input));
+}
+
+/// Ensure backtrace will be printed, if executing `datafusion-cli` with a query
+/// that triggers error.
+/// Example:
+///     RUST_BACKTRACE=1 cargo run --features backtrace -- -c 'select pow(1,'foo');'
+#[rstest]
+#[case("SELECT pow(1,'foo')")]
+#[case("SELECT CAST('not_a_number' AS INTEGER);")]
+#[cfg(feature = "backtrace")]
+fn test_backtrace_output(#[case] query: &str) {
+    let mut cmd = cli();
+    // Use a command that will cause an error and trigger backtrace
+    cmd.args(["--command", query, "-q"])
+        .env("RUST_BACKTRACE", "1"); // Enable backtrace
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined_output = format!("{}{}", stdout, stderr);
+
+    // Assert that the output includes literal 'backtrace'
+    assert!(
+        combined_output.to_lowercase().contains("backtrace"),
+        "Expected output to contain 'backtrace', but got stdout: '{}' stderr: '{}'",
+        stdout,
+        stderr
+    );
+}
+
+#[tokio::test]
+async fn test_s3_url_fallback() {
+    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
+        eprintln!("Skipping external storages integration tests");
+        return;
+    }
+
+    let container = setup_minio_container().await;
+
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("s3_url_fallback");
+    let _bound = settings.bind_to_scope();
+
+    let port = container.get_host_port_ipv4(9000).await.unwrap();
+
+    // Create a table using a prefix path (without trailing slash)
+    // This should trigger the fallback logic where head() fails on the prefix
+    // and list() is used to discover the actual files
+    let input = r#"CREATE EXTERNAL TABLE partitioned_data
+STORED AS CSV
+LOCATION 's3://data/partitioned_csv'
+OPTIONS (
+    'format.has_header' 'false'
+);
+
+SELECT * FROM partitioned_data ORDER BY column_1, column_2 LIMIT 5;
+"#;
+
+    assert_cmd_snapshot!(cli()
+        .env_clear()
+        .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
+        .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+        .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
+        .env("AWS_ALLOW_HTTP", "true")
         .pass_stdin(input));
 }

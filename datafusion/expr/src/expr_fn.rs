@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction, WindowFunctionParams,
+    NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -29,8 +29,8 @@ use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    udf_equals_hash, AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
-    ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
+    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -42,8 +42,8 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use sqlparser::ast::NullTreatment;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::Not;
@@ -70,8 +70,22 @@ pub fn col(ident: impl Into<Column>) -> Expr {
 
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
+/// The expression created by this function does not preserve the metadata of the outer column.
+/// Please use `out_ref_col_with_metadata` if you want to preserve the metadata.
 pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
-    Expr::OuterReferenceColumn(dt, ident.into())
+    out_ref_col_with_metadata(dt, HashMap::new(), ident)
+}
+
+/// Create an out reference column from an existing field (preserving metadata)
+pub fn out_ref_col_with_metadata(
+    dt: DataType,
+    metadata: HashMap<String, String>,
+    ident: impl Into<Column>,
+) -> Expr {
+    let column = ident.into();
+    let field: FieldRef =
+        Arc::new(Field::new(column.name(), dt, true).with_metadata(metadata));
+    Expr::OuterReferenceColumn(field, column)
 }
 
 /// Create an unqualified column expression from the provided name, without normalizing
@@ -477,8 +491,6 @@ impl ScalarUDFImpl for SimpleScalarUDF {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         (self.fun)(&args.args)
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.
@@ -600,8 +612,6 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(self.state_fields.clone())
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 /// Creates a new UDWF with a specific signature, state type and return type.
@@ -720,8 +730,8 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// # Example
 /// ```no_run
 /// # use datafusion_common::Result;
+/// # use datafusion_expr::expr::NullTreatment;
 /// # use datafusion_expr::test::function_stub::count;
-/// # use sqlparser::ast::NullTreatment;
 /// # use datafusion_expr::{ExprFunctionExt, lit, Expr, col};
 /// # // first_value is an aggregate function in another crate
 /// # fn first_value(_arg: Expr) -> Expr {
@@ -774,7 +784,7 @@ pub trait ExprFunctionExt {
 #[derive(Debug, Clone)]
 pub enum ExprFuncKind {
     Aggregate(AggregateFunction),
-    Window(WindowFunction),
+    Window(Box<WindowFunction>),
 }
 
 /// Implementation of [`ExprFunctionExt`].
@@ -836,23 +846,16 @@ impl ExprFuncBuilder {
                 udaf.params.null_treatment = null_treatment;
                 Expr::AggregateFunction(udaf)
             }
-            ExprFuncKind::Window(WindowFunction {
-                fun,
-                params: WindowFunctionParams { args, .. },
-            }) => {
+            ExprFuncKind::Window(mut udwf) => {
                 let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
-                Expr::from(WindowFunction {
-                    fun,
-                    params: WindowFunctionParams {
-                        args,
-                        partition_by: partition_by.unwrap_or_default(),
-                        order_by: order_by.unwrap_or_default(),
-                        window_frame: window_frame
-                            .unwrap_or_else(|| WindowFrame::new(has_order_by)),
-                        null_treatment,
-                        distinct,
-                    },
-                })
+                udwf.params.partition_by = partition_by.unwrap_or_default();
+                udwf.params.order_by = order_by.unwrap_or_default();
+                udwf.params.window_frame =
+                    window_frame.unwrap_or_else(|| WindowFrame::new(has_order_by));
+                udwf.params.filter = filter.map(Box::new);
+                udwf.params.null_treatment = null_treatment;
+                udwf.params.distinct = distinct;
+                Expr::WindowFunction(udwf)
             }
         };
 
@@ -906,7 +909,7 @@ impl ExprFunctionExt for Expr {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
             Expr::WindowFunction(udwf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)))
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
             }
             _ => ExprFuncBuilder::new(None),
         };
@@ -946,7 +949,7 @@ impl ExprFunctionExt for Expr {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
             Expr::WindowFunction(udwf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)))
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
             }
             _ => ExprFuncBuilder::new(None),
         };
@@ -959,7 +962,7 @@ impl ExprFunctionExt for Expr {
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
         match self {
             Expr::WindowFunction(udwf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)));
+                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
                 builder.partition_by = Some(partition_by);
                 builder
             }
@@ -970,7 +973,7 @@ impl ExprFunctionExt for Expr {
     fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder {
         match self {
             Expr::WindowFunction(udwf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)));
+                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
                 builder.window_frame = Some(window_frame);
                 builder
             }

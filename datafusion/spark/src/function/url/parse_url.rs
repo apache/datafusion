@@ -19,7 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, GenericStringBuilder, LargeStringArray, StringArray, StringArrayType,
+    Array, ArrayRef, GenericStringBuilder, LargeStringArray, StringArray,
+    StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{
@@ -33,7 +34,7 @@ use datafusion_expr::{
 use datafusion_functions::utils::make_scalar_function;
 use url::Url;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ParseUrl {
     signature: Signature,
 }
@@ -222,7 +223,7 @@ fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
                 )
             }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
+                process_parse_url::<_, _, _, StringViewArray>(
                     as_string_view_array(url)?,
                     as_string_view_array(part)?,
                     as_string_view_array(key)?,
@@ -255,7 +256,7 @@ fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
                 )
             }
             (DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
+                process_parse_url::<_, _, _, StringViewArray>(
                     as_string_view_array(url)?,
                     as_string_view_array(part)?,
                     &key,

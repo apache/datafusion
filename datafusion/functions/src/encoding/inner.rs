@@ -54,7 +54,7 @@ use std::any::Any;
     ),
     related_udf(name = "decode")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct EncodeFunc {
     signature: Signature,
 }
@@ -147,7 +147,7 @@ impl ScalarUDFImpl for EncodeFunc {
     argument(name = "format", description = "Same arguments as [encode](#encode)"),
     related_udf(name = "encode")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DecodeFunc {
     signature: Signature,
 }

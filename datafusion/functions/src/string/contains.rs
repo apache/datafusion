@@ -46,7 +46,7 @@ use std::sync::Arc;
     standard_argument(name = "str", prefix = "String"),
     argument(name = "search_str", description = "The string to search for in str.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ContainsFunc {
     signature: Signature,
 }
@@ -140,7 +140,7 @@ fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         }
     } else {
         exec_err!(
-            "Unsupported data type {:?}, {:?} for function `contains`.",
+            "Unsupported data type {}, {:?} for function `contains`.",
             args[0].data_type(),
             args[1].data_type()
         )

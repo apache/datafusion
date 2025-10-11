@@ -48,7 +48,7 @@ impl ParamValues {
                 for (i, (param_type, value)) in iter.enumerate() {
                     if *param_type != value.data_type() {
                         return _plan_err!(
-                            "Expected parameter of type {:?}, got {:?} at index {}",
+                            "Expected parameter of type {}, got {:?} at index {}",
                             param_type,
                             value.data_type(),
                             i

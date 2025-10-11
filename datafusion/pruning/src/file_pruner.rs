@@ -56,7 +56,7 @@ impl FilePruner {
         predicate_creation_errors: Count,
     ) -> Result<Self> {
         // Build a pruning schema that combines the file fields and partition fields.
-        // Partition fileds are always at the end.
+        // Partition fields are always at the end.
         let pruning_schema = Arc::new(
             Schema::new(
                 logical_file_schema

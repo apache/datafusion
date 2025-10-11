@@ -62,7 +62,7 @@ fn select_arrow_cast() {
         plan,
         @r#"
     Projection: Float64(1234) AS f64, LargeUtf8("foo") AS large
-      EmptyRelation
+      EmptyRelation: rows=1
     "#
     );
 }

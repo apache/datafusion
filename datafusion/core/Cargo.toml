@@ -62,8 +62,8 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
-    "parquet_encryption",
     "recursive_protection",
+    "sql",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -71,11 +71,10 @@ force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "data
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet", "datafusion-datasource-parquet"]
 parquet_encryption = [
-    "dep:parquet",
+    "parquet",
     "parquet/encryption",
     "datafusion-common/parquet_encryption",
     "datafusion-datasource-parquet/parquet_encryption",
-    "dep:hex",
 ]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
@@ -95,9 +94,15 @@ serde = [
     # statements in `arrow-schema` crate
     "arrow-schema/serde",
 ]
+sql = [
+    "datafusion-common/sql",
+    "datafusion-functions-nested?/sql",
+    "datafusion-sql",
+    "sqlparser",
+]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
-    "datafusion-sql/unicode_expressions",
+    "datafusion-sql?/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
 extended_tests = []
@@ -120,23 +125,23 @@ datafusion-datasource-csv = { workspace = true }
 datafusion-datasource-json = { workspace = true }
 datafusion-datasource-parquet = { workspace = true, optional = true }
 datafusion-execution = { workspace = true }
-datafusion-expr = { workspace = true }
+datafusion-expr = { workspace = true, default-features = false }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
-datafusion-functions-nested = { workspace = true, optional = true }
+datafusion-functions-nested = { workspace = true, default-features = false, optional = true }
 datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
-datafusion-sql = { workspace = true }
+datafusion-sql = { workspace = true, optional = true }
 flate2 = { version = "1.1.2", optional = true }
 futures = { workspace = true }
-hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
@@ -144,12 +149,13 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
 regex = { workspace = true }
+rstest = { workspace = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.17", features = ["v4", "js"] }
+uuid = { version = "1.18", features = ["v4", "js"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
@@ -172,7 +178,7 @@ rand_distr = "0.5"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.37.0"
+sysinfo = "0.37.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
