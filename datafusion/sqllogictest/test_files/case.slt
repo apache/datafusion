@@ -467,6 +467,7 @@ FROM t;
 ----
 [{foo: blarg}]
 
+# mix of then and else
 query II
 SELECT v, CASE WHEN v != 0 THEN 10/v ELSE 42 END FROM (VALUES (0), (1), (2)) t(v)
 ----
@@ -474,11 +475,37 @@ SELECT v, CASE WHEN v != 0 THEN 10/v ELSE 42 END FROM (VALUES (0), (1), (2)) t(v
 1 10
 2 5
 
+# when expressions is always false, then branch should never be evaluated
 query II
 SELECT v, CASE WHEN v < 0 THEN 10/0 ELSE 1 END FROM (VALUES (1), (2)) t(v)
 ----
 1 1
 2 1
+
+# when expressions is always true, else branch should never be evaluated
+query II
+SELECT v, CASE WHEN v > 0 THEN 1 ELSE 10/0 END FROM (VALUES (1), (2)) t(v)
+----
+1 1
+2 1
+
+
+# lazy evaluation of multiple when branches, else branch should never be evaluated
+query II
+SELECT v, CASE WHEN v == 1 THEN -1 WHEN v == 2 THEN -2 WHEN v == 3 THEN -3  ELSE 10/0 END FROM (VALUES (1), (2), (3)) t(v)
+----
+1 -1
+2 -2
+3 -3
+
+# covers the InfallibleExprOrNull evaluation strategy
+query II
+SELECT v, CASE WHEN v THEN 1 END FROM (VALUES (1), (2), (3), (NULL)) t(v)
+----
+1 1
+2 1
+3 1
+NULL NULL
 
 statement ok
 drop table t
