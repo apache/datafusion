@@ -17,6 +17,7 @@
 
 pub mod bit_count;
 pub mod bit_get;
+pub mod bit_not;
 pub mod bit_shift;
 
 use datafusion_expr::ScalarUDF;
@@ -28,6 +29,7 @@ make_udf_function!(bit_shift::SparkShiftRight, shiftright);
 make_udf_function!(bit_shift::SparkShiftRightUnsigned, shiftrightunsigned);
 make_udf_function!(bit_get::SparkBitGet, bit_get);
 make_udf_function!(bit_count::SparkBitCount, bit_count);
+make_udf_function!(bit_not::SparkBitNot, bit_not);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -36,6 +38,11 @@ pub mod expr_fn {
     export_functions!((
         bit_count,
         "Returns the number of bits set in the binary representation of the argument.",
+        col
+    ));
+    export_functions!((
+        bit_not,
+        "Returns the result of a bitwise negation operation on the argument, where each bit in the binary representation is flipped, following two's complement arithmetic for signed integers.",
         col
     ));
     export_functions!((
@@ -59,6 +66,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         bit_get(),
         bit_count(),
+        bit_not(),
         shiftleft(),
         shiftright(),
         shiftrightunsigned(),
