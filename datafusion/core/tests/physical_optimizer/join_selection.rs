@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use insta::assert_snapshot;
 use std::sync::Arc;
 use std::{
     any::Any,
@@ -426,8 +427,7 @@ async fn test_join_with_swap_mark() {
 
 /// Compare the input plan with the plan after running the probe order optimizer.
 macro_rules! assert_optimized {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
-        let expected_lines = $EXPECTED_LINES.iter().map(|s| *s).collect::<Vec<&str>>();
+    ($PLAN: expr, @$EXPECTED_LINES: literal $(,)?) => {
 
         let plan = Arc::new($PLAN);
         let optimized = JoinSelection::new()
@@ -435,12 +435,11 @@ macro_rules! assert_optimized {
             .unwrap();
 
         let plan_string = displayable(optimized.as_ref()).indent(true).to_string();
-        let actual_lines = plan_string.split("\n").collect::<Vec<&str>>();
+        let actual = plan_string.trim();
 
-        assert_eq!(
-            &expected_lines, &actual_lines,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected_lines, actual_lines
+        assert_snapshot!(
+            actual,
+            @$EXPECTED_LINES
         );
     };
 }
@@ -489,17 +488,18 @@ async fn test_nested_join_swap() {
     // The first hash join's left is 'small' table (with 1000 rows), and the second hash join's
     // left is the F(small IJ big) which has an estimated cardinality of 2000 rows (vs medium which
     // has an exact cardinality of 10_000 rows).
-    let expected = [
-            "ProjectionExec: expr=[medium_col@2 as medium_col, big_col@0 as big_col, small_col@1 as small_col]",
-            "  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]",
-            "    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]",
-            "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]",
-            "        StatisticsExec: col_count=1, row_count=Inexact(1000)",
-            "        StatisticsExec: col_count=1, row_count=Inexact(100000)",
-            "    StatisticsExec: col_count=1, row_count=Inexact(10000)",
-            "",
-        ];
-    assert_optimized!(expected, join);
+    assert_optimized!(
+        join,
+        @r"
+    ProjectionExec: expr=[medium_col@2 as medium_col, big_col@0 as big_col, small_col@1 as small_col]
+      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]
+        ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]
+            StatisticsExec: col_count=1, row_count=Inexact(1000)
+            StatisticsExec: col_count=1, row_count=Inexact(100000)
+        StatisticsExec: col_count=1, row_count=Inexact(10000)
+    "
+    );
 }
 
 #[tokio::test]

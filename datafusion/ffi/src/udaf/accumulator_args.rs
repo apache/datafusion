@@ -30,6 +30,7 @@ use datafusion::{
     physical_expr::{PhysicalExpr, PhysicalSortExpr},
     prelude::SessionContext,
 };
+use datafusion_common::exec_datafusion_err;
 use datafusion_proto::{
     physical_plan::{
         from_proto::{parse_physical_exprs, parse_physical_sort_exprs},
@@ -112,9 +113,12 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_AccumulatorArgs) -> Result<Self, Self::Error> {
-        let proto_def =
-            PhysicalAggregateExprNode::decode(value.physical_expr_def.as_ref())
-                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+        let proto_def = PhysicalAggregateExprNode::decode(
+            value.physical_expr_def.as_ref(),
+        )
+        .map_err(|e| {
+            exec_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {e}")
+        })?;
 
         let return_field = Arc::new((&value.return_field.0).try_into()?);
         let schema = Schema::try_from(&value.schema.0)?;

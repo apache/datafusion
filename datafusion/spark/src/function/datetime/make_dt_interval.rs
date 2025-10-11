@@ -211,7 +211,7 @@ mod tests {
     use arrow::datatypes::DataType::Duration;
     use arrow::datatypes::Field;
     use arrow::datatypes::TimeUnit::Microsecond;
-    use datafusion_common::{DataFusionError, Result};
+    use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 
     use super::*;
@@ -267,7 +267,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         for i in 0..out.len() {
@@ -293,7 +293,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         for i in 0..out.len() {
@@ -331,7 +331,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(arr.len(), number_rows);
@@ -355,7 +355,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -378,7 +378,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -401,7 +401,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -427,7 +427,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -452,7 +452,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DurationMicrosecondArray>()
             .ok_or_else(|| {
-                DataFusionError::Internal("expected DurationMicrosecondArray".into())
+                internal_datafusion_err!("expected DurationMicrosecondArray")
             })?;
 
         assert_eq!(out.len(), 2);
@@ -477,7 +477,7 @@ mod tests {
 
         assert!(
             matches!(res, Err(DataFusionError::Execution(_))),
-            "make_dt_interval expects between 0 and 4 arguments, got 5"
+            "make_dt_interval should return execution error for too many arguments"
         );
 
         Ok(())

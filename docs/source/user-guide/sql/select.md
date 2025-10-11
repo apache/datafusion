@@ -345,6 +345,12 @@ DataFusion currently supports the following pipe operators:
 - [LIMIT](#pipe_limit)
 - [SELECT](#pipe_select)
 - [EXTEND](#pipe_extend)
+- [AS](#pipe_as)
+- [UNION](#pipe_union)
+- [INTERSECT](#pipe_intersect)
+- [EXCEPT](#pipe_except)
+- [AGGREGATE](#pipe_aggregate)
+- [JOIN](#pipe_join)
 
 (pipe_where)=
 
@@ -422,4 +428,115 @@ select * from range(0,3)
 | 1     | -1          |
 | 2     | -2          |
 +-------+-------------+
+```
+
+(pipe_as)=
+
+### AS
+
+```sql
+select * from range(0,3)
+|> as my_range
+|> SELECT my_range.value;
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
++-------+
+```
+
+(pipe_union)=
+
+### UNION
+
+```sql
+select * from range(0,3)
+|> union all (
+  select * from range(3,6)
+);
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
+| 3     |
+| 4     |
+| 5     |
++-------+
+```
+
+(pipe_intersect)=
+
+### INTERSECT
+
+```sql
+select * from range(0,100)
+|> INTERSECT DISTINCT (
+  select 3
+);
++-------+
+| value |
++-------+
+| 3     |
++-------+
+```
+
+(pipe_except)=
+
+### EXCEPT
+
+```sql
+select * from range(0,10)
+|> EXCEPT DISTINCT (select * from range(5,10));
++-------+
+| value |
++-------+
+| 0     |
+| 1     |
+| 2     |
+| 3     |
+| 4     |
++-------+
+```
+
+(pipe_aggregate)=
+
+### AGGREGATE
+
+```sql
+select * from range(0,3)
+|> aggregate sum(value) AS total;
++-------+
+| total |
++-------+
+| 3     |
++-------+
+```
+
+(pipe_join)=
+
+### JOIN
+
+```sql
+(
+  SELECT 'apples' AS item, 2 AS sales
+  UNION ALL
+  SELECT 'bananas' AS item, 5 AS sales
+)
+|> AS produce_sales
+|> LEFT JOIN
+     (
+       SELECT 'apples' AS item, 123 AS id
+     ) AS produce_data
+   ON produce_sales.item = produce_data.item
+|> SELECT produce_sales.item, sales, id;
++--------+-------+------+
+| item   | sales | id   |
++--------+-------+------+
+| apples | 2     | 123  |
+| bananas| 5     | NULL |
++--------+-------+------+
 ```

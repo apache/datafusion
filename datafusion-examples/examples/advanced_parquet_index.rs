@@ -30,7 +30,7 @@ use datafusion::common::{
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    FileMeta, FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
+    FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -555,15 +555,16 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
     fn create_reader(
         &self,
         _partition_index: usize,
-        file_meta: FileMeta,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
         // for this example we ignore the partition index and metrics
         // but in a real system you would likely use them to report details on
         // the performance of the reader.
-        let filename = file_meta
-            .location()
+        let filename = partitioned_file
+            .object_meta
+            .location
             .parts()
             .last()
             .expect("No path in location")
@@ -572,8 +573,8 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 
         let object_store = Arc::clone(&self.object_store);
         let mut inner =
-            ParquetObjectReader::new(object_store, file_meta.object_meta.location)
-                .with_file_size(file_meta.object_meta.size);
+            ParquetObjectReader::new(object_store, partitioned_file.object_meta.location)
+                .with_file_size(partitioned_file.object_meta.size);
 
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)

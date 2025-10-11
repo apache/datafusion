@@ -2493,7 +2493,7 @@ mod tests {
         // the cast here is implicit so has CastOptions with safe=true
         let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "lit", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#;
 
-        assert!(format!("{exec_plan:?}").contains(expected));
+        assert_contains!(format!("{exec_plan:?}"), expected);
         Ok(())
     }
 
@@ -2517,9 +2517,121 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "lit", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
-
-        assert_eq!(format!("{cube:?}"), expected);
+        insta::assert_debug_snapshot!(cube, @r#"
+        Ok(
+            PhysicalGroupBy {
+                expr: [
+                    (
+                        Column {
+                            name: "c1",
+                            index: 0,
+                        },
+                        "c1",
+                    ),
+                    (
+                        Column {
+                            name: "c2",
+                            index: 1,
+                        },
+                        "c2",
+                    ),
+                    (
+                        Column {
+                            name: "c3",
+                            index: 2,
+                        },
+                        "c3",
+                    ),
+                ],
+                null_expr: [
+                    (
+                        Literal {
+                            value: Utf8(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Utf8,
+                                nullable: true,
+                                dict_id: 0,
+                                dict_is_ordered: false,
+                                metadata: {},
+                            },
+                        },
+                        "c1",
+                    ),
+                    (
+                        Literal {
+                            value: Int64(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Int64,
+                                nullable: true,
+                                dict_id: 0,
+                                dict_is_ordered: false,
+                                metadata: {},
+                            },
+                        },
+                        "c2",
+                    ),
+                    (
+                        Literal {
+                            value: Int64(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Int64,
+                                nullable: true,
+                                dict_id: 0,
+                                dict_is_ordered: false,
+                                metadata: {},
+                            },
+                        },
+                        "c3",
+                    ),
+                ],
+                groups: [
+                    [
+                        false,
+                        false,
+                        false,
+                    ],
+                    [
+                        true,
+                        false,
+                        false,
+                    ],
+                    [
+                        false,
+                        true,
+                        false,
+                    ],
+                    [
+                        false,
+                        false,
+                        true,
+                    ],
+                    [
+                        true,
+                        true,
+                        false,
+                    ],
+                    [
+                        true,
+                        false,
+                        true,
+                    ],
+                    [
+                        false,
+                        true,
+                        true,
+                    ],
+                    [
+                        true,
+                        true,
+                        true,
+                    ],
+                ],
+            },
+        )
+        "#);
 
         Ok(())
     }
@@ -2544,9 +2656,101 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "lit", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
-
-        assert_eq!(format!("{rollup:?}"), expected);
+        insta::assert_debug_snapshot!(rollup, @r#"
+        Ok(
+            PhysicalGroupBy {
+                expr: [
+                    (
+                        Column {
+                            name: "c1",
+                            index: 0,
+                        },
+                        "c1",
+                    ),
+                    (
+                        Column {
+                            name: "c2",
+                            index: 1,
+                        },
+                        "c2",
+                    ),
+                    (
+                        Column {
+                            name: "c3",
+                            index: 2,
+                        },
+                        "c3",
+                    ),
+                ],
+                null_expr: [
+                    (
+                        Literal {
+                            value: Utf8(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Utf8,
+                                nullable: true,
+                                dict_id: 0,
+                                dict_is_ordered: false,
+                                metadata: {},
+                            },
+                        },
+                        "c1",
+                    ),
+                    (
+                        Literal {
+                            value: Int64(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Int64,
+                                nullable: true,
+                                dict_id: 0,
+                                dict_is_ordered: false,
+                                metadata: {},
+                            },
+                        },
+                        "c2",
+                    ),
+                    (
+                        Literal {
+                            value: Int64(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Int64,
+                                nullable: true,
+                                dict_id: 0,
+                                dict_is_ordered: false,
+                                metadata: {},
+                            },
+                        },
+                        "c3",
+                    ),
+                ],
+                groups: [
+                    [
+                        true,
+                        true,
+                        true,
+                    ],
+                    [
+                        false,
+                        true,
+                        true,
+                    ],
+                    [
+                        false,
+                        false,
+                        true,
+                    ],
+                    [
+                        false,
+                        false,
+                        false,
+                    ],
+                ],
+            },
+        )
+        "#);
 
         Ok(())
     }
@@ -2684,35 +2888,13 @@ mod tests {
         let logical_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpExtensionNode::default()),
         });
-        let plan = planner
+        let e = planner
             .create_physical_plan(&logical_plan, &session_state)
-            .await;
+            .await
+            .expect_err("planning error")
+            .strip_backtrace();
 
-        let expected_error: &str = "Error during planning: \
-            Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
-            LogicalPlan schema: \
-            DFSchema { inner: Schema { fields: \
-                [Field { name: \"a\", \
-                data_type: Int32, \
-                nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, metadata: {} }], \
-                metadata: {} }, field_qualifiers: [None], \
-                functional_dependencies: FunctionalDependencies { deps: [] } }, \
-            ExecutionPlan schema: Schema { fields: \
-                [Field { name: \"b\", \
-                data_type: Int32, \
-                nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, metadata: {} }], \
-                metadata: {} }";
-        match plan {
-            Ok(_) => panic!("Expected planning failure"),
-            Err(e) => assert!(
-                e.to_string().contains(expected_error),
-                "Error '{e}' did not contain expected error '{expected_error}'"
-            ),
-        }
+        insta::assert_snapshot!(e, @r#"Error during planning: Extension planner for NoOp created an ExecutionPlan with mismatched schema. LogicalPlan schema: DFSchema { inner: Schema { fields: [Field { name: "a", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, ExecutionPlan schema: Schema { fields: [Field { name: "b", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }"#);
     }
 
     #[tokio::test]
@@ -2730,8 +2912,7 @@ mod tests {
 
         let expected = "expr: [ProjectionExpr { expr: BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
 
-        let actual = format!("{execution_plan:?}");
-        assert!(actual.contains(expected), "{}", actual);
+        assert_contains!(format!("{execution_plan:?}"), expected);
 
         Ok(())
     }

@@ -99,7 +99,8 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, NullEquality, Result, UnnestOptions,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, NullEquality,
+    Result, UnnestOptions,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
@@ -1154,7 +1155,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         if name == "regex_udf" {
             let proto = MyRegexUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to decode regex_udf: {err}"))
+                internal_datafusion_err!("failed to decode regex_udf: {err}")
             })?;
 
             Ok(Arc::new(ScalarUDF::from(MyRegexUdf::new(proto.pattern))))
@@ -1169,9 +1170,9 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
             let proto = MyRegexUdfNode {
                 pattern: udf.pattern.clone(),
             };
-            proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udf: {err}"))
-            })?;
+            proto
+                .encode(buf)
+                .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         }
         Ok(())
     }
@@ -1179,9 +1180,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         if name == "aggregate_udf" {
             let proto = MyAggregateUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "failed to decode aggregate_udf: {err}"
-                ))
+                internal_datafusion_err!("failed to decode aggregate_udf: {err}")
             })?;
 
             Ok(Arc::new(AggregateUDF::from(MyAggregateUDF::new(
@@ -1199,7 +1198,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
                 result: udf.result.clone(),
             };
             proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udf: {err:?}"))
+                internal_datafusion_err!("failed to encode udf: {err:?}")
             })?;
         }
         Ok(())
@@ -1208,7 +1207,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
         if name == "custom_udwf" {
             let proto = CustomUDWFNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to decode custom_udwf: {err}"))
+                internal_datafusion_err!("failed to decode custom_udwf: {err}")
             })?;
 
             Ok(Arc::new(WindowUDF::from(CustomUDWF::new(proto.payload))))
@@ -1226,7 +1225,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
                 payload: udwf.payload.clone(),
             };
             proto.encode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to encode udwf: {err:?}"))
+                internal_datafusion_err!("failed to encode udwf: {err:?}")
             })?;
         }
         Ok(())

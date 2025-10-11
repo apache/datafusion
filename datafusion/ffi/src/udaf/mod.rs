@@ -37,6 +37,7 @@ use datafusion::{
     error::Result,
     logical_expr::{AggregateUDF, AggregateUDFImpl, Signature},
 };
+use datafusion_common::exec_datafusion_err;
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
 use std::hash::{Hash, Hasher};
@@ -487,13 +488,13 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
                 .into_iter()
                 .map(|field_bytes| {
                     datafusion_proto_common::Field::decode(field_bytes.as_ref())
-                        .map_err(|e| DataFusionError::Execution(e.to_string()))
+                        .map_err(|e| exec_datafusion_err!("{e}"))
                 })
                 .collect::<Result<Vec<_>>>()?;
 
             parse_proto_fields_to_fields(fields.iter())
                 .map(|fields| fields.into_iter().map(Arc::new).collect())
-                .map_err(|e| DataFusionError::Execution(e.to_string()))
+                .map_err(|e| exec_datafusion_err!("{e}"))
         }
     }
 
