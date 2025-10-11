@@ -31,8 +31,8 @@ version.workspace = true
 all-features = true
 
 [dependencies]
-apache-avro = { workspace = true }
 arrow = { workspace = true }
+arrow-avro = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store", "avro"] }
