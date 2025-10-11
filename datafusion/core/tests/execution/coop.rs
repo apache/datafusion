@@ -124,7 +124,9 @@ impl LazyBatchGenerator for RangeBatchGenerator {
 }
 
 fn make_lazy_exec(column_name: &str, pretend_infinite: bool) -> LazyMemoryExec {
-    make_lazy_exec_with_range(column_name, i64::MIN..i64::MAX, pretend_infinite)
+    // Use a large enough range to provide diversity for grouping tests,
+    // but small enough to avoid overflow in SUM operations
+    make_lazy_exec_with_range(column_name, 1..10000000000i64, pretend_infinite)
 }
 
 fn make_lazy_exec_with_range(
@@ -357,12 +359,12 @@ async fn sort_merge_join_yields(
     // set up the join sources
     let inf1 = Arc::new(make_lazy_exec_with_range(
         "value1",
-        i64::MIN..0,
+        -10000000000i64..-1,
         pretend_infinite,
     ));
     let inf2 = Arc::new(make_lazy_exec_with_range(
         "value2",
-        0..i64::MAX,
+        1..10000000000i64,
         pretend_infinite,
     ));
 
@@ -399,7 +401,7 @@ async fn filter_yields(
     let filter_expr = binary_expr(
         col("value", &inf.schema())?,
         Operator::Lt,
-        lit(i64::MIN),
+        lit(-10000000000i64),
         &inf.schema(),
     )?;
     let filter = Arc::new(FilterExec::try_new(filter_expr, inf.clone())?);
@@ -416,7 +418,7 @@ async fn filter_reject_all_batches_yields(
     let session_ctx = SessionContext::new();
 
     // Wrap this batch in an InfiniteExec
-    let infinite = make_lazy_exec_with_range("value", i64::MIN..0, pretend_infinite);
+    let infinite = make_lazy_exec_with_range("value", -1000000..-1, pretend_infinite);
 
     // 2b) Construct a FilterExec that is always false: “value > 10000” (no rows pass)
     let false_predicate = Arc::new(BinaryExpr::new_with_overflow_check(
@@ -447,7 +449,8 @@ async fn interleave_then_filter_all_yields(
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
     for threshold in 1..32 {
         // One infinite exec:
-        let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
+        let mut inf =
+            make_lazy_exec_with_range("value", 1..10000000000i64, pretend_infinite);
 
         // Now repartition so that all children share identical Hash partitioning
         // on “value” into 1 bucket. This is required for InterleaveExec::try_new.
@@ -503,7 +506,8 @@ async fn interleave_then_aggregate_yields(
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
     for threshold in 1..32 {
         // One infinite exec:
-        let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
+        let mut inf =
+            make_lazy_exec_with_range("value", 1..10000000000i64, pretend_infinite);
 
         // Now repartition so that all children share identical Hash partitioning
         // on “value” into 1 bucket. This is required for InterleaveExec::try_new.
@@ -578,7 +582,7 @@ async fn join_yields(
     // but plenty of matching keys exist (e.g. 0 on left matches 1 on right, etc.)
     let infinite_left = make_lazy_exec_with_range("value", -10..10, false);
     let infinite_right =
-        make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
+        make_lazy_exec_with_range("value", 1..10000000000i64, pretend_infinite);
 
     // Create Join keys → join on “value” = “value”
     let left_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
@@ -626,7 +630,7 @@ async fn join_agg_yields(
     // but plenty of matching keys exist (e.g. 0 on left matches 1 on right, etc.)
     let infinite_left = make_lazy_exec_with_range("value", -10..10, false);
     let infinite_right =
-        make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
+        make_lazy_exec_with_range("value", 1..10000000000i64, pretend_infinite);
 
     // 2b) Create Join keys → join on “value” = “value”
     let left_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
@@ -739,7 +743,7 @@ async fn hash_join_without_repartition_and_no_agg(
     // but plenty of matching keys exist (e.g. 0 on left matches 1 on right, etc.)
     let infinite_left = make_lazy_exec_with_range("value", -10..10, false);
     let infinite_right =
-        make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
+        make_lazy_exec_with_range("value", 1..10000000000i64, pretend_infinite);
 
     // Directly feed `infinite_left` and `infinite_right` into HashJoinExec.
     // Do not use aggregation or repartition.
