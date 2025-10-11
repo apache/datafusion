@@ -17,7 +17,7 @@
 
 sphinx==8.2.3
 sphinx-reredirects==1.0.0
-pydata-sphinx-theme==0.8.0
+pydata-sphinx-theme==0.16.1
 myst-parser==4.0.1
 maturin==1.9.5
 jinja2==3.1.6
