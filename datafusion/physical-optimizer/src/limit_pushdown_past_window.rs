@@ -211,5 +211,3 @@ fn bound_to_usize(bound: &WindowFrameBound) -> Option<usize> {
         _ => None,
     }
 }
-
-// tests: all branches are covered by sqllogictests

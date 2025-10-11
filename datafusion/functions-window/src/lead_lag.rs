@@ -327,6 +327,7 @@ impl WindowUDFImpl for WindowShift {
                 };
                 LimitEffect::Relative((*amount).max(0) as usize)
             }
+            [_] => LimitEffect::Relative(1), // default value
             _ => LimitEffect::Unknown, // invalid arguments
         }
     }
