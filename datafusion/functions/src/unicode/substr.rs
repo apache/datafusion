@@ -70,8 +70,23 @@ impl Default for SubstrFunc {
 
 impl SubstrFunc {
     pub fn new() -> Self {
+        use datafusion_expr::TypeSignature;
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    // substr(str, start_pos)
+                    TypeSignature::Any(2),
+                    // substr(str, start_pos, length)
+                    TypeSignature::Any(3),
+                ],
+                Volatility::Immutable,
+            )
+            .with_parameter_names(vec![
+                "str".to_string(),
+                "start_pos".to_string(),
+                "length".to_string(),
+            ])
+            .expect("valid parameter names"),
             aliases: vec![String::from("substring")],
         }
     }
