@@ -2091,6 +2091,7 @@ mod tests {
                     })),
                     extensions: None,
                     metadata_size_hint: None,
+                    distribution_statistics: None,
                 }
             }
         }
