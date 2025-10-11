@@ -292,9 +292,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         );
         let schema = self.schema();
 
-        let reservation =
-            MemoryConsumer::new(format!("SortPreservingMergeExec[{partition}]"))
-                .register(&context.runtime_env().memory_pool);
+        let reservation = MemoryConsumer::new(format!(
+            "SortPreservingMergeExec[partition={partition}]"
+        ))
+        .register(&context.runtime_env().memory_pool);
 
         match input_partitions {
             0 => internal_err!(
