@@ -19,15 +19,21 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
+use datafusion_expr::{WindowFrameBound, WindowFrameUnits, WindowUDFImpl};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::windows::BoundedWindowAggExec;
+use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 use datafusion_physical_plan::ExecutionPlan;
 use std::cmp;
 use std::sync::Arc;
+use itertools::Itertools;
+use datafusion_functions_window::lead_lag::WindowShift;
+use datafusion_functions_window::nth_value::NthValue;
+use datafusion_functions_window::row_number::RowNumber;
+use datafusion_physical_expr::expressions::{Column, Literal};
+use datafusion_physical_expr::window::{PlainAggregateWindowExpr, SlidingAggregateWindowExpr, StandardWindowExpr, StandardWindowFunctionExpr, WindowExpr};
 
 /// This rule inspects [`ExecutionPlan`]'s attempting to find fetch limits that were not pushed
 /// down by `LimitPushdown` because [BoundedWindowAggExec]s were "in the way". If the window is
@@ -80,6 +86,9 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             // grow the limit if we hit a window function
             if let Some(window) = node.as_any().downcast_ref::<BoundedWindowAggExec>() {
                 for expr in window.window_expr().iter() {
+                    let Some(growth) = grow_window_amount(expr) else {
+                        return reset(node, &mut latest_max);
+                    };
                     let frame = expr.get_window_frame();
                     if frame.units != WindowFrameUnits::Rows {
                         return reset(node, &mut latest_max); // expression-based limits?
@@ -87,7 +96,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                     let Some(end_bound) = bound_to_usize(&frame.end_bound) else {
                         return reset(node, &mut latest_max);
                     };
-                    latest_max = cmp::max(end_bound + 1, latest_max);
+                    latest_max = cmp::max(end_bound + growth, latest_max);
                 }
                 return Ok(Transformed::no(node));
             }
@@ -142,6 +151,64 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
     fn schema_check(&self) -> bool {
         false // we don't change the schema
     }
+}
+
+/// Examines the `WindowExpr` and decides:
+/// 1. The expression does not change the window size
+/// 2. The expression grows it by X amount
+/// 3. We don't know
+///
+/// # Arguments
+///
+/// * `expr` the expression to examine
+///
+/// # Returns
+///
+/// `None` if we don't know the effect on window size, else Some(amount)
+fn grow_window_amount(expr: &Arc<dyn WindowExpr>) -> Option<usize> {
+    println!("grow_window_amount expr={:?}", expr);
+    if expr.as_any().is::<PlainAggregateWindowExpr>()
+        || expr.as_any().is::<SlidingAggregateWindowExpr>() {
+        return Some(0); // aggregates do not change window
+    }
+    let Some(swe) = expr.as_any().downcast_ref::<StandardWindowExpr>() else {
+        return None; // `StandardWindowExpr` is the only remaining one in DataFusion code
+    };
+    let swfe = swe.get_standard_func_expr();
+    let Some(udf) = swfe.as_any().downcast_ref::<WindowUDFExpr>() else {
+        return None; // Always `WindowUDFExpr` unless someone added extensions
+    };
+    let fun = udf.fun().inner();
+
+    // no change
+    if fun.as_any().is::<RowNumber>() {
+        return Some(0);
+    };
+
+    // get arguments
+    let args = udf.expressions();
+    let Ok(arg) = args.iter().exactly_one() else {
+        return None;
+    };
+    let Some(amount) = arg.as_any().downcast_ref::<Literal>() else {
+        return None;
+    };
+
+    // window manipulating
+    if let Some(fun) = fun.as_any().downcast_ref::<WindowShift>() {
+        println!("WindowShift args={:?}", amount);
+        return Some(0); // TODO: get amount and return it
+    };
+    if let Some(fun) = fun.as_any().downcast_ref::<NthValue>() {
+        println!("WindowShift args={:?}", amount);
+        return Some(0); // TODO: get amount and return it
+    };
+
+    // explicitly can't handle: cume_dist, ntile, percent_rank
+
+    // maybe in the future: dense_rank, rank, first_value
+
+    None // Don't know, can't optimize
 }
 
 fn bound_to_usize(bound: &WindowFrameBound) -> Option<usize> {

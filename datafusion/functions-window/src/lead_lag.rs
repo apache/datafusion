@@ -95,7 +95,7 @@ pub fn lead(
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-enum WindowShiftKind {
+pub enum WindowShiftKind {
     Lag,
     Lead,
 }
@@ -147,6 +147,10 @@ impl WindowShift {
 
     pub fn lead() -> Self {
         Self::new(WindowShiftKind::Lead)
+    }
+
+    pub fn kind(&self) -> &WindowShiftKind {
+        &self.kind
     }
 }
 
