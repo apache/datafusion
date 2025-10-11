@@ -204,7 +204,9 @@ impl DisplayAs for SortPreservingMergeExec {
                         write!(f, ", ")?;
                     }
                 }
+
                 if let Some(fetch) = self.fetch {
+                    writeln!(f)?;
                     writeln!(f, "limit={fetch}")?;
                 };
 
