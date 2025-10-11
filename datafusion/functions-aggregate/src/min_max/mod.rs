@@ -21,39 +21,38 @@
 mod min_max_bytes;
 mod min_max_struct;
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
-    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
-use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, ColumnStatistics, Result};
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use datafusion_physical_expr::expressions;
-use std::cmp::Ordering;
-use std::fmt::Debug;
+// Note: test helpers for `min_max_bytes` are declared in
+// `min_max/min_max_bytes.rs` via `#[path = "tests.rs"] pub(super) mod tests;`.
+// We previously re-exported them here which caused a duplicate `tests` module
+// name; that re-export is unnecessary and removed to avoid compiler warnings.
 
-use arrow::datatypes::i256;
-use arrow::datatypes::{
-    Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+use self::{
+    min_max_bytes::MinMaxBytesAccumulator, min_max_struct::MinMaxStructAccumulator,
 };
-
-use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
-use crate::min_max::min_max_struct::MinMaxStructAccumulator;
-use datafusion_common::ScalarValue;
+use arrow::{
+    array::ArrayRef,
+    datatypes::{
+        i256, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+        Decimal32Type, Decimal64Type, DurationMicrosecondType, DurationMillisecondType,
+        DurationNanosecondType, DurationSecondType, Float16Type, Float32Type,
+        Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType,
+        Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
+        TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+        TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    },
+};
+use datafusion_common::{
+    exec_err, internal_err, stats::Precision, ColumnStatistics, Result, ScalarValue,
+};
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
-    SetMonotonicity, Signature, Volatility,
+    GroupsAccumulator, SetMonotonicity, Signature, StatisticsArgs, Volatility,
 };
-use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_macros::user_doc;
+use datafusion_physical_expr::expressions;
 use half::f16;
-use std::mem::size_of_val;
-use std::ops::Deref;
+use std::{cmp::Ordering, fmt::Debug, mem::size_of_val, ops::Deref};
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
