@@ -230,6 +230,7 @@ physical_plan after OutputRequirements
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true
 physical_plan after aggregate_statistics SAME TEXT AS ABOVE
 physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after nl-join-projection-push-down SAME TEXT AS ABOVE
 physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after FilterPushdown SAME TEXT AS ABOVE
 physical_plan after EnforceDistribution SAME TEXT AS ABOVE
@@ -309,6 +310,7 @@ physical_plan after OutputRequirements
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, file_type=parquet, statistics=[Rows=Exact(8), Bytes=Exact(671), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
 physical_plan after aggregate_statistics SAME TEXT AS ABOVE
 physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after nl-join-projection-push-down SAME TEXT AS ABOVE
 physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after FilterPushdown SAME TEXT AS ABOVE
 physical_plan after EnforceDistribution SAME TEXT AS ABOVE
@@ -354,6 +356,7 @@ physical_plan after OutputRequirements
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, file_type=parquet
 physical_plan after aggregate_statistics SAME TEXT AS ABOVE
 physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after nl-join-projection-push-down SAME TEXT AS ABOVE
 physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after FilterPushdown SAME TEXT AS ABOVE
 physical_plan after EnforceDistribution SAME TEXT AS ABOVE
@@ -594,6 +597,7 @@ physical_plan after OutputRequirements
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true
 physical_plan after aggregate_statistics SAME TEXT AS ABOVE
 physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after nl-join-projection-push-down SAME TEXT AS ABOVE
 physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after FilterPushdown SAME TEXT AS ABOVE
 physical_plan after EnforceDistribution SAME TEXT AS ABOVE

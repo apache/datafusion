@@ -849,9 +849,11 @@ logical_plan
 05)----TableScan: department projection=[dept_name]
 physical_plan
 01)ProjectionExec: expr=[emp_id@1 as emp_id, name@2 as name, dept_name@0 as dept_name]
-02)--NestedLoopJoinExec: join_type=Right, filter=name@0 = Alice OR name@0 = Bob
+02)--NestedLoopJoinExec: join_type=Right, filter=join_proj_push_down_1@0, projection=[dept_name@0, emp_id@1, name@2]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----ProjectionExec: expr=[emp_id@0 as emp_id, name@1 as name, name@1 = Alice OR name@1 = Bob as join_proj_push_down_1]
+05)------CoalesceBatchesExec: target_batch_size=8192
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITT rowsort
 SELECT e.emp_id, e.name, d.dept_name
