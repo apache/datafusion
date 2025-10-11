@@ -207,15 +207,15 @@ pub(crate) fn regex_match_dyn(
     match left.data_type() {
         DataType::Utf8 => {
             regexp_is_match_flag!(left, right, StringArray, not_match, flag)
-        },
+        }
         DataType::Utf8View => {
             regexp_is_match_flag!(left, right, StringViewArray, not_match, flag)
         }
         DataType::LargeUtf8 => {
             regexp_is_match_flag!(left, right, LargeStringArray, not_match, flag)
-        },
+        }
         other => internal_err!(
-            "Data type {} not supported for binary_string_array_flag_op operation regexp_is_match on string array",
+            "Data type {} not supported for regex_match_dyn on string array",
             other
         ),
     }
@@ -229,26 +229,22 @@ macro_rules! regexp_is_match_flag_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("failed to downcast array");
 
-        let string_value = match $RIGHT.try_as_str() {
-            Some(Some(string_value)) => string_value,
-            // null literal or non string
-            _ => {
-                return Some(internal_err!(
-                    "failed to cast literal value {} for operation 'regexp_is_match_scalar'",
-                    $RIGHT
-                ))
-            }
-        };
-
-        let flag = $FLAG.then_some("i");
-        match regexp_is_match_scalar(ll, &string_value, flag) {
-            Ok(mut array) => {
-                if $NOT {
-                    array = not(&array).unwrap();
+        if let Some(Some(string_value)) = $RIGHT.try_as_str() {
+            let flag = $FLAG.then_some("i");
+            match regexp_is_match_scalar(ll, &string_value, flag) {
+                Ok(mut array) => {
+                    if $NOT {
+                        array = not(&array).unwrap();
+                    }
+                    Ok(Arc::new(array))
                 }
-                Ok(Arc::new(array))
+                Err(e) => internal_err!("failed to call 'regex_match_dyn_scalar' {}", e),
             }
-            Err(e) => internal_err!("failed to call regexp_is_match_scalar {}", e),
+        } else {
+            internal_err!(
+                "failed to cast literal value {} for operation 'regex_match_dyn_scalar'",
+                $RIGHT
+            )
         }
     }};
 }
@@ -277,7 +273,7 @@ pub(crate) fn regex_match_dyn_scalar(
                 DataType::Utf8View => regexp_is_match_flag_scalar!(values, right, StringViewArray, not_match, flag),
                 DataType::LargeUtf8 => regexp_is_match_flag_scalar!(values, right, LargeStringArray, not_match, flag),
                 other => internal_err!(
-                    "Data type {} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation 'regexp_is_match_scalar' on string array",
+                    "Data type {} not supported as a dictionary value type for operation 'regex_match_dyn_scalar' on string array",
                     other
                 ),
             }.map(
@@ -292,7 +288,7 @@ pub(crate) fn regex_match_dyn_scalar(
             )
         },
         other => internal_err!(
-                "Data type {} not supported for binary_string_array_flag_op_scalar operation 'regexp_is_match_scalar' on string array",
+                "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",
                 other
         ),
     };
