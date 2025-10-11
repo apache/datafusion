@@ -15,12 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::try_cast;
+use crate::expressions::{try_cast, BinaryExpr, IsNotNullExpr, IsNullExpr, NotExpr};
 use crate::PhysicalExpr;
-use std::borrow::Cow;
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filter};
@@ -30,8 +26,12 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
+use std::borrow::Cow;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 use super::{Column, Literal};
+use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
@@ -481,6 +481,11 @@ impl PhysicalExpr for CaseExpr {
         let then_nullable = self
             .when_then_expr
             .iter()
+            .filter(|(w, t)| {
+                // Disregard branches where we can determine statically that the predicate
+                // is always false when the then expression would evaluate to null
+                const_result_when_value_is_null(w.as_ref(), t.as_ref()).unwrap_or(true)
+            })
             .map(|(_, t)| t.nullable(input_schema))
             .collect::<Result<Vec<_>>>()?;
         if then_nullable.contains(&true) {
@@ -588,6 +593,54 @@ impl PhysicalExpr for CaseExpr {
     }
 }
 
+/// Determines if the given `predicate` can be const evaluated if `value` were to evaluate to `NULL`.
+/// Returns a `Some` value containing the const result if so; otherwise returns `None`.
+fn const_result_when_value_is_null(
+    predicate: &dyn PhysicalExpr,
+    value: &dyn PhysicalExpr,
+) -> Option<bool> {
+    let predicate_any = predicate.as_any();
+    if let Some(not_null) = predicate_any.downcast_ref::<IsNotNullExpr>() {
+        if not_null.arg().as_ref().dyn_eq(value) {
+            Some(false)
+        } else {
+            None
+        }
+    } else if let Some(null) = predicate_any.downcast_ref::<IsNullExpr>() {
+        if null.arg().as_ref().dyn_eq(value) {
+            Some(true)
+        } else {
+            None
+        }
+    } else if let Some(not) = predicate_any.downcast_ref::<NotExpr>() {
+        const_result_when_value_is_null(not.arg().as_ref(), value).map(|b| !b)
+    } else if let Some(binary) = predicate_any.downcast_ref::<BinaryExpr>() {
+        match binary.op() {
+            Operator::And => {
+                let l = const_result_when_value_is_null(binary.left().as_ref(), value);
+                let r = const_result_when_value_is_null(binary.right().as_ref(), value);
+                match (l, r) {
+                    (Some(l), Some(r)) => Some(l && r),
+                    (Some(l), None) => Some(l),
+                    (None, Some(r)) => Some(r),
+                    _ => None,
+                }
+            }
+            Operator::Or => {
+                let l = const_result_when_value_is_null(binary.left().as_ref(), value);
+                let r = const_result_when_value_is_null(binary.right().as_ref(), value);
+                match (l, r) {
+                    (Some(l), Some(r)) => Some(l || r),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
 /// Create a CASE expression
 pub fn case(
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -601,7 +654,8 @@ pub fn case(
 mod tests {
     use super::*;
 
-    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
+    use crate::expressions;
+    use crate::expressions::{binary, cast, col, is_not_null, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
@@ -609,7 +663,6 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
-    use datafusion_expr::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
@@ -1434,5 +1487,189 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    fn when_then_else(
+        when: &Arc<dyn PhysicalExpr>,
+        then: &Arc<dyn PhysicalExpr>,
+        els: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let case = CaseExpr::try_new(
+            None,
+            vec![(Arc::clone(when), Arc::clone(then))],
+            Some(Arc::clone(els)),
+        )?;
+        Ok(Arc::new(case))
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_nullable_column() -> Result<()> {
+        case_expression_nullability(true)
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_not_nullable_column() -> Result<()> {
+        case_expression_nullability(false)
+    }
+
+    fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
+        let schema =
+            Schema::new(vec![Field::new("foo", DataType::Int32, col_is_nullable)]);
+
+        let foo = col("foo", &schema)?;
+        let foo_is_not_null = is_not_null(Arc::clone(&foo))?;
+        let foo_is_null = expressions::is_null(Arc::clone(&foo))?;
+        let not_foo_is_null = expressions::not(Arc::clone(&foo_is_null))?;
+        let zero = lit(0);
+        let foo_eq_zero =
+            binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?;
+
+        assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
+        assert_nullability(
+            when_then_else(&foo_eq_zero, &foo, &zero)?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::And,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::And,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::Or,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?,
+                    Operator::Or,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&zero),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    Operator::Or,
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&foo),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        Ok(())
+    }
+
+    fn assert_not_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(!expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullability(expr: Arc<dyn PhysicalExpr>, schema: &Schema, nullable: bool) {
+        if nullable {
+            assert_nullable(expr, schema);
+        } else {
+            assert_not_nullable(expr, schema);
+        }
     }
 }
