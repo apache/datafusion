@@ -2181,6 +2181,7 @@ mod tests {
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+    use datafusion_physical_expr::PhysicalExpr;
     use std::hash::Hash;
     use std::sync::LazyLock;
     use std::{
@@ -4864,6 +4865,14 @@ mod tests {
 
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!("not needed for tests")
+        }
+
+        fn is_causal(&self) -> bool {
+            false
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
     #[derive(Debug, PartialEq, Eq, Hash)]

@@ -56,7 +56,7 @@ statement ok
 set datafusion.optimizer.enable_window_limits = false;
 
 query I
-SELECT LEAD(c9) OVER (ORDER BY c9 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM aggregate_test_100 LIMIT 5
+SELECT LEAD(c9, 1) OVER (ORDER BY c9 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM aggregate_test_100 LIMIT 5
 ----
 63044568
 141047417

@@ -19,10 +19,7 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::{WindowFrameBound, WindowFrameUnits, WindowUDFImpl};
-use datafusion_functions_window::lead_lag::{WindowShift, WindowShiftKind};
-use datafusion_functions_window::nth_value::{NthValue, NthValueKind};
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_expr::{LimitEffect, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::window::{
     PlainAggregateWindowExpr, SlidingAggregateWindowExpr, StandardWindowExpr,
     StandardWindowFunctionExpr, WindowExpr,
@@ -87,10 +84,18 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
 
             // grow the limit if we hit a window function
             if let Some(window) = node.as_any().downcast_ref::<BoundedWindowAggExec>() {
+                let mut max_rel = 0;
+                let mut max_abs = 0;
                 for expr in window.window_expr().iter() {
-                    if !grow_limit(expr, &mut latest_max) {
-                        return reset(node, &mut latest_max);
-                    };
+                    // grow based on function requirements
+                    match grow_limit(expr) {
+                        LimitEffect::None => {}
+                        LimitEffect::Unknown => return reset(node, &mut latest_max),
+                        LimitEffect::Relative(rel) => max_rel = max_rel.max(rel),
+                        LimitEffect::Absolute(abs) => max_abs = max_abs.max(abs),
+                    }
+
+                    // grow based on frames
                     let frame = expr.get_window_frame();
                     if frame.units != WindowFrameUnits::Rows {
                         return reset(node, &mut latest_max); // expression-based limits?
@@ -100,6 +105,10 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                     };
                     latest_max = max(end_bound, latest_max);
                 }
+
+                // finish grow
+                latest_max = latest_max.max(latest_max + max_rel);
+                latest_max = latest_max.max(max_abs);
                 return Ok(Transformed::no(node));
             }
 
@@ -167,63 +176,29 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
 /// # Returns
 ///
 /// `false` if we can't optimize
-fn grow_limit(expr: &Arc<dyn WindowExpr>, limit: &mut usize) -> bool {
+fn grow_limit(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
     // White list aggregates
     if expr.as_any().is::<PlainAggregateWindowExpr>()
         || expr.as_any().is::<SlidingAggregateWindowExpr>()
     {
-        return true; // aggregates do not change window
+        return LimitEffect::None;
     }
 
     // Grab the window function
     let Some(swe) = expr.as_any().downcast_ref::<StandardWindowExpr>() else {
-        return false; // `StandardWindowExpr` is the only remaining one in DataFusion code
+        return LimitEffect::Unknown; // should be only remaining type
     };
     let swfe = swe.get_standard_func_expr();
     let Some(udf) = swfe.as_any().downcast_ref::<WindowUDFExpr>() else {
-        return false; // Always `WindowUDFExpr` unless someone added extensions
+        return LimitEffect::Unknown; // should be only remaining type
     };
+
+    // Return it's effect
     let fun = udf.fun().inner();
     if fun.is_causal() {
-        return true; // no effect
+        return LimitEffect::None;
     }
-
-    // Grab the relevant argument
-    let amount = match udf.expressions().as_slice() {
-        [_, expr, ..] => {
-            let Some(lit) = expr.as_any().downcast_ref::<Literal>() else {
-                return false; // not statically analyzable
-            };
-            let ScalarValue::Int64(Some(amount)) = lit.value() else {
-                return false; // we should only get int64 from the parser
-            };
-            *amount
-        }
-        [_] => 1,           // default value
-        [] => return false, // invalid arguments
-    };
-
-    // calculate the effect on the window
-    if let Some(fun) = fun.as_any().downcast_ref::<WindowShift>() {
-        if *fun.kind() == WindowShiftKind::Lag {
-            return true; // lag is causal
-        }
-        *limit += amount.max(0) as usize; // lead causes us to look ahead N rows
-        return true;
-    };
-    if let Some(fun) = fun.as_any().downcast_ref::<NthValue>() {
-        match fun.kind() {
-            NthValueKind::First => return true, // causal
-            NthValueKind::Last => return false, // requires whole window
-            NthValueKind::Nth => {}
-        }
-        let nth_row = (amount - 1).max(0) as usize;
-        *limit = max(*limit, nth_row); // i.e. 10th row, limit 5 - so make limit 10
-        return true;
-    };
-
-    // We don't know about this window function, so we can't optimize
-    false
+    udf.limit_effect()
 }
 
 fn bound_to_usize(bound: &WindowFrameBound) -> Option<usize> {

@@ -29,8 +29,8 @@ use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
-    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    AggregateUDF, Expr, LimitEffect, LogicalPlan, Operator, PartitionEvaluator,
+    ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -42,6 +42,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -625,7 +626,6 @@ pub fn create_udwf(
     return_type: Arc<DataType>,
     volatility: Volatility,
     partition_evaluator_factory: PartitionEvaluatorFactory,
-    is_causal: bool,
 ) -> WindowUDF {
     let return_type = Arc::unwrap_or_clone(return_type);
     WindowUDF::from(SimpleWindowUDF::new(
@@ -634,7 +634,6 @@ pub fn create_udwf(
         return_type,
         volatility,
         partition_evaluator_factory,
-        is_causal,
     ))
 }
 
@@ -646,7 +645,6 @@ pub struct SimpleWindowUDF {
     signature: Signature,
     return_type: DataType,
     partition_evaluator_factory: PtrEq<PartitionEvaluatorFactory>,
-    is_causal: bool,
 }
 
 impl Debug for SimpleWindowUDF {
@@ -669,7 +667,6 @@ impl SimpleWindowUDF {
         return_type: DataType,
         volatility: Volatility,
         partition_evaluator_factory: PartitionEvaluatorFactory,
-        is_causal: bool,
     ) -> Self {
         let name = name.into();
         let signature = Signature::exact([input_type].to_vec(), volatility);
@@ -678,7 +675,6 @@ impl SimpleWindowUDF {
             signature,
             return_type,
             partition_evaluator_factory: partition_evaluator_factory.into(),
-            is_causal,
         }
     }
 }
@@ -712,7 +708,11 @@ impl WindowUDFImpl for SimpleWindowUDF {
     }
 
     fn is_causal(&self) -> bool {
-        self.is_causal
+        false
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 

@@ -417,6 +417,21 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
 
     /// Returns true if this function only needs access to current and previous rows
     fn is_causal(&self) -> bool;
+
+    /// If not causal, returns the effect this function will have on the window
+    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect;
+}
+
+/// the effect this function will have on the window
+pub enum LimitEffect {
+    /// Does not affect the limit (i.e. this is causal)
+    None,
+    /// Either undeclared, or dynamic (only evaluatable at run time)
+    Unknown,
+    /// Grow the limit by N rows
+    Relative(usize),
+    /// Limit needs to be at least N rows
+    Absolute(usize),
 }
 
 pub enum ReversedUDWF {
@@ -530,19 +545,25 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn is_causal(&self) -> bool {
         self.inner.is_causal()
     }
+
+    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        self.inner.limit_effect(args)
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
+    use crate::{LimitEffect, PartitionEvaluator, WindowUDF, WindowUDFImpl};
     use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use std::any::Any;
     use std::cmp::Ordering;
     use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AWindowUDF {
@@ -584,6 +605,10 @@ mod test {
 
         fn is_causal(&self) -> bool {
             false
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
 
@@ -627,6 +652,10 @@ mod test {
 
         fn is_causal(&self) -> bool {
             false
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
 
