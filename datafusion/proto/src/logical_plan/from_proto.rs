@@ -587,6 +587,15 @@ pub fn parse_expr(
                     .udaf(&pb.fun_name)
                     .or_else(|_| codec.try_decode_udaf(&pb.fun_name, &[]))?,
             };
+            let null_treatment: Option<NullTreatment> =
+                protobuf::NullTreatment::try_from(pb.null_treatment)
+                    .map_err(|_| {
+                        proto_error(format!(
+                        "Received a AggregateUdfExprNode message with unknown NullTreatment {}",
+                        pb.null_treatment
+                    ))
+                    })?
+                    .into();
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
@@ -594,7 +603,7 @@ pub fn parse_expr(
                 pb.distinct,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
                 parse_sorts(&pb.order_by, registry, codec)?,
-                None,
+                null_treatment,
             )))
         }
 

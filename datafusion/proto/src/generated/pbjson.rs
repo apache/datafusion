@@ -596,6 +596,9 @@ impl serde::Serialize for AggregateUdfExprNode {
         if self.fun_definition.is_some() {
             len += 1;
         }
+        if self.null_treatment != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateUDFExprNode", len)?;
         if !self.fun_name.is_empty() {
             struct_ser.serialize_field("funName", &self.fun_name)?;
@@ -617,6 +620,11 @@ impl serde::Serialize for AggregateUdfExprNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
+        if self.null_treatment != 0 {
+            let v = NullTreatment::try_from(self.null_treatment)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.null_treatment)))?;
+            struct_ser.serialize_field("nullTreatment", &v)?;
+        }
         struct_ser.end()
     }
 }
@@ -636,6 +644,8 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
             "orderBy",
             "fun_definition",
             "funDefinition",
+            "null_treatment",
+            "nullTreatment",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -646,6 +656,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
             Filter,
             OrderBy,
             FunDefinition,
+            NullTreatment,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -673,6 +684,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                             "filter" => Ok(GeneratedField::Filter),
                             "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
+                            "nullTreatment" | "null_treatment" => Ok(GeneratedField::NullTreatment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -698,6 +710,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                 let mut filter__ = None;
                 let mut order_by__ = None;
                 let mut fun_definition__ = None;
+                let mut null_treatment__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FunName => {
@@ -738,6 +751,12 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::NullTreatment => {
+                            if null_treatment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullTreatment"));
+                            }
+                            null_treatment__ = Some(map_.next_value::<NullTreatment>()? as i32);
+                        }
                     }
                 }
                 Ok(AggregateUdfExprNode {
@@ -747,6 +766,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                     filter: filter__,
                     order_by: order_by__.unwrap_or_default(),
                     fun_definition: fun_definition__,
+                    null_treatment: null_treatment__.unwrap_or_default(),
                 })
             }
         }

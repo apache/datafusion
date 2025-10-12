@@ -368,7 +368,7 @@ pub fn serialize_expr(
                     ref distinct,
                     ref filter,
                     ref order_by,
-                    null_treatment: _,
+                    ref null_treatment,
                 },
         }) => {
             let mut buf = Vec::new();
@@ -385,6 +385,8 @@ pub fn serialize_expr(
                         },
                         order_by: serialize_sorts(order_by, codec)?,
                         fun_definition: (!buf.is_empty()).then_some(buf),
+                        null_treatment: protobuf::NullTreatment::from(null_treatment)
+                            .into(),
                     },
                 ))),
             }
