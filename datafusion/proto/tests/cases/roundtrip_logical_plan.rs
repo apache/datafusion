@@ -2189,7 +2189,11 @@ fn roundtrip_aggregate_udf() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+    let ctx = SessionContext::new();
+    ctx.register_udaf(dummy_agg.clone());
+
+    // null_treatment absent
+    let test_expr1 = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
         Arc::new(dummy_agg.clone()),
         vec![lit(1.0_f64)],
         false,
@@ -2198,10 +2202,29 @@ fn roundtrip_aggregate_udf() {
         None,
     ));
 
-    let ctx = SessionContext::new();
-    ctx.register_udaf(dummy_agg);
+    // null_treatment respect nulls
+    let test_expr2 = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+        Arc::new(dummy_agg.clone()),
+        vec![lit(1.0_f64)],
+        true,
+        Some(Box::new(lit(true))),
+        vec![],
+        Some(NullTreatment::RespectNulls),
+    ));
 
-    roundtrip_expr_test(test_expr, ctx);
+    // null_treatment ignore nulls
+    let test_expr3 = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+        Arc::new(dummy_agg),
+        vec![lit(1.0_f64)],
+        true,
+        Some(Box::new(lit(true))),
+        vec![],
+        Some(NullTreatment::IgnoreNulls),
+    ));
+
+    roundtrip_expr_test(test_expr1, ctx.clone());
+    roundtrip_expr_test(test_expr2, ctx.clone());
+    roundtrip_expr_test(test_expr3, ctx);
 }
 
 fn dummy_udf() -> ScalarUDF {
