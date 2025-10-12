@@ -210,9 +210,9 @@ impl ScalarUDFImpl for PowerFunc {
                     &exponent,
                     |b, e| match e.try_into() {
                         Ok(exp_u32) => b.pow_checked(exp_u32),
-                        Err(_) => Err(ArrowError::ArithmeticOverflow(
-                            format!("Exponent {e} in integer computation is out of bounds.")
-                        )),
+                        Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
+                            "Exponent {e} in integer computation is out of bounds."
+                        ))),
                     },
                 )?
             }
@@ -222,9 +222,9 @@ impl ScalarUDFImpl for PowerFunc {
                     &exponent,
                     |b, e| match e.try_into() {
                         Ok(exp_u32) => b.pow_checked(exp_u32),
-                        Err(_) => Err(ArrowError::ArithmeticOverflow(
-                            format!("Exponent {e} in integer computation is out of bounds.")
-                        )),
+                        Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
+                            "Exponent {e} in integer computation is out of bounds."
+                        ))),
                     },
                 )?
             }
