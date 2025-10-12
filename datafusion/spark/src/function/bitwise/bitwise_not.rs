@@ -25,17 +25,17 @@ use datafusion_functions::utils::make_scalar_function;
 use std::{any::Any, sync::Arc};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkBitNot {
+pub struct SparkBitwiseNot {
     signature: Signature,
 }
 
-impl Default for SparkBitNot {
+impl Default for SparkBitwiseNot {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkBitNot {
+impl SparkBitwiseNot {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -51,13 +51,13 @@ impl SparkBitNot {
     }
 }
 
-impl ScalarUDFImpl for SparkBitNot {
+impl ScalarUDFImpl for SparkBitwiseNot {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "bit_not"
+        "bitwise_not"
     }
 
     fn signature(&self) -> &Signature {
@@ -70,13 +70,13 @@ impl ScalarUDFImpl for SparkBitNot {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
-            return plan_err!("bit_not expects exactly 1 argument");
+            return plan_err!("bitwise_not expects exactly 1 argument");
         }
-        make_scalar_function(spark_bit_not, vec![])(&args.args)
+        make_scalar_function(spark_bitwise_not, vec![])(&args.args)
     }
 }
 
-pub fn spark_bit_not(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn spark_bitwise_not(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = args[0].as_ref();
     match array.data_type() {
         DataType::Int8 => {
@@ -101,7 +101,7 @@ pub fn spark_bit_not(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         _ => {
             plan_err!(
-                "bit_not function does not support data type: {}",
+                "bitwise_not function does not support data type: {}",
                 array.data_type()
             )
         }
