@@ -314,11 +314,9 @@ pub fn serialize_expr(
                         ref partition_by,
                         ref order_by,
                         ref window_frame,
-                        // TODO: support null treatment, distinct, and filter in proto.
-                        // See https://github.com/apache/datafusion/issues/17417
-                        null_treatment,
-                        distinct: _,
-                        filter: _,
+                        ref null_treatment,
+                        ref distinct,
+                        ref filter,
                     },
             } = window_fun.as_ref();
             let mut buf = Vec::new();
@@ -351,10 +349,15 @@ pub fn serialize_expr(
                 order_by,
                 window_frame,
                 null_treatment: null_treatment.map(Into::into),
+                distinct: *distinct,
+                filter: match filter {
+                    Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
+                    None => None,
+                },
                 fun_definition,
             };
             protobuf::LogicalExprNode {
-                expr_type: Some(ExprType::WindowExpr(window_expr)),
+                expr_type: Some(ExprType::WindowExpr(Box::new(window_expr))),
             }
         }
         Expr::AggregateFunction(expr::AggregateFunction {

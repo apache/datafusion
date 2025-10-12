@@ -321,9 +321,8 @@ pub fn parse_expr(
                 })
                 .transpose()?
                 .map(Into::into);
+            let distinct = expr.distinct;
 
-            // TODO: support null treatment, distinct, and filter in proto.
-            // See https://github.com/apache/datafusion/issues/17417
             let agg_fn = match window_function {
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
@@ -346,13 +345,23 @@ pub fn parse_expr(
             };
 
             let args = parse_exprs(&expr.exprs, registry, codec)?;
-            Expr::from(WindowFunction::new(agg_fn, args))
+            let mut builder = Expr::from(WindowFunction::new(agg_fn, args))
                 .partition_by(partition_by)
                 .order_by(order_by)
                 .window_frame(window_frame)
-                .null_treatment(null_treatment)
-                .build()
-                .map_err(Error::DataFusionError)
+                .null_treatment(null_treatment);
+
+            if distinct {
+                builder = builder.distinct();
+            };
+
+            if let Some(filter) =
+                parse_optional_expr(expr.filter.as_deref(), registry, codec)?
+            {
+                builder = builder.filter(filter);
+            }
+
+            builder.build().map_err(Error::DataFusionError)
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
             parse_required_expr(alias.expr.as_deref(), registry, "expr", codec)?,
