@@ -181,7 +181,7 @@ fn has_explicit_timezone(value: &str) -> bool {
         return true;
     }
 
-    if let Some(pos) = value.rfind(|c| c == 'T' || c == ' ') {
+    if let Some(pos) = value.rfind(|c| ['T', ' '].contains(&c)) {
         let tail = &value[pos + 1..];
         tail.contains('Z')
             || tail.contains('z')
@@ -305,6 +305,7 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 ///
 #[inline]
+#[allow(dead_code)]
 pub(crate) fn string_to_timestamp_nanos_formatted(
     s: &str,
     format: &str,
