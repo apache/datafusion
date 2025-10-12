@@ -538,6 +538,9 @@ message WindowExprNode {
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
   optional bytes fun_definition = 10;
+  optional NullTreatment null_treatment = 11;
+  bool distinct = 12;
+  LogicalExprNode filter = 13;
 }
 
 message BetweenNode {
@@ -620,6 +623,11 @@ enum WindowFrameBoundType {
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
   datafusion_common.ScalarValue bound_value = 2;
+}
+
+enum NullTreatment {
+  IGNORE_NULLS = 0;
+  RESPECT_NULLS = 1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
