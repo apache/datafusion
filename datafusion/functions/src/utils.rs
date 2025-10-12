@@ -19,11 +19,11 @@ use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray}
 use arrow::compute::try_binary;
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
+use arrow_buffer::i256;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
-use arrow_buffer::i256;
 
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
