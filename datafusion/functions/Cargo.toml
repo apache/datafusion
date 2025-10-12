@@ -71,6 +71,7 @@ base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.8", optional = true }
 chrono = { workspace = true }
+chrono-tz = "0.10.4"
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }

@@ -82,7 +82,7 @@ impl ToDateFunc {
 
     fn to_date(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args.len() {
-            1 => handle::<Date32Type, _, Date32Type>(
+            1 => handle::<Date32Type, _, i32>(
                 args,
                 |s| match Date32Type::parse(s) {
                     Some(v) => Ok(v),
@@ -92,8 +92,9 @@ impl ToDateFunc {
                     )),
                 },
                 "to_date",
+                &ScalarDataType::new(Date32),
             ),
-            2.. => handle_multiple::<Date32Type, _, Date32Type, _>(
+            2.. => handle_multiple::<Date32Type, _, _, i32>(
                 args,
                 |s, format| {
                     string_to_timestamp_millis_formatted(s, format)
@@ -106,6 +107,7 @@ impl ToDateFunc {
                 },
                 |n| n,
                 "to_date",
+                &ScalarDataType::new(Date32),
             ),
             0 => exec_err!("Unsupported 0 argument count for function to_date"),
         }
