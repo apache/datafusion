@@ -81,22 +81,22 @@ pub fn spark_bit_not(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Int8 => {
             let result: Int8Array =
-                bitwise::bitwise_not(&array.as_primitive::<Int8Type>())?;
+                bitwise::bitwise_not(array.as_primitive::<Int8Type>())?;
             Ok(Arc::new(result))
         }
         DataType::Int16 => {
             let result: Int16Array =
-                bitwise::bitwise_not(&array.as_primitive::<Int16Type>())?;
+                bitwise::bitwise_not(array.as_primitive::<Int16Type>())?;
             Ok(Arc::new(result))
         }
         DataType::Int32 => {
             let result: Int32Array =
-                bitwise::bitwise_not(&array.as_primitive::<Int32Type>())?;
+                bitwise::bitwise_not(array.as_primitive::<Int32Type>())?;
             Ok(Arc::new(result))
         }
         DataType::Int64 => {
             let result: Int64Array =
-                bitwise::bitwise_not(&array.as_primitive::<Int64Type>())?;
+                bitwise::bitwise_not(array.as_primitive::<Int64Type>())?;
             Ok(Arc::new(result))
         }
         _ => {
