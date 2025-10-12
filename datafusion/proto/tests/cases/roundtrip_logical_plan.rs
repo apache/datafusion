@@ -72,8 +72,8 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Unnest, WildcardOptions,
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, NullTreatment,
+    ScalarFunction, Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -2572,6 +2572,53 @@ fn roundtrip_window() {
     .build()
     .unwrap();
 
+    // 8. test with respect nulls
+    let test_expr8 = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .null_treatment(NullTreatment::RespectNulls)
+    .build()
+    .unwrap();
+
+    // 9. test with ignore nulls
+    let test_expr9 = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .null_treatment(NullTreatment::IgnoreNulls)
+    .build()
+    .unwrap();
+
+    // 10. test with distinct is `true`
+    let test_expr10 = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .distinct()
+    .build()
+    .unwrap();
+
+    // 11. test with filter
+    let test_expr11 = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .filter(col("col1").eq(lit(1)))
+    .build()
+    .unwrap();
 
     roundtrip_expr_test(test_expr1, ctx.clone());
     roundtrip_expr_test(test_expr2, ctx.clone());
@@ -2579,7 +2626,11 @@ fn roundtrip_window() {
     roundtrip_expr_test(test_expr4, ctx.clone());
     roundtrip_expr_test(test_expr5, ctx.clone());
     roundtrip_expr_test(test_expr6, ctx.clone());
-    roundtrip_expr_test(test_expr7, ctx);
+    roundtrip_expr_test(test_expr7, ctx.clone());
+    roundtrip_expr_test(test_expr8, ctx.clone());
+    roundtrip_expr_test(test_expr9, ctx.clone());
+    roundtrip_expr_test(test_expr10, ctx.clone());
+    roundtrip_expr_test(test_expr11, ctx);
 }
 
 #[tokio::test]
