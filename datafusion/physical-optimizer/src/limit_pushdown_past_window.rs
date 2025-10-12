@@ -81,6 +81,11 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                 latest_max = 0;
                 return Ok(Transformed::no(node));
             }
+            if let Some(limit) = node.as_any().downcast_ref::<SortPreservingMergeExec>() {
+                latest_limit = limit.fetch();
+                latest_max = 0;
+                return Ok(Transformed::no(node));
+            }
 
             // grow the limit if we hit a window function
             if let Some(window) = node.as_any().downcast_ref::<BoundedWindowAggExec>() {
