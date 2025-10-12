@@ -25,7 +25,7 @@ use datafusion_common::{NullEquality, TableReference, UnnestOptions};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
-    Like, Placeholder, ScalarFunction, Unnest,
+    Like, NullTreatment, Placeholder, ScalarFunction, Unnest,
 };
 use datafusion_expr::WriteOp;
 use datafusion_expr::{
@@ -316,7 +316,7 @@ pub fn serialize_expr(
                         ref window_frame,
                         // TODO: support null treatment, distinct, and filter in proto.
                         // See https://github.com/apache/datafusion/issues/17417
-                        null_treatment: _,
+                        null_treatment,
                         distinct: _,
                         filter: _,
                     },
@@ -342,12 +342,15 @@ pub fn serialize_expr(
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
+            let null_treatment: Option<protobuf::NullTreatment> =
+                null_treatment.as_ref().map(Into::into);
             let window_expr = protobuf::WindowExprNode {
                 exprs: serialize_exprs(args, codec)?,
                 window_function: Some(window_function),
                 partition_by,
                 order_by,
                 window_frame,
+                null_treatment: null_treatment.map(Into::into),
                 fun_definition,
             };
             protobuf::LogicalExprNode {
@@ -719,6 +722,15 @@ impl From<&WriteOp> for protobuf::dml_node::Type {
             WriteOp::Delete => protobuf::dml_node::Type::Delete,
             WriteOp::Update => protobuf::dml_node::Type::Update,
             WriteOp::Ctas => protobuf::dml_node::Type::Ctas,
+        }
+    }
+}
+
+impl From<&NullTreatment> for protobuf::NullTreatment {
+    fn from(t: &NullTreatment) -> Self {
+        match t {
+            NullTreatment::IgnoreNulls => protobuf::NullTreatment::IgnoreNulls,
+            NullTreatment::RespectNulls => protobuf::NullTreatment::RespectNulls,
         }
     }
 }

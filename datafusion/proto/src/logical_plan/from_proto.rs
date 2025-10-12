@@ -23,7 +23,7 @@ use datafusion_common::{
     RecursionUnnestOption, Result, ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{Alias, Placeholder, Sort};
+use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::{
     expr::{self, InList, WindowFunction},
@@ -243,6 +243,15 @@ impl From<protobuf::dml_node::Type> for WriteOp {
     }
 }
 
+impl From<protobuf::NullTreatment> for NullTreatment {
+    fn from(t: protobuf::NullTreatment) -> Self {
+        match t {
+            protobuf::NullTreatment::IgnoreNulls => NullTreatment::IgnoreNulls,
+            protobuf::NullTreatment::RespectNulls => NullTreatment::RespectNulls,
+        }
+    }
+}
+
 pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     registry: &dyn FunctionRegistry,
@@ -300,6 +309,18 @@ pub fn parse_expr(
                 .ok_or_else(|| {
                     exec_datafusion_err!("missing window frame during deserialization")
                 })?;
+            let null_treatment: Option<NullTreatment> = expr
+                .null_treatment
+                .map(|null_treatment| {
+                    protobuf::NullTreatment::try_from(null_treatment).map_err(|_| {
+                        proto_error(format!(
+                        "Received a WindowExprNode message with unknown NullTreatment {}",
+                        null_treatment
+                    ))
+                    })
+                })
+                .transpose()?
+                .map(Into::into);
 
             // TODO: support null treatment, distinct, and filter in proto.
             // See https://github.com/apache/datafusion/issues/17417
@@ -320,6 +341,7 @@ pub fn parse_expr(
                     .partition_by(partition_by)
                     .order_by(order_by)
                     .window_frame(window_frame)
+                    .null_treatment(null_treatment)
                     .build()
                     .map_err(Error::DataFusionError)
                 }
@@ -339,6 +361,7 @@ pub fn parse_expr(
                     .partition_by(partition_by)
                     .order_by(order_by)
                     .window_frame(window_frame)
+                    .null_treatment(null_treatment)
                     .build()
                     .map_err(Error::DataFusionError)
                 }
