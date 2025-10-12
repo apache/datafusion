@@ -5463,7 +5463,7 @@ order by c1, c2, rank;
 query TT
 explain select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5497,7 +5497,7 @@ physical_plan
 query IIII
 select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5514,7 +5514,7 @@ order by c1, c2, rank1, rank2;
 query TT
 explain select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5548,7 +5548,7 @@ physical_plan
 query IIII
 select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )

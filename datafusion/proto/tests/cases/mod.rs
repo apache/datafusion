@@ -176,10 +176,6 @@ impl WindowUDFImpl for CustomUDWF {
         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
     }
 
-    fn is_causal(&self) -> bool {
-        false
-    }
-
     fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
         LimitEffect::Unknown
     }

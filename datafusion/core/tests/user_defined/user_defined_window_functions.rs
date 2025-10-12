@@ -574,10 +574,6 @@ impl OddCounter {
                 Ok(Field::new(field_args.name(), DataType::Int64, true).into())
             }
 
-            fn is_causal(&self) -> bool {
-                false
-            }
-
             fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
                 LimitEffect::Unknown
             }
@@ -699,10 +695,6 @@ impl WindowUDFImpl for VariadicWindowUDF {
 
     fn field(&self, _: WindowUDFFieldArgs) -> Result<FieldRef> {
         unimplemented!("unnecessary for testing");
-    }
-
-    fn is_causal(&self) -> bool {
-        false
     }
 
     fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
@@ -860,10 +852,6 @@ impl WindowUDFImpl for MetadataBasedWindowUdf {
         Ok(Field::new(field_args.name(), DataType::UInt64, true)
             .with_metadata(self.metadata.clone())
             .into())
-    }
-
-    fn is_causal(&self) -> bool {
-        false
     }
 
     fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {

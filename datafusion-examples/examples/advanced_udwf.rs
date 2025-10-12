@@ -93,10 +93,6 @@ impl WindowUDFImpl for SmoothItUdf {
         Ok(Field::new(field_args.name(), DataType::Float64, true).into())
     }
 
-    fn is_causal(&self) -> bool {
-        false
-    }
-
     fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
         LimitEffect::Unknown
     }
@@ -219,10 +215,6 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(field_args.name(), DataType::Float64, true).into())
-    }
-
-    fn is_causal(&self) -> bool {
-        false
     }
 
     fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {

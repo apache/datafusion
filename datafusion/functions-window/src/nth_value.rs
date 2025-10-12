@@ -344,10 +344,6 @@ impl WindowUDFImpl for NthValue {
         }
     }
 
-    fn is_causal(&self) -> bool {
-        false
-    }
-
     fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
         match args {
             [_, expr, ..] => {

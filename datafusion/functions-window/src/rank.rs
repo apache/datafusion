@@ -242,14 +242,6 @@ impl WindowUDFImpl for Rank {
         }
     }
 
-    fn is_causal(&self) -> bool {
-        match self.rank_type {
-            RankType::Basic => true,
-            RankType::Dense => true,
-            RankType::Percent => false,
-        }
-    }
-
     fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
         match self.rank_type {
             RankType::Basic => LimitEffect::None,

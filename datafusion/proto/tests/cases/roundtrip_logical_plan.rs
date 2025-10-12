@@ -2546,10 +2546,6 @@ fn roundtrip_window() {
             }
         }
 
-        fn is_causal(&self) -> bool {
-            false
-        }
-
         fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
             LimitEffect::Unknown
         }

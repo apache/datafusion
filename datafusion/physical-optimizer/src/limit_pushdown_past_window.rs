@@ -214,11 +214,7 @@ fn grow_limit(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
         return LimitEffect::Unknown; // should be only remaining type
     };
 
-    // Return it's effect
-    let fun = udf.fun().inner();
-    if fun.is_causal() {
-        return LimitEffect::None;
-    }
+    // Return its effect
     udf.limit_effect()
 }
 

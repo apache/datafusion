@@ -305,13 +305,6 @@ impl WindowUDFImpl for WindowShift {
         }
     }
 
-    fn is_causal(&self) -> bool {
-        match self.kind {
-            WindowShiftKind::Lag => true,
-            WindowShiftKind::Lead => false,
-        }
-    }
-
     fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
         if self.kind == WindowShiftKind::Lag {
             return LimitEffect::None;

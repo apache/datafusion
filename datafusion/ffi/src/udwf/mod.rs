@@ -352,10 +352,6 @@ impl WindowUDFImpl for ForeignWindowUDF {
         options.map(|s| s.into())
     }
 
-    fn is_causal(&self) -> bool {
-        false
-    }
-
     fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
         LimitEffect::Unknown
     }

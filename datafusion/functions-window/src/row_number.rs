@@ -124,10 +124,6 @@ impl WindowUDFImpl for RowNumber {
         self.doc()
     }
 
-    fn is_causal(&self) -> bool {
-        true
-    }
-
     fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
         LimitEffect::None
     }
