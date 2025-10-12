@@ -243,11 +243,12 @@ impl From<protobuf::dml_node::Type> for WriteOp {
     }
 }
 
-impl From<protobuf::NullTreatment> for NullTreatment {
+impl From<protobuf::NullTreatment> for Option<NullTreatment> {
     fn from(t: protobuf::NullTreatment) -> Self {
         match t {
-            protobuf::NullTreatment::IgnoreNulls => NullTreatment::IgnoreNulls,
-            protobuf::NullTreatment::RespectNulls => NullTreatment::RespectNulls,
+            protobuf::NullTreatment::Unspecified => None,
+            protobuf::NullTreatment::RespectNulls => Some(NullTreatment::RespectNulls),
+            protobuf::NullTreatment::IgnoreNulls => Some(NullTreatment::IgnoreNulls),
         }
     }
 }
@@ -309,19 +310,16 @@ pub fn parse_expr(
                 .ok_or_else(|| {
                     exec_datafusion_err!("missing window frame during deserialization")
                 })?;
-            let null_treatment: Option<NullTreatment> = expr
-                .null_treatment
-                .map(|null_treatment| {
-                    protobuf::NullTreatment::try_from(null_treatment).map_err(|_| {
+            let distinct = expr.distinct;
+            let null_treatment: Option<NullTreatment> =
+                protobuf::NullTreatment::try_from(expr.null_treatment)
+                    .map_err(|_| {
                         proto_error(format!(
                         "Received a WindowExprNode message with unknown NullTreatment {}",
-                        null_treatment
+                        expr.null_treatment
                     ))
-                    })
-                })
-                .transpose()?
-                .map(Into::into);
-            let distinct = expr.distinct;
+                    })?
+                    .into();
 
             let agg_fn = match window_function {
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {

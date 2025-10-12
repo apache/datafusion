@@ -340,15 +340,15 @@ pub fn serialize_expr(
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
-            let null_treatment: Option<protobuf::NullTreatment> =
-                null_treatment.as_ref().map(Into::into);
+            let null_treatment: protobuf::NullTreatment = null_treatment.into();
+
             let window_expr = protobuf::WindowExprNode {
                 exprs: serialize_exprs(args, codec)?,
                 window_function: Some(window_function),
                 partition_by,
                 order_by,
                 window_frame,
-                null_treatment: null_treatment.map(Into::into),
+                null_treatment: null_treatment.into(),
                 distinct: *distinct,
                 filter: match filter {
                     Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
@@ -729,11 +729,14 @@ impl From<&WriteOp> for protobuf::dml_node::Type {
     }
 }
 
-impl From<&NullTreatment> for protobuf::NullTreatment {
-    fn from(t: &NullTreatment) -> Self {
+impl From<&Option<NullTreatment>> for protobuf::NullTreatment {
+    fn from(t: &Option<NullTreatment>) -> Self {
         match t {
-            NullTreatment::IgnoreNulls => protobuf::NullTreatment::IgnoreNulls,
-            NullTreatment::RespectNulls => protobuf::NullTreatment::RespectNulls,
+            Some(null_treatment) => match null_treatment {
+                NullTreatment::RespectNulls => protobuf::NullTreatment::RespectNulls,
+                NullTreatment::IgnoreNulls => protobuf::NullTreatment::IgnoreNulls,
+            },
+            None => protobuf::NullTreatment::Unspecified,
         }
     }
 }

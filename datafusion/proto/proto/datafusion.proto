@@ -538,7 +538,7 @@ message WindowExprNode {
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
   optional bytes fun_definition = 10;
-  optional NullTreatment null_treatment = 11;
+  NullTreatment null_treatment = 11;
   bool distinct = 12;
   LogicalExprNode filter = 13;
 }
@@ -626,8 +626,9 @@ message WindowFrameBound {
 }
 
 enum NullTreatment {
-  IGNORE_NULLS = 0;
+  UNSPECIFIED = 0;
   RESPECT_NULLS = 1;
+  IGNORE_NULLS = 2;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
