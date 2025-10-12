@@ -1409,10 +1409,21 @@ impl PhysicalExpr for BinaryExpr {
                     if matches!(left_data_type, DataType::Int64)
                         && matches!(right_data_type, DataType::Int64)
                     {
-                        return crate::arithmetic::intelligent_checked_add(
-                            &lhs, &rhs, None,
-                        )
-                        .map(ColumnarValue::Array);
+                        // Check for NULL scalars first - if either operand is NULL, use Arrow's function
+                        let has_null_scalar = match (&lhs, &rhs) {
+                            (ColumnarValue::Scalar(s), _) if s.is_null() => true,
+                            (_, ColumnarValue::Scalar(s)) if s.is_null() => true,
+                            _ => false,
+                        };
+
+                        if has_null_scalar {
+                            return apply(&lhs, &rhs, add);
+                        } else {
+                            return crate::arithmetic::intelligent_checked_add(
+                                &lhs, &rhs, None,
+                            )
+                            .map(ColumnarValue::Array);
+                        }
                     } else {
                         // Use Arrow's standard add function for non-Int64 types
                         return apply(&lhs, &rhs, add);
@@ -1428,10 +1439,21 @@ impl PhysicalExpr for BinaryExpr {
                     if matches!(left_data_type, DataType::Int64)
                         && matches!(right_data_type, DataType::Int64)
                     {
-                        return crate::arithmetic::intelligent_checked_sub(
-                            &lhs, &rhs, None,
-                        )
-                        .map(ColumnarValue::Array);
+                        // Check for NULL scalars first - if either operand is NULL, use Arrow's function
+                        let has_null_scalar = match (&lhs, &rhs) {
+                            (ColumnarValue::Scalar(s), _) if s.is_null() => true,
+                            (_, ColumnarValue::Scalar(s)) if s.is_null() => true,
+                            _ => false,
+                        };
+
+                        if has_null_scalar {
+                            return apply(&lhs, &rhs, sub);
+                        } else {
+                            return crate::arithmetic::intelligent_checked_sub(
+                                &lhs, &rhs, None,
+                            )
+                            .map(ColumnarValue::Array);
+                        }
                     } else {
                         return apply(&lhs, &rhs, sub);
                     }
@@ -1446,10 +1468,21 @@ impl PhysicalExpr for BinaryExpr {
                     if matches!(left_data_type, DataType::Int64)
                         && matches!(right_data_type, DataType::Int64)
                     {
-                        return crate::arithmetic::intelligent_checked_mul(
-                            &lhs, &rhs, None,
-                        )
-                        .map(ColumnarValue::Array);
+                        // Check for NULL scalars first - if either operand is NULL, use Arrow's function
+                        let has_null_scalar = match (&lhs, &rhs) {
+                            (ColumnarValue::Scalar(s), _) if s.is_null() => true,
+                            (_, ColumnarValue::Scalar(s)) if s.is_null() => true,
+                            _ => false,
+                        };
+
+                        if has_null_scalar {
+                            return apply(&lhs, &rhs, mul);
+                        } else {
+                            return crate::arithmetic::intelligent_checked_mul(
+                                &lhs, &rhs, None,
+                            )
+                            .map(ColumnarValue::Array);
+                        }
                     } else {
                         return apply(&lhs, &rhs, mul);
                     }

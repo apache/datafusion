@@ -55,6 +55,12 @@ pub fn intelligent_checked_add(
                 return add(left_array, right_array)
                     .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
             }
+
+            // If either array has nulls, use Arrow's standard function which handles nulls correctly
+            if left_array.null_count() > 0 || right_array.null_count() > 0 {
+                return add(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
             let batch_size = left_array.len();
 
             // ULTRA-FAST PATH: Optimized thresholds based on benchmark results
@@ -133,7 +139,8 @@ pub fn intelligent_checked_add(
             }
         }
         _ => {
-            // Handle scalar cases - determine the correct length for array expansion
+            // Handle scalar cases - always use Arrow's functions for scalar operations
+            // This ensures proper NULL handling for scalar NULL values
             let length = match (left, right) {
                 (ColumnarValue::Array(arr), ColumnarValue::Scalar(_)) => arr.len(),
                 (ColumnarValue::Scalar(_), ColumnarValue::Array(arr)) => arr.len(),
@@ -168,6 +175,12 @@ pub fn intelligent_checked_sub(
             if !matches!(left_array.data_type(), arrow::datatypes::DataType::Int64)
                 || !matches!(right_array.data_type(), arrow::datatypes::DataType::Int64)
             {
+                return sub(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
+
+            // If either array has nulls, use Arrow's standard function which handles nulls correctly
+            if left_array.null_count() > 0 || right_array.null_count() > 0 {
                 return sub(left_array, right_array)
                     .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
             }
@@ -244,6 +257,12 @@ pub fn intelligent_checked_mul(
             if !matches!(left_array.data_type(), arrow::datatypes::DataType::Int64)
                 || !matches!(right_array.data_type(), arrow::datatypes::DataType::Int64)
             {
+                return mul(left_array, right_array)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+            }
+
+            // If either array has nulls, use Arrow's standard function which handles nulls correctly
+            if left_array.null_count() > 0 || right_array.null_count() > 0 {
                 return mul(left_array, right_array)
                     .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
             }

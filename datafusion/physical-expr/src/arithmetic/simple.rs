@@ -33,11 +33,16 @@ pub fn ultra_fast_checked_add(
 ) -> Result<Arc<dyn Array>> {
     match (left, right) {
         (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
-            // Use optimized path for Int64 arrays
+            // Use optimized path for Int64 arrays that don't have nulls
             if let (Some(left_i64), Some(right_i64)) = (
                 left_array.as_primitive_opt::<Int64Type>(),
                 right_array.as_primitive_opt::<Int64Type>(),
             ) {
+                // If either array has nulls, fall back to Arrow's standard function
+                if left_array.null_count() > 0 || right_array.null_count() > 0 {
+                    return add(left_array, right_array)
+                        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+                }
                 let result = simd_simple::simd_checked_add_i64(
                     left_i64.values(),
                     right_i64.values(),
@@ -79,11 +84,16 @@ pub fn ultra_fast_checked_sub(
 ) -> Result<Arc<dyn Array>> {
     match (left, right) {
         (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
-            // Use optimized path for Int64 arrays
+            // Use optimized path for Int64 arrays that don't have nulls
             if let (Some(left_i64), Some(right_i64)) = (
                 left_array.as_primitive_opt::<Int64Type>(),
                 right_array.as_primitive_opt::<Int64Type>(),
             ) {
+                // If either array has nulls, fall back to Arrow's standard function
+                if left_array.null_count() > 0 || right_array.null_count() > 0 {
+                    return sub(left_array, right_array)
+                        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+                }
                 let result = simd_simple::simd_checked_sub_i64(
                     left_i64.values(),
                     right_i64.values(),
@@ -126,11 +136,16 @@ pub fn ultra_fast_checked_mul(
 ) -> Result<Arc<dyn Array>> {
     match (left, right) {
         (ColumnarValue::Array(left_array), ColumnarValue::Array(right_array)) => {
-            // Use optimized path for Int64 arrays
+            // Use optimized path for Int64 arrays that don't have nulls
             if let (Some(left_i64), Some(right_i64)) = (
                 left_array.as_primitive_opt::<Int64Type>(),
                 right_array.as_primitive_opt::<Int64Type>(),
             ) {
+                // If either array has nulls, fall back to Arrow's standard function
+                if left_array.null_count() > 0 || right_array.null_count() > 0 {
+                    return mul(left_array, right_array)
+                        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None));
+                }
                 let result = simd_simple::simd_checked_mul_i64(
                     left_i64.values(),
                     right_i64.values(),
