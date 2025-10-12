@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
+use arrow::array::timezone::Tz;
 use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
     StringArrayType, StringViewArray,
@@ -25,7 +27,7 @@ use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::DataType;
 use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, TimeZone, Utc};
 
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
@@ -40,6 +42,167 @@ const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented a
 /// Calls string_to_timestamp_nanos and converts the error type
 pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
     string_to_timestamp_nanos(s).map_err(|e| e.into())
+}
+
+#[derive(Clone, Copy)]
+enum ConfiguredZone {
+    Named(Tz),
+    Offset(FixedOffset),
+}
+
+#[derive(Clone)]
+pub(crate) struct ConfiguredTimeZone {
+    repr: Arc<str>,
+    zone: ConfiguredZone,
+}
+
+impl ConfiguredTimeZone {
+    pub(crate) fn utc() -> Self {
+        Self {
+            repr: Arc::from("+00:00"),
+            zone: ConfiguredZone::Offset(FixedOffset::east_opt(0).unwrap()),
+        }
+    }
+
+    pub(crate) fn parse(tz: &str) -> Result<Self> {
+        if tz.trim().is_empty() {
+            return Ok(Self::utc());
+        }
+
+        if let Ok(named) = Tz::from_str(tz) {
+            return Ok(Self {
+                repr: Arc::from(tz),
+                zone: ConfiguredZone::Named(named),
+            });
+        }
+
+        if let Some(offset) = parse_fixed_offset(tz) {
+            return Ok(Self {
+                repr: Arc::from(tz),
+                zone: ConfiguredZone::Offset(offset),
+            });
+        }
+
+        Err(exec_datafusion_err!(
+            "Invalid execution timezone '{tz}'. Please provide an IANA timezone name (e.g. 'America/New_York') or an offset in the form '+HH:MM'."
+        ))
+    }
+
+    fn timestamp_from_naive(&self, naive: &NaiveDateTime) -> Result<i64> {
+        match self.zone {
+            ConfiguredZone::Named(tz) => {
+                local_datetime_to_timestamp(tz.from_local_datetime(naive), &self.repr)
+            }
+            ConfiguredZone::Offset(offset) => {
+                local_datetime_to_timestamp(offset.from_local_datetime(naive), &self.repr)
+            }
+        }
+    }
+
+    fn datetime_from_formatted(&self, s: &str, format: &str) -> Result<DateTime<Utc>> {
+        let datetime = match self.zone {
+            ConfiguredZone::Named(tz) => {
+                string_to_datetime_formatted(&tz, s, format)?.with_timezone(&Utc)
+            }
+            ConfiguredZone::Offset(offset) => {
+                string_to_datetime_formatted(&offset, s, format)?.with_timezone(&Utc)
+            }
+        };
+        Ok(datetime)
+    }
+}
+
+fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
+    let tz = tz.trim();
+    if tz.eq_ignore_ascii_case("utc") || tz.eq_ignore_ascii_case("z") {
+        return FixedOffset::east_opt(0);
+    }
+
+    let (sign, rest) = if let Some(rest) = tz.strip_prefix('+') {
+        (1, rest)
+    } else if let Some(rest) = tz.strip_prefix('-') {
+        (-1, rest)
+    } else {
+        return None;
+    };
+
+    let (hours, minutes) = if let Some((hours, minutes)) = rest.split_once(':') {
+        (hours, minutes)
+    } else if rest.len() == 4 {
+        rest.split_at(2)
+    } else {
+        return None;
+    };
+
+    let hours: i32 = hours.parse().ok()?;
+    let minutes: i32 = minutes.parse().ok()?;
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+
+    let total_minutes = hours * 60 + minutes;
+    let total_seconds = sign * total_minutes * 60;
+    FixedOffset::east_opt(total_seconds)
+}
+
+fn local_datetime_to_timestamp<T: TimeZone>(
+    result: LocalResult<DateTime<T>>,
+    tz_repr: &str,
+) -> Result<i64> {
+    match result {
+        Single(dt) => datetime_to_timestamp(dt.with_timezone(&Utc)),
+        LocalResult::Ambiguous(dt1, dt2) => Err(exec_datafusion_err!(
+            "The local time '{:?}' is ambiguous in timezone '{tz_repr}' (also corresponds to '{:?}').",
+            dt1.naive_local(),
+            dt2.naive_local()
+        )),
+        LocalResult::None => Err(exec_datafusion_err!(
+            "The local time is invalid in timezone '{tz_repr}'."
+        )),
+    }
+}
+
+fn datetime_to_timestamp(datetime: DateTime<Utc>) -> Result<i64> {
+    datetime
+        .timestamp_nanos_opt()
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
+}
+
+fn timestamp_to_naive(value: i64) -> Result<NaiveDateTime> {
+    let secs = value.div_euclid(1_000_000_000);
+    let nanos = value.rem_euclid(1_000_000_000) as u32;
+    DateTime::<Utc>::from_timestamp(secs, nanos)
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
+        .map(|dt| dt.naive_utc())
+}
+
+fn has_explicit_timezone(value: &str) -> bool {
+    if DateTime::parse_from_rfc3339(value).is_ok() {
+        return true;
+    }
+
+    if let Some(pos) = value.rfind(|c| c == 'T' || c == ' ') {
+        let tail = &value[pos + 1..];
+        tail.contains('Z')
+            || tail.contains('z')
+            || tail.contains('+')
+            || tail.contains('-')
+    } else {
+        false
+    }
+}
+
+pub(crate) fn string_to_timestamp_nanos_with_timezone(
+    timezone: &ConfiguredTimeZone,
+    s: &str,
+) -> Result<i64> {
+    let ts = string_to_timestamp_nanos_shim(s)?;
+    if has_explicit_timezone(s) {
+        Ok(ts)
+    } else {
+        let naive = timestamp_to_naive(ts)?;
+        timezone.timestamp_from_naive(&naive)
+    }
 }
 
 /// Checks that all the arguments from the second are of type [Utf8], [LargeUtf8] or [Utf8View]
@@ -151,6 +314,15 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
         .and_utc()
         .timestamp_nanos_opt()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
+}
+
+pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
+    timezone: &ConfiguredTimeZone,
+    s: &str,
+    format: &str,
+) -> Result<i64, DataFusionError> {
+    let datetime = timezone.datetime_from_formatted(s, format)?;
+    datetime_to_timestamp(datetime)
 }
 
 /// Accepts a string with a `chrono` format and converts it to a
