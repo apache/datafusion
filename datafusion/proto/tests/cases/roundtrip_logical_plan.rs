@@ -2561,8 +2561,10 @@ fn roundtrip_window() {
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
+    ctx.register_udwf(dummy_window_udf);
 
-    let text_expr7 = Expr::from(expr::WindowFunction::new(
+    // 7. test with average udaf
+    let test_expr7 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))
@@ -2570,7 +2572,6 @@ fn roundtrip_window() {
     .build()
     .unwrap();
 
-    ctx.register_udwf(dummy_window_udf);
 
     roundtrip_expr_test(test_expr1, ctx.clone());
     roundtrip_expr_test(test_expr2, ctx.clone());
@@ -2578,7 +2579,7 @@ fn roundtrip_window() {
     roundtrip_expr_test(test_expr4, ctx.clone());
     roundtrip_expr_test(test_expr5, ctx.clone());
     roundtrip_expr_test(test_expr6, ctx.clone());
-    roundtrip_expr_test(text_expr7, ctx);
+    roundtrip_expr_test(test_expr7, ctx);
 }
 
 #[tokio::test]
