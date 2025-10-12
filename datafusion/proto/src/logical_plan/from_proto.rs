@@ -324,7 +324,7 @@ pub fn parse_expr(
 
             // TODO: support null treatment, distinct, and filter in proto.
             // See https://github.com/apache/datafusion/issues/17417
-            match window_function {
+            let agg_fn = match window_function {
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
@@ -332,18 +332,7 @@ pub fn parse_expr(
                             .udaf(udaf_name)
                             .or_else(|_| codec.try_decode_udaf(udaf_name, &[]))?,
                     };
-
-                    let args = parse_exprs(&expr.exprs, registry, codec)?;
-                    Expr::from(WindowFunction::new(
-                        expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
-                        args,
-                    ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .null_treatment(null_treatment)
-                    .build()
-                    .map_err(Error::DataFusionError)
+                    expr::WindowFunctionDefinition::AggregateUDF(udaf_function)
                 }
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
                     let udwf_function = match &expr.fun_definition {
@@ -352,20 +341,18 @@ pub fn parse_expr(
                             .udwf(udwf_name)
                             .or_else(|_| codec.try_decode_udwf(udwf_name, &[]))?,
                     };
-
-                    let args = parse_exprs(&expr.exprs, registry, codec)?;
-                    Expr::from(WindowFunction::new(
-                        expr::WindowFunctionDefinition::WindowUDF(udwf_function),
-                        args,
-                    ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .null_treatment(null_treatment)
-                    .build()
-                    .map_err(Error::DataFusionError)
+                    expr::WindowFunctionDefinition::WindowUDF(udwf_function)
                 }
-            }
+            };
+
+            let args = parse_exprs(&expr.exprs, registry, codec)?;
+            Expr::from(WindowFunction::new(agg_fn, args))
+                .partition_by(partition_by)
+                .order_by(order_by)
+                .window_frame(window_frame)
+                .null_treatment(null_treatment)
+                .build()
+                .map_err(Error::DataFusionError)
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
             parse_required_expr(alias.expr.as_deref(), registry, "expr", codec)?,
