@@ -24,7 +24,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::table::TableProvider;
+use crate::table::{TableFunction, TableProvider};
 use datafusion_common::Result;
 use datafusion_expr::TableType;
 
@@ -88,4 +88,45 @@ pub trait SchemaProvider: Debug + Sync + Send {
 
     /// Returns true if table exist in the schema provider, false otherwise.
     fn table_exist(&self, name: &str) -> bool;
+
+    /// Retrieves the list of available table function names in this schema.
+    fn udtf_names(&self) -> Vec<String> {
+        vec![]
+    }
+
+    /// Retrieves a specific table function from the schema by name, if it exists,
+    /// otherwise returns `None`.
+    fn udtf(&self, name: &str) -> Result<Option<Arc<TableFunction>>> {
+        let _ = name; // suppress unused warning
+        Ok(None)
+    }
+
+    /// If supported by the implementation, adds a new table function named `name` to
+    /// this schema.
+    ///
+    /// If a table function of the same name was already registered, returns "Table
+    /// function already exists" error.
+    #[allow(unused_variables)]
+    fn register_udtf(
+        &self,
+        name: String,
+        function: Arc<TableFunction>,
+    ) -> Result<Option<Arc<TableFunction>>> {
+        exec_err!("schema provider does not support registering table functions")
+    }
+
+    /// If supported by the implementation, removes the `name` table function from this
+    /// schema and returns the previously registered [`TableFunction`], if any.
+    ///
+    /// If no `name` table function exists, returns Ok(None).
+    #[allow(unused_variables)]
+    fn deregister_udtf(&self, name: &str) -> Result<Option<Arc<TableFunction>>> {
+        exec_err!("schema provider does not support deregistering table functions")
+    }
+
+    /// Returns true if table function exists in the schema provider, false otherwise.
+    fn udtf_exist(&self, name: &str) -> bool {
+        let _ = name;
+        false
+    }
 }
