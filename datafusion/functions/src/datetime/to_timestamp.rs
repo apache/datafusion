@@ -309,7 +309,6 @@ impl ScalarUDFImpl for ToTimestampFunc {
             config_options,
             ..
         } = args;
-        let timezone = ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp function requires 1 or more arguments, got {}",
@@ -345,11 +344,15 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
-                &args,
-                "to_timestamp",
-                &timezone,
-            ),
+            Utf8View | LargeUtf8 | Utf8 => {
+                let timezone =
+                    ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
+                to_timestamp_impl::<TimestampNanosecondType>(
+                    &args,
+                    "to_timestamp",
+                    &timezone,
+                )
+            }
             Decimal128(_, _) => {
                 match &args[0] {
                     ColumnarValue::Scalar(ScalarValue::Decimal128(
@@ -410,7 +413,6 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             config_options,
             ..
         } = args;
-        let timezone = ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_seconds function requires 1 or more arguments, got {}",
@@ -428,11 +430,15 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
             Timestamp(_, Some(tz)) => args[0].cast_to(&Timestamp(Second, Some(tz)), None),
-            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampSecondType>(
-                &args,
-                "to_timestamp_seconds",
-                &timezone,
-            ),
+            Utf8View | LargeUtf8 | Utf8 => {
+                let timezone =
+                    ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
+                to_timestamp_impl::<TimestampSecondType>(
+                    &args,
+                    "to_timestamp_seconds",
+                    &timezone,
+                )
+            }
             other => {
                 exec_err!(
                     "Unsupported data type {} for function to_timestamp_seconds",
@@ -472,7 +478,6 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             config_options,
             ..
         } = args;
-        let timezone = ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_millis function requires 1 or more arguments, got {}",
@@ -492,11 +497,15 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMillisecondType>(
-                &args,
-                "to_timestamp_millis",
-                &timezone,
-            ),
+            Utf8View | LargeUtf8 | Utf8 => {
+                let timezone =
+                    ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
+                to_timestamp_impl::<TimestampMillisecondType>(
+                    &args,
+                    "to_timestamp_millis",
+                    &timezone,
+                )
+            }
             other => {
                 exec_err!(
                     "Unsupported data type {} for function to_timestamp_millis",
@@ -536,7 +545,6 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             config_options,
             ..
         } = args;
-        let timezone = ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_micros function requires 1 or more arguments, got {}",
@@ -556,11 +564,15 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMicrosecondType>(
-                &args,
-                "to_timestamp_micros",
-                &timezone,
-            ),
+            Utf8View | LargeUtf8 | Utf8 => {
+                let timezone =
+                    ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
+                to_timestamp_impl::<TimestampMicrosecondType>(
+                    &args,
+                    "to_timestamp_micros",
+                    &timezone,
+                )
+            }
             other => {
                 exec_err!(
                     "Unsupported data type {} for function to_timestamp_micros",
@@ -600,7 +612,6 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             config_options,
             ..
         } = args;
-        let timezone = ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_nanos function requires 1 or more arguments, got {}",
@@ -620,11 +631,15 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
-                &args,
-                "to_timestamp_nanos",
-                &timezone,
-            ),
+            Utf8View | LargeUtf8 | Utf8 => {
+                let timezone =
+                    ConfiguredTimeZone::parse(&config_options.execution.time_zone)?;
+                to_timestamp_impl::<TimestampNanosecondType>(
+                    &args,
+                    "to_timestamp_nanos",
+                    &timezone,
+                )
+            }
             other => {
                 exec_err!(
                     "Unsupported data type {} for function to_timestamp_nanos",
