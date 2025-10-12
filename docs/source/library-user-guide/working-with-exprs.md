@@ -121,7 +121,7 @@ If you'd like to learn more about `Expr`s, before we get into the details of cre
 
 ## Rewriting `Expr`s
 
-There are several examples of rewriting and working with `Exprs`:
+There are several examples of rewriting and working with `Expr`s:
 
 - [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs)
 - [analyzer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/analyzer_rule.rs)
