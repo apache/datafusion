@@ -26,6 +26,7 @@ use datafusion_physical_expr::window::{
 };
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
@@ -33,7 +34,6 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::cmp;
 use std::cmp::max;
 use std::sync::Arc;
-use datafusion_physical_plan::repartition::RepartitionExec;
 
 /// This rule inspects [`ExecutionPlan`]'s attempting to find fetch limits that were not pushed
 /// down by `LimitPushdown` because [BoundedWindowAggExec]s were "in the way". If the window is
