@@ -310,7 +310,6 @@ pub fn parse_expr(
                 .ok_or_else(|| {
                     exec_datafusion_err!("missing window frame during deserialization")
                 })?;
-            let distinct = expr.distinct;
             let null_treatment: Option<NullTreatment> =
                 protobuf::NullTreatment::try_from(expr.null_treatment)
                     .map_err(|_| {
@@ -349,7 +348,7 @@ pub fn parse_expr(
                 .window_frame(window_frame)
                 .null_treatment(null_treatment);
 
-            if distinct {
+            if expr.distinct {
                 builder = builder.distinct();
             };
 
