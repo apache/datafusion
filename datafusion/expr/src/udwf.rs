@@ -421,7 +421,9 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     }
 
     /// If not causal, returns the effect this function will have on the window
-    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect;
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
+    }
 }
 
 /// the effect this function will have on the limit pushdown

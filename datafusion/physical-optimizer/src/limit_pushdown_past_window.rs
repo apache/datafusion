@@ -59,6 +59,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
         }
         let mut latest_limit: Option<usize> = None;
         let mut lookahead = 0;
+        let mut applying = false;
         let result = original.transform_down(|node| {
             // helper closure to DRY out most the early return cases
             let mut reset = |node,
@@ -77,19 +78,24 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // grab the latest limit we see
-            if let Some(limit) = node.as_any().downcast_ref::<GlobalLimitExec>() {
-                latest_limit = limit.fetch().map(|fetch| fetch + limit.skip());
-                lookahead = 0;
-                return Ok(Transformed::no(node));
-            }
-            if let Some(limit) = node.as_any().downcast_ref::<SortPreservingMergeExec>() {
-                latest_limit = limit.fetch();
-                lookahead = 0;
-                return Ok(Transformed::no(node));
+            if !applying {
+                if let Some(limit) = node.as_any().downcast_ref::<GlobalLimitExec>() {
+                    latest_limit = limit.fetch().map(|fetch| fetch + limit.skip());
+                    lookahead = 0;
+                    return Ok(Transformed::no(node));
+                }
+                if let Some(limit) =
+                    node.as_any().downcast_ref::<SortPreservingMergeExec>()
+                {
+                    latest_limit = limit.fetch();
+                    lookahead = 0;
+                    return Ok(Transformed::no(node));
+                }
             }
 
             // grow the limit if we hit a window function
             if let Some(window) = node.as_any().downcast_ref::<BoundedWindowAggExec>() {
+                applying = true;
                 let mut max_rel = 0;
                 let mut max_abs = 0;
                 for expr in window.window_expr().iter() {
@@ -119,35 +125,40 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // Apply the limit if we hit a sortpreservingmerge node
-            if let Some(spm) = node.as_any().downcast_ref::<SortPreservingMergeExec>() {
-                let latest = latest_limit.take();
-                let Some(fetch) = latest else {
+            if applying {
+                if let Some(spm) = node.as_any().downcast_ref::<SortPreservingMergeExec>()
+                {
+                    let latest = latest_limit.take();
+                    let Some(fetch) = latest else {
+                        lookahead = 0;
+                        return Ok(Transformed::no(node));
+                    };
+                    let fetch = match spm.fetch() {
+                        None => fetch + lookahead,
+                        Some(existing) => cmp::min(existing, fetch + lookahead),
+                    };
+                    let spm: Arc<dyn ExecutionPlan> =
+                        spm.with_fetch(Some(fetch)).unwrap();
                     lookahead = 0;
-                    return Ok(Transformed::no(node));
-                };
-                let fetch = match spm.fetch() {
-                    None => fetch + lookahead,
-                    Some(existing) => cmp::min(existing, fetch + lookahead),
-                };
-                let spm: Arc<dyn ExecutionPlan> = spm.with_fetch(Some(fetch)).unwrap();
-                lookahead = 0;
-                return Ok(Transformed::complete(spm));
-            }
+                    return Ok(Transformed::complete(spm));
+                }
 
-            // Apply the limit if we hit a sort node
-            if let Some(sort) = node.as_any().downcast_ref::<SortExec>() {
-                let latest = latest_limit.take();
-                let Some(fetch) = latest else {
+                // Apply the limit if we hit a sort node
+                if let Some(sort) = node.as_any().downcast_ref::<SortExec>() {
+                    let latest = latest_limit.take();
+                    let Some(fetch) = latest else {
+                        lookahead = 0;
+                        return Ok(Transformed::no(node));
+                    };
+                    let fetch = match sort.fetch() {
+                        None => fetch + lookahead,
+                        Some(existing) => cmp::min(existing, fetch + lookahead),
+                    };
+                    let sort: Arc<dyn ExecutionPlan> =
+                        Arc::new(sort.with_fetch(Some(fetch)));
                     lookahead = 0;
-                    return Ok(Transformed::no(node));
-                };
-                let fetch = match sort.fetch() {
-                    None => fetch + lookahead,
-                    Some(existing) => cmp::min(existing, fetch + lookahead),
-                };
-                let sort: Arc<dyn ExecutionPlan> = Arc::new(sort.with_fetch(Some(fetch)));
-                lookahead = 0;
-                return Ok(Transformed::complete(sort));
+                    return Ok(Transformed::complete(sort));
+                }
             }
 
             // nodes along the way
