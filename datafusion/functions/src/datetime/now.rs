@@ -119,15 +119,8 @@ impl ScalarUDFImpl for NowFunc {
             .query_execution_start_time
             .timestamp_nanos_opt();
 
-        let timezone = info
-            .execution_props()
-            .config_options
-            .as_ref()
-            .map(|opts| opts.execution.time_zone.as_str())
-            .unwrap_or("+00");
-
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::TimestampNanosecond(now_ts, Some(timezone.into())),
+            ScalarValue::TimestampNanosecond(now_ts, self.timezone.clone()),
             None,
         )))
     }

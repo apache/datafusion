@@ -1074,20 +1074,20 @@ impl SessionContext {
         } else {
             let mut state = self.state.write();
             state.config_mut().options_mut().set(&variable, &value)?;
-            drop(state);
 
             // Register UDFs that return values based on session configuration
             // e.g. now() which depends on the time_zone configuration option
             if variable == "datafusion.execution.time_zone" {
-                let state = self.state.read();
                 let config_options = state.config().options();
                 let now_udf = {
                     // recreate the function so it captures the new time zone
                     make_udf_function_with_config!(NowFunc, now, &ConfigOptions);
                     now(config_options)
                 };
-                self.state.write().register_udf(now_udf)?;
+                state.register_udf(now_udf)?;
             }
+
+            drop(state);
         }
 
         self.return_empty_dataframe()
