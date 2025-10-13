@@ -267,7 +267,7 @@ impl Accumulator for TrivialNthValueAccumulator {
             // First entry in the state is the aggregation result.
             let n_required = self.n.unsigned_abs() as usize;
             let array_agg_res = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
-            for v in array_agg_res.into_iter() {
+            for v in array_agg_res.into_iter().flatten() {
                 self.values.extend(v);
                 if self.values.len() > n_required {
                     // There is enough data collected, can stop merging:
@@ -457,14 +457,14 @@ impl Accumulator for NthValueAccumulator {
         let mut partition_values = vec![self.values.clone()];
         // First entry in the state is the aggregation result.
         let array_agg_res = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
-        for v in array_agg_res.into_iter() {
+        for v in array_agg_res.into_iter().flatten() {
             partition_values.push(v.into());
         }
         // Stores ordering requirement expression results coming from each partition:
         let mut partition_ordering_values = vec![self.ordering_values.clone()];
         let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
         // Extract value from struct to ordering_rows for each group/partition:
-        for partition_ordering_rows in orderings.into_iter() {
+        for partition_ordering_rows in orderings.into_iter().flatten() {
             let ordering_values = partition_ordering_rows.into_iter().map(|ordering_row| {
                 let ScalarValue::Struct(s_array) = ordering_row else {
                     return exec_err!(

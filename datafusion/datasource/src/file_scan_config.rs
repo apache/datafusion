@@ -37,8 +37,8 @@ use arrow::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    exec_err, ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue,
-    Statistics,
+    exec_datafusion_err, exec_err, internal_datafusion_err, ColumnStatistics,
+    Constraints, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
@@ -377,8 +377,8 @@ impl FileScanConfigBuilder {
     /// Add a file as a single group
     ///
     /// See [`Self::with_file_groups`] for more information.
-    pub fn with_file(self, file: PartitionedFile) -> Self {
-        self.with_file_group(FileGroup::new(vec![file]))
+    pub fn with_file(self, partitioned_file: PartitionedFile) -> Self {
+        self.with_file_group(FileGroup::new(vec![partitioned_file]))
     }
 
     /// Set the output ordering of the files
@@ -876,8 +876,8 @@ impl FileScanConfig {
         target_partitions: usize,
     ) -> Result<Vec<FileGroup>> {
         if target_partitions == 0 {
-            return Err(DataFusionError::Internal(
-                "target_partitions must be greater than 0".to_string(),
+            return Err(internal_datafusion_err!(
+                "target_partitions must be greater than 0"
             ));
         }
 
@@ -1123,12 +1123,9 @@ impl PartitionColumnProjector {
 
         let mut cols = file_batch.columns().to_vec();
         for &(pidx, sidx) in &self.projected_partition_indexes {
-            let p_value =
-                partition_values
-                    .get(pidx)
-                    .ok_or(DataFusionError::Execution(
-                        "Invalid partitioning found on disk".to_string(),
-                    ))?;
+            let p_value = partition_values.get(pidx).ok_or_else(|| {
+                exec_datafusion_err!("Invalid partitioning found on disk")
+            })?;
 
             let mut partition_value = Cow::Borrowed(p_value);
 

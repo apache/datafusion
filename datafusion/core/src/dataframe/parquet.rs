@@ -102,7 +102,6 @@ impl DataFrame {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -248,7 +247,7 @@ mod tests {
         Ok(())
     }
 
-    #[rstest]
+    #[rstest::rstest]
     #[cfg(feature = "parquet_encryption")]
     #[tokio::test]
     async fn roundtrip_parquet_with_encryption(

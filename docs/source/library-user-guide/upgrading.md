@@ -31,6 +31,25 @@ The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
 
 [`1.87.0`]: https://releases.rs/docs/1.87.0/
 
+### `FunctionRegistry` exposes two additional methods
+
+`FunctionRegistry` exposes two additional methods `udafs` and `udwfs` which expose set of registered user defined aggregation and window function names. To upgrade implement methods returning set of registered function names:
+
+```diff
+impl FunctionRegistry for FunctionRegistryImpl {
+      fn udfs(&self) -> HashSet<String> {
+         self.scalar_functions.keys().cloned().collect()
+     }
++    fn udafs(&self) -> HashSet<String> {
++        self.aggregate_functions.keys().cloned().collect()
++    }
++
++    fn udwfs(&self) -> HashSet<String> {
++        self.window_functions.keys().cloned().collect()
++    }
+}
+```
+
 ### `datafusion-proto` use `TaskContext` rather than `SessionContext` in physical plan serde methods
 
 There have been changes in the public API methods of `datafusion-proto` which handle physical plan serde.

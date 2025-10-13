@@ -31,7 +31,9 @@ use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_datafusion_err, internal_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
     Operator, Volatility,
@@ -695,7 +697,7 @@ impl<'a> ConstEvaluator<'a> {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
                     ConstSimplifyResult::SimplifyRuntimeError(
-                        DataFusionError::Execution(format!("Could not evaluate the expression, found a result of length {}", a.len())),
+                        exec_datafusion_err!("Could not evaluate the expression, found a result of length {}", a.len()),
                         expr,
                     )
                 } else if as_list_array(&a).is_ok() {
@@ -2180,6 +2182,7 @@ mod tests {
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::hash::Hash;
+    use std::sync::LazyLock;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -2220,12 +2223,15 @@ mod tests {
     }
 
     fn test_schema() -> DFSchemaRef {
-        Schema::new(vec![
-            Field::new("i", DataType::Int64, false),
-            Field::new("b", DataType::Boolean, true),
-        ])
-        .to_dfschema_ref()
-        .unwrap()
+        static TEST_SCHEMA: LazyLock<DFSchemaRef> = LazyLock::new(|| {
+            Schema::new(vec![
+                Field::new("i", DataType::Int64, false),
+                Field::new("b", DataType::Boolean, true),
+            ])
+            .to_dfschema_ref()
+            .unwrap()
+        });
+        Arc::clone(&TEST_SCHEMA)
     }
 
     #[test]
@@ -3407,24 +3413,27 @@ mod tests {
     }
 
     fn expr_test_schema() -> DFSchemaRef {
-        Arc::new(
-            DFSchema::from_unqualified_fields(
-                vec![
-                    Field::new("c1", DataType::Utf8, true),
-                    Field::new("c2", DataType::Boolean, true),
-                    Field::new("c3", DataType::Int64, true),
-                    Field::new("c4", DataType::UInt32, true),
-                    Field::new("c1_non_null", DataType::Utf8, false),
-                    Field::new("c2_non_null", DataType::Boolean, false),
-                    Field::new("c3_non_null", DataType::Int64, false),
-                    Field::new("c4_non_null", DataType::UInt32, false),
-                    Field::new("c5", DataType::FixedSizeBinary(3), true),
-                ]
-                .into(),
-                HashMap::new(),
+        static EXPR_TEST_SCHEMA: LazyLock<DFSchemaRef> = LazyLock::new(|| {
+            Arc::new(
+                DFSchema::from_unqualified_fields(
+                    vec![
+                        Field::new("c1", DataType::Utf8, true),
+                        Field::new("c2", DataType::Boolean, true),
+                        Field::new("c3", DataType::Int64, true),
+                        Field::new("c4", DataType::UInt32, true),
+                        Field::new("c1_non_null", DataType::Utf8, false),
+                        Field::new("c2_non_null", DataType::Boolean, false),
+                        Field::new("c3_non_null", DataType::Int64, false),
+                        Field::new("c4_non_null", DataType::UInt32, false),
+                        Field::new("c5", DataType::FixedSizeBinary(3), true),
+                    ]
+                    .into(),
+                    HashMap::new(),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        )
+        });
+        Arc::clone(&EXPR_TEST_SCHEMA)
     }
 
     #[test]
@@ -4653,14 +4662,17 @@ mod tests {
     }
 
     fn boolean_test_schema() -> DFSchemaRef {
-        Schema::new(vec![
-            Field::new("A", DataType::Boolean, false),
-            Field::new("B", DataType::Boolean, false),
-            Field::new("C", DataType::Boolean, false),
-            Field::new("D", DataType::Boolean, false),
-        ])
-        .to_dfschema_ref()
-        .unwrap()
+        static BOOLEAN_TEST_SCHEMA: LazyLock<DFSchemaRef> = LazyLock::new(|| {
+            Schema::new(vec![
+                Field::new("A", DataType::Boolean, false),
+                Field::new("B", DataType::Boolean, false),
+                Field::new("C", DataType::Boolean, false),
+                Field::new("D", DataType::Boolean, false),
+            ])
+            .to_dfschema_ref()
+            .unwrap()
+        });
+        Arc::clone(&BOOLEAN_TEST_SCHEMA)
     }
 
     #[test]
