@@ -81,6 +81,8 @@ use datafusion_expr::{
     planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_functions::datetime::now::NowFunc;
+use datafusion_functions::make_udf_function_with_config;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
@@ -1073,6 +1075,19 @@ impl SessionContext {
             let mut state = self.state.write();
             state.config_mut().options_mut().set(&variable, &value)?;
             drop(state);
+
+            // Register UDFs that return values based on session configuration
+            // e.g. now() which depends on the time_zone configuration option
+            if variable == "datafusion.execution.time_zone" {
+                let state = self.state.read();
+                let config_options = state.config().options().clone();
+                drop(state);
+                let now_udf = {
+                    make_udf_function_with_config!(NowFunc, now, &ConfigOptions);
+                    now(&config_options)
+                };
+                self.state.write().register_udf(now_udf)?;
+            }
         }
 
         self.return_empty_dataframe()
