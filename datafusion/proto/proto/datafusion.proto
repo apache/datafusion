@@ -518,7 +518,7 @@ message AggregateUDFExprNode {
   LogicalExprNode filter = 3;
   repeated SortExprNode order_by = 4;
   optional bytes fun_definition = 6;
-  NullTreatment null_treatment = 7;
+  optional NullTreatment null_treatment = 7;
 }
 
 message ScalarUDFExprNode {
@@ -539,7 +539,7 @@ message WindowExprNode {
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
   optional bytes fun_definition = 10;
-  NullTreatment null_treatment = 11;
+  optional NullTreatment null_treatment = 11;
   bool distinct = 12;
   LogicalExprNode filter = 13;
 }
@@ -627,7 +627,7 @@ message WindowFrameBound {
 }
 
 enum NullTreatment {
-  UNSPECIFIED = 0;
+  NULL_TREATMENT_UNSPECIFIED = 0;
   RESPECT_NULLS = 1;
   IGNORE_NULLS = 2;
 }

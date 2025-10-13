@@ -243,12 +243,16 @@ impl From<protobuf::dml_node::Type> for WriteOp {
     }
 }
 
-impl From<protobuf::NullTreatment> for Option<NullTreatment> {
-    fn from(t: protobuf::NullTreatment) -> Self {
-        match t {
-            protobuf::NullTreatment::Unspecified => None,
-            protobuf::NullTreatment::RespectNulls => Some(NullTreatment::RespectNulls),
-            protobuf::NullTreatment::IgnoreNulls => Some(NullTreatment::IgnoreNulls),
+impl TryFrom<protobuf::NullTreatment> for NullTreatment {
+    type Error = Error;
+
+    fn try_from(null_treatment: protobuf::NullTreatment) -> Result<Self, Self::Error> {
+        match null_treatment {
+            protobuf::NullTreatment::Unspecified => {
+                Err(Error::unknown("NullTreatment", null_treatment as i32))
+            }
+            protobuf::NullTreatment::RespectNulls => Ok(NullTreatment::RespectNulls),
+            protobuf::NullTreatment::IgnoreNulls => Ok(NullTreatment::IgnoreNulls),
         }
     }
 }
@@ -310,15 +314,20 @@ pub fn parse_expr(
                 .ok_or_else(|| {
                     exec_datafusion_err!("missing window frame during deserialization")
                 })?;
-            let null_treatment: Option<NullTreatment> =
-                protobuf::NullTreatment::try_from(expr.null_treatment)
+
+            let null_treatment = match expr.null_treatment {
+                Some(null_treatment) => {
+                    let null_treatment  =  protobuf::NullTreatment::try_from(null_treatment)
                     .map_err(|_| {
                         proto_error(format!(
-                        "Received a WindowExprNode message with unknown NullTreatment {}",
-                        expr.null_treatment
-                    ))
-                    })?
-                    .into();
+                            "Received a WindowExprNode message with unknown NullTreatment {}",
+                            null_treatment
+                        ))
+                    })?;
+                    Some(null_treatment.try_into()?)
+                }
+                None => None,
+            };
 
             let agg_fn = match window_function {
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
@@ -587,15 +596,19 @@ pub fn parse_expr(
                     .udaf(&pb.fun_name)
                     .or_else(|_| codec.try_decode_udaf(&pb.fun_name, &[]))?,
             };
-            let null_treatment: Option<NullTreatment> =
-                protobuf::NullTreatment::try_from(pb.null_treatment)
+            let null_treatment = match pb.null_treatment {
+                Some(null_treatment) => {
+                    let null_treatment  =  protobuf::NullTreatment::try_from(null_treatment)
                     .map_err(|_| {
                         proto_error(format!(
-                        "Received a AggregateUdfExprNode message with unknown NullTreatment {}",
-                        pb.null_treatment
-                    ))
-                    })?
-                    .into();
+                            "Received an AggregateUdfExprNode message with unknown NullTreatment {}",
+                            null_treatment
+                        ))
+                    })?;
+                    Some(null_treatment.try_into()?)
+                }
+                None => None,
+            };
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,

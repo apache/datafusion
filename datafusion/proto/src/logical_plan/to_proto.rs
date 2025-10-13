@@ -340,7 +340,6 @@ pub fn serialize_expr(
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
-            let null_treatment: protobuf::NullTreatment = null_treatment.into();
 
             let window_expr = protobuf::WindowExprNode {
                 exprs: serialize_exprs(args, codec)?,
@@ -348,12 +347,14 @@ pub fn serialize_expr(
                 partition_by,
                 order_by,
                 window_frame,
-                null_treatment: null_treatment.into(),
                 distinct: *distinct,
                 filter: match filter {
                     Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
                     None => None,
                 },
+                null_treatment: null_treatment
+                    .as_ref()
+                    .map(|nt| protobuf::NullTreatment::from(nt).into()),
                 fun_definition,
             };
             protobuf::LogicalExprNode {
@@ -385,8 +386,9 @@ pub fn serialize_expr(
                         },
                         order_by: serialize_sorts(order_by, codec)?,
                         fun_definition: (!buf.is_empty()).then_some(buf),
-                        null_treatment: protobuf::NullTreatment::from(null_treatment)
-                            .into(),
+                        null_treatment: null_treatment
+                            .as_ref()
+                            .map(|nt| protobuf::NullTreatment::from(nt).into()),
                     },
                 ))),
             }
@@ -731,14 +733,11 @@ impl From<&WriteOp> for protobuf::dml_node::Type {
     }
 }
 
-impl From<&Option<NullTreatment>> for protobuf::NullTreatment {
-    fn from(t: &Option<NullTreatment>) -> Self {
+impl From<&NullTreatment> for protobuf::NullTreatment {
+    fn from(t: &NullTreatment) -> Self {
         match t {
-            Some(null_treatment) => match null_treatment {
-                NullTreatment::RespectNulls => protobuf::NullTreatment::RespectNulls,
-                NullTreatment::IgnoreNulls => protobuf::NullTreatment::IgnoreNulls,
-            },
-            None => protobuf::NullTreatment::Unspecified,
+            NullTreatment::RespectNulls => protobuf::NullTreatment::RespectNulls,
+            NullTreatment::IgnoreNulls => protobuf::NullTreatment::IgnoreNulls,
         }
     }
 }

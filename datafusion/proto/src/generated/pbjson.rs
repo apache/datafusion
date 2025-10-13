@@ -596,7 +596,7 @@ impl serde::Serialize for AggregateUdfExprNode {
         if self.fun_definition.is_some() {
             len += 1;
         }
-        if self.null_treatment != 0 {
+        if self.null_treatment.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateUDFExprNode", len)?;
@@ -620,9 +620,9 @@ impl serde::Serialize for AggregateUdfExprNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
-        if self.null_treatment != 0 {
-            let v = NullTreatment::try_from(self.null_treatment)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.null_treatment)))?;
+        if let Some(v) = self.null_treatment.as_ref() {
+            let v = NullTreatment::try_from(*v)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
             struct_ser.serialize_field("nullTreatment", &v)?;
         }
         struct_ser.end()
@@ -755,7 +755,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                             if null_treatment__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullTreatment"));
                             }
-                            null_treatment__ = Some(map_.next_value::<NullTreatment>()? as i32);
+                            null_treatment__ = map_.next_value::<::std::option::Option<NullTreatment>>()?.map(|x| x as i32);
                         }
                     }
                 }
@@ -766,7 +766,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                     filter: filter__,
                     order_by: order_by__.unwrap_or_default(),
                     fun_definition: fun_definition__,
-                    null_treatment: null_treatment__.unwrap_or_default(),
+                    null_treatment: null_treatment__,
                 })
             }
         }
@@ -13311,7 +13311,7 @@ impl serde::Serialize for NullTreatment {
         S: serde::Serializer,
     {
         let variant = match self {
-            Self::Unspecified => "UNSPECIFIED",
+            Self::Unspecified => "NULL_TREATMENT_UNSPECIFIED",
             Self::RespectNulls => "RESPECT_NULLS",
             Self::IgnoreNulls => "IGNORE_NULLS",
         };
@@ -13325,7 +13325,7 @@ impl<'de> serde::Deserialize<'de> for NullTreatment {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "UNSPECIFIED",
+            "NULL_TREATMENT_UNSPECIFIED",
             "RESPECT_NULLS",
             "IGNORE_NULLS",
         ];
@@ -13368,7 +13368,7 @@ impl<'de> serde::Deserialize<'de> for NullTreatment {
                 E: serde::de::Error,
             {
                 match value {
-                    "UNSPECIFIED" => Ok(NullTreatment::Unspecified),
+                    "NULL_TREATMENT_UNSPECIFIED" => Ok(NullTreatment::Unspecified),
                     "RESPECT_NULLS" => Ok(NullTreatment::RespectNulls),
                     "IGNORE_NULLS" => Ok(NullTreatment::IgnoreNulls),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
@@ -23608,7 +23608,7 @@ impl serde::Serialize for WindowExprNode {
         if self.fun_definition.is_some() {
             len += 1;
         }
-        if self.null_treatment != 0 {
+        if self.null_treatment.is_some() {
             len += 1;
         }
         if self.distinct {
@@ -23638,9 +23638,9 @@ impl serde::Serialize for WindowExprNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
-        if self.null_treatment != 0 {
-            let v = NullTreatment::try_from(self.null_treatment)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.null_treatment)))?;
+        if let Some(v) = self.null_treatment.as_ref() {
+            let v = NullTreatment::try_from(*v)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
             struct_ser.serialize_field("nullTreatment", &v)?;
         }
         if self.distinct {
@@ -23795,7 +23795,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             if null_treatment__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullTreatment"));
                             }
-                            null_treatment__ = Some(map_.next_value::<NullTreatment>()? as i32);
+                            null_treatment__ = map_.next_value::<::std::option::Option<NullTreatment>>()?.map(|x| x as i32);
                         }
                         GeneratedField::Distinct => {
                             if distinct__.is_some() {
@@ -23829,7 +23829,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                     order_by: order_by__.unwrap_or_default(),
                     window_frame: window_frame__,
                     fun_definition: fun_definition__,
-                    null_treatment: null_treatment__.unwrap_or_default(),
+                    null_treatment: null_treatment__,
                     distinct: distinct__.unwrap_or_default(),
                     filter: filter__,
                     window_function: window_function__,
