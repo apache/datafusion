@@ -166,7 +166,7 @@ pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
 insta = { version = "1.43.2", features = ["glob", "filters"] }
-prost = "0.13.1"
+prost = "0.14.1"
 rand = "0.9"
 recursive = "0.1.1"
 regex = "1.11"
