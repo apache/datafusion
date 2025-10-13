@@ -121,9 +121,6 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
 
             // nodes along the way
             if !node.supports_limit_pushdown() {
-                // TODO: avoid combinatorial explosion of rules*nodes
-                // instead of white listing rules (supports push_down rule)
-                // use properties like CardinalityEffect, or LimitEffect
                 return reset(node, &mut ctx);
             }
             if let Some(part) = node.as_any().downcast_ref::<RepartitionExec>() {
