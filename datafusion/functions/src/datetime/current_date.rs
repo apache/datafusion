@@ -17,9 +17,10 @@
 
 use std::any::Any;
 
+use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, TimeZone};
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -31,7 +32,7 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r#"
-Returns the current UTC date.
+Returns the current date in the session time zone.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 "#,
@@ -100,12 +101,32 @@ impl ScalarUDFImpl for CurrentDateFunc {
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         let now_ts = info.execution_props().query_execution_start_time;
-        let days = Some(
-            now_ts.num_days_from_ce()
-                - NaiveDate::from_ymd_opt(1970, 1, 1)
-                    .unwrap()
-                    .num_days_from_ce(),
-        );
+
+        let days = if let Some(config) = info.execution_props().config_options() {
+            if let Ok(tz) = config.execution.time_zone.parse::<Tz>() {
+                let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
+                Some(
+                    local_now.num_days_from_ce()
+                        - NaiveDate::from_ymd_opt(1970, 1, 1)
+                            .unwrap()
+                            .num_days_from_ce(),
+                )
+            } else {
+                Some(
+                    now_ts.num_days_from_ce()
+                        - NaiveDate::from_ymd_opt(1970, 1, 1)
+                            .unwrap()
+                            .num_days_from_ce(),
+                )
+            }
+        } else {
+            Some(
+                now_ts.num_days_from_ce()
+                    - NaiveDate::from_ymd_opt(1970, 1, 1)
+                        .unwrap()
+                        .num_days_from_ce(),
+            )
+        };
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Date32(days),
             None,
