@@ -749,9 +749,9 @@ execution will be performed.</p>
 <h2>Translating Logical Plan to Physical Plan<a class="headerlink" href="#translating-logical-plan-to-physical-plan" title="Link to this heading">¶</a></h2>
 <p>Logical plans can not be directly executed. They must be “compiled” into an
 <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code></a>, which is often referred to as a “physical plan”.</p>
-<p>Compared to <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>s <code class="docutils literal notranslate"><span class="pre">ExecutionPlans</span></code> have many more details such as
-specific algorithms and detailed optimizations compared to. Given a
-<code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> the easiest way to create an <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> is using
+<p>Compared to <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>s, <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>s have many more details such as
+specific algorithms and detailed optimizations. Given a
+<code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>, the easiest way to create an <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> is using
 <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.create_physical_plan"><code class="docutils literal notranslate"><span class="pre">SessionState::create_physical_plan</span></code></a> as shown below</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">datasource</span><span class="p">::{</span><span class="n">provider_as_source</span><span class="p">,</span><span class="w"> </span><span class="n">MemTable</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">DataFusionError</span><span class="p">;</span>

@@ -717,13 +717,13 @@
 <p>As the writer of a library, you can use <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and how to rewrite <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to inline the simple UDF.</p>
 <section id="arrow-schema-and-datafusion-dfschema">
 <h2>Arrow Schema and DataFusion DFSchema<a class="headerlink" href="#arrow-schema-and-datafusion-dfschema" title="Link to this heading">¶</a></h2>
-<p>Apache Arrow <code class="docutils literal notranslate"><span class="pre">Schema</span></code> provides a lightweight structure for defining data, and Apache Datafusion<code class="docutils literal notranslate"><span class="pre">DFSchema</span></code> extends it with extra information such as column qualifiers and functional dependencies. Column qualifiers are multi part path to the table e.g table, schema, catalog. Functional Dependency is the relationship between attributes(characteristics) of a table related to each other.</p>
+<p>Apache Arrow <code class="docutils literal notranslate"><span class="pre">Schema</span></code> provides a lightweight structure for defining data, and Apache Datafusion <code class="docutils literal notranslate"><span class="pre">DFSchema</span></code> extends it with extra information such as column qualifiers and functional dependencies. Column qualifiers are multi part path to the table e.g table, schema, catalog. Functional Dependency is the relationship between attributes(characteristics) of a table related to each other.</p>
 <section id="difference-between-schema-and-dfschema">
 <h3>Difference between Schema and DFSchema<a class="headerlink" href="#difference-between-schema-and-dfschema" title="Link to this heading">¶</a></h3>
 <ul>
 <li><p>Schema: A fundamental component of Apache Arrow, <code class="docutils literal notranslate"><span class="pre">Schema</span></code> defines a dataset’s structure, specifying column names and their data types.</p>
 <blockquote>
-<div><p>Please see <a class="reference external" href="https://docs.rs/arrow-schema/54.2.1/arrow_schema/struct.Schema.html">Struct Schema</a> for a detailed document of Arrow Schema.</p>
+<div><p>Please see <a class="reference external" href="https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html">Struct Schema</a> for a detailed document of Arrow Schema.</p>
 </div></blockquote>
 </li>
 <li><p>DFSchema: Extending <code class="docutils literal notranslate"><span class="pre">Schema</span></code>, <code class="docutils literal notranslate"><span class="pre">DFSchema</span></code> incorporates qualifiers such as table names, enabling it to carry additional context when required. This is particularly valuable for managing queries across multiple tables.</p>
@@ -770,7 +770,7 @@
 </section>
 <section id="rewriting-exprs">
 <h2>Rewriting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s<a class="headerlink" href="#rewriting-exprs" title="Link to this heading">¶</a></h2>
-<p>There are several examples of rewriting and working with <code class="docutils literal notranslate"><span class="pre">Exprs</span></code>:</p>
+<p>There are several examples of rewriting and working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s:</p>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs">expr_api.rs</a></p></li>
 <li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/analyzer_rule.rs">analyzer_rule.rs</a></p></li>
@@ -809,7 +809,7 @@
 </section>
 <section id="creating-an-optimizerrule">
 <h3>Creating an <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code><a class="headerlink" href="#creating-an-optimizerrule" title="Link to this heading">¶</a></h3>
-<p>In DataFusion, an <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> is a trait that supports rewriting<code class="docutils literal notranslate"><span class="pre">Expr</span></code>s that appear in various parts of the <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>. It follows DataFusion’s general mantra of trait implementations to drive behavior.</p>
+<p>In DataFusion, an <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> is a trait that supports rewriting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s that appear in various parts of the <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>. It follows DataFusion’s general mantra of trait implementations to drive behavior.</p>
 <p>We’ll call our rule <code class="docutils literal notranslate"><span class="pre">AddOneInliner</span></code> and implement the <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> trait. The <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> trait has two methods:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">name</span></code> - returns the name of the rule</p></li>
