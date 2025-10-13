@@ -102,33 +102,20 @@ impl ScalarUDFImpl for CurrentDateFunc {
     ) -> Result<ExprSimplifyResult> {
         let now_ts = info.execution_props().query_execution_start_time;
 
+        // Get timezone from config and convert to local time
         let days = if let Some(config) = info.execution_props().config_options() {
             if let Ok(tz) = config.execution.time_zone.parse::<Tz>() {
                 let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
-                Some(
-                    local_now.num_days_from_ce()
-                        - NaiveDate::from_ymd_opt(1970, 1, 1)
-                            .unwrap()
-                            .num_days_from_ce(),
-                )
+                datetime_to_days(&local_now)
             } else {
-                Some(
-                    now_ts.num_days_from_ce()
-                        - NaiveDate::from_ymd_opt(1970, 1, 1)
-                            .unwrap()
-                            .num_days_from_ce(),
-                )
+                datetime_to_days(&now_ts)
             }
         } else {
-            Some(
-                now_ts.num_days_from_ce()
-                    - NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .unwrap()
-                        .num_days_from_ce(),
-            )
+            datetime_to_days(&now_ts)
         };
+
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::Date32(days),
+            ScalarValue::Date32(Some(days)),
             None,
         )))
     }
@@ -136,4 +123,12 @@ impl ScalarUDFImpl for CurrentDateFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// Converts a DateTime to the number of days since Unix epoch (1970-01-01)
+fn datetime_to_days<T: Datelike>(dt: &T) -> i32 {
+    dt.num_days_from_ce()
+        - NaiveDate::from_ymd_opt(1970, 1, 1)
+            .unwrap()
+            .num_days_from_ce()
 }

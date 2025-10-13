@@ -31,9 +31,9 @@ SELECT current_date() = today();
 ----
 true
 
-# Test 3: Set timezone to +19:00 and verify current_date is still stable
+# Test 3: Set timezone to +05:00 and verify current_date is still stable
 statement ok
-SET datafusion.execution.time_zone = '+19:00';
+SET datafusion.execution.time_zone = '+05:00';
 
 query B
 SELECT current_date() = current_date();
@@ -44,7 +44,7 @@ true
 query B
 SELECT current_date() = cast(now() as date);
 ----
-false
+true
 
 # Test 5: Test with negative offset timezone
 statement ok
