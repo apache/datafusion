@@ -48,19 +48,19 @@ impl LimitPushPastWindows {
     }
 }
 
+#[derive(Eq, PartialEq)]
 enum Phase {
-    Find,
-    Grow,
+    FindOrGrow,
     Apply
 }
 
 #[derive(Default)]
-struct RuleContext {
+struct TraverseState {
     pub limit: Option<usize>,
     pub lookahead: usize,
 }
 
-impl RuleContext {
+impl TraverseState {
     pub fn reset_limit(&mut self, limit: Option<usize>) {
         self.limit = limit;
         self.lookahead = 0;
@@ -69,6 +69,21 @@ impl RuleContext {
     pub fn max_lookahead(&mut self, new_val: usize) {
         self.lookahead = self.lookahead.max(new_val);
     }
+}
+
+fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
+    if let Some(limit) = node.as_any().downcast_ref::<GlobalLimitExec>() {
+        ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
+        return true;
+    }
+    if let Some(limit) =
+        node.as_any().downcast_ref::<SortPreservingMergeExec>()
+    {
+        ctx.reset_limit(limit.fetch());
+        return true;
+    }
+
+    false
 }
 
 impl PhysicalOptimizerRule for LimitPushPastWindows {
@@ -80,11 +95,11 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
         if !config.optimizer.enable_window_limits {
             return Ok(original);
         }
-        let mut ctx = RuleContext::default();
-        let mut applying = false;
+        let mut ctx = TraverseState::default();
+        let mut phase = Phase::FindOrGrow;
         let result = original.transform_down(|node| {
             // helper closure to DRY out most the early return cases
-            let mut reset = |node, ctx: &mut RuleContext|
+            let mut reset = |node, ctx: &mut TraverseState|
              -> datafusion_common::Result<
                 Transformed<Arc<dyn ExecutionPlan>>,
             > {
@@ -99,22 +114,15 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // grab the latest limit we see
-            if !applying {
-                if let Some(limit) = node.as_any().downcast_ref::<GlobalLimitExec>() {
-                    ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
-                    return Ok(Transformed::no(node));
-                }
-                if let Some(limit) =
-                    node.as_any().downcast_ref::<SortPreservingMergeExec>()
-                {
-                    ctx.reset_limit(limit.fetch());
+            if phase == Phase::FindOrGrow {
+                if get_limit(&node, &mut ctx) {
                     return Ok(Transformed::no(node));
                 }
             }
 
             // grow the limit if we hit a window function
             if let Some(window) = node.as_any().downcast_ref::<BoundedWindowAggExec>() {
-                applying = true;
+                phase = Phase::Apply;
                 let mut max_rel = 0;
                 let mut max_abs = 0;
                 for expr in window.window_expr().iter() {
@@ -144,7 +152,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // Apply the limit if we hit a sortpreservingmerge node
-            if applying {
+            if phase == Phase::Apply {
                 if let Some(spm) = node.as_any().downcast_ref::<SortPreservingMergeExec>()
                 {
                     let latest = ctx.limit.take();
