@@ -358,6 +358,13 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Or, a closure with two arguments:
     /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
     /// * 'info': [crate::simplify::SimplifyInfo]
+    ///
+    /// # Notes
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         None
     }
