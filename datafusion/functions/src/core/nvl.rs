@@ -16,13 +16,14 @@
 // under the License.
 
 use arrow::array::Array;
-use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
+use arrow::compute::{is_not_null, not, prep_null_mask_filter};
 use arrow::datatypes::DataType;
-use datafusion_common::{utils::take_function_args, Result};
+use datafusion_common::{plan_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ArgumentEvaluation, ColumnarValue, DeferredScalarFunctionArgs,
+    DeferredScalarFunctionResult, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -118,7 +119,7 @@ impl ScalarUDFImpl for NVLFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        nvl_func(&args.args)
+        nvl_func_eager(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -128,9 +129,33 @@ impl ScalarUDFImpl for NVLFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn short_circuits(&self) -> bool {
+        true
+    }
+
+    fn argument_evaluation(
+        &self,
+        args: &[Expr],
+    ) -> Result<Option<Vec<ArgumentEvaluation>>> {
+        if args.len() != 2 {
+            return plan_err!("nvl/ifnull requires exactly 2 arguments");
+        }
+        Ok(Some(vec![
+            ArgumentEvaluation::Eager,
+            ArgumentEvaluation::Lazy,
+        ]))
+    }
+
+    fn invoke_with_deferred_args(
+        &self,
+        args: DeferredScalarFunctionArgs,
+    ) -> Result<DeferredScalarFunctionResult> {
+        nvl_func_lazy(&args)
+    }
 }
 
-fn nvl_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn nvl_func_eager(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let [lhs, rhs] = take_function_args("nvl/ifnull", args)?;
     let (lhs_array, rhs_array) = match (lhs, rhs) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
@@ -153,6 +178,54 @@ fn nvl_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let to_apply = is_not_null(&lhs_array)?;
     let value = zip(&to_apply, &lhs_array, &rhs_array)?;
     Ok(ColumnarValue::Array(value))
+}
+
+fn nvl_func_lazy(
+    args: &DeferredScalarFunctionArgs,
+) -> Result<DeferredScalarFunctionResult> {
+    let [lhs, rhs] = take_function_args("nvl/ifnull", &args.args)?;
+
+    let lhs_value = lhs.value()?;
+    let lhs_array = match lhs_value {
+        ColumnarValue::Array(array) => array,
+        ColumnarValue::Scalar(s) => {
+            return Ok(DeferredScalarFunctionResult {
+                value: if s.is_null() {
+                    rhs.value()?
+                } else {
+                    ColumnarValue::Array(s.to_array_of_size(args.number_rows)?)
+                },
+                all_args_were_scalar: false,
+            });
+        }
+    };
+
+    let not_null = is_not_null(lhs_array.as_ref())?;
+    if not_null.true_count() == lhs_array.len() {
+        return Ok(DeferredScalarFunctionResult {
+            value: ColumnarValue::Array(lhs_array),
+            all_args_were_scalar: false,
+        });
+    }
+
+    let selection = if not_null.nulls().is_some() {
+        let mask = prep_null_mask_filter(&not_null);
+        not(&mask)?
+    } else {
+        not(&not_null)?
+    };
+
+    let rhs_value = rhs.value_for_selection(&selection)?;
+
+    let rhs_array = match rhs_value {
+        ColumnarValue::Array(array) => array,
+        ColumnarValue::Scalar(s) => s.to_array_of_size(lhs_array.len())?,
+    };
+    let value = zip(&not_null, &lhs_array, &rhs_array)?;
+    Ok(DeferredScalarFunctionResult {
+        value: ColumnarValue::Array(value),
+        all_args_were_scalar: false,
+    })
 }
 
 #[cfg(test)]
@@ -181,7 +254,7 @@ mod tests {
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(6i32)));
 
-        let result = nvl_func(&[a, lit_array])?;
+        let result = nvl_func_eager(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
@@ -207,7 +280,7 @@ mod tests {
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(20i32)));
 
-        let result = nvl_func(&[a, lit_array])?;
+        let result = nvl_func_eager(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
@@ -232,7 +305,7 @@ mod tests {
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
 
-        let result = nvl_func(&[a, lit_array])?;
+        let result = nvl_func_eager(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(BooleanArray::from(vec![
@@ -252,7 +325,7 @@ mod tests {
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::from("bax"));
 
-        let result = nvl_func(&[a, lit_array])?;
+        let result = nvl_func_eager(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(StringArray::from(vec![
@@ -273,7 +346,7 @@ mod tests {
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
-        let result = nvl_func(&[lit_array, a])?;
+        let result = nvl_func_eager(&[lit_array, a])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
@@ -293,7 +366,7 @@ mod tests {
         let a_null = ColumnarValue::Scalar(ScalarValue::Int32(None));
         let b_null = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
-        let result_null = nvl_func(&[a_null, b_null])?;
+        let result_null = nvl_func_eager(&[a_null, b_null])?;
         let result_null = result_null
             .into_array(1)
             .expect("Failed to convert to array");
@@ -305,7 +378,7 @@ mod tests {
         let a_nnull = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
         let b_nnull = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
 
-        let result_nnull = nvl_func(&[a_nnull, b_nnull])?;
+        let result_nnull = nvl_func_eager(&[a_nnull, b_nnull])?;
         let result_nnull = result_nnull
             .into_array(1)
             .expect("Failed to convert to array");

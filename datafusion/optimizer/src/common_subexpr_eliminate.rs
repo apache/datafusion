@@ -34,7 +34,9 @@ use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator, SortExpr};
+use datafusion_expr::{
+    col, ArgumentEvaluation, BinaryExpr, Case, Expr, Operator, SortExpr,
+};
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -647,15 +649,22 @@ impl<'a> ExprCSEController<'a> {
 impl CSEController for ExprCSEController<'_> {
     type Node = Expr;
 
-    fn conditional_children(node: &Expr) -> Option<(Vec<&Expr>, Vec<&Expr>)> {
+    fn conditional_children(node: &Expr) -> Result<Option<(Vec<&Expr>, Vec<&Expr>)>> {
         match node {
-            // In case of `ScalarFunction`s we don't know which children are surely
-            // executed so start visiting all children conditionally and stop the
-            // recursion with `TreeNodeRecursion::Jump`.
-            Expr::ScalarFunction(ScalarFunction { func, args })
-                if func.short_circuits() =>
-            {
-                Some((vec![], args.iter().collect()))
+            // In case of `ScalarFunction`s ask the function which arguments are evaluated
+            // eagerly and which are evaluated lazily.
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                Ok(func.argument_evaluation(args)?.map(|evaluation_types| {
+                    let mut eager = vec![];
+                    let mut lazy = vec![];
+                    for (expr, evaluation) in args.iter().zip(evaluation_types) {
+                        match evaluation {
+                            ArgumentEvaluation::Eager => eager.push(expr),
+                            ArgumentEvaluation::Lazy => lazy.push(expr),
+                        };
+                    }
+                    (eager, lazy)
+                }))
             }
 
             // In case of `And` and `Or` the first child is surely executed, but we
@@ -664,7 +673,7 @@ impl CSEController for ExprCSEController<'_> {
                 left,
                 op: Operator::And | Operator::Or,
                 right,
-            }) => Some((vec![left.as_ref()], vec![right.as_ref()])),
+            }) => Ok(Some((vec![left.as_ref()], vec![right.as_ref()]))),
 
             // In case of `Case` the optional base expression and the first when
             // expressions are surely executed, but we account subexpressions as
@@ -673,7 +682,7 @@ impl CSEController for ExprCSEController<'_> {
                 expr,
                 when_then_expr,
                 else_expr,
-            }) => Some((
+            }) => Ok(Some((
                 expr.iter()
                     .map(|e| e.as_ref())
                     .chain(when_then_expr.iter().take(1).map(|(when, _)| when.as_ref()))
@@ -690,8 +699,8 @@ impl CSEController for ExprCSEController<'_> {
                     )
                     .chain(else_expr.iter().map(|e| e.as_ref()))
                     .collect(),
-            )),
-            _ => None,
+            ))),
+            _ => Ok(None),
         }
     }
 
