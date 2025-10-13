@@ -218,10 +218,7 @@ mod tests {
         // Second registration should fail
         let result = schema.register_udtf("my_func".to_string(), func.clone());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("already exists"));
+        assert!(result.unwrap_err().to_string().contains("already exists"));
     }
 
     #[test]
@@ -232,9 +229,7 @@ mod tests {
             Arc::new(DummyTableFunc),
         ));
 
-        schema
-            .register_udtf("my_func".to_string(), func)
-            .unwrap();
+        schema.register_udtf("my_func".to_string(), func).unwrap();
         assert!(schema.udtf_exist("my_func"));
 
         // Deregister
