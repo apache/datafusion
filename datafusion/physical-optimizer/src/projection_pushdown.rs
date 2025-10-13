@@ -33,7 +33,6 @@ use datafusion_common::tree_node::{
 use datafusion_common::{JoinSide, JoinType, Result};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::projection::{
@@ -61,7 +60,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let alias_generator = AliasGenerator::new();
         let plan = plan
@@ -71,7 +70,6 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
                     Some(hash_join) => try_push_down_join_filter(
                         Arc::clone(&plan),
                         hash_join,
-                        config,
                         &alias_generator,
                     ),
                 }
@@ -96,7 +94,6 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
 fn try_push_down_join_filter(
     original_plan: Arc<dyn ExecutionPlan>,
     join: &NestedLoopJoinExec,
-    config: &ConfigOptions,
     alias_generator: &AliasGenerator,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     // Mark joins are currently not supported.
@@ -117,7 +114,6 @@ fn try_push_down_join_filter(
         Arc::clone(join.left()),
         JoinSide::Left,
         filter.clone(),
-        config,
         alias_generator,
     )?;
     let rhs_rewrite = try_push_down_projection(
@@ -125,7 +121,6 @@ fn try_push_down_join_filter(
         Arc::clone(join.right()),
         JoinSide::Right,
         lhs_rewrite.data.1,
-        config,
         alias_generator,
     )?;
     if !lhs_rewrite.transformed && !rhs_rewrite.transformed {
@@ -193,7 +188,6 @@ fn try_push_down_projection(
     plan: Arc<dyn ExecutionPlan>,
     join_side: JoinSide,
     join_filter: JoinFilter,
-    config: &ConfigOptions,
     alias_generator: &AliasGenerator,
 ) -> Result<Transformed<(Arc<dyn ExecutionPlan>, JoinFilter)>> {
     let expr = Arc::clone(join_filter.expression());
@@ -207,7 +201,6 @@ fn try_push_down_projection(
     let new_expr = rewriter.rewrite(expr)?;
 
     if new_expr.transformed {
-        let plan = ensure_batch_size(plan, config);
         let new_join_side =
             ProjectionExec::try_new(rewriter.join_side_projections, plan)?;
         let new_schema = Arc::clone(&new_join_side.schema());
@@ -235,25 +228,6 @@ fn try_push_down_projection(
         Ok(Transformed::yes((Arc::new(new_join_side), join_filter)))
     } else {
         Ok(Transformed::no((plan, join_filter)))
-    }
-}
-
-/// Adds a [CoalesceBatchesExec], if necessary.
-///
-/// The nested loop join can handle small batches quite efficiently, but our UDFs suffer greatly
-/// from small batches.
-fn ensure_batch_size(
-    plan: Arc<dyn ExecutionPlan>,
-    config: &ConfigOptions,
-) -> Arc<dyn ExecutionPlan> {
-    if plan
-        .as_any()
-        .downcast_ref::<CoalesceBatchesExec>()
-        .is_some()
-    {
-        plan
-    } else {
-        Arc::new(CoalesceBatchesExec::new(plan, config.execution.batch_size))
     }
 }
 
@@ -518,11 +492,9 @@ mod test {
         assert_snapshot!(optimized_plan, @r"
         NestedLoopJoinExec: join_type=Inner, filter=join_proj_push_down_1@0 > join_proj_push_down_2@1, projection=[a@0, x@2]
           ProjectionExec: expr=[a@0 as a, a@0 + 1 as join_proj_push_down_1]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
           ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
         ");
         Ok(())
     }
@@ -549,11 +521,9 @@ mod test {
         assert_snapshot!(optimized_plan, @r"
         NestedLoopJoinExec: join_type=Inner, filter=false AND join_proj_push_down_1@0 > join_proj_push_down_2@1, projection=[a@0, x@2]
           ProjectionExec: expr=[a@0 as a, a@0 + 1 as join_proj_push_down_1]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
           ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
         ");
         Ok(())
     }
@@ -594,11 +564,9 @@ mod test {
         assert_snapshot!(optimized_plan, @r"
         NestedLoopJoinExec: join_type=Inner, filter=join_proj_push_down_1@0 > join_proj_push_down_2@1, projection=[a@0, b@1, c@2, x@4, y@5, z@6]
           ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c, a@0 + b@1 as join_proj_push_down_1]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
           ProjectionExec: expr=[x@0 as x, y@1 as y, z@2 as z, x@0 + z@2 as join_proj_push_down_2]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
         ");
         Ok(())
     }
@@ -619,11 +587,9 @@ mod test {
         assert_snapshot!(optimized_plan, @r"
         NestedLoopJoinExec: join_type=Inner, filter=join_proj_push_down_1@0 > join_proj_push_down_2@1, projection=[b@1, x@4, z@6]
           ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c, a@0 + b@1 as join_proj_push_down_1]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
           ProjectionExec: expr=[x@0 as x, y@1 as y, z@2 as z, x@0 + z@2 as join_proj_push_down_2]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
         ");
         Ok(())
     }
@@ -644,11 +610,9 @@ mod test {
         assert_snapshot!(left_semi_join_plan, @r"
         NestedLoopJoinExec: join_type=LeftSemi, filter=join_proj_push_down_1@0 > join_proj_push_down_2@1, projection=[a@0]
           ProjectionExec: expr=[a@0 as a, a@0 + 1 as join_proj_push_down_1]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
           ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
         ");
         Ok(())
     }
@@ -667,11 +631,9 @@ mod test {
         assert_snapshot!(right_semi_join_plan, @r"
         NestedLoopJoinExec: join_type=RightSemi, filter=join_proj_push_down_1@0 > join_proj_push_down_2@1, projection=[x@0]
           ProjectionExec: expr=[a@0 as a, a@0 + 1 as join_proj_push_down_1]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
           ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
-            CoalesceBatchesExec: target_batch_size=8192
-              EmptyExec
+            EmptyExec
         ");
         Ok(())
     }
