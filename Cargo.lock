@@ -2031,6 +2031,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-datasource-arrow"
+version = "50.1.0"
+dependencies = [
+ "arrow",
+ "arrow-ipc",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "datafusion-common",
+ "datafusion-common-runtime",
+ "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "datafusion-session",
+ "futures",
+ "itertools 0.14.0",
+ "object_store",
+ "tokio",
+]
+
+[[package]]
 name = "datafusion-datasource-avro"
 version = "50.1.0"
 dependencies = [
@@ -2509,11 +2532,21 @@ dependencies = [
  "arrow",
  "chrono",
  "datafusion",
+ "datafusion-catalog",
  "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-datasource-arrow",
+ "datafusion-datasource-csv",
+ "datafusion-datasource-json",
+ "datafusion-datasource-parquet",
+ "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-functions-table",
  "datafusion-functions-window-common",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
  "datafusion-proto-common",
  "doc-comment",
  "object_store",

@@ -35,8 +35,6 @@ pub use datafusion_datasource_parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
 pub use datafusion_datasource_parquet::{ParquetFileMetrics, ParquetFileReaderFactory};
 
-pub use arrow_file::ArrowSource;
-
 pub use json::{JsonOpener, JsonSource};
 
 pub use csv::{CsvOpener, CsvSource};
