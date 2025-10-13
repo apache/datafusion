@@ -89,6 +89,22 @@ macro_rules! make_udf_function {
     };
 }
 
+/// Creates a singleton `ScalarUDF` of the `$UDF` function and a function
+/// named `$NAME` which returns that singleton. The function takes a
+/// configuration argument of type `$CONFIG_TYPE` to create the UDF.
+#[macro_export]
+macro_rules! make_udf_function_with_config {
+    ($UDF:ty, $NAME:ident, $CONFIG_TYPE:ty) => {
+        #[allow(rustdoc::redundant_explicit_links)]
+        #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
+        pub fn $NAME(config: $CONFIG_TYPE) -> std::sync::Arc<datafusion_expr::ScalarUDF> {
+            std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
+                <$UDF>::new_with_config(&config),
+            ))
+        }
+    };
+}
+
 /// Macro creates a sub module if the feature is not enabled
 ///
 /// The rationale for providing stub functions is to help users to configure datafusion

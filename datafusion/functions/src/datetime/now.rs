@@ -19,7 +19,9 @@ use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use std::any::Any;
+use std::sync::Arc;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -41,6 +43,7 @@ The `now()` return value is determined at query time and will return the same ti
 pub struct NowFunc {
     signature: Signature,
     aliases: Vec<String>,
+    timezone: Option<Arc<str>>,
 }
 
 impl Default for NowFunc {
@@ -54,6 +57,15 @@ impl NowFunc {
         Self {
             signature: Signature::nullary(Volatility::Stable),
             aliases: vec!["current_timestamp".to_string()],
+            timezone: Some(Arc::from("+00")),
+        }
+    }
+
+    pub fn new_with_config(config: &ConfigOptions) -> Self {
+        Self {
+            signature: Signature::nullary(Volatility::Stable),
+            aliases: vec!["current_timestamp".to_string()],
+            timezone: Some(Arc::from(config.execution.time_zone.as_str())),
         }
     }
 }
@@ -80,7 +92,7 @@ impl ScalarUDFImpl for NowFunc {
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(
             self.name(),
-            Timestamp(Nanosecond, Some("+00".into())),
+            Timestamp(Nanosecond, self.timezone.clone()),
             false,
         )
         .into())
