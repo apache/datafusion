@@ -45,7 +45,7 @@ use datafusion_physical_plan::ExecutionPlan;
 ///
 /// Furthermore, tries to push down projections from nested loop join filters that only depend on
 /// one side of the join. By pushing these projections down, functions that only depend on one side
-/// of the join must be done for the cartesian product of the two sides.
+/// of the join must be evaluated for the cartesian product of the two sides.
 #[derive(Default, Debug)]
 pub struct ProjectionPushdown {}
 
