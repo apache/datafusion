@@ -149,7 +149,7 @@ datafusion-substrait = { path = "datafusion/substrait", version = "50.1.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
-half = { version = "2.6.0", default-features = false }
+half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
 indexmap = "2.11.4"
