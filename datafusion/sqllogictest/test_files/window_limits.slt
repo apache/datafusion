@@ -684,3 +684,86 @@ LIMIT 5;
 557517119 1088543984
 4061635107 1362369177
 4015442341 145294611
+
+# sliding
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query III
+SELECT
+    empno,
+    salary,
+    SUM(salary) OVER (ORDER BY empno ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS sliding_sum
+FROM employees
+LIMIT 3;
+----
+102 3276123488 3276123488
+299 28774375 3304897863
+363 1865307672 5170205535
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query III
+SELECT
+    empno,
+    salary,
+    SUM(salary) OVER (ORDER BY empno ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS sliding_sum
+FROM employees
+LIMIT 3;
+----
+102 3276123488 3276123488
+299 28774375 3304897863
+363 1865307672 5170205535
+
+# sliding lead
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query III
+SELECT
+    empno,
+    salary,
+    LEAD(salary, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead2
+FROM employees
+LIMIT 3;
+----
+102 3276123488 1865307672
+299 28774375 557517119
+363 1865307672 4061635107
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query III
+SELECT
+    empno,
+    salary,
+    LEAD(salary, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead2
+FROM employees
+LIMIT 3;
+----
+102 3276123488 1865307672
+299 28774375 557517119
+363 1865307672 4061635107
+
+query TT
+EXPLAIN
+SELECT
+    empno,
+    salary,
+    LEAD(salary, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead2
+FROM employees
+LIMIT 3;
+----
+logical_plan
+01)Projection: employees.empno, employees.salary, lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead2
+02)--Limit: skip=0, fetch=3
+03)----WindowAggr: windowExpr=[[lead(employees.salary, Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno, salary]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, salary@1 as salary, lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as lead2]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----BoundedWindowAggExec: wdw=[lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
