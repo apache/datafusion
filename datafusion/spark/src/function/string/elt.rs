@@ -150,11 +150,19 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 mod tests {
     use arrow::array::Int64Array;
     use datafusion_common::Result;
-
     use super::*;
 
-    fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<ArrayRef> {
-        elt(&arrs)
+    use std::sync::Arc;
+    use arrow::array::{ArrayRef, StringArray};
+    use datafusion_common::{DataFusionError};
+
+    fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<Arc<StringArray>> {
+        let arr = elt(&arrs)?;
+        let string_array = arr
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
+        Ok(Arc::new(string_array.clone()))
     }
 
     #[test]
@@ -193,10 +201,6 @@ mod tests {
         ]));
 
         let out = run_elt_arrays(vec![idx, v1, v2, v3])?;
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
         assert_eq!(out.len(), 6);
         assert_eq!(out.value(0), "a1");
         assert_eq!(out.value(1), "b2");
@@ -214,10 +218,6 @@ mod tests {
         let v2 = Arc::new(Int64Array::from(vec![Some(100), None, Some(300)]));
 
         let out = run_elt_arrays(vec![idx, v1, v2])?;
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
         assert_eq!(out.len(), 3);
         assert_eq!(out.value(0), "100");
         assert_eq!(out.value(1), "20");
@@ -232,10 +232,6 @@ mod tests {
         let v2 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]));
 
         let out = run_elt_arrays(vec![idx, v1, v2])?;
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
         assert!(out.is_null(0));
         assert!(out.is_null(1));
         assert!(out.is_null(2));
