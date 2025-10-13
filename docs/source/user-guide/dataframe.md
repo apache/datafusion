@@ -19,6 +19,8 @@
 
 # DataFrame API
 
+## DataFrame overview
+
 A DataFrame represents a logical set of rows with the same named columns,
 similar to a [Pandas DataFrame] or [Spark DataFrame].
 
@@ -108,6 +110,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+---
+
+# REFERENCES
 
 [pandas dataframe]: https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html
 [spark dataframe]: https://spark.apache.org/docs/latest/sql-programming-guide.html
