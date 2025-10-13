@@ -52,7 +52,7 @@ pub mod expr_fn {
     ));
     export_functions!((
         elt,
-        "Returns the n-th input, e.g., returns input2 when n is 2. The function returns NULL if the index exceeds the length of the array.",
+        "Returns the n-th input (1-indexed), e.g. returns 2nd input when n is 2. The function returns NULL if the index is 0 or exceeds the length of the array.",
         select_col arg1 arg2 argn
     ));
     export_functions!((

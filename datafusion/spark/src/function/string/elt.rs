@@ -24,6 +24,7 @@ use arrow::array::{
 use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{Int64, Utf8};
 use arrow::datatypes::{DataType, Int64Type};
+use datafusion_common::cast::as_string_array;
 use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -98,51 +99,38 @@ impl ScalarUDFImpl for SparkElt {
 fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     let n_rows = args[0].len();
 
-    let idx_i64: Option<&PrimitiveArray<Int64Type>> =
-        args[0].as_primitive_opt::<Int64Type>();
+    let idx: &PrimitiveArray<Int64Type> =
+        args[0].as_primitive_opt::<Int64Type>().ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "ELT function: first argument must be Int64 (got {:?})",
+                args[0].data_type()
+            ))
+        })?;
 
-    if idx_i64.is_none() {
-        plan_datafusion_err!(
-            "ELT function: first argument must be Int64 (got {:?})",
-            args[0].data_type()
-        );
-    }
-
-    let num_values: usize = args.len() - 1;
+    let num_values = args.len() - 1;
     let mut cols: Vec<Arc<StringArray>> = Vec::with_capacity(num_values);
     for a in args.iter().skip(1) {
         let casted = cast(a, &Utf8)?;
-        let sa = casted.as_string::<i32>().clone();
-        cols.push(Arc::new(sa));
+        let sa = as_string_array(&casted)?;
+        cols.push(Arc::new(sa.clone()));
     }
 
     let mut builder = StringBuilder::new();
 
     for i in 0..n_rows {
-        let n_opt: Option<i64> = if let Some(idx) = idx_i64 {
-            if idx.is_null(i) {
-                None
-            } else {
-                Some(idx.value(i))
-            }
-        } else {
-            None
-        };
-
-        let Some(index) = n_opt else {
+        if idx.is_null(i) {
             builder.append_null();
             continue;
-        };
+        }
 
-        let ansi_enable: bool = false;
+        let index = idx.value(i);
 
+        // TODO: if spark.sql.ansi.enabled is true,
+        //  throw ArrayIndexOutOfBoundsException for invalid indices;
+        //  if false, return NULL instead (current behavior).
         if index < 1 || (index as usize) > num_values {
-            if !ansi_enable {
-                builder.append_null();
-                continue;
-            } else {
-                plan_datafusion_err!("ArrayIndexOutOfBoundsException");
-            }
+            builder.append_null();
+            continue;
         }
 
         let value_idx = (index as usize) - 1;
@@ -160,7 +148,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Int32Array, Int64Array};
+    use arrow::array::Int64Array;
     use datafusion_common::Result;
 
     use super::*;
@@ -239,7 +227,7 @@ mod tests {
 
     #[test]
     fn elt_out_of_range_all_null() -> Result<()> {
-        let idx = Arc::new(Int32Array::from(vec![Some(5), Some(-1), Some(0)]));
+        let idx = Arc::new(Int64Array::from(vec![Some(5), Some(-1), Some(0)]));
         let v1 = Arc::new(StringArray::from(vec![Some("x"), Some("y"), Some("z")]));
         let v2 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]));
 
@@ -256,7 +244,7 @@ mod tests {
 
     #[test]
     fn elt_utf8_returns_utf8() -> Result<()> {
-        let idx = Arc::new(Int32Array::from(vec![Some(1)]));
+        let idx = Arc::new(Int64Array::from(vec![Some(1)]));
         let v1 = Arc::new(StringArray::from(vec![Some("scala")]));
         let v2 = Arc::new(StringArray::from(vec![Some("java")]));
 
