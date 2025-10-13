@@ -149,7 +149,7 @@ physical_plan
 04)------SortExec: TopK(fetch=3), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
 
-# aggregate functions shouldn't effect the window
+# aggregate functions shouldn't affect the window
 statement ok
 set datafusion.optimizer.enable_window_limits = false;
 
@@ -213,6 +213,130 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: TopK(fetch=5), expr=[empno@1 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true
+
+# ranking functions that don't affect the limit
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query IIII
+SELECT
+  empno,
+  row_number() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rn,
+  rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rnk,
+  dense_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS drnk
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 1 1 1
+299 2 2 2
+363 3 3 3
+417 4 4 4
+794 5 5 5
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query IIII
+SELECT
+  empno,
+  row_number() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rn,
+  rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rnk,
+  dense_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS drnk
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 1 1 1
+299 2 2 2
+363 3 3 3
+417 4 4 4
+794 5 5 5
+
+query TT
+EXPLAIN
+SELECT
+  empno,
+  row_number() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rn,
+  rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rnk,
+  dense_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS drnk
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+logical_plan
+01)Sort: employees.empno ASC NULLS LAST, fetch=5
+02)--Projection: employees.empno, row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rnk, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS drnk
+03)----WindowAggr: windowExpr=[[row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rnk, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as drnk]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+
+# Unoptimizable global ranking functions
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query IRRI
+SELECT
+  empno,
+  percent_rank() OVER (ORDER BY empno) AS pr,
+  cume_dist() OVER (ORDER BY empno) AS cd,
+  ntile(4) OVER (ORDER BY empno) AS nt
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 0 0.01 1
+299 0.010101010101 0.02 1
+363 0.020202020202 0.03 1
+417 0.030303030303 0.04 1
+794 0.040404040404 0.05 1
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query IRRI
+SELECT
+  empno,
+  percent_rank() OVER (ORDER BY empno) AS pr,
+  cume_dist() OVER (ORDER BY empno) AS cd,
+  ntile(4) OVER (ORDER BY empno) AS nt
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 0 0.01 1
+299 0.010101010101 0.02 1
+363 0.020202020202 0.03 1
+417 0.030303030303 0.04 1
+794 0.040404040404 0.05 1
+
+query TT
+EXPLAIN
+SELECT
+  empno,
+  percent_rank() OVER (ORDER BY empno) AS pr,
+  cume_dist() OVER (ORDER BY empno) AS cd,
+  ntile(4) OVER (ORDER BY empno) AS nt
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+logical_plan
+01)Sort: employees.empno ASC NULLS LAST, fetch=5
+02)--Projection: employees.empno, percent_rank() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS pr, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS cd, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS nt
+03)----WindowAggr: windowExpr=[[percent_rank() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, percent_rank() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as pr, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as cd, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as nt]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----WindowAggExec: wdw=[percent_rank() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "percent_rank() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "cume_dist() ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }]
+04)------SortExec: expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
 
 # should handle partition by unoptimized
 statement ok
