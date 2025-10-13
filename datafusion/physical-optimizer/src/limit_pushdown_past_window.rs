@@ -106,31 +106,9 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             // grow the limit if we hit a window function
             if let Some(window) = node.as_any().downcast_ref::<BoundedWindowAggExec>() {
                 phase = Phase::Apply;
-                let mut max_rel = 0;
-                let mut max_abs = 0;
-                for expr in window.window_expr().iter() {
-                    // grow based on function requirements
-                    match grow_limit(expr) {
-                        LimitEffect::None => {}
-                        LimitEffect::Unknown => return reset(node, &mut ctx),
-                        LimitEffect::Relative(rel) => max_rel = max_rel.max(rel),
-                        LimitEffect::Absolute(abs) => max_abs = max_abs.max(abs),
-                    }
-
-                    // grow based on frames
-                    let frame = expr.get_window_frame();
-                    if frame.units != WindowFrameUnits::Rows {
-                        return reset(node, &mut ctx); // expression-based limits?
-                    }
-                    let Some(end_bound) = bound_to_usize(&frame.end_bound) else {
-                        return reset(node, &mut ctx);
-                    };
-                    ctx.lookahead = ctx.lookahead.max(end_bound);
+                if !grow_limit(window, &mut ctx) {
+                    return reset(node, &mut ctx);
                 }
-
-                // finish grow
-                ctx.max_lookahead(ctx.lookahead + max_rel);
-                ctx.max_lookahead(max_abs);
                 return Ok(Transformed::no(node));
             }
 
@@ -174,6 +152,35 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
     fn schema_check(&self) -> bool {
         false // we don't change the schema
     }
+}
+
+fn grow_limit(window: &BoundedWindowAggExec, ctx: &mut TraverseState) -> bool {
+    let mut max_rel = 0;
+    let mut max_abs = 0;
+    for expr in window.window_expr().iter() {
+        // grow based on function requirements
+        match get_limit_effect(expr) {
+            LimitEffect::None => {}
+            LimitEffect::Unknown => return false,
+            LimitEffect::Relative(rel) => max_rel = max_rel.max(rel),
+            LimitEffect::Absolute(abs) => max_abs = max_abs.max(abs),
+        }
+
+        // grow based on frames
+        let frame = expr.get_window_frame();
+        if frame.units != WindowFrameUnits::Rows {
+            return false; // expression-based limits not statically evaluatable
+        }
+        let Some(end_bound) = bound_to_usize(&frame.end_bound) else {
+            return false;
+        };
+        ctx.lookahead = ctx.lookahead.max(end_bound);
+    }
+
+    // finish grow
+    ctx.max_lookahead(ctx.lookahead + max_rel);
+    ctx.max_lookahead(max_abs);
+    true
 }
 
 fn apply_limit(
@@ -220,7 +227,7 @@ fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
 /// # Returns
 ///
 /// The effect on the limit
-fn grow_limit(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
+fn get_limit_effect(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
     // White list aggregates
     if expr.as_any().is::<PlainAggregateWindowExpr>()
         || expr.as_any().is::<SlidingAggregateWindowExpr>()
