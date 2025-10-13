@@ -20,13 +20,13 @@
 ##########
 
 # Test 1: Verify current_date is consistent within the same query (default UTC)
-query R
+query B
 SELECT current_date() = current_date();
 ----
 true
 
 # Test 2: Verify alias 'today' works the same as current_date
-query R
+query B
 SELECT current_date() = today();
 ----
 true
@@ -35,13 +35,13 @@ true
 statement ok
 SET datafusion.execution.time_zone = '+19:00';
 
-query R
+query B
 SELECT current_date() = current_date();
 ----
 true
 
 # Test 4: Verify current_date matches cast(now() as date) in the same timezone
-query R
+query B
 SELECT current_date() = cast(now() as date);
 ----
 true
@@ -50,7 +50,7 @@ true
 statement ok
 SET datafusion.execution.time_zone = '-08:00';
 
-query R
+query B
 SELECT current_date() = today();
 ----
 true
@@ -59,13 +59,13 @@ true
 statement ok
 SET datafusion.execution.time_zone = 'America/New_York';
 
-query R
+query B
 SELECT current_date() = current_date();
 ----
 true
 
 # Test 7: Verify date type is preserved
-query R
+query T
 SELECT arrow_typeof(current_date());
 ----
 Date32
@@ -74,7 +74,7 @@ Date32
 statement ok
 SET datafusion.execution.time_zone = '+00:00';
 
-query R
+query B
 SELECT current_date() = today();
 ----
 true
