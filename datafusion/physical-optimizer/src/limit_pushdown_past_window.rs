@@ -32,7 +32,6 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::cmp;
-use std::cmp::max;
 use std::sync::Arc;
 
 /// This rule inspects [`ExecutionPlan`]'s attempting to find fetch limits that were not pushed
@@ -51,7 +50,7 @@ impl LimitPushPastWindows {
 #[derive(Eq, PartialEq)]
 enum Phase {
     FindOrGrow,
-    Apply
+    Apply,
 }
 
 #[derive(Default)]
@@ -71,21 +70,6 @@ impl TraverseState {
     }
 }
 
-fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
-    if let Some(limit) = node.as_any().downcast_ref::<GlobalLimitExec>() {
-        ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
-        return true;
-    }
-    if let Some(limit) =
-        node.as_any().downcast_ref::<SortPreservingMergeExec>()
-    {
-        ctx.reset_limit(limit.fetch());
-        return true;
-    }
-
-    false
-}
-
 impl PhysicalOptimizerRule for LimitPushPastWindows {
     fn optimize(
         &self,
@@ -99,7 +83,8 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
         let mut phase = Phase::FindOrGrow;
         let result = original.transform_down(|node| {
             // helper closure to DRY out most the early return cases
-            let mut reset = |node, ctx: &mut TraverseState|
+            let reset = |node,
+                         ctx: &mut TraverseState|
              -> datafusion_common::Result<
                 Transformed<Arc<dyn ExecutionPlan>>,
             > {
@@ -114,10 +99,8 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // grab the latest limit we see
-            if phase == Phase::FindOrGrow {
-                if get_limit(&node, &mut ctx) {
-                    return Ok(Transformed::no(node));
-                }
+            if phase == Phase::FindOrGrow && get_limit(&node, &mut ctx) {
+                return Ok(Transformed::no(node));
             }
 
             // grow the limit if we hit a window function
@@ -153,34 +136,8 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
 
             // Apply the limit if we hit a sortpreservingmerge node
             if phase == Phase::Apply {
-                if let Some(spm) = node.as_any().downcast_ref::<SortPreservingMergeExec>()
-                {
-                    let latest = ctx.limit.take();
-                    let Some(fetch) = latest else {
-                        return reset(node, &mut ctx);
-                    };
-                    let fetch = match spm.fetch() {
-                        None => fetch + ctx.lookahead,
-                        Some(existing) => cmp::min(existing, fetch + ctx.lookahead),
-                    };
-                    let spm: Arc<dyn ExecutionPlan> =
-                        spm.with_fetch(Some(fetch)).unwrap();
-                    return Ok(Transformed::complete(spm));
-                }
-
-                // Apply the limit if we hit a sort node
-                if let Some(sort) = node.as_any().downcast_ref::<SortExec>() {
-                    let latest = ctx.limit.take();
-                    let Some(fetch) = latest else {
-                        return reset(node, &mut ctx);
-                    };
-                    let fetch = match sort.fetch() {
-                        None => fetch + ctx.lookahead,
-                        Some(existing) => cmp::min(existing, fetch + ctx.lookahead),
-                    };
-                    let sort: Arc<dyn ExecutionPlan> =
-                        Arc::new(sort.with_fetch(Some(fetch)));
-                    return Ok(Transformed::complete(sort));
+                if let Some(out) = apply_limit(&node, &mut ctx) {
+                    return Ok(out);
                 }
             }
 
@@ -219,6 +176,38 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
     }
 }
 
+fn apply_limit(
+    node: &Arc<dyn ExecutionPlan>,
+    ctx: &mut TraverseState,
+) -> Option<Transformed<Arc<dyn ExecutionPlan>>> {
+    if !node.as_any().is::<SortExec>() && !node.as_any().is::<SortPreservingMergeExec>() {
+        return None;
+    }
+    let latest = ctx.limit.take();
+    let Some(fetch) = latest else {
+        ctx.limit = None;
+        ctx.lookahead = 0;
+        return Some(Transformed::no(node.clone()));
+    };
+    let fetch = match node.fetch() {
+        None => fetch + ctx.lookahead,
+        Some(existing) => cmp::min(existing, fetch + ctx.lookahead),
+    };
+    Some(Transformed::complete(node.with_fetch(Some(fetch)).unwrap()))
+}
+
+fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
+    if let Some(limit) = node.as_any().downcast_ref::<GlobalLimitExec>() {
+        ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
+        return true;
+    }
+    if let Some(limit) = node.as_any().downcast_ref::<SortPreservingMergeExec>() {
+        ctx.reset_limit(limit.fetch());
+        return true;
+    }
+    false
+}
+
 /// Examines the `WindowExpr` and decides:
 /// 1. The expression does not change the window size
 /// 2. The expression grows it by X amount
@@ -230,7 +219,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
 ///
 /// # Returns
 ///
-/// `false` if we can't optimize
+/// The effect on the limit
 fn grow_limit(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
     // White list aggregates
     if expr.as_any().is::<PlainAggregateWindowExpr>()
@@ -247,8 +236,6 @@ fn grow_limit(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
     let Some(udf) = swfe.as_any().downcast_ref::<WindowUDFExpr>() else {
         return LimitEffect::Unknown; // should be only remaining type
     };
-
-    // Return its effect
     udf.limit_effect()
 }
 
