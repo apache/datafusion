@@ -153,14 +153,16 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
 
 fn grow_limit(window: &BoundedWindowAggExec, ctx: &mut TraverseState) -> bool {
     let mut max_rel = 0;
-    let mut max_abs = 0;
     for expr in window.window_expr().iter() {
         // grow based on function requirements
         match get_limit_effect(expr) {
             LimitEffect::None => {}
             LimitEffect::Unknown => return false,
             LimitEffect::Relative(rel) => max_rel = max_rel.max(rel),
-            LimitEffect::Absolute(abs) => max_abs = max_abs.max(abs),
+            LimitEffect::Absolute(val) => {
+                let cur = ctx.limit.unwrap_or(0);
+                ctx.limit = Some(cur.max(val))
+            }
         }
 
         // grow based on frames
@@ -169,14 +171,13 @@ fn grow_limit(window: &BoundedWindowAggExec, ctx: &mut TraverseState) -> bool {
             return false; // expression-based limits not statically evaluatable
         }
         let Some(end_bound) = bound_to_usize(&frame.end_bound) else {
-            return false;
+            return false; // can't optimize unbounded window expressions
         };
-        ctx.lookahead = ctx.lookahead.max(end_bound);
+        ctx.max_lookahead(end_bound);
     }
 
     // finish grow
     ctx.max_lookahead(ctx.lookahead + max_rel);
-    ctx.max_lookahead(max_abs);
     true
 }
 
@@ -191,7 +192,7 @@ fn apply_limit(
     let Some(fetch) = latest else {
         ctx.limit = None;
         ctx.lookahead = 0;
-        return Some(Transformed::no(node.clone()));
+        return Some(Transformed::no(Arc::clone(node)));
     };
     let fetch = match node.fetch() {
         None => fetch + ctx.lookahead,

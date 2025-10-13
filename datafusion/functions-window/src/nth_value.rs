@@ -344,21 +344,8 @@ impl WindowUDFImpl for NthValue {
         }
     }
 
-    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
-        match args {
-            [_, expr, ..] => {
-                let Some(lit) = expr.as_any().downcast_ref::<expressions::Literal>()
-                else {
-                    return LimitEffect::Unknown;
-                };
-                let ScalarValue::Int64(Some(amount)) = lit.value() else {
-                    return LimitEffect::Unknown; // we should only get int64 from the parser
-                };
-                let nth_row = (amount - 1).max(0) as usize;
-                LimitEffect::Absolute(nth_row)
-            }
-            _ => LimitEffect::Unknown, // invalid arguments
-        }
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::None // NthValue is causal
     }
 }
 
