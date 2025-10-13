@@ -48,6 +48,29 @@ impl LimitPushPastWindows {
     }
 }
 
+enum Phase {
+    Find,
+    Grow,
+    Apply
+}
+
+#[derive(Default)]
+struct RuleContext {
+    pub limit: Option<usize>,
+    pub lookahead: usize,
+}
+
+impl RuleContext {
+    pub fn reset_limit(&mut self, limit: Option<usize>) {
+        self.limit = limit;
+        self.lookahead = 0;
+    }
+
+    pub fn max_lookahead(&mut self, new_val: usize) {
+        self.lookahead = self.lookahead.max(new_val);
+    }
+}
+
 impl PhysicalOptimizerRule for LimitPushPastWindows {
     fn optimize(
         &self,
@@ -57,38 +80,34 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
         if !config.optimizer.enable_window_limits {
             return Ok(original);
         }
-        let mut latest_limit: Option<usize> = None;
-        let mut lookahead = 0;
+        let mut ctx = RuleContext::default();
         let mut applying = false;
         let result = original.transform_down(|node| {
             // helper closure to DRY out most the early return cases
-            let mut reset = |node,
-                             max: &mut usize|
+            let mut reset = |node, ctx: &mut RuleContext|
              -> datafusion_common::Result<
                 Transformed<Arc<dyn ExecutionPlan>>,
             > {
-                latest_limit = None;
-                *max = 0;
+                ctx.limit = None;
+                ctx.lookahead = 0;
                 Ok(Transformed::no(node))
             };
 
             // traversing sides of joins will require more thought
             if node.children().len() > 1 {
-                return reset(node, &mut lookahead);
+                return reset(node, &mut ctx);
             }
 
             // grab the latest limit we see
             if !applying {
                 if let Some(limit) = node.as_any().downcast_ref::<GlobalLimitExec>() {
-                    latest_limit = limit.fetch().map(|fetch| fetch + limit.skip());
-                    lookahead = 0;
+                    ctx.reset_limit(limit.fetch().map(|fetch| fetch + limit.skip()));
                     return Ok(Transformed::no(node));
                 }
                 if let Some(limit) =
                     node.as_any().downcast_ref::<SortPreservingMergeExec>()
                 {
-                    latest_limit = limit.fetch();
-                    lookahead = 0;
+                    ctx.reset_limit(limit.fetch());
                     return Ok(Transformed::no(node));
                 }
             }
@@ -102,7 +121,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                     // grow based on function requirements
                     match grow_limit(expr) {
                         LimitEffect::None => {}
-                        LimitEffect::Unknown => return reset(node, &mut lookahead),
+                        LimitEffect::Unknown => return reset(node, &mut ctx),
                         LimitEffect::Relative(rel) => max_rel = max_rel.max(rel),
                         LimitEffect::Absolute(abs) => max_abs = max_abs.max(abs),
                     }
@@ -110,17 +129,17 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                     // grow based on frames
                     let frame = expr.get_window_frame();
                     if frame.units != WindowFrameUnits::Rows {
-                        return reset(node, &mut lookahead); // expression-based limits?
+                        return reset(node, &mut ctx); // expression-based limits?
                     }
                     let Some(end_bound) = bound_to_usize(&frame.end_bound) else {
-                        return reset(node, &mut lookahead);
+                        return reset(node, &mut ctx);
                     };
-                    lookahead = max(end_bound, lookahead);
+                    ctx.lookahead = ctx.lookahead.max(end_bound);
                 }
 
                 // finish grow
-                lookahead = lookahead.max(lookahead + max_rel);
-                lookahead = lookahead.max(max_abs);
+                ctx.max_lookahead(ctx.lookahead + max_rel);
+                ctx.max_lookahead(max_abs);
                 return Ok(Transformed::no(node));
             }
 
@@ -128,35 +147,31 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             if applying {
                 if let Some(spm) = node.as_any().downcast_ref::<SortPreservingMergeExec>()
                 {
-                    let latest = latest_limit.take();
+                    let latest = ctx.limit.take();
                     let Some(fetch) = latest else {
-                        lookahead = 0;
-                        return Ok(Transformed::no(node));
+                        return reset(node, &mut ctx);
                     };
                     let fetch = match spm.fetch() {
-                        None => fetch + lookahead,
-                        Some(existing) => cmp::min(existing, fetch + lookahead),
+                        None => fetch + ctx.lookahead,
+                        Some(existing) => cmp::min(existing, fetch + ctx.lookahead),
                     };
                     let spm: Arc<dyn ExecutionPlan> =
                         spm.with_fetch(Some(fetch)).unwrap();
-                    lookahead = 0;
                     return Ok(Transformed::complete(spm));
                 }
 
                 // Apply the limit if we hit a sort node
                 if let Some(sort) = node.as_any().downcast_ref::<SortExec>() {
-                    let latest = latest_limit.take();
+                    let latest = ctx.limit.take();
                     let Some(fetch) = latest else {
-                        lookahead = 0;
-                        return Ok(Transformed::no(node));
+                        return reset(node, &mut ctx);
                     };
                     let fetch = match sort.fetch() {
-                        None => fetch + lookahead,
-                        Some(existing) => cmp::min(existing, fetch + lookahead),
+                        None => fetch + ctx.lookahead,
+                        Some(existing) => cmp::min(existing, fetch + ctx.lookahead),
                     };
                     let sort: Arc<dyn ExecutionPlan> =
                         Arc::new(sort.with_fetch(Some(fetch)));
-                    lookahead = 0;
                     return Ok(Transformed::complete(sort));
                 }
             }
@@ -166,18 +181,18 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                 // TODO: avoid combinatorial explosion of rules*nodes
                 // instead of white listing rules (supports push_down rule)
                 // use properties like CardinalityEffect, or LimitEffect
-                return reset(node, &mut lookahead);
+                return reset(node, &mut ctx);
             }
             if let Some(part) = node.as_any().downcast_ref::<RepartitionExec>() {
                 let output = part.partitioning().partition_count();
                 let input = part.input().output_partitioning().partition_count();
                 if output < input {
-                    return reset(node, &mut lookahead);
+                    return reset(node, &mut ctx);
                 }
             }
             match node.cardinality_effect() {
-                CardinalityEffect::Unknown => return reset(node, &mut lookahead),
-                CardinalityEffect::LowerEqual => return reset(node, &mut lookahead),
+                CardinalityEffect::Unknown => return reset(node, &mut ctx),
+                CardinalityEffect::LowerEqual => return reset(node, &mut ctx),
                 CardinalityEffect::Equal => {}
                 CardinalityEffect::GreaterEqual => {}
             }
