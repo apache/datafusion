@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Time64;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use std::any::Any;
 
+use chrono::TimeZone;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -30,7 +32,7 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r#"
-Returns the current UTC time.
+Returns the current time in the session time zone.
 
 The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
 "#,
@@ -93,7 +95,20 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         let now_ts = info.execution_props().query_execution_start_time;
-        let nano = now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000);
+
+        let nano = if let Some(config) = info.execution_props().config_options() {
+            if let Ok(tz) = config.execution.time_zone.parse::<Tz>() {
+                let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
+                local_now
+                    .timestamp_nanos_opt()
+                    .map(|ts| ts % 86400000000000)
+            } else {
+                now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000)
+            }
+        } else {
+            now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000)
+        };
+
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Time64Nanosecond(nano),
             None,

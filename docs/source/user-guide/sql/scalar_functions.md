@@ -2417,7 +2417,7 @@ current_date()
 
 ### `current_time`
 
-Returns the current UTC time.
+Returns the current time in the session time zone.
 
 The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
 
