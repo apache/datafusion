@@ -884,6 +884,20 @@ select log(2.0, null);
 ----
 NULL
 
+# power with decimals
+
+# TODO: Result should be decimal
+query RT
+SELECT power(2::decimal(12, 0), 4), arrow_typeof(power(2::decimal(12, 0), 4));
+----
+16 Float64
+
+query RR
+SELECT power(2::decimal(39, 0), 4), power(2::decimal(39, 0), 0);
+----
+16 1
+
+
 # Set parse_float_as_decimal to false to test float parsing
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
@@ -907,3 +921,16 @@ query R
 select log(100000000000000000000000000000000000::decimal(38,0))
 ----
 34
+
+# power with decimals-as-floats
+
+query R
+SELECT power(2::decimal(39, 0), 4);
+----
+16
+
+# Result is float
+query RT
+SELECT power(2::decimal(12, 0), 4), arrow_typeof(power(2::decimal(12, 0), 4));
+----
+16 Float64
