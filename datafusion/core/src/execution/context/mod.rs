@@ -1079,10 +1079,9 @@ impl SessionContext {
             // Register UDFs that return values based on session configuration
             // e.g. now() which depends on the time_zone configuration option
             if variable == "datafusion.execution.time_zone" {
-                let state = self.state.read();
-                let config_options = state.config().options().clone();
-                drop(state);
+                let config_options = self.state.read().config().options().clone();
                 let now_udf = {
+                    // recreate the function so it captures the new time zone
                     make_udf_function_with_config!(NowFunc, now, &ConfigOptions);
                     now(&config_options)
                 };
