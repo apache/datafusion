@@ -1065,6 +1065,11 @@ impl RepartitionExec {
                 None => break,
             };
 
+            // Handle empty batch
+            if batch.num_rows() == 0 {
+                continue;
+            }
+
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
                 let size = batch.get_array_memory_size();
@@ -1089,6 +1094,7 @@ impl RepartitionExec {
                                             "RepartitionExec spill partition {partition}"
                                         ),
                                     )?
+                                    // Note that we handled empty batch above, so this is safe
                                     .expect("non-empty batch should produce spill file");
 
                                 // Store size for validation when reading back
