@@ -17,19 +17,19 @@
 
 use std::sync::Arc;
 
+use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
+use datafusion_catalog::TableProvider;
+use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_datafusion_err, exec_err, not_impl_err, parsers::CompressionTypeVariant,
     TableReference,
 };
-use prost::Message;
-use datafusion_catalog::TableProvider;
-use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_datasource_arrow::ArrowFormatFactory;
 use datafusion_datasource_csv::CsvFormatFactory;
 use datafusion_datasource_json::JsonFormatFactory;
 use datafusion_execution::TaskContext;
-use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
+use prost::Message;
 
 use super::LogicalExtensionCodec;
 
@@ -343,8 +343,8 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
 
 #[cfg(feature = "parquet")]
 mod parquet {
-    use datafusion_datasource_parquet::ParquetFormatFactory;
     use super::*;
+    use datafusion_datasource_parquet::ParquetFormatFactory;
 
     use crate::protobuf::{
         parquet_column_options, parquet_options,
@@ -608,8 +608,7 @@ mod parquet {
             _table_ref: &TableReference,
             _schema: arrow::datatypes::SchemaRef,
             _ctx: &TaskContext,
-        ) -> datafusion_common::Result<Arc<dyn TableProvider>>
-        {
+        ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
             not_impl_err!("Method not implemented")
         }
 
@@ -631,11 +630,9 @@ mod parquet {
                 exec_datafusion_err!("Failed to decode TableParquetOptionsProto: {e:?}")
             })?;
             let options: datafusion_common::config::TableParquetOptions = (&proto).into();
-            Ok(Arc::new(
-                ParquetFormatFactory {
-                    options: Some(options),
-                },
-            ))
+            Ok(Arc::new(ParquetFormatFactory {
+                options: Some(options),
+            }))
         }
 
         fn try_encode_file_format(

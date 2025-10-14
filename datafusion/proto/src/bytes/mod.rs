@@ -24,8 +24,8 @@ use crate::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use crate::protobuf;
-use datafusion::execution::TaskContext;
 use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_execution::TaskContext;
 use datafusion_expr::{
     create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LogicalPlan, Volatility,
     WindowUDF,
@@ -37,9 +37,9 @@ use prost::{
 use std::sync::Arc;
 
 // Reexport Bytes which appears in the API
-use datafusion::execution::registry::FunctionRegistry;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::planner::ExprPlanner;
+use datafusion_physical_plan::ExecutionPlan;
 
 mod registry;
 
@@ -245,10 +245,7 @@ pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<Logica
 }
 
 /// Deserialize a LogicalPlan from bytes
-pub fn logical_plan_from_bytes(
-    bytes: &[u8],
-    ctx: &TaskContext,
-) -> Result<LogicalPlan> {
+pub fn logical_plan_from_bytes(bytes: &[u8], ctx: &TaskContext) -> Result<LogicalPlan> {
     let extension_codec = DefaultLogicalExtensionCodec {};
     logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
 }

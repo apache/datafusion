@@ -31,7 +31,7 @@ use super::write::SharedBuffer;
 use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
-use crate::datasource::physical_plan::{ArrowSource, FileSink, FileSinkConfig};
+use crate::datasource::physical_plan::{FileSink, FileSinkConfig};
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
@@ -60,6 +60,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource_arrow::source::ArrowSource;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};

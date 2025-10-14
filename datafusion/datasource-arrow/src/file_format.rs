@@ -41,25 +41,27 @@ use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
-use datafusion_datasource::write::{get_writer_schema, ObjectWriterBuilder, SharedBuffer};
+use datafusion_datasource::write::{
+    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
+};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::source::ArrowSource;
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 use tokio::io::AsyncWriteExt;
-use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::write::demux::DemuxedStreamReceiver;
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
-use datafusion_session::Session;
-use crate::source::ArrowSource;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -246,14 +248,14 @@ impl FileSink for ArrowFileSink {
                 &path,
                 Arc::clone(&object_store),
             )
-                .with_buffer_size(Some(
-                    context
-                        .session_config()
-                        .options()
-                        .execution
-                        .objectstore_writer_buffer_size,
-                ))
-                .build()?;
+            .with_buffer_size(Some(
+                context
+                    .session_config()
+                    .options()
+                    .execution
+                    .objectstore_writer_buffer_size,
+            ))
+            .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
                 while let Some(batch) = rx.recv().await {
@@ -434,14 +436,14 @@ mod tests {
     use super::*;
 
     use chrono::DateTime;
-    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
     use datafusion_common::config::TableOptions;
     use datafusion_common::DFSchema;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
 
     struct MockSession {
         config: SessionConfig,

@@ -23,7 +23,7 @@ use bytes::{BufMut, BytesMut};
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, CsvSource, FileSource, JsonSource, ParquetSource,
+    CsvSource, FileSource, JsonSource, ParquetSource,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -33,6 +33,7 @@ use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource_arrow::source::ArrowSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
