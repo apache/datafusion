@@ -60,6 +60,7 @@ use datafusion::functions_window::expr_fn::{
     cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
 };
 use datafusion::functions_window::rank::rank_udwf;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -75,9 +76,11 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable, Literal,
-    LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
+    Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable,
+    LimitEffect, Literal, LogicalPlan, Operator, PartitionEvaluator,
+    ScalarUDF, Signature, TryCast, Volatility,
+    WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
     WindowUDFImpl,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
@@ -2543,6 +2546,10 @@ fn roundtrip_window() {
                     field_args.input_fields()
                 )
             }
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
 
