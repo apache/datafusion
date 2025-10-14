@@ -1131,7 +1131,7 @@ impl ListingTable {
     }
 }
 
-// Expressions can be used for parttion pruning if they can be evaluated using
+// Expressions can be used for partition pruning if they can be evaluated using
 // only the partition columns and there are partition columns.
 fn can_be_evaluated_for_partition_pruning(
     partition_column_names: &[&str],

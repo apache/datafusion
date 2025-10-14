@@ -2378,7 +2378,7 @@ impl ScalarValue {
                 Arc::new(array)
             }
             // explicitly enumerate unsupported types so newly added
-            // types must be aknowledged, Time32 and Time64 types are
+            // types must be acknowledged, Time32 and Time64 types are
             // not supported if the TimeUnit is not valid (Time32 can
             // only be used with Second and Millisecond, Time64 only
             // with Microsecond and Nanosecond)
