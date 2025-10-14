@@ -82,7 +82,7 @@ use datafusion_expr::{
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
 use datafusion_functions::datetime::now::NowFunc;
-use datafusion_functions::make_udf_function_with_config;
+use datafusion_functions::{init_udf_with_config, make_udf_function_with_config};
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
@@ -1079,11 +1079,8 @@ impl SessionContext {
             // e.g. now() which depends on the time_zone configuration option
             if variable == "datafusion.execution.time_zone" {
                 let config_options = state.config().options();
-                let now_udf = {
-                    // recreate the function so it captures the new time zone
-                    make_udf_function_with_config!(NowFunc, now, &ConfigOptions);
-                    now(config_options)
-                };
+                let udf = state.udf("now")?;
+                let now_udf = init_udf_with_config!(udf.clone(), config_options, NowFunc);
                 state.register_udf(now_udf)?;
             }
 

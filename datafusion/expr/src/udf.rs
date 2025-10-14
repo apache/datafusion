@@ -205,6 +205,10 @@ impl ScalarUDF {
         self.inner.return_type(arg_types)
     }
 
+    pub fn need_config(&self) -> bool {
+        self.inner.need_config()
+    }
+
     /// Return the datatype this function returns given the input argument types.
     ///
     /// See [`ScalarUDFImpl::return_field_from_args`] for more details.
@@ -545,6 +549,11 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+
+    fn need_config(&self) -> bool {
+        false
+    }
 
     /// What type will be returned by this function, given the arguments?
     ///
