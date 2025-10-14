@@ -730,14 +730,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
             } => {
                 // Convert parser data types to DataFusion data types
-                let mut data_types: Vec<FieldRef> = data_types
+                let mut fields: Vec<FieldRef> = data_types
                     .into_iter()
                     .map(|t| self.convert_data_type(&t))
                     .collect::<Result<_>>()?;
 
                 // Create planner context with parameters
-                let mut planner_context = PlannerContext::new()
-                    .with_prepare_param_data_types(data_types.clone());
+                let mut planner_context =
+                    PlannerContext::new().with_prepare_param_data_types(fields.clone());
 
                 // Build logical plan for inner statement of the prepare statement
                 let plan = self.sql_statement_to_plan_with_context_impl(
@@ -745,7 +745,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &mut planner_context,
                 )?;
 
-                if data_types.is_empty() {
+                if fields.is_empty() {
                     let map_types = plan.get_parameter_fields()?;
                     let param_types: Vec<_> = (1..=map_types.len())
                         .filter_map(|i| {
@@ -753,13 +753,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             map_types.get(&key).and_then(|opt| opt.clone())
                         })
                         .collect();
-                    data_types.extend(param_types.iter().cloned());
+                    fields.extend(param_types.iter().cloned());
                     planner_context.with_prepare_param_data_types(param_types);
                 }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
-                    data_types,
+                    fields,
                     input: Arc::new(plan),
                 })))
             }

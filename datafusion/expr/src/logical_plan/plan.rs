@@ -1099,15 +1099,13 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
-                name,
-                data_types,
-                ..
+                name, fields, ..
             })) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Statement(Statement::Prepare(Prepare {
                     name: name.clone(),
-                    data_types: data_types.clone(),
+                    fields: fields.clone(),
                     input: Arc::new(input),
                 })))
             }
@@ -1283,7 +1281,7 @@ impl LogicalPlan {
             if let LogicalPlan::Statement(Statement::Prepare(prepare_lp)) =
                 plan_with_values
             {
-                param_values.verify_fields(&prepare_lp.data_types)?;
+                param_values.verify_fields(&prepare_lp.fields)?;
                 // try and take ownership of the input if is not shared, clone otherwise
                 Arc::unwrap_or_clone(prepare_lp.input)
             } else {
@@ -1500,7 +1498,6 @@ impl LogicalPlan {
     ///
     /// Note that this will drop any extension or field metadata attached to parameters. Use
     /// [`LogicalPlan::get_parameter_fields`] to keep extension metadata.
-    #[deprecated]
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {

@@ -623,11 +623,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
-    pub fn prepare(self, name: String, data_types: Vec<FieldRef>) -> Result<Self> {
+    pub fn prepare(self, name: String, fields: Vec<FieldRef>) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Statement(Statement::Prepare(
             Prepare {
                 name,
-                data_types,
+                fields,
                 input: self.plan,
             },
         ))))

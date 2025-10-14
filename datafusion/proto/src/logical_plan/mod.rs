@@ -1645,7 +1645,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
-                data_types,
+                fields,
                 input,
             })) => {
                 let input =
@@ -1656,12 +1656,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: name.clone(),
                             input: Some(Box::new(input)),
                             // Store the DataTypes for reading by older DataFusion
-                            data_types: data_types
+                            data_types: fields
                                 .iter()
                                 .map(|f| f.data_type().try_into())
                                 .collect::<Result<Vec<_>, _>>()?,
                             // Store the Fields for current and future DataFusion
-                            fields: data_types
+                            fields: fields
                                 .iter()
                                 .map(|f| f.as_ref().try_into())
                                 .collect::<Result<Vec<_>, _>>()?,

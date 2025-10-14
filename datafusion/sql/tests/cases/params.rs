@@ -54,8 +54,8 @@ impl ParameterTest<'_> {
 fn generate_prepare_stmt_and_data_types(sql: &str) -> (LogicalPlan, String) {
     let plan = logical_plan(sql).unwrap();
     let data_types = match &plan {
-        LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. })) => {
-            data_types.iter().join(", ").to_string()
+        LogicalPlan::Statement(Statement::Prepare(Prepare { fields, .. })) => {
+            fields.iter().map(|f| f.data_type()).join(", ").to_string()
         }
         _ => panic!("Expected a Prepare statement"),
     };

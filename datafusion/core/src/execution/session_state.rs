@@ -872,12 +872,12 @@ impl SessionState {
     pub(crate) fn store_prepared(
         &mut self,
         name: String,
-        data_types: Vec<FieldRef>,
+        fields: Vec<FieldRef>,
         plan: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<()> {
         match self.prepared_plans.entry(name) {
             Entry::Vacant(e) => {
-                e.insert(Arc::new(PreparedPlan { data_types, plan }));
+                e.insert(Arc::new(PreparedPlan { fields, plan }));
                 Ok(())
             }
             Entry::Occupied(e) => {
@@ -2011,7 +2011,7 @@ impl SimplifyInfo for SessionSimplifyProvider<'_> {
 #[derive(Debug)]
 pub(crate) struct PreparedPlan {
     /// Data types of the parameters
-    pub(crate) data_types: Vec<FieldRef>,
+    pub(crate) fields: Vec<FieldRef>,
     /// The prepared logical plan
     pub(crate) plan: Arc<LogicalPlan>,
 }

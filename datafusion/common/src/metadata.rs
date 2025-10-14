@@ -115,7 +115,13 @@ pub fn check_metadata_with_storage_equal(
     Ok(())
 }
 
-fn format_type_and_metadata(
+/// Given a data type represented by storage and optional metadata, generate
+/// a user-facing string
+///
+/// This function exists to reduce the number of Field debug strings that are
+/// used to communicate type information in error messages and plan explain
+/// renderings.
+pub fn format_type_and_metadata(
     data_type: &DataType,
     metadata: Option<&std::collections::HashMap<String, String>>,
 ) -> String {

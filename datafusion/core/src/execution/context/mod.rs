@@ -709,15 +709,15 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
                 input,
-                data_types,
+                fields,
             })) => {
                 // The number of parameters must match the specified data types length.
-                if !data_types.is_empty() {
+                if !fields.is_empty() {
                     let param_names = input.get_parameter_names()?;
-                    if param_names.len() != data_types.len() {
+                    if param_names.len() != fields.len() {
                         return plan_err!(
                             "Prepare specifies {} data types but query has {} parameters",
-                            data_types.len(),
+                            fields.len(),
                             param_names.len()
                         );
                     }
@@ -727,7 +727,7 @@ impl SessionContext {
                 // not currently feasible. This is because `now()` would be optimized to a
                 // constant value, causing each EXECUTE to yield the same result, which is
                 // incorrect behavior.
-                self.state.write().store_prepared(name, data_types, input)?;
+                self.state.write().store_prepared(name, fields, input)?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Execute(execute)) => {
@@ -1248,18 +1248,18 @@ impl SessionContext {
             .collect::<Result<_>>()?;
 
         // If the prepared statement provides data types, cast the params to those types.
-        if !prepared.data_types.is_empty() {
-            if params.len() != prepared.data_types.len() {
+        if !prepared.fields.is_empty() {
+            if params.len() != prepared.fields.len() {
                 return exec_err!(
                     "Prepared statement '{}' expects {} parameters, but {} provided",
                     name,
-                    prepared.data_types.len(),
+                    prepared.fields.len(),
                     params.len()
                 );
             }
             params = params
                 .into_iter()
-                .zip(prepared.data_types.iter())
+                .zip(prepared.fields.iter())
                 .map(|(e, dt)| -> Result<_> {
                     // This is fishy...we're casting storage without checking if an
                     // extension type supports the destination
