@@ -29,6 +29,7 @@ use datafusion_catalog::UrlTableFactory;
 use datafusion_common::plan_datafusion_err;
 use datafusion_session::SessionStore;
 
+use crate::datasource::listing_table_factory::infer_options;
 use async_trait::async_trait;
 
 /// [DynamicListTableFactory] is a factory that can create a [ListingTable] from the given url.
@@ -70,10 +71,7 @@ impl UrlTableFactory for DynamicListTableFactory {
             })
             .ok_or_else(|| plan_datafusion_err!("get current SessionStore error"))?;
 
-        match ListingTableConfig::new(table_url.clone())
-            .infer_options(state)
-            .await
-        {
+        match infer_options(ListingTableConfig::new(table_url.clone()), state).await {
             Ok(cfg) => {
                 let cfg = cfg
                     .infer_partitions_from_path(state)
