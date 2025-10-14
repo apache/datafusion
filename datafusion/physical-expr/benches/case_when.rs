@@ -98,6 +98,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
                     None,
                     vec![(make_x_cmp_y(&c1, Operator::LtEq, 500), lit(1))],
                     Some(lit(0)),
+                    &batch.schema(),
                 )
                 .unwrap(),
             );
@@ -118,6 +119,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
                     None,
                     vec![(make_x_cmp_y(&c1, Operator::LtEq, 500), Arc::clone(&c2))],
                     None,
+                    &batch.schema(),
                 )
                 .unwrap(),
             );
@@ -138,6 +140,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
                     None,
                     vec![(make_x_cmp_y(&c1, Operator::LtEq, 500), Arc::clone(&c2))],
                     Some(Arc::clone(&c3)),
+                    &batch.schema(),
                 )
                 .unwrap(),
             );
@@ -158,6 +161,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
                     Some(Arc::clone(&c1)),
                     vec![(lit(1), Arc::clone(&c2)), (lit(2), Arc::clone(&c3))],
                     None,
+                    &batch.schema(),
                 )
                 .unwrap(),
             );
@@ -171,7 +175,8 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
             case(
                 None,
                 when_thens,
-                Some(lit(batch.num_rows() as i32))
+                Some(lit(batch.num_rows() as i32)),
+                &batch.schema(),
             )
                 .unwrap(),
         );

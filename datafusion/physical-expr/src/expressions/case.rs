@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::expressions::try_cast;
-use crate::PhysicalExpr;
+use crate::{expressions, PhysicalExpr};
 use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
@@ -600,8 +600,20 @@ pub fn case(
     expr: Option<Arc<dyn PhysicalExpr>>,
     when_thens: Vec<WhenThen>,
     else_expr: Option<Arc<dyn PhysicalExpr>>,
+    input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(CaseExpr::try_new(expr, when_thens, else_expr)?))
+    let case_expr = CaseExpr::try_new(expr, when_thens, else_expr)?;
+
+    match case_expr.eval_method {
+        EvalMethod::NoExpression
+        | EvalMethod::WithExpression
+        | EvalMethod::ExpressionOrExpression => {
+            expressions::projected(Arc::new(case_expr), input_schema)
+        }
+        EvalMethod::InfallibleExprOrNull | EvalMethod::ScalarOrScalar => {
+            Ok(Arc::new(case_expr))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1381,7 +1393,7 @@ mod tests {
                 Ok((left, right))
             }
         }?;
-        case(expr, when_thens, else_expr)
+        case(expr, when_thens, else_expr, input_schema)
     }
 
     fn get_case_common_type(

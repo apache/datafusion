@@ -286,7 +286,8 @@ pub fn create_physical_expr(
                 } else {
                     None
                 };
-            Ok(expressions::case(expr, when_then_expr, else_expr)?)
+
+            expressions::case(expr, when_then_expr, else_expr, input_schema)
         }
         Expr::Cast(Cast { expr, data_type }) => expressions::cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
