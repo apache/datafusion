@@ -22,7 +22,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::object_storage::instrumented::{
-    InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
+    InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry, RequestSummary,
 };
 use crate::print_format::PrintFormat;
 
@@ -202,6 +202,13 @@ impl PrintOptions {
                         }
                         // Add an extra blank line to help visually organize the output
                         writeln!(writer)?;
+
+                        writeln!(writer, "Summaries:")?;
+                        let summaries = RequestSummary::summarize_by_operation(&requests);
+                        for (op, summary) in summaries {
+                            writeln!(writer, "{op:?}")?;
+                            writeln!(writer, "{summary}")?;
+                        }
                     }
                 }
             }
