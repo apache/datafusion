@@ -495,12 +495,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection = Some(column_indices);
                 }
 
-                let ordering = scan.ordering.as_ref().map(|o| {
-                    o.preferred_ordering
-                        .as_ref()
-                        .map(|so| from_proto::parse_sorts(&so.sort_expr_nodes, ctx, extension_codec))
-                        .transpose()
-                }).transpose()?;
+                let ordering = scan
+                    .ordering
+                    .as_ref()
+                    .and_then(|o| o.preferred_ordering.as_ref())
+                    .map(|so| {
+                        from_proto::parse_sorts(&so.sort_expr_nodes, ctx, extension_codec)
+                    })
+                    .transpose()?;
 
                 let mut scan = TableScan::try_new(
                     table_name,
@@ -509,8 +511,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     filters,
                     None,
                 )?;
-                if let Some(ordering) = ordering {
-                    scan = scan.with_ordering(ordering);
+                if let Some(preferred_ordering) = ordering {
+                    let scan_ordering = datafusion_expr::logical_plan::ScanOrdering {
+                        preferred_ordering: Some(preferred_ordering),
+                    };
+                    scan = scan.with_ordering(scan_ordering);
                 }
 
                 Ok(LogicalPlan::TableScan(scan))
