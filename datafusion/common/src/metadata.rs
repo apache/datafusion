@@ -17,8 +17,73 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, Field};
 use hashbrown::HashMap;
+
+use crate::{error::_plan_err, DataFusionError};
+
+/// Assert equality of data types where one or both sides may have field metadata
+///
+/// This currently compares absent metadata (e.g., one side was a DataType) and
+/// empty metadata (e.g., one side was a field where the field had no metadata)
+/// as equal and uses byte-for-byte comparison for the keys and values of the
+/// fields, even though this is potentially too strict for some cases (e.g.,
+/// extension types where extension metadata is represented by JSON, or cases
+/// where field metadata is orthogonal to the interpretation of the data type).
+///
+/// Returns a planning error with suitably formatted type representations if
+/// actual and expected do not compare to equal.
+pub fn check_metadata_with_storage_equal(
+    actual: (
+        &DataType,
+        Option<&std::collections::HashMap<String, String>>,
+    ),
+    expected: (
+        &DataType,
+        Option<&std::collections::HashMap<String, String>>,
+    ),
+    what: &str,
+    context: &str,
+) -> Result<(), DataFusionError> {
+    if actual.0 != expected.0 {
+        return _plan_err!(
+            "Expected {what} of type {}, got {}{context}",
+            format_type_and_metadata(expected.0, expected.1),
+            format_type_and_metadata(actual.0, actual.1)
+        );
+    }
+
+    let metdata_equal = match (actual.1, expected.1) {
+        (None, None) => true,
+        (None, Some(expected_metadata)) => expected_metadata.is_empty(),
+        (Some(actual_metadata), None) => actual_metadata.is_empty(),
+        (Some(actual_metadata), Some(expected_metadata)) => {
+            actual_metadata == expected_metadata
+        }
+    };
+
+    if !metdata_equal {
+        return _plan_err!(
+            "Expected {what} of type {}, got {}{context}",
+            format_type_and_metadata(expected.0, expected.1),
+            format_type_and_metadata(actual.0, actual.1)
+        );
+    }
+
+    Ok(())
+}
+
+fn format_type_and_metadata(
+    data_type: &DataType,
+    metadata: Option<&std::collections::HashMap<String, String>>,
+) -> String {
+    match metadata {
+        Some(metadata) if !metadata.is_empty() => {
+            format!("{data_type}<{metadata:?}>")
+        }
+        _ => data_type.to_string(),
+    }
+}
 
 /// Literal metadata
 ///

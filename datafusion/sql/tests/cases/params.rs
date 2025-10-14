@@ -235,7 +235,7 @@ fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
             .unwrap_err()
             .strip_backtrace(),
         @r###"
-        Error during planning: Expected parameter of type Field { name: "", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, got Float64 at index 0
+        Error during planning: Expected parameter of type Int32, got Float64 at index 0
         "###
     );
 }

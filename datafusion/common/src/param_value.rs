@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::error::{_plan_datafusion_err, _plan_err};
-use crate::metadata::FieldMetadata;
+use crate::metadata::{check_metadata_with_storage_equal, FieldMetadata};
 use crate::{Result, ScalarValue};
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use std::collections::HashMap;
 
 /// The parameter value corresponding to the placeholder
@@ -31,8 +31,22 @@ pub enum ParamValues {
 }
 
 impl ParamValues {
+    /// Verify parameter list length and DataType
+    ///
+    /// Use [`ParamValues::verify_fields`] to ensure field metadata is considered when
+    /// computing type equality.
+    #[deprecated]
+    pub fn verify(&self, expect: &[DataType]) -> Result<()> {
+        // make dummy Fields
+        let expect = expect
+            .iter()
+            .map(|dt| Field::new("", dt.clone(), true).into())
+            .collect::<Vec<_>>();
+        self.verify_fields(&expect)
+    }
+
     /// Verify parameter list length and type
-    pub fn verify(&self, expect: &[FieldRef]) -> Result<()> {
+    pub fn verify_fields(&self, expect: &[FieldRef]) -> Result<()> {
         match self {
             ParamValues::List(list) => {
                 // Verify if the number of params matches the number of values
@@ -47,27 +61,15 @@ impl ParamValues {
                 // Verify if the types of the params matches the types of the values
                 let iter = expect.iter().zip(list.iter());
                 for (i, (param_type, (value, maybe_metadata))) in iter.enumerate() {
-                    if *param_type.data_type() != value.data_type() {
-                        return _plan_err!(
-                            "Expected parameter of type {}, got {:?} at index {}",
-                            param_type,
-                            value.data_type(),
-                            i
-                        );
-                    }
-
-                    if let Some(expected_metadata) = maybe_metadata {
-                        // Probably too strict of a comparison (this is an example of where
-                        // the concept of type equality would be useful)
-                        if &expected_metadata.to_hashmap() != param_type.metadata() {
-                            return _plan_err!(
-                                "Expected parameter with metadata {:?}, got {:?} at index {}",
-                                expected_metadata,
-                                param_type.metadata(),
-                                i
-                            );
-                        }
-                    }
+                    check_metadata_with_storage_equal(
+                        (
+                            &value.data_type(),
+                            maybe_metadata.as_ref().map(|m| m.to_hashmap()).as_ref(),
+                        ),
+                        (param_type.data_type(), Some(param_type.metadata())),
+                        "parameter",
+                        &format!(" at index {i}"),
+                    )?;
                 }
                 Ok(())
             }

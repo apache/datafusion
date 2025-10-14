@@ -1282,7 +1282,7 @@ impl LogicalPlan {
             if let LogicalPlan::Statement(Statement::Prepare(prepare_lp)) =
                 plan_with_values
             {
-                param_values.verify(&prepare_lp.data_types)?;
+                param_values.verify_fields(&prepare_lp.data_types)?;
                 // try and take ownership of the input if is not shared, clone otherwise
                 Arc::unwrap_or_clone(prepare_lp.input)
             } else {
