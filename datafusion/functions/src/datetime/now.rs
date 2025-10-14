@@ -89,6 +89,10 @@ impl ScalarUDFImpl for NowFunc {
         &self.signature
     }
 
+    fn need_config(&self) -> bool {
+        true
+    }
+
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(
             self.name(),
