@@ -2066,7 +2066,7 @@ EXPLAIN SELECT a FROM multiple_ordered_table ORDER BY b DESC;
 logical_plan
 01)Projection: multiple_ordered_table.a
 02)--Sort: multiple_ordered_table.b DESC NULLS FIRST
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[multiple_ordered_table.b DESC NULLS FIRST]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a]
 02)--SortExec: expr=[b@1 DESC], preserve_partitioning=[false]
@@ -2080,7 +2080,7 @@ EXPLAIN SELECT a FROM multiple_ordered_table ORDER BY c ASC;
 logical_plan
 01)Projection: multiple_ordered_table.a
 02)--Sort: multiple_ordered_table.c ASC NULLS LAST
-03)----TableScan: multiple_ordered_table projection=[a, c]
+03)----TableScan: multiple_ordered_table projection=[a, c] preferred_ordering=[multiple_ordered_table.c ASC NULLS LAST]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 # Final plan shouldn't have SortExec a ASC, b ASC,
@@ -2091,7 +2091,7 @@ EXPLAIN SELECT a FROM multiple_ordered_table ORDER BY a ASC, b ASC;
 logical_plan
 01)Projection: multiple_ordered_table.a
 02)--Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
-03)----TableScan: multiple_ordered_table projection=[a, b]
+03)----TableScan: multiple_ordered_table projection=[a, b] preferred_ordering=[multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 # test_window_agg_sort
@@ -2248,7 +2248,7 @@ ORDER BY a, b, d;
 ----
 logical_plan
 01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST
-02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d] preferred_ordering=[annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST]
 physical_plan
 01)PartialSortExec: expr=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, d@4 ASC NULLS LAST], common_prefix_length=[2]
 02)--StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
@@ -2261,7 +2261,7 @@ LIMIT 50;
 ----
 logical_plan
 01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST, fetch=50
-02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d] preferred_ordering=[annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST]
 physical_plan
 01)PartialSortExec: TopK(fetch=50), expr=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, d@4 ASC NULLS LAST], common_prefix_length=[2]
 02)--StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
@@ -2273,7 +2273,7 @@ ORDER BY a, b, d;
 ----
 logical_plan
 01)Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST, multiple_ordered_table.d ASC NULLS LAST
-02)--TableScan: multiple_ordered_table projection=[a0, a, b, c, d]
+02)--TableScan: multiple_ordered_table projection=[a0, a, b, c, d] preferred_ordering=[multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST, multiple_ordered_table.d ASC NULLS LAST]
 physical_plan
 01)SortExec: expr=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, d@4 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]], file_type=csv, has_header=true
@@ -2535,7 +2535,7 @@ logical_plan
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
-05)--------TableScan: sales_global projection=[country, amount]
+05)--------TableScan: sales_global projection=[country, amount] preferred_ordering=[sales_global.country ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
@@ -2573,7 +2573,7 @@ logical_plan
 02)--Aggregate: groupBy=[[s.country, s.zip_code]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
-05)--------TableScan: sales_global projection=[zip_code, country, amount]
+05)--------TableScan: sales_global projection=[zip_code, country, amount] preferred_ordering=[sales_global.country ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@2 as amounts, sum(s.amount)@3 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=PartiallySorted([0])
@@ -2610,7 +2610,7 @@ logical_plan
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
-05)--------TableScan: sales_global projection=[country, amount]
+05)--------TableScan: sales_global projection=[country, amount] preferred_ordering=[sales_global.country ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
@@ -2646,7 +2646,7 @@ logical_plan
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
-05)--------TableScan: sales_global projection=[country, amount]
+05)--------TableScan: sales_global projection=[country, amount] preferred_ordering=[sales_global.country ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
@@ -3906,7 +3906,7 @@ ORDER BY c ASC;
 ----
 logical_plan
 01)Sort: multiple_ordered_table.c ASC NULLS LAST
-02)--TableScan: multiple_ordered_table projection=[c]
+02)--TableScan: multiple_ordered_table projection=[c] preferred_ordering=[multiple_ordered_table.c ASC NULLS LAST]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
@@ -4392,7 +4392,7 @@ EXPLAIN SELECT name, date_bin('15 minutes', ts) as time_chunks
 logical_plan
 01)Sort: unbounded_csv_with_timestamps2.name DESC NULLS FIRST, time_chunks DESC NULLS FIRST, fetch=5
 02)--Projection: unbounded_csv_with_timestamps2.name, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), unbounded_csv_with_timestamps2.ts) AS time_chunks
-03)----TableScan: unbounded_csv_with_timestamps2 projection=[name, ts]
+03)----TableScan: unbounded_csv_with_timestamps2 projection=[name, ts] preferred_ordering=[unbounded_csv_with_timestamps2.name DESC NULLS FIRST, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), unbounded_csv_with_timestamps2.ts) DESC NULLS FIRST]
 physical_plan
 01)SortPreservingMergeExec: [name@0 DESC, time_chunks@1 DESC], fetch=5
 02)--ProjectionExec: expr=[name@0 as name, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@1) as time_chunks]

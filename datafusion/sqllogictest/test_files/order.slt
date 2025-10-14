@@ -254,7 +254,7 @@ explain SELECT c1, c2 FROM aggregate_test_100 ORDER BY c2, c3, c2
 logical_plan
 01)Projection: aggregate_test_100.c1, aggregate_test_100.c2
 02)--Sort: aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST
-03)----TableScan: aggregate_test_100 projection=[c1, c2, c3]
+03)----TableScan: aggregate_test_100 projection=[c1, c2, c3] preferred_ordering=[aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
 02)--SortExec: expr=[c2@1 ASC NULLS LAST, c3@2 ASC NULLS LAST], preserve_partitioning=[false]
@@ -557,7 +557,7 @@ ORDER BY result;
 logical_plan
 01)Sort: result ASC NULLS LAST
 02)--Projection: multiple_ordered_table.b + multiple_ordered_table.a + multiple_ordered_table.c AS result
-03)----TableScan: multiple_ordered_table projection=[a, b, c]
+03)----TableScan: multiple_ordered_table projection=[a, b, c] preferred_ordering=[multiple_ordered_table.b + multiple_ordered_table.a + multiple_ordered_table.c ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [result@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
@@ -588,7 +588,7 @@ ORDER BY db15;
 logical_plan
 01)Sort: db15 ASC NULLS LAST
 02)--Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
-03)----TableScan: csv_with_timestamps projection=[ts]
+03)----TableScan: csv_with_timestamps projection=[ts] preferred_ordering=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [db15@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@0, 1659537600000000000) as db15]
@@ -603,7 +603,7 @@ ORDER BY dt_day;
 logical_plan
 01)Sort: dt_day ASC NULLS LAST
 02)--Projection: date_trunc(Utf8("DAY"), csv_with_timestamps.ts) AS dt_day
-03)----TableScan: csv_with_timestamps projection=[ts]
+03)----TableScan: csv_with_timestamps projection=[ts] preferred_ordering=[date_trunc(Utf8("DAY"), csv_with_timestamps.ts) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [dt_day@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[date_trunc(DAY, ts@0) as dt_day]
@@ -646,7 +646,7 @@ ORDER BY atan_c11;
 logical_plan
 01)Sort: atan_c11 ASC NULLS LAST
 02)--Projection: atan(aggregate_test_100.c11) AS atan_c11
-03)----TableScan: aggregate_test_100 projection=[c11]
+03)----TableScan: aggregate_test_100 projection=[c11] preferred_ordering=[atan(aggregate_test_100.c11) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [atan_c11@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[atan(c11@0) as atan_c11]
@@ -661,7 +661,7 @@ ORDER BY ceil_c11;
 logical_plan
 01)Sort: ceil_c11 ASC NULLS LAST
 02)--Projection: ceil(aggregate_test_100.c11) AS ceil_c11
-03)----TableScan: aggregate_test_100 projection=[c11]
+03)----TableScan: aggregate_test_100 projection=[c11] preferred_ordering=[ceil(aggregate_test_100.c11) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [ceil_c11@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[ceil(c11@0) as ceil_c11]
@@ -676,7 +676,7 @@ query TT
 logical_plan
 01)Sort: log_c11_base_c12 ASC NULLS LAST
 02)--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c11_base_c12
-03)----TableScan: aggregate_test_100 projection=[c11, c12]
+03)----TableScan: aggregate_test_100 projection=[c11, c12] preferred_ordering=[log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c11_base_c12]
@@ -691,7 +691,7 @@ ORDER BY log_c12_base_c11 DESC NULLS LAST;
 logical_plan
 01)Sort: log_c12_base_c11 DESC NULLS LAST
 02)--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c12_base_c11
-03)----TableScan: aggregate_test_100 projection=[c11, c12]
+03)----TableScan: aggregate_test_100 projection=[c11, c12] preferred_ordering=[log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) DESC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC NULLS LAST]
 02)--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c12_base_c11]
@@ -757,7 +757,7 @@ EXPLAIN SELECT o_orderkey, o_orderstatus FROM orders ORDER BY o_orderkey ASC
 ----
 logical_plan
 01)Sort: orders.o_orderkey ASC NULLS LAST
-02)--TableScan: orders projection=[o_orderkey, o_orderstatus]
+02)--TableScan: orders projection=[o_orderkey, o_orderstatus] preferred_ordering=[orders.o_orderkey ASC NULLS LAST]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/orders.csv]]}, projection=[o_orderkey, o_orderstatus], output_ordering=[o_orderkey@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 
@@ -801,7 +801,7 @@ EXPLAIN SELECT * FROM t1 ORDER BY id DESC, id, name, id ASC;
 ----
 logical_plan
 01)Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
-02)--TableScan: t1 projection=[id, name]
+02)--TableScan: t1 projection=[id, name] preferred_ordering=[t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST]
 physical_plan
 01)SortExec: expr=[id@0 DESC, name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
@@ -820,7 +820,7 @@ EXPLAIN SELECT * FROM t1 ORDER BY id ASC, id, name, id DESC;
 ----
 logical_plan
 01)Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
-02)--TableScan: t1 projection=[id, name]
+02)--TableScan: t1 projection=[id, name] preferred_ordering=[t1.id ASC NULLS LAST, t1.name ASC NULLS LAST]
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST, name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1140,7 +1140,7 @@ limit 5;
 logical_plan
 01)Sort: c_str ASC NULLS LAST, fetch=5
 02)--Projection: CAST(ordered_table.c AS Utf8View) AS c_str
-03)----TableScan: ordered_table projection=[c]
+03)----TableScan: ordered_table projection=[c] preferred_ordering=[CAST(ordered_table.c AS Utf8View) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
 02)--SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -1171,7 +1171,7 @@ limit 5;
 logical_plan
 01)Sort: c_bigint ASC NULLS LAST, fetch=5
 02)--Projection: CAST(ordered_table.c AS Int64) AS c_bigint
-03)----TableScan: ordered_table projection=[c]
+03)----TableScan: ordered_table projection=[c] preferred_ordering=[CAST(ordered_table.c AS Int64) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [c_bigint@0 ASC NULLS LAST], fetch=5
 02)--ProjectionExec: expr=[CAST(c@0 AS Int64) as c_bigint]
@@ -1206,7 +1206,7 @@ limit 5;
 logical_plan
 01)Sort: abs_c ASC NULLS LAST, fetch=5
 02)--Projection: abs(ordered_table.c) AS abs_c
-03)----TableScan: ordered_table projection=[c]
+03)----TableScan: ordered_table projection=[c] preferred_ordering=[abs(ordered_table.c) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
 02)--SortExec: TopK(fetch=5), expr=[abs_c@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -1241,7 +1241,7 @@ limit 5;
 logical_plan
 01)Sort: abs_c ASC NULLS LAST, fetch=5
 02)--Projection: abs(ordered_table.c) AS abs_c
-03)----TableScan: ordered_table projection=[c]
+03)----TableScan: ordered_table projection=[c] preferred_ordering=[abs(ordered_table.c) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
 02)--ProjectionExec: expr=[abs(c@0) as abs_c]
@@ -1267,7 +1267,7 @@ EXPLAIN SELECT CAST((inc_col>desc_col) as integer) as c from annotated_data_fini
 logical_plan
 01)Sort: c ASC NULLS LAST
 02)--Projection: CAST(annotated_data_finite.inc_col > annotated_data_finite.desc_col AS Int32) AS c
-03)----TableScan: annotated_data_finite projection=[inc_col, desc_col]
+03)----TableScan: annotated_data_finite projection=[inc_col, desc_col] preferred_ordering=[CAST(annotated_data_finite.inc_col > annotated_data_finite.desc_col AS Int32) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [c@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
@@ -1291,7 +1291,7 @@ EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
 logical_plan
 01)Projection: ordered_table.a + ordered_table.b AS sum1
 02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
-03)----TableScan: ordered_table projection=[a, b]
+03)----TableScan: ordered_table projection=[a, b] preferred_ordering=[ordered_table.a ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1311,7 +1311,7 @@ EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
 logical_plan
 01)Projection: ordered_table.a + ordered_table.b AS sum1
 02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
-03)----TableScan: ordered_table projection=[a, b]
+03)----TableScan: ordered_table projection=[a, b] preferred_ordering=[ordered_table.a ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
 02)--SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -1330,7 +1330,7 @@ EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
 logical_plan
 01)Projection: ordered_table.a + ordered_table.b AS sum1
 02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
-03)----TableScan: ordered_table projection=[a, b]
+03)----TableScan: ordered_table projection=[a, b] preferred_ordering=[ordered_table.a ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1444,7 +1444,7 @@ EXPLAIN SELECT c1, c2 FROM table_with_ordered_pk ORDER BY c1, c2;
 ----
 logical_plan
 01)Sort: table_with_ordered_pk.c1 ASC NULLS LAST, table_with_ordered_pk.c2 ASC NULLS LAST
-02)--TableScan: table_with_ordered_pk projection=[c1, c2]
+02)--TableScan: table_with_ordered_pk projection=[c1, c2] preferred_ordering=[table_with_ordered_pk.c1 ASC NULLS LAST, table_with_ordered_pk.c2 ASC NULLS LAST]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2], output_ordering=[c1@0 ASC NULLS LAST], constraints=[PrimaryKey([0])], file_type=csv, has_header=true
 
 statement ok

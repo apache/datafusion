@@ -62,7 +62,7 @@ logical_plan
 02)--Sort: t2.c1 ASC NULLS LAST, t2.c3 ASC NULLS LAST, t2.c9 ASC NULLS LAST
 03)----SubqueryAlias: t2
 04)------Sort: sink_table.c1 DESC NULLS FIRST, sink_table.c3 ASC NULLS LAST, fetch=2
-05)--------TableScan: sink_table projection=[c1, c2, c3, c9]
+05)--------TableScan: sink_table projection=[c1, c2, c3, c9] preferred_ordering=[sink_table.c1 DESC NULLS FIRST, sink_table.c3 ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
 02)--SortExec: expr=[c1@0 ASC NULLS LAST, c3@2 ASC NULLS LAST, c9@3 ASC NULLS LAST], preserve_partitioning=[false]

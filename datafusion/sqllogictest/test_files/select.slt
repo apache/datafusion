@@ -1195,7 +1195,7 @@ EXPLAIN SELECT a FROM annotated_data_finite2
 ----
 logical_plan
 01)Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
-02)--TableScan: annotated_data_finite2 projection=[a]
+02)--TableScan: annotated_data_finite2 projection=[a] preferred_ordering=[annotated_data_finite2.a ASC NULLS LAST]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], limit=5, output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 query I
@@ -1376,7 +1376,7 @@ EXPLAIN select a as a FROM table1 order by a
 ----
 logical_plan
 01)Sort: table1.a ASC NULLS LAST
-02)--TableScan: table1 projection=[a]
+02)--TableScan: table1 projection=[a] preferred_ordering=[table1.a ASC NULLS LAST]
 physical_plan
 01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1400,7 +1400,7 @@ ORDER BY a ASC;
 logical_plan
 01)Sort: annotated_data_finite2.a ASC NULLS LAST
 02)--Projection: annotated_data_finite2.a, annotated_data_finite2.a + annotated_data_finite2.b
-03)----TableScan: annotated_data_finite2 projection=[a, b]
+03)----TableScan: annotated_data_finite2 projection=[a, b] preferred_ordering=[annotated_data_finite2.a ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
@@ -1419,7 +1419,7 @@ ORDER BY a ASC;
 logical_plan
 01)Sort: annotated_data_finite2.a ASC NULLS LAST
 02)--Projection: annotated_data_finite2.a, annotated_data_finite2.b, Int64(2)
-03)----TableScan: annotated_data_finite2 projection=[a, b]
+03)----TableScan: annotated_data_finite2 projection=[a, b] preferred_ordering=[annotated_data_finite2.a ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, b@1 as b, 2 as Int64(2)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
@@ -1437,7 +1437,7 @@ ORDER BY b, c;
 logical_plan
 01)Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
 02)--Filter: annotated_data_finite2.a = Int32(0)
-03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)] preferred_ordering=[annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
@@ -1458,7 +1458,7 @@ ORDER BY c;
 logical_plan
 01)Sort: annotated_data_finite2.c ASC NULLS LAST
 02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
-03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)] preferred_ordering=[annotated_data_finite2.c ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
@@ -1479,7 +1479,7 @@ ORDER BY b, c;
 logical_plan
 01)Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
 02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
-03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)] preferred_ordering=[annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
@@ -1500,7 +1500,7 @@ ORDER BY a, b, c;
 logical_plan
 01)Sort: annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
 02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
-03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)] preferred_ordering=[annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
@@ -1521,7 +1521,7 @@ ORDER BY c;
 logical_plan
 01)Sort: annotated_data_finite2.c ASC NULLS LAST
 02)--Filter: annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)
-03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)]
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)] preferred_ordering=[annotated_data_finite2.c ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 02)--SortExec: expr=[c@3 ASC NULLS LAST], preserve_partitioning=[true]
@@ -1546,7 +1546,7 @@ logical_plan
 03)----Projection: aggregate_test_100.c2
 04)------Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST, fetch=4
 05)--------Projection: aggregate_test_100.c2, aggregate_test_100.c1
-06)----------TableScan: aggregate_test_100 projection=[c1, c2]
+06)----------TableScan: aggregate_test_100 projection=[c1, c2] preferred_ordering=[aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[c2@0 as c2, count(Int64(1))@1 as count(*)]
 02)--AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(Int64(1))]
@@ -1570,7 +1570,7 @@ ORDER BY CAST(ROUND(b) as INT);
 logical_plan
 01)Sort: CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) ASC NULLS LAST
 02)--Filter: CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a
-03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a]
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a] preferred_ordering=[CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) ASC NULLS LAST]
 physical_plan
 01)SortPreservingMergeExec: [CAST(round(CAST(b@2 AS Float64)) AS Int32) ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192

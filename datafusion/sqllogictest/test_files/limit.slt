@@ -562,7 +562,7 @@ explain SELECT * FROM data ORDER BY column1 LIMIT 3,3;
 logical_plan
 01)Limit: skip=3, fetch=3
 02)--Sort: data.column1 ASC NULLS LAST, fetch=6
-03)----TableScan: data projection=[column1, column2]
+03)----TableScan: data projection=[column1, column2] preferred_ordering=[data.column1 ASC NULLS LAST]
 physical_plan
 01)GlobalLimitExec: skip=3, fetch=3
 02)--StreamingTableExec: partition_sizes=1, projection=[column1, column2], infinite_source=true, fetch=6, output_ordering=[column1@0 ASC NULLS LAST, column2@1 ASC NULLS LAST]
@@ -848,7 +848,7 @@ logical_plan
 03)----Projection: Int64(1) AS foo, selection.part_key
 04)------SubqueryAlias: selection
 05)--------Sort: test_limit_with_partitions.part_key ASC NULLS LAST, fetch=1
-06)----------TableScan: test_limit_with_partitions projection=[part_key]
+06)----------TableScan: test_limit_with_partitions projection=[part_key] preferred_ordering=[test_limit_with_partitions.part_key ASC NULLS LAST]
 physical_plan
 01)ProjectionExec: expr=[1 as foo]
 02)--SortPreservingMergeExec: [part_key@0 ASC NULLS LAST], fetch=1

@@ -521,7 +521,7 @@ logical_plan
 01)Dml: op=[Insert Into] table=[table_without_values]
 02)--Projection: aggregate_test_100.c1 AS c1
 03)----Sort: aggregate_test_100.c1 ASC NULLS LAST
-04)------TableScan: aggregate_test_100 projection=[c1]
+04)------TableScan: aggregate_test_100 projection=[c1] preferred_ordering=[aggregate_test_100.c1 ASC NULLS LAST]
 physical_plan
 01)DataSinkExec: sink=ParquetSink(file_groups=[])
 02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
