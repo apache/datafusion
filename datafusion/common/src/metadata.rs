@@ -20,7 +20,45 @@ use std::{collections::BTreeMap, sync::Arc};
 use arrow::datatypes::{DataType, Field};
 use hashbrown::HashMap;
 
-use crate::{error::_plan_err, DataFusionError};
+use crate::{error::_plan_err, DataFusionError, ScalarValue};
+
+/// A [`ScalarValue`] with optional [`FieldMetadata`]
+#[derive(Debug, Clone)]
+pub struct Literal {
+    pub value: ScalarValue,
+    pub metadata: Option<FieldMetadata>,
+}
+
+impl Literal {
+    /// Create a new Literal from a scalar value with optional [`FieldMetadata`]
+    pub fn new(value: ScalarValue, metadata: Option<FieldMetadata>) -> Self {
+        Self { value, metadata }
+    }
+
+    /// Access the underlying [ScalarValue] storage
+    pub fn value(&self) -> &ScalarValue {
+        &self.value
+    }
+
+    /// Access the [FieldMetadata] attached to this value, if any
+    pub fn metadata(&self) -> Option<&FieldMetadata> {
+        self.metadata.as_ref()
+    }
+
+    /// Consume self and return components
+    pub fn into_inner(self) -> (ScalarValue, Option<FieldMetadata>) {
+        (self.value, self.metadata)
+    }
+
+    /// Cast this literal's storage type
+    pub fn cast_storage_to(
+        &self,
+        target_type: &DataType,
+    ) -> Result<Self, DataFusionError> {
+        let new_value = self.value().cast_to(target_type)?;
+        Ok(Literal::new(new_value, self.metadata.clone()))
+    }
+}
 
 /// Assert equality of data types where one or both sides may have field metadata
 ///

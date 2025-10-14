@@ -1463,8 +1463,10 @@ impl LogicalPlan {
                     let original_name = name_preserver.save(&e);
                     let transformed_expr = e.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
-                            let value = param_values.get_placeholders_with_values(&id)?;
-                            Ok(Transformed::yes(Expr::Literal(value.0, value.1)))
+                            let (value, metadata) = param_values
+                                .get_placeholders_with_values(&id)?
+                                .into_inner();
+                            Ok(Transformed::yes(Expr::Literal(value, metadata)))
                         } else {
                             Ok(Transformed::no(e))
                         }

@@ -64,13 +64,13 @@ use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::metadata::Literal;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
     plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaReference, TableReference,
+    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
@@ -1239,10 +1239,10 @@ impl SessionContext {
         })?;
 
         // Only allow literals as parameters for now.
-        let mut params: Vec<(ScalarValue, Option<FieldMetadata>)> = parameters
+        let mut params: Vec<Literal> = parameters
             .into_iter()
             .map(|e| match e {
-                Expr::Literal(scalar, metadata) => Ok((scalar, metadata)),
+                Expr::Literal(scalar, metadata) => Ok(Literal::new(scalar, metadata)),
                 _ => not_impl_err!("Unsupported parameter type: {}", e),
             })
             .collect::<Result<_>>()?;
@@ -1263,7 +1263,7 @@ impl SessionContext {
                 .map(|(e, dt)| -> Result<_> {
                     // This is fishy...we're casting storage without checking if an
                     // extension type supports the destination
-                    Ok((e.0.cast_to(dt.data_type())?, e.1))
+                    e.cast_storage_to(dt.data_type())
                 })
                 .collect::<Result<_>>()?;
         }
