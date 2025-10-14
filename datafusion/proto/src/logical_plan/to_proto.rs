@@ -353,7 +353,6 @@ pub fn serialize_expr(
                     None => None,
                 },
                 null_treatment: null_treatment
-                    .as_ref()
                     .map(|nt| protobuf::NullTreatment::from(nt).into()),
                 fun_definition,
             };
@@ -387,7 +386,6 @@ pub fn serialize_expr(
                         order_by: serialize_sorts(order_by, codec)?,
                         fun_definition: (!buf.is_empty()).then_some(buf),
                         null_treatment: null_treatment
-                            .as_ref()
                             .map(|nt| protobuf::NullTreatment::from(nt).into()),
                     },
                 ))),
@@ -733,8 +731,8 @@ impl From<&WriteOp> for protobuf::dml_node::Type {
     }
 }
 
-impl From<&NullTreatment> for protobuf::NullTreatment {
-    fn from(t: &NullTreatment) -> Self {
+impl From<NullTreatment> for protobuf::NullTreatment {
+    fn from(t: NullTreatment) -> Self {
         match t {
             NullTreatment::RespectNulls => protobuf::NullTreatment::RespectNulls,
             NullTreatment::IgnoreNulls => protobuf::NullTreatment::IgnoreNulls,

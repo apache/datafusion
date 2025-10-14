@@ -243,16 +243,11 @@ impl From<protobuf::dml_node::Type> for WriteOp {
     }
 }
 
-impl TryFrom<protobuf::NullTreatment> for NullTreatment {
-    type Error = Error;
-
-    fn try_from(null_treatment: protobuf::NullTreatment) -> Result<Self, Self::Error> {
-        match null_treatment {
-            protobuf::NullTreatment::Unspecified => {
-                Err(Error::unknown("NullTreatment", null_treatment as i32))
-            }
-            protobuf::NullTreatment::RespectNulls => Ok(NullTreatment::RespectNulls),
-            protobuf::NullTreatment::IgnoreNulls => Ok(NullTreatment::IgnoreNulls),
+impl From<protobuf::NullTreatment> for NullTreatment {
+    fn from(t: protobuf::NullTreatment) -> Self {
+        match t {
+            protobuf::NullTreatment::RespectNulls => NullTreatment::RespectNulls,
+            protobuf::NullTreatment::IgnoreNulls => NullTreatment::IgnoreNulls,
         }
     }
 }
@@ -324,7 +319,7 @@ pub fn parse_expr(
                             null_treatment
                         ))
                     })?;
-                    Some(null_treatment.try_into()?)
+                    Some(NullTreatment::from(null_treatment))
                 }
                 None => None,
             };
@@ -605,7 +600,7 @@ pub fn parse_expr(
                             null_treatment
                         ))
                     })?;
-                    Some(null_treatment.try_into()?)
+                    Some(NullTreatment::from(null_treatment))
                 }
                 None => None,
             };

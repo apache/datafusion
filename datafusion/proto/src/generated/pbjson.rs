@@ -13311,7 +13311,6 @@ impl serde::Serialize for NullTreatment {
         S: serde::Serializer,
     {
         let variant = match self {
-            Self::Unspecified => "NULL_TREATMENT_UNSPECIFIED",
             Self::RespectNulls => "RESPECT_NULLS",
             Self::IgnoreNulls => "IGNORE_NULLS",
         };
@@ -13325,7 +13324,6 @@ impl<'de> serde::Deserialize<'de> for NullTreatment {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "NULL_TREATMENT_UNSPECIFIED",
             "RESPECT_NULLS",
             "IGNORE_NULLS",
         ];
@@ -13368,7 +13366,6 @@ impl<'de> serde::Deserialize<'de> for NullTreatment {
                 E: serde::de::Error,
             {
                 match value {
-                    "NULL_TREATMENT_UNSPECIFIED" => Ok(NullTreatment::Unspecified),
                     "RESPECT_NULLS" => Ok(NullTreatment::RespectNulls),
                     "IGNORE_NULLS" => Ok(NullTreatment::IgnoreNulls),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),

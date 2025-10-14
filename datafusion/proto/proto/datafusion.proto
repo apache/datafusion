@@ -627,9 +627,8 @@ message WindowFrameBound {
 }
 
 enum NullTreatment {
-  NULL_TREATMENT_UNSPECIFIED = 0;
-  RESPECT_NULLS = 1;
-  IGNORE_NULLS = 2;
+  RESPECT_NULLS = 0;
+  IGNORE_NULLS = 1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
