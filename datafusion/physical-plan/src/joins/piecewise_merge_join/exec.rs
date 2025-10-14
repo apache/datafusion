@@ -443,7 +443,9 @@ impl PiecewiseMergeJoinExec {
         ))
     }
 
-    // TODO: Add input order
+    // TODO: Add input order. Now they're all `false` indicating it will not maintain the input order.
+    // However, for certain join types the order is maintained. This can be updated in the future after
+    // more testing.
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         match join_type {
             // The existence side is expected to come in sorted
