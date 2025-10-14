@@ -81,8 +81,6 @@ use datafusion_expr::{
     planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
-use datafusion_functions::datetime::now::NowFunc;
-use datafusion_functions::{init_udf_with_config, make_udf_function_with_config};
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
@@ -1075,13 +1073,25 @@ impl SessionContext {
             let mut state = self.state.write();
             state.config_mut().options_mut().set(&variable, &value)?;
 
-            // Register UDFs that return values based on session configuration
-            // e.g. now() which depends on the time_zone configuration option
-            if variable == "datafusion.execution.time_zone" {
-                let config_options = state.config().options();
-                let udf = state.udf("now")?;
-                let now_udf = init_udf_with_config!(udf.clone(), config_options, NowFunc);
-                state.register_udf(now_udf)?;
+            // Re-initialize any UDFs that depend on configuration
+            // This allows both built-in and custom functions to respond to configuration changes
+            let config_options = state.config().options();
+            let udf_names: Vec<_> = state.scalar_functions().keys().cloned().collect();
+
+            // Collect updated UDFs in a separate vector
+            let udfs_to_update: Vec<_> = udf_names
+                .into_iter()
+                .filter_map(|name| {
+                    state.udf(&name).ok().and_then(|udf| {
+                        udf.inner()
+                            .with_updated_config(&config_options)
+                            .map(Arc::new)
+                    })
+                })
+                .collect();
+
+            for udf in udfs_to_update {
+                state.register_udf(udf)?;
             }
 
             drop(state);

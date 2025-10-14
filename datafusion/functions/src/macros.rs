@@ -404,16 +404,3 @@ macro_rules! make_math_binary_udf {
         }
     };
 }
-
-#[macro_export]
-macro_rules! init_udf_with_config {
-    ($udf:expr, $config:expr, $func_type:ty) => {{
-        let mut udf = (*$udf).clone();
-        if let Some(_) = udf.inner().as_any().downcast_ref::<$func_type>() {
-            udf = <$func_type>::new_with_config($config).into();
-        }
-        let udf = Arc::new(udf);
-        Arc::clone(&udf)
-    }};
-}
-
