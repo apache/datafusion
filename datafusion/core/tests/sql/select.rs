@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use super::*;
-use datafusion_common::ScalarValue;
+use datafusion_common::{metadata::Literal, ParamValues, ScalarValue};
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -313,6 +315,41 @@ async fn test_named_parameter_not_bound() -> Result<()> {
     | -1     | 1        |
     +--------+----------+
     ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_query_parameters_with_metadata() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
+
+    let metadata0 = HashMap::from([(
+        "some_key".to_string(),
+        "some_value".to_string(),
+    )]);
+    let metadata1 = HashMap::from([(
+        "some_other_key".to_string(),
+        "some_other_value".to_string(),
+    )]);
+
+    // sql to statement then to logical plan with parameters
+    let df = ctx.sql("SELECT $1, $2").await?;
+
+    let df_with_params_replaced = df.with_param_values(ParamValues::List(vec![
+        Literal::new(ScalarValue::UInt32(Some(3)), Some(metadata0.clone().into())),
+        Literal::new(
+            ScalarValue::Utf8(Some("bar_value".to_string())),
+            Some(metadata1.clone().into()),
+        ),
+    ]))?;
+
+    let schema = df_with_params_replaced.schema();
+    assert_eq!(schema.field(0).data_type(), &DataType::UInt32);
+    assert_eq!(schema.field(0).metadata(), &metadata0);
+    assert_eq!(schema.field(1).data_type(), &DataType::Utf8);
+    assert_eq!(schema.field(1).metadata(), &metadata1);
 
     Ok(())
 }
