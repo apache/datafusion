@@ -344,11 +344,28 @@ FROM employees;
 
 ## Analytical Functions
 
+- [first](#first)
 - [first_value](#first_value)
 - [lag](#lag)
+- [last](#last)
 - [last_value](#last_value)
 - [lead](#lead)
+- [next](#next)
 - [nth_value](#nth_value)
+- [prev](#prev)
+
+### `first`
+
+Returns the first value in a MATCH_RECOGNIZE pattern match. This function can only be used within MATCH_RECOGNIZE clauses.
+
+```sql
+first(expression[, classifier_mask])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **classifier_mask**: Optional Boolean. Restrict to rows matching the symbol.
 
 ### `first_value`
 
@@ -415,6 +432,19 @@ FROM employees;
 | 4           | 60000  | 70000       |
 +-------------+--------+-------------+
 ```
+
+### `last`
+
+Returns the last value in a MATCH_RECOGNIZE pattern match. This function can only be used within MATCH_RECOGNIZE clauses.
+
+```sql
+last(expression[, classifier_mask])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **classifier_mask**: Optional Boolean. Restrict to rows matching the symbol.
 
 ### `last_value`
 
@@ -485,6 +515,21 @@ FROM employees;
 +-------------+-------------+--------+--------------+
 ```
 
+### `next`
+
+Returns a value from a following row in a MATCH_RECOGNIZE pattern match. This function can only be used within MATCH_RECOGNIZE clauses.
+
+```sql
+next(expression[, offset[, default[, classifier_mask]]])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **offset**: Non-negative integer. Rows ahead to look. Defaults to 1.
+- **default**: Default value if offset is out of bounds
+- **classifier_mask**: Optional Boolean. Restrict to rows matching the symbol.
+
 ### `nth_value`
 
 Returns the value evaluated at the nth row of the window frame (counting from 1). Returns NULL if no such row exists.
@@ -527,3 +572,18 @@ FROM employees;
 | 40000     |
 +-----------+
 ```
+
+### `prev`
+
+Returns a value from a previous row in a MATCH_RECOGNIZE pattern match. This function can only be used within MATCH_RECOGNIZE clauses.
+
+```sql
+prev(expression[, offset[, default[, classifier_mask]]])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **offset**: Non-negative integer. Rows back to look. Defaults to 1.
+- **default**: Default value if offset is out of bounds
+- **classifier_mask**: Optional Boolean. Restrict to rows matching the symbol.

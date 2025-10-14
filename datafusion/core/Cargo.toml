@@ -129,6 +129,7 @@ datafusion-expr = { workspace = true, default-features = false }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-match_recognize = { workspace = true }
 datafusion-functions-nested = { workspace = true, default-features = false, optional = true }
 datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
