@@ -271,31 +271,31 @@ The DataFrame API handles all the Arrow details under the hood - reading files i
 - Parquet format and pushdown: [Parquet format](https://parquet.apache.org/docs/file-format/), [Row group filtering / predicate pushdown](https://arrow.apache.org/docs/cpp/parquet.html#row-group-filtering)
 - For DataFusion contributors: [DataFusion Invariants](../contributor-guide/specification/invariants.md) - How DataFusion maintains type safety and consistency with Arrow's dynamic type system
 
-[`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
-[`ArrayRef`]: https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html
-[`Field`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Field.html
-[`Schema`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html
-[`DataType`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html
-[`Int32Array`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.Int32Array.html
-[`StringArray`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.StringArray.html
-[`Int32`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int32
-[`Int64`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int64
+[`arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
+[`arrayref`]: https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html
+[`field`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Field.html
+[`schema`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html
+[`datatype`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html
+[`int32array`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.Int32Array.html
+[`stringarray`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.StringArray.html
+[`int32`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int32
+[`int64`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int64
 [ extension points]: ../library-user-guide/extensions.md
-[`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
-[Custom Table Providers guide]: ../library-user-guide/custom-table-providers.md
-[User-Defined Functions (UDFs)]: ../library-user-guide/functions/adding-udfs.md
-[Custom Optimizer Rules and Operators]: ../library-user-guide/extending-operators.md
+[`tableprovider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
+[custom table providers guide]: ../library-user-guide/custom-table-providers.md
+[user-defined functions (udfs)]: ../library-user-guide/functions/adding-udfs.md
+[custom optimizer rules and operators]: ../library-user-guide/extending-operators.md
 [`.register_table()`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.register_table
 [`.sql()`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql
 [`.show()`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.show
-[`MemTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html
-[`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
-[`CsvReadOptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.CsvReadOptions.html
-[`ParquetReadOptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.ParquetReadOptions.html
-[`RecordBatch`]: https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html
+[`memtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html
+[`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
+[`csvreadoptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.CsvReadOptions.html
+[`parquetreadoptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.ParquetReadOptions.html
+[`recordbatch`]: https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html
 [`read_csv`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_csv
 [`read_parquet`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_parquet
 [`read_json`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_json
 [`read_avro`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_avro
-[`DataFrame`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
+[`dataframe`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
 [`.collect()`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.collect
