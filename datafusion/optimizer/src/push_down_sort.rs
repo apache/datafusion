@@ -136,6 +136,11 @@ impl OptimizerRule for PushDownSort {
                 LogicalPlan::Sort(ref sort) => {
                     // Update current sort expressions to the new ones
                     ctx.data = Some(sort.expr.clone());
+                    // Propagate sort expressions to all children
+                    let sort_exprs = ctx.data.clone();
+                    for child in ctx.children.iter_mut() {
+                        child.data = sort_exprs.clone();
+                    }
                     // Continue recursion with updated sort expressions
                     Ok(Transformed::no(ctx))
                 }
@@ -188,8 +193,19 @@ impl OptimizerRule for PushDownSort {
                         ctx.data = if rewritten_sorts.is_empty() {
                             None
                         } else {
-                            Some(rewritten_sorts)
+                            Some(rewritten_sorts.clone())
                         };
+
+                        // Propagate rewritten sort expressions to children
+                        let data_to_propagate = ctx.data.clone();
+                        for child in ctx.children.iter_mut() {
+                            child.data = data_to_propagate.clone();
+                        }
+                    } else {
+                        // No sort expressions to propagate, clear children data
+                        for child in ctx.children.iter_mut() {
+                            child.data = None;
+                        }
                     }
 
                     // Continue recursion with potentially updated sort expressions
@@ -197,14 +213,23 @@ impl OptimizerRule for PushDownSort {
                 }
                 LogicalPlan::Filter(_)
                 | LogicalPlan::Repartition(_)
-                | LogicalPlan::SubqueryAlias(_) => {
+                | LogicalPlan::SubqueryAlias(_)
+                | LogicalPlan::Limit(_) => {
+                    // Propagate current sort expressions to children without modification
+                    let current_data = ctx.data.clone();
+                    for child in ctx.children.iter_mut() {
+                        child.data = current_data.clone();
+                    }
                     // Continue recursion without modifying current sort expressions
                     Ok(Transformed::no(ctx))
                 }
                 _ => {
                     // Cannot push sort expressions through this node type
-                    // Clear sort expressions and continue recursion
+                    // Clear sort expressions from both context and children
                     ctx.data = None;
+                    for child in ctx.children.iter_mut() {
+                        child.data = None;
+                    }
                     Ok(Transformed::no(ctx))
                 }
             }
@@ -365,13 +390,13 @@ mod tests {
             .sort(vec![col("bc").sort(true, false)])?
             .build()?;
 
-        // Sort on computed column should not push down
+        // Sort on computed column can push down as complex expression
         assert_optimized_plan_equal!(
             plan,
             @r"
         Sort: bc ASC NULLS LAST
           Projection: test.a, test.b + test.c AS bc
-            TableScan: test
+            TableScan: test preferred_ordering=[test.b + test.c ASC NULLS LAST]
         "
         )
     }
@@ -397,45 +422,23 @@ mod tests {
     }
 
     #[test]
-    fn sort_partial_pushdown_through_projection() -> Result<()> {
+    fn sort_rewrites_expression_to_source_columns() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), (col("b") + col("c")).alias("bc")])?
+            .project(vec![col("a"), (col("b") + col("c") + lit(1)).alias("bc1"), col("c")])?
             .sort(vec![
-                col("a").sort(true, false),
-                col("bc").sort(false, true),
-            ])?
-            .build()?;
-
-        // First sort column can push, second cannot (it's computed)
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Sort: test.a ASC NULLS LAST, bc DESC NULLS FIRST
-          Projection: test.a, test.b + test.c AS bc
-            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
-        "
-        )
-    }
-
-    #[test]
-    fn sort_stops_at_computed_column() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), (col("b") + col("c")).alias("bc"), col("c")])?
-            .sort(vec![
-                col("bc").sort(true, false),
+                col("bc1").sort(true, false),
                 col("c").sort(true, false),
             ])?
             .build()?;
 
-        // Since first sort column is computed, nothing should push down
+        // We can succesfully rewrite the sort expression `bc` to `b + c` and push it down
         assert_optimized_plan_equal!(
             plan,
             @r"
         Sort: bc ASC NULLS LAST, test.c ASC NULLS LAST
           Projection: test.a, test.b + test.c AS bc, test.c
-            TableScan: test
+            TableScan: test preferred_ordering=[test.b + test.c + Int32(1) ASC NULLS LAST, test.c ASC NULLS LAST]
         "
         )
     }
@@ -494,7 +497,7 @@ mod tests {
             plan,
             @r"
         Sort: test.a ASC NULLS LAST
-          Repartition: RoundRobinBatch(4)
+          Repartition: RoundRobinBatch partition_count=4
             TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
         "
         )
@@ -510,13 +513,13 @@ mod tests {
             .sort(vec![col("b").sort(false, true)])?
             .build()?;
 
-        // The outer sort should replace the inner sort for pushdown
+        // The innermost sort should be what gets pushed down
         assert_optimized_plan_equal!(
             plan,
             @r"
         Sort: test.b DESC NULLS FIRST
           Sort: test.a ASC NULLS LAST
-            TableScan: test preferred_ordering=[test.b DESC NULLS FIRST]
+            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
         "
         )
     }
@@ -530,14 +533,14 @@ mod tests {
             .sort(vec![col("c").sort(false, true)])?
             .build()?;
 
-        // Outer sort should be what gets pushed down
+        // Innermost sort should be what gets pushed down
         assert_optimized_plan_equal!(
             plan,
             @r"
         Sort: test.c DESC NULLS FIRST
           Projection: test.a, test.b, test.c
             Sort: test.a ASC NULLS LAST, test.b ASC NULLS LAST
-              TableScan: test preferred_ordering=[test.c DESC NULLS FIRST]
+              TableScan: test preferred_ordering=[test.a ASC NULLS LAST, test.b ASC NULLS LAST]
         "
         )
     }
@@ -552,13 +555,13 @@ mod tests {
             .sort(vec![col("a").sort(true, false)])?
             .build()?;
 
-        // Sort cannot push through limit
+        // Sort can push through limit
         assert_optimized_plan_equal!(
             plan,
             @r"
         Sort: test.a ASC NULLS LAST
           Limit: skip=0, fetch=10
-            TableScan: test
+            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
         "
         )
     }
