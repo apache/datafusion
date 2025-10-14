@@ -39,3 +39,10 @@ query T
 SELECT concat('');
 ----
 (empty)
+
+
+query T
+SELECT concat(a, b, c) from (select 'a' a, 'b' b, 'c' c union all select null a, 'b', 'c') order by 1 nulls last;
+----
+abc
+NULL
