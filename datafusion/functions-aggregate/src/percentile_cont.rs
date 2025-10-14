@@ -759,12 +759,22 @@ fn calculate_percentile<T: ArrowNumericType>(
         Some(values[0])
     } else if percentile == 0.0 {
         // Get minimum value
-        values.sort_by(cmp);
-        Some(values[0])
+        Some(
+            values
+                .iter()
+                .min_by(|a, b| cmp(a, b))
+                .expect("we checked for len > 0 a few lines above")
+                .clone(),
+        )
     } else if percentile == 1.0 {
         // Get maximum value
-        values.sort_by(cmp);
-        Some(values[len - 1])
+        Some(
+            values
+                .iter()
+                .max_by(|a, b| cmp(a, b))
+                .expect("we checked for len > 0 a few lines above")
+                .clone(),
+        )
     } else {
         // Calculate the index using the formula: p * (n - 1)
         let index = percentile * ((len - 1) as f64);
