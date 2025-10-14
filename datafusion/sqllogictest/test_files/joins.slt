@@ -4196,21 +4196,6 @@ SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 20;
 3 3 3 3 true
 4 4 NULL NULL NULL
 
-query TT rowsort
--- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
-EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
-----
-01)GlobalLimitExec: skip=0, fetch=20
-01)Limit: skip=0, fetch=20
-02)--Full Join:  Filter: t0.c2 >= t1.c2
-02)--NestedLoopJoinExec: join_type=Full, filter=c2@0 >= c2@1
-03)----DataSourceExec: partitions=1, partition_sizes=[2]
-03)----TableScan: t0 projection=[c1, c2]
-04)----DataSourceExec: partitions=1, partition_sizes=[2]
-04)----TableScan: t1 projection=[c1, c2, c3]
-logical_plan
-physical_plan
-
 query IIIIB rowsort
 -- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
 SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
@@ -5208,7 +5193,7 @@ SELECT c
 
 # PiecewiseMergeJoin Test
 statement ok
-set datafusion.optimizer.allow_piecewise_merge_join = true;
+set datafusion.optimizer.enable_piecewise_merge_join = true;
 
 query II
 SELECT join_t1.t1_id, join_t2.t2_id
@@ -5248,3 +5233,6 @@ DROP TABLE t2;
 
 statement ok
 set datafusion.explain.physical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;

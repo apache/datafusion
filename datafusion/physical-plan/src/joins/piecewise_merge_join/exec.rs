@@ -81,19 +81,19 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 /// Classic joins are processed differently compared to existence joins.
 ///
 /// ## Classic Joins (Inner, Full, Left, Right)
-/// For classic joins we buffer the right side (the "build" side) and stream the left side (the "probe" side).
+/// For classic joins we buffer the build side and stream the probe side (the "probe" side).
 /// Both sides are sorted so that we can iterate from index 0 to the end on each side.  This ordering ensures
-/// that when we find the first matching pair of rows, we can emit the current left row joined with all remaining
-/// right rows from the match position onward, without rescanning earlier right rows.
+/// that when we find the first matching pair of rows, we can emit the current stream row joined with all remaining
+/// probe rows from the match position onward, without rescanning earlier probe rows.
 ///  
 /// For `<` and `<=` operators, both inputs are sorted in **descending** order, while for `>` and `>=` operators
 /// they are sorted in **ascending** order. This choice ensures that the pointer on the buffered side can advance
-/// monotonically as we stream new batches from the left side.
+/// monotonically as we stream new batches from the stream side.
 ///
-/// The streamed (left) side may arrive unsorted, so this operator sorts each incoming batch in memory before
-/// processing. The buffered (right) side is required to be globally sorted; the plan declares this requirement
+/// The streamed side may arrive unsorted, so this operator sorts each incoming batch in memory before
+/// processing. The buffered side is required to be globally sorted; the plan declares this requirement
 /// in `requires_input_order`, which allows the optimizer to automatically insert a `SortExec` on that side if needed.
-/// By the time this operator runs, the right side is guaranteed to be in the proper order.
+/// By the time this operator runs, the buffered side is guaranteed to be in the proper order.
 ///
 /// The pseudocode for the algorithm looks like this:
 ///
@@ -215,6 +215,12 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 /// For both types of joins, the buffered side must be sorted ascending for `Operator::Lt` (<) or
 /// `Operator::LtEq` (<=) and descending for `Operator::Gt` (>) or `Operator::GtEq` (>=).
 ///
+/// # Partitioning Logic
+/// Piecewise Merge Join requires one buffered side partition + round robin partitioned stream side. A counter
+/// is used in the buffered side to coordinate when all streamed partitions are finished execution. This allows
+/// for processing the rest of the unmatched rows for Left and Full joins. The last partition that finishes
+/// execution will be responsible for outputting the unmatched rows.
+///
 /// # Performance Explanation (cost)
 /// Piecewise Merge Join is used over Nested Loop Join due to its superior performance. Here is the breakdown:
 ///
@@ -275,7 +281,7 @@ pub struct PiecewiseMergeJoinExec {
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Number of partitions to process
-    remaining_partitions: Arc<AtomicUsize>,
+    num_partitions: usize,
 }
 
 impl PiecewiseMergeJoinExec {
@@ -285,7 +291,7 @@ impl PiecewiseMergeJoinExec {
         on: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
         operator: Operator,
         join_type: JoinType,
-        num_partitions: Arc<AtomicUsize>,
+        num_partitions: usize,
     ) -> Result<Self> {
         // TODO: Implement existence joins for PiecewiseMergeJoin
         if is_existence_join(join_type) {
@@ -368,7 +374,7 @@ impl PiecewiseMergeJoinExec {
             right_batch_required_orders,
             sort_options,
             cache,
-            remaining_partitions: num_partitions,
+            num_partitions,
         })
     }
 
@@ -510,7 +516,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 self.on.clone(),
                 self.operator,
                 self.join_type,
-                Arc::clone(&self.remaining_partitions),
+                self.num_partitions,
             )?)),
             _ => internal_err!(
                 "PiecewiseMergeJoin should have 2 children, found {}",
@@ -539,6 +545,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 metrics.clone(),
                 reservation,
                 build_visited_indices_map(self.join_type),
+                partition,
             ))
         })?;
 
@@ -561,7 +568,6 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 self.sort_options,
                 metrics,
                 batch_size,
-                Arc::clone(&self.remaining_partitions),
             )))
         }
     }
@@ -602,6 +608,7 @@ async fn build_buffered_data(
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     build_map: bool,
+    remaining_partitions: usize,
 ) -> Result<BufferedSideData> {
     let schema = buffered.schema();
 
@@ -653,6 +660,7 @@ async fn build_buffered_data(
         single_batch,
         buffered_values,
         Mutex::new(visited_indices_bitmap),
+        remaining_partitions,
         reservation,
     );
 
@@ -663,6 +671,7 @@ pub(super) struct BufferedSideData {
     pub(super) batch: RecordBatch,
     values: ArrayRef,
     pub(super) visited_indices_bitmap: SharedBitmapBuilder,
+    pub(super) remaining_partitions: AtomicUsize,
     _reservation: MemoryReservation,
 }
 
@@ -671,12 +680,14 @@ impl BufferedSideData {
         batch: RecordBatch,
         values: ArrayRef,
         visited_indices_bitmap: SharedBitmapBuilder,
+        remaining_partitions: usize,
         reservation: MemoryReservation,
     ) -> Self {
         Self {
             batch,
             values,
             visited_indices_bitmap,
+            remaining_partitions: AtomicUsize::new(remaining_partitions),
             _reservation: reservation,
         }
     }

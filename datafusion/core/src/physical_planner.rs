@@ -19,7 +19,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -1267,7 +1266,7 @@ impl DefaultPhysicalPlanner {
                         && session_state
                             .config_options()
                             .optimizer
-                            .allow_piecewise_merge_join
+                            .enable_piecewise_merge_join
                     {
                         let Expr::BinaryExpr(be) = &range_filters[0] else {
                             return plan_err!(
@@ -1337,17 +1336,13 @@ impl DefaultPhysicalPlanner {
                             session_state.execution_props(),
                         )?;
 
-                        let num_partitions = Arc::new(AtomicUsize::new(
-                            session_state.config().target_partitions(),
-                        ));
-
                         Arc::new(PiecewiseMergeJoinExec::try_new(
                             physical_left,
                             physical_right,
                             (on_left, on_right),
                             op,
                             *join_type,
-                            num_partitions,
+                            session_state.config().target_partitions(),
                         )?)
                     } else {
                         // there is no equal join condition, use the nested loop join

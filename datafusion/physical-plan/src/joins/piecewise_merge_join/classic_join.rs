@@ -26,12 +26,11 @@ use arrow::{
 };
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
-use std::sync::atomic::AtomicUsize;
 use std::{cmp::Ordering, task::ready};
 use std::{sync::Arc, task::Poll};
 
@@ -44,14 +43,14 @@ use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
 pub(super) enum PiecewiseMergeJoinStreamState {
     WaitBufferedSide,
     FetchStreamBatch,
-    ProcessStreamBatch(StreamedBatch),
-    ExhaustedStreamSide,
+    ProcessStreamBatch(SortedStreamBatch),
+    ProcessUnmatched,
     Completed,
 }
 
 impl PiecewiseMergeJoinStreamState {
     // Grab mutable reference to the current stream batch
-    fn try_as_process_stream_batch_mut(&mut self) -> Result<&mut StreamedBatch> {
+    fn try_as_process_stream_batch_mut(&mut self) -> Result<&mut SortedStreamBatch> {
         match self {
             PiecewiseMergeJoinStreamState::ProcessStreamBatch(state) => Ok(state),
             _ => internal_err!("Expected streamed batch in StreamBatch"),
@@ -59,19 +58,28 @@ impl PiecewiseMergeJoinStreamState {
     }
 }
 
-pub(super) struct StreamedBatch {
+/// The stream side incoming batch with required sort order.
+///
+/// Note the compare key in the join predicate might include expressions on the original
+/// columns, so we store the evaluated compare key separately.
+/// e.g. For join predicate `buffer.v1 < (stream.v1 + 1)`, the `compare_key_values` field stores
+/// the evaluted `stream.v1 + 1` array.
+pub(super) struct SortedStreamBatch {
     pub batch: RecordBatch,
-    values: Vec<ArrayRef>,
+    compare_key_values: Vec<ArrayRef>,
 }
 
-impl StreamedBatch {
+impl SortedStreamBatch {
     #[allow(dead_code)]
-    fn new(batch: RecordBatch, values: Vec<ArrayRef>) -> Self {
-        Self { batch, values }
+    fn new(batch: RecordBatch, compare_key_values: Vec<ArrayRef>) -> Self {
+        Self {
+            batch,
+            compare_key_values,
+        }
     }
 
-    fn values(&self) -> &Vec<ArrayRef> {
-        &self.values
+    fn compare_key_values(&self) -> &Vec<ArrayRef> {
+        &self.compare_key_values
     }
 }
 
@@ -96,15 +104,13 @@ pub(super) struct ClassicPWMJStream {
     buffered_side: BufferedSide,
     // Tracks the state of the `PiecewiseMergeJoin`
     state: PiecewiseMergeJoinStreamState,
-    // Sort option for buffered and streamed side (specifies whether
+    // Sort option for streamed side (specifies whether
     // the sort is ascending or descending)
     sort_option: SortOptions,
     // Metrics for build + probe joins
     join_metrics: BuildProbeJoinMetrics,
     // Tracking incremental state for emitting record batches
     batch_process_state: BatchProcessState,
-    // To synchronize when partition needs to finish
-    remaining_partitions: Arc<AtomicUsize>,
 }
 
 impl RecordBatchStream for ClassicPWMJStream {
@@ -114,7 +120,7 @@ impl RecordBatchStream for ClassicPWMJStream {
 }
 
 // `PiecewiseMergeJoinStreamState` is separated into `WaitBufferedSide`, `FetchStreamBatch`,
-// `ProcessStreamBatch`, `ExhaustedStreamSide` and `Completed`.
+// `ProcessStreamBatch`, `ProcessUnmatched` and `Completed`.
 //
 // Classic Joins
 //  1. `WaitBufferedSide` - Load in the buffered side data into memory.
@@ -138,7 +144,6 @@ impl ClassicPWMJStream {
         sort_option: SortOptions,
         join_metrics: BuildProbeJoinMetrics,
         batch_size: usize,
-        remaining_partitions: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             schema: Arc::clone(&schema),
@@ -152,7 +157,6 @@ impl ClassicPWMJStream {
             sort_option,
             join_metrics,
             batch_process_state: BatchProcessState::new(schema, batch_size),
-            remaining_partitions,
         }
     }
 
@@ -171,7 +175,7 @@ impl ClassicPWMJStream {
                 PiecewiseMergeJoinStreamState::ProcessStreamBatch(_) => {
                     handle_state!(self.process_stream_batch())
                 }
-                PiecewiseMergeJoinStreamState::ExhaustedStreamSide => {
+                PiecewiseMergeJoinStreamState::ProcessUnmatched => {
                     handle_state!(self.process_unmatched_buffered_batch())
                 }
                 PiecewiseMergeJoinStreamState::Completed => Poll::Ready(None),
@@ -209,12 +213,15 @@ impl ClassicPWMJStream {
         match ready!(self.streamed.poll_next_unpin(cx)) {
             None => {
                 if self
+                    .buffered_side
+                    .try_as_ready_mut()?
+                    .buffered_data
                     .remaining_partitions
                     .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
                     == 1
                 {
                     self.batch_process_state.reset();
-                    self.state = PiecewiseMergeJoinStreamState::ExhaustedStreamSide;
+                    self.state = PiecewiseMergeJoinStreamState::ProcessUnmatched;
                 } else {
                     self.state = PiecewiseMergeJoinStreamState::Completed;
                 }
@@ -240,11 +247,12 @@ impl ClassicPWMJStream {
 
                 // Reset BatchProcessState before processing a new stream batch
                 self.batch_process_state.reset();
-                self.state =
-                    PiecewiseMergeJoinStreamState::ProcessStreamBatch(StreamedBatch {
+                self.state = PiecewiseMergeJoinStreamState::ProcessStreamBatch(
+                    SortedStreamBatch {
                         batch: stream_batch,
-                        values: vec![stream_values],
-                    });
+                        compare_key_values: vec![stream_values],
+                    },
+                );
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
         };
@@ -292,9 +300,13 @@ impl ClassicPWMJStream {
                 self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
                 return Ok(StatefulStreamResult::Ready(Some(b)));
             }
+
             // Nothing pending; hand back whatever `resolve` returned (often empty) and move on.
+            // if self.batch_process_state.output_batches.is_empty() {
             self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+
             return Ok(StatefulStreamResult::Ready(Some(batch)));
+            // }
         }
 
         Ok(StatefulStreamResult::Ready(Some(batch)))
@@ -438,7 +450,7 @@ impl Stream for ClassicPWMJStream {
 #[allow(clippy::too_many_arguments)]
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
-    stream_batch: &StreamedBatch,
+    stream_batch: &SortedStreamBatch,
     join_schema: Arc<Schema>,
     operator: Operator,
     sort_options: SortOptions,
@@ -446,7 +458,7 @@ fn resolve_classic_join(
     batch_process_state: &mut BatchProcessState,
 ) -> Result<RecordBatch> {
     let buffered_len = buffered_side.buffered_data.values().len();
-    let stream_values = stream_batch.values();
+    let stream_values = stream_batch.compare_key_values();
 
     let mut buffer_idx = batch_process_state.start_buffer_idx;
     let stream_idx = batch_process_state.start_stream_idx;
@@ -474,7 +486,7 @@ fn resolve_classic_join(
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
 
-                        let batch = build_matched_indices(
+                        let batch = build_matched_indices_and_set_buffered_bitmap(
                             (buffer_idx, count),
                             (row_idx, count),
                             buffered_side,
@@ -502,7 +514,7 @@ fn resolve_classic_join(
                     if matches!(compare, Ordering::Equal | Ordering::Less) {
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
-                        let batch = build_matched_indices(
+                        let batch = build_matched_indices_and_set_buffered_bitmap(
                             (buffer_idx, count),
                             (row_idx, count),
                             buffered_side,
@@ -526,7 +538,7 @@ fn resolve_classic_join(
                     }
                 }
                 _ => {
-                    return exec_err!(
+                    return internal_err!(
                         "PiecewiseMergeJoin should not contain operator, {}",
                         operator
                     )
@@ -569,11 +581,11 @@ fn resolve_classic_join(
 //
 // The two ranges are: buffered_range: (start index, count) and streamed_range: (start index, count) due
 // to batch.slice(start, count).
-fn build_matched_indices(
+fn build_matched_indices_and_set_buffered_bitmap(
     buffered_range: (usize, usize),
     streamed_range: (usize, usize),
     buffered_side: &mut BufferedSideReadyState,
-    stream_batch: &StreamedBatch,
+    stream_batch: &SortedStreamBatch,
     join_type: JoinType,
     join_schema: Arc<Schema>,
 ) -> Result<RecordBatch> {
@@ -606,7 +618,7 @@ fn build_matched_indices(
 // Creates a record batch from the unmatched indices on the streamed side
 fn create_unmatched_batch(
     streamed_indices: &mut PrimitiveBuilder<UInt32Type>,
-    stream_batch: &StreamedBatch,
+    stream_batch: &SortedStreamBatch,
     join_schema: Arc<Schema>,
 ) -> Result<RecordBatch> {
     let streamed_indices = streamed_indices.finish();
@@ -719,14 +731,7 @@ mod tests {
         operator: Operator,
         join_type: JoinType,
     ) -> Result<PiecewiseMergeJoinExec> {
-        PiecewiseMergeJoinExec::try_new(
-            left,
-            right,
-            on,
-            operator,
-            join_type,
-            Arc::new(AtomicUsize::new(1)),
-        )
+        PiecewiseMergeJoinExec::try_new(left, right, on, operator, join_type, 1)
     }
 
     async fn join_collect(

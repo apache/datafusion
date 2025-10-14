@@ -285,7 +285,7 @@ datafusion.format.time_format %H:%M:%S%.f
 datafusion.format.timestamp_format %Y-%m-%dT%H:%M:%S%.f
 datafusion.format.timestamp_tz_format NULL
 datafusion.format.types_info false
-datafusion.optimizer.allow_piecewise_merge_join false
+datafusion.optimizer.enable_piecewise_merge_join false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.default_filter_selectivity 20
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true
@@ -402,7 +402,7 @@ datafusion.format.time_format %H:%M:%S%.f Time format for time arrays
 datafusion.format.timestamp_format %Y-%m-%dT%H:%M:%S%.f Timestamp format for timestamp arrays
 datafusion.format.timestamp_tz_format NULL Timestamp format for timestamp with timezone arrays. When `None`, ISO 8601 format is used.
 datafusion.format.types_info false Show types in visual representation batches
-datafusion.optimizer.allow_piecewise_merge_join false When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently experimental.
+datafusion.optimizer.enable_piecewise_merge_join false When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently experimental.
 datafusion.optimizer.allow_symmetric_joins_without_pruning true Should DataFusion allow symmetric hash joins for unbounded data sources even when its inputs do not have any ordering or filtering If the flag is not enabled, the SymmetricHashJoin operator will be unable to prune its internal buffers, resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right, RightAnti, and RightSemi - being produced only at the end of the execution. This is not typical in stream processing. Additionally, without proper design for long runner execution, all types of joins may encounter out-of-memory errors.
 datafusion.optimizer.default_filter_selectivity 20 The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true When set to true, the optimizer will push a limit operation into grouped aggregations which have no aggregate expressions, as a soft limit, emitting groups once the limit is reached, before all rows in the group are read.

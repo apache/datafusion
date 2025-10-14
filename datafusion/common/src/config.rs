@@ -841,8 +841,9 @@ config_namespace! {
         pub prefer_hash_join: bool, default = true
 
         /// When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently
-        /// experimental.
-        pub allow_piecewise_merge_join: bool, default = false
+        /// experimental. Physical planner will opt for PiecewiseMergeJoin when there is only
+        /// one range filter.
+        pub enable_piecewise_merge_join: bool, default = false
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
