@@ -289,7 +289,7 @@ query TT
 EXPLAIN PREPARE my_plan(INT) AS SELECT id + $1 FROM person;
 ----
 logical_plan
-01)Prepare: "my_plan" [Field { name: "", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]
+01)Prepare: "my_plan" [Int32]
 02)--Projection: person.id + $1
 03)----TableScan: person projection=[id]
 
