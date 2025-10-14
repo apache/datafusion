@@ -485,7 +485,7 @@ mod tests {
             ])?
             .build()?;
 
-        // We can succesfully rewrite the sort expression `bc1` to `b + c + 1` and push it down
+        // We can successfully rewrite the sort expression `bc1` to `b + c + 1` and push it down
         assert_optimized_plan_equal!(
             plan,
             @r"

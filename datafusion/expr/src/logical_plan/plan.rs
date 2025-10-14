@@ -2627,7 +2627,7 @@ pub struct ScanOrdering {
 }
 
 impl ScanOrdering {
-    /// Attatch a preferred ordering to the scan ordering.
+    /// Attach a preferred ordering to the scan ordering.
     /// See [`ScanOrdering`] for details on how this is used.
     pub fn with_preferred_ordering(mut self, preferred_ordering: Vec<SortExpr>) -> Self {
         self.preferred_ordering = Some(preferred_ordering);
