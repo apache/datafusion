@@ -32,8 +32,8 @@ use crate::{
 };
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, FixedSizeListArray, Int64Array,
-    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray,
+    new_null_array, Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray,
+    Int64Array, LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -111,19 +111,19 @@ impl UnnestExec {
         struct_column_indices: &[usize],
         schema: SchemaRef,
     ) -> PlanProperties {
-        let list_column_indices: Vec<usize> = list_column_indices
-            .iter()
-            .map(|list_unnest| list_unnest.index_in_input_schema)
-            .collect();
-        let non_unnested_indices: Vec<usize> = input
-            .schema()
-            .fields()
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| {
-                !list_column_indices.contains(idx) && !struct_column_indices.contains(idx)
-            })
-            .map(|(idx, _)| idx)
+        // Find out which indices are not unnested, such that they can be copied over from the input plan
+        let input_schema = input.schema();
+        let mut unnested_indices = BooleanBufferBuilder::new(input_schema.fields().len());
+        unnested_indices.append_n(input_schema.fields().len(), false);
+        for list_unnest in list_column_indices {
+            unnested_indices.set_bit(list_unnest.index_in_input_schema, true);
+        }
+        for list_unnest in struct_column_indices {
+            unnested_indices.set_bit(*list_unnest, true)
+        }
+        let unnested_indices = unnested_indices.finish();
+        let non_unnested_indices: Vec<usize> = (0..input_schema.fields().len())
+            .filter(|idx| !unnested_indices.value(*idx))
             .collect();
 
         // Manually build projection mapping from non-unnested input columns to their positions in the output
