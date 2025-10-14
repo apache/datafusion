@@ -27,6 +27,7 @@ use datafusion::common::{Result, ScalarValue};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::listing_table_factory::ListingTableConfigExt;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
@@ -39,7 +40,6 @@ use datafusion_physical_expr_adapter::{
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, PutPayload};
-
 // Example showing how to implement custom casting rules to adapt file schemas.
 // This example enforces that casts must be strictly widening: if the file type is Int64 and the table type is Int32, it will error
 // before even reading the data.
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
                     DefaultPhysicalExprAdapterFactory,
                 )),
             ));
-    let table = ListingTable::try_new(listing_table_config).unwrap();
+    let table = ListingTable::try_new(listing_table_config)?;
     ctx.register_table("good_table", Arc::new(table))?;
     let listing_table_config =
         ListingTableConfig::new(ListingTableUrl::parse("memory:///bad.parquet")?)
@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
                     DefaultPhysicalExprAdapterFactory,
                 )),
             ));
-    let table = ListingTable::try_new(listing_table_config).unwrap();
+    let table = ListingTable::try_new(listing_table_config)?;
     ctx.register_table("bad_table", Arc::new(table))?;
 
     println!("\n=== File with narrower schema is cast ===");

@@ -21,6 +21,7 @@ use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::listing_table_factory::ListingTableConfigExt;
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::memory::*;
 use datafusion_catalog::{SchemaProvider, TableProvider};

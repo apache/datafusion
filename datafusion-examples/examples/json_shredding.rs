@@ -29,6 +29,7 @@ use datafusion::common::{assert_contains, exec_datafusion_err, Result};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::listing_table_factory::ListingTableConfigExt;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{
@@ -82,7 +83,7 @@ async fn main() -> Result<()> {
             .expect("creating writer");
 
         writer.write(&batch).expect("Writing batch");
-        writer.close().unwrap();
+        writer.close()?;
         buf
     };
     let path = Path::from("example.parquet");
@@ -105,7 +106,7 @@ async fn main() -> Result<()> {
             .await?
             .with_schema(table_schema)
             .with_expr_adapter_factory(Arc::new(ShreddedJsonRewriterFactory));
-    let table = ListingTable::try_new(listing_table_config).unwrap();
+    let table = ListingTable::try_new(listing_table_config)?;
     let table_provider = Arc::new(table);
 
     // Register our table
@@ -223,8 +224,9 @@ impl ScalarUDFImpl for JsonGetStr {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        assert!(
-            args.args.len() == 2,
+        assert_eq!(
+            args.args.len(),
+            2,
             "json_get_str requires exactly 2 arguments"
         );
         let key = match &args.args[0] {

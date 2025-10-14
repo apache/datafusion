@@ -28,9 +28,7 @@ use crate::datasource::listing::{
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::DataType;
-use datafusion_common::{
-    arrow_datafusion_err, internal_datafusion_err, plan_err, DataFusionError, ToDFSchema,
-};
+use datafusion_common::{arrow_datafusion_err, internal_datafusion_err, plan_err, DataFusionError, ToDFSchema};
 use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
 
@@ -206,60 +204,76 @@ fn get_extension(path: &str) -> String {
     }
 }
 
-/// Infer `ListingOptions` based on `table_path` and file suffix.
-///
-/// The format is inferred based on the first `table_path`.
-pub async fn infer_options(
-    config: ListingTableConfig,
-    state: &dyn Session,
-) -> Result<ListingTableConfig> {
-    let store = if let Some(url) = config.table_paths.first() {
-        state.runtime_env().object_store(url)?
-    } else {
-        return Ok(config);
-    };
+/// This trait exists because the following inference methods only
+/// work for [`SessionState`] implementations of [`Session`].
+/// See [`ListingTableConfig`] for the remaining inference methods.
+#[async_trait]
+pub trait ListingTableConfigExt {
+    /// Infer `ListingOptions` based on `table_path` and file suffix.
+    ///
+    /// The format is inferred based on the first `table_path`.
+    async fn infer_options(self, state: &dyn Session) -> Result<ListingTableConfig>;
 
-    let file = config
-        .table_paths
-        .first()
-        .unwrap()
-        .list_all_files(state, store.as_ref(), "")
-        .await?
-        .next()
-        .await
-        .ok_or_else(|| internal_datafusion_err!("No files for table"))??;
-
-    let (file_extension, maybe_compression_type) =
-        ListingTableConfig::infer_file_extension_and_compression_type(
-            file.location.as_ref(),
-        )?;
-
-    let mut format_options = HashMap::new();
-    if let Some(ref compression_type) = maybe_compression_type {
-        format_options.insert("format.compression".to_string(), compression_type.clone());
-    }
-    let state = state.as_any().downcast_ref::<SessionState>().unwrap();
-    let file_format = state
-        .get_file_format_factory(&file_extension)
-        .ok_or(config_datafusion_err!(
-            "No file_format found with extension {file_extension}"
-        ))?
-        .create(state, &format_options)?;
-
-    let listing_file_extension = if let Some(compression_type) = maybe_compression_type {
-        format!("{}.{}", &file_extension, &compression_type)
-    } else {
-        file_extension
-    };
-
-    let listing_options = ListingOptions::new(file_format)
-        .with_file_extension(listing_file_extension)
-        .with_target_partitions(state.config().target_partitions())
-        .with_collect_stat(state.config().collect_statistics());
-
-    Ok(config.with_listing_options(listing_options))
+    /// Convenience method to call both [`Self::infer_options`] and [`Self::infer_schema`]
+    async fn infer(self, state: &dyn Session) -> Result<ListingTableConfig>;
 }
 
+#[async_trait]
+impl ListingTableConfigExt for ListingTableConfig {
+    async fn infer_options(self, state: &dyn Session) -> Result<ListingTableConfig> {
+        let store = if let Some(url) = self.table_paths.first() {
+            state.runtime_env().object_store(url)?
+        } else {
+            return Ok(self);
+        };
+
+        let file = self
+            .table_paths
+            .first()
+            .unwrap()
+            .list_all_files(state, store.as_ref(), "")
+            .await?
+            .next()
+            .await
+            .ok_or_else(|| internal_datafusion_err!("No files for table"))??;
+
+        let (file_extension, maybe_compression_type) =
+            ListingTableConfig::infer_file_extension_and_compression_type(
+                file.location.as_ref(),
+            )?;
+
+        let mut format_options = HashMap::new();
+        if let Some(ref compression_type) = maybe_compression_type {
+            format_options
+                .insert("format.compression".to_string(), compression_type.clone());
+        }
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
+        let file_format = state
+            .get_file_format_factory(&file_extension)
+            .ok_or(config_datafusion_err!(
+                "No file_format found with extension {file_extension}"
+            ))?
+            .create(state, &format_options)?;
+
+        let listing_file_extension =
+            if let Some(compression_type) = maybe_compression_type {
+                format!("{}.{}", &file_extension, &compression_type)
+            } else {
+                file_extension
+            };
+
+        let listing_options = ListingOptions::new(file_format)
+            .with_file_extension(listing_file_extension)
+            .with_target_partitions(state.config().target_partitions())
+            .with_collect_stat(state.config().collect_statistics());
+
+        Ok(self.with_listing_options(listing_options))
+    }
+
+    async fn infer(self, state: &dyn Session) -> Result<Self> {
+        self.infer_options(state).await?.infer_schema(state).await
+    }
+}
 #[cfg(test)]
 mod tests {
     use datafusion_execution::config::SessionConfig;

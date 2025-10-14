@@ -24,6 +24,7 @@ use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
 use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
+use datafusion::datasource::listing_table_factory::ListingTableConfigExt;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;
@@ -124,16 +125,14 @@ impl SchemaMapper for CustomSchemaMapper {
                     DataType::Utf8 => ScalarValue::Utf8(Some("a".to_string())),
                     _ => unimplemented!("Unsupported data type: {}", field.data_type()),
                 };
-                output_columns
-                    .push(default_value.to_array_of_size(batch.num_rows()).unwrap());
+                output_columns.push(default_value.to_array_of_size(batch.num_rows())?);
             }
         }
         let batch = RecordBatch::try_new_with_options(
             Arc::clone(&self.logical_file_schema),
             output_columns,
             &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
-        )
-        .unwrap();
+        )?;
         Ok(batch)
     }
 

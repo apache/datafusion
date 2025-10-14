@@ -1084,7 +1084,7 @@ impl ListingTable {
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
-    fn try_create_output_ordering(
+    pub fn try_create_output_ordering(
         &self,
         execution_props: &ExecutionProps,
     ) -> datafusion_common::Result<Vec<LexOrdering>> {
@@ -1340,7 +1340,7 @@ impl ListingTable {
     /// Get the list of files for a scan as well as the file level statistics.
     /// The list is grouped to let the execution plan know how the files should
     /// be distributed to different threads / executors.
-    async fn list_files_for_scan<'a>(
+    pub async fn list_files_for_scan<'a>(
         &'a self,
         ctx: &'a dyn Session,
         filters: &'a [Expr],

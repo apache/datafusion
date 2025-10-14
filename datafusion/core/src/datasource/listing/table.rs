@@ -17,9 +17,9 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
+    use crate::datasource::listing_table_factory::ListingTableConfigExt;
     use crate::prelude::*;
     use crate::{
         datasource::{
@@ -33,21 +33,34 @@ mod tests {
         },
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use datafusion_catalog::TableProvider;
+    use datafusion_catalog_listing::{
+        ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
+    };
     use datafusion_common::{
-        assert_contains,
+        assert_contains, plan_err,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
-        ColumnStatistics, ScalarValue,
+        ColumnStatistics, DataFusionError, Result, ScalarValue,
     };
+    use datafusion_datasource::file_compression_type::FileCompressionType;
+    use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::schema_adapter::{
         SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
+    use datafusion_datasource::ListingTableUrl;
+    use datafusion_expr::dml::InsertOp;
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
+    use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::{collect, ExecutionPlanProperties};
     use rstest::rstest;
+    use std::collections::HashMap;
     use std::io::Write;
+    use std::sync::Arc;
     use tempfile::TempDir;
     use url::Url;
 
@@ -84,7 +97,7 @@ mod tests {
         let ctx = SessionContext::new();
         let testdata = datafusion_test_data();
         let filename = format!("{testdata}/aggregate_simple.csv");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
+        let table_path = ListingTableUrl::parse(filename)?;
 
         // Test default schema source
         let config = ListingTableConfig::new(table_path.clone());
@@ -282,7 +295,7 @@ mod tests {
             .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
 
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+        let table_path = ListingTableUrl::parse("test:///table/")?;
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
         let config = ListingTableConfig::new(table_path)
@@ -318,7 +331,7 @@ mod tests {
     ) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{testdata}/{name}");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
+        let table_path = ListingTableUrl::parse(filename)?;
 
         let config = ListingTableConfig::new(table_path)
             .infer(&ctx.state())
@@ -345,7 +358,7 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
-        let table_path = ListingTableUrl::parse(table_prefix).unwrap();
+        let table_path = ListingTableUrl::parse(table_prefix)?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
@@ -904,7 +917,7 @@ mod tests {
     async fn test_infer_options_compressed_csv() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{testdata}/csv/aggregate_test_100.csv.gz");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
+        let table_path = ListingTableUrl::parse(filename)?;
 
         let ctx = SessionContext::new();
 
@@ -925,7 +938,7 @@ mod tests {
 
         let testdata = datafusion_test_data();
         let filename = format!("{testdata}/aggregate_simple.csv");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
+        let table_path = ListingTableUrl::parse(filename)?;
 
         let provided_schema = create_test_schema();
 
@@ -1185,7 +1198,7 @@ mod tests {
 
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
+        let table_path = ListingTableUrl::parse(filename)?;
 
         let ctx = SessionContext::new();
         let state = ctx.state();
@@ -1331,7 +1344,7 @@ mod tests {
         let format = JsonFormat::default();
         let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(false);
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+        let table_path = ListingTableUrl::parse("test:///table/")?;
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
@@ -1545,7 +1558,7 @@ mod tests {
         let format = JsonFormat::default();
         let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(collect_stat);
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+        let table_path = ListingTableUrl::parse("test:///table/")?;
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
