@@ -92,6 +92,7 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         config_options,
     } = args;
 
+    // Handle zero-argument case: return empty string
     if arg_values.is_empty() {
         return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
             Some(String::new()),
