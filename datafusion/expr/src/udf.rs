@@ -898,6 +898,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.invoke_with_args(args)
     }
 
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+        None
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
