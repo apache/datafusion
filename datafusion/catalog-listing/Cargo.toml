@@ -50,6 +50,7 @@ object_store = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+datafusion-datasource-parquet = { workspace = true }
 
 [lints]
 workspace = true

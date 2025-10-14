@@ -42,7 +42,7 @@ use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
 };
-use datafusion_datasource::{
+pub use datafusion_datasource::{
     compute_all_files_statistics, ListingTableUrl, PartitionedFile,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
@@ -153,8 +153,8 @@ impl ListingTableConfig {
     /// # Example: Specifying Table Schema
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
-    /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
+    /// # use datafusion_catalog_listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     /// # use arrow::datatypes::{Schema, Field, DataType};
     /// # let table_paths = ListingTableUrl::parse("file:///path/to/data").unwrap();
     /// # let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
@@ -192,8 +192,8 @@ impl ListingTableConfig {
     /// # Example: Configuring Parquet Files with Custom Options
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
-    /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
+    /// # use datafusion_catalog_listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     /// # let table_paths = ListingTableUrl::parse("file:///path/to/data").unwrap();
     /// let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_file_extension(".parquet")
@@ -341,9 +341,9 @@ impl ListingTableConfig {
     /// # Example: Custom Schema Adapter for Type Coercion
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
-    /// # use datafusion::datasource::schema_adapter::{SchemaAdapterFactory, SchemaAdapter};
-    /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
+    /// # use datafusion_catalog_listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
+    /// # use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaAdapter};
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     /// # use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
     /// #
     /// # #[derive(Debug)]
@@ -467,8 +467,8 @@ impl ListingOptions {
     /// # Example
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::SessionContext;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_catalog_listing::ListingOptions;
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -489,8 +489,9 @@ impl ListingOptions {
     /// # Example
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::SessionContext;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_catalog_listing::ListingOptions;
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
+    ///
     /// let extension = Some(".parquet");
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -552,8 +553,9 @@ impl ListingOptions {
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow::datatypes::DataType;
-    /// # use datafusion::prelude::col;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_expr::col;
+    /// # use datafusion_catalog_listing::ListingOptions;
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
     /// // listing options for files with paths such as  `/mnt/data/col_a=x/col_b=y/data.parquet`
     /// // `col_a` and `col_b` will be included in the data read from those files
@@ -581,7 +583,8 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_catalog_listing::ListingOptions;
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -599,7 +602,8 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_catalog_listing::ListingOptions;
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -617,8 +621,9 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::col;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_expr::col;
+    /// # use datafusion_catalog_listing::ListingOptions;
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
     ///  let file_sort_order = vec![vec![
@@ -850,19 +855,13 @@ impl ListingOptions {
 /// # Example: Read a directory of parquet files using a [`ListingTable`]
 ///
 /// ```no_run
-/// # use datafusion::prelude::SessionContext;
-/// # use datafusion::error::Result;
+/// # use datafusion_common::Result;
 /// # use std::sync::Arc;
-/// # use datafusion::datasource::{
-/// #   listing::{
-/// #      ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-/// #   },
-/// #   file_format::parquet::ParquetFormat,
-/// # };
-/// # #[tokio::main]
-/// # async fn main() -> Result<()> {
-/// let ctx = SessionContext::new();
-/// let session_state = ctx.state();
+/// # use datafusion_catalog::TableProvider;
+/// # use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
+/// # use datafusion_datasource_parquet::file_format::ParquetFormat;/// #
+/// # use datafusion_session::Session;
+/// async fn get_listing_table(session: &dyn Session) -> Result<Arc<dyn TableProvider>> {
 /// let table_path = "/path/to/parquet";
 ///
 /// // Parse the path
@@ -875,7 +874,7 @@ impl ListingOptions {
 ///
 /// // Resolve the schema
 /// let resolved_schema = listing_options
-///    .infer_schema(&session_state, &table_path)
+///    .infer_schema(session, &table_path)
 ///    .await?;
 ///
 /// let config = ListingTableConfig::new(table_path)
@@ -885,13 +884,7 @@ impl ListingOptions {
 /// // Create a new TableProvider
 /// let provider = Arc::new(ListingTable::try_new(config)?);
 ///
-/// // This provider can now be read as a dataframe:
-/// let df = ctx.read_table(provider.clone());
-///
-/// // or registered as a named table:
-/// ctx.register_table("my_table", provider);
-///
-/// # Ok(())
+/// # Ok(provider)
 /// # }
 /// ```
 #[derive(Debug, Clone)]
@@ -1026,9 +1019,9 @@ impl ListingTable {
     /// # Example: Adding Schema Evolution Support
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::listing::{ListingTable, ListingTableConfig, ListingOptions, ListingTableUrl};
-    /// # use datafusion::datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter};
-    /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
+    /// # use datafusion_catalog_listing::{ListingTable, ListingTableConfig, ListingOptions, ListingTableUrl};
+    /// # use datafusion_datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter};
+    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     /// # use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
     /// # let table_path = ListingTableUrl::parse("file:///path/to/data").unwrap();
     /// # let options = ListingOptions::new(Arc::new(ParquetFormat::default()));

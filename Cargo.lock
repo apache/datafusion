@@ -1913,6 +1913,7 @@ dependencies = [
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-datasource",
+ "datafusion-datasource-parquet",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-expr",
