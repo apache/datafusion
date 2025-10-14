@@ -25,6 +25,8 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
 };
 use arrow_schema::{Field, FieldRef};
+use datafusion::logical_expr::LimitEffect;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::{
     error::DataFusionError,
     logical_expr::{
@@ -348,6 +350,10 @@ impl WindowUDFImpl for ForeignWindowUDF {
     fn sort_options(&self) -> Option<SortOptions> {
         let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref().into();
         options.map(|s| s.into())
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 
