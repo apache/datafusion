@@ -54,3 +54,5 @@ pub use datafusion_common::format::ExplainFormat;
 pub use display::display_schema;
 
 pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
+
+pub use tree_node::LogicalPlanContext;

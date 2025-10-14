@@ -870,3 +870,102 @@ impl LogicalPlan {
         })
     }
 }
+
+/// A node context object beneficial for writing optimizer rules.
+/// This context encapsulates a [`LogicalPlan`] node with a payload.
+///
+/// Since each wrapped node has its children within both the [`LogicalPlanContext.plan.inputs()`],
+/// as well as separately within the [`LogicalPlanContext.children`] (which are child nodes wrapped in the context),
+/// it's important to keep these child plans in sync when performing mutations.
+///
+/// Since there are two ways to access child plans directly — it's recommended
+/// to perform mutable operations via [`Self::update_plan_from_children`].
+/// After mutating the `LogicalPlanContext.children`, or after creating the `LogicalPlanContext`,
+/// call `update_plan_from_children` to sync.
+#[derive(Debug, Clone)]
+pub struct LogicalPlanContext<T: Sized> {
+    /// The logical plan associated with this context.
+    pub plan: LogicalPlan,
+    /// Custom data payload of the node.
+    pub data: T,
+    /// Child contexts of this node.
+    pub children: Vec<Self>,
+}
+
+impl<T> LogicalPlanContext<T> {
+    pub fn new(plan: LogicalPlan, data: T, children: Vec<Self>) -> Self {
+        Self {
+            plan,
+            data,
+            children,
+        }
+    }
+
+    /// Update the [`LogicalPlanContext.plan.inputs()`] from the [`LogicalPlanContext.children`],
+    /// if the `LogicalPlanContext.children` have been changed.
+    pub fn update_plan_from_children(mut self) -> Result<Self> {
+        // Get the plans from all children
+        let children_plans = self
+            .children
+            .iter()
+            .map(|c| c.plan.clone())
+            .collect::<Vec<_>>();
+
+        // Use TreeNode's map_children to reconstruct the plan with new children
+        let mut child_iter = children_plans.into_iter();
+        self.plan = self
+            .plan
+            .clone()
+            .map_children(|_| {
+                // Replace each child with the corresponding child from our context
+                child_iter
+                    .next()
+                    .map(Transformed::no)
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Internal(
+                            "Mismatch between plan children and context children".to_string(),
+                        )
+                    })
+            })?
+            .data;
+
+        Ok(self)
+    }
+}
+
+impl<T: Default> LogicalPlanContext<T> {
+    pub fn new_default(plan: LogicalPlan) -> Self {
+        let children = plan
+            .inputs()
+            .into_iter()
+            .cloned()
+            .map(Self::new_default)
+            .collect();
+        Self::new(plan, Default::default(), children)
+    }
+}
+
+impl<T: std::fmt::Display> std::fmt::Display for LogicalPlanContext<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let node_string = self.plan.display_indent();
+        write!(f, "Node plan: {node_string}")?;
+        write!(f, "Node data: {}", self.data)?;
+        write!(f, "")
+    }
+}
+
+impl<T> datafusion_common::tree_node::ConcreteTreeNode for LogicalPlanContext<T> {
+    fn children(&self) -> &[Self] {
+        &self.children
+    }
+
+    fn take_children(mut self) -> (Self, Vec<Self>) {
+        let children = std::mem::take(&mut self.children);
+        (self, children)
+    }
+
+    fn with_new_children(mut self, children: Vec<Self>) -> Result<Self> {
+        self.children = children;
+        self.update_plan_from_children()
+    }
+}

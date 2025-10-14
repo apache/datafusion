@@ -31,6 +31,7 @@ use datafusion_expr::{logical_plan::LogicalPlan, ColumnarValue, Expr};
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
 use std::sync::Arc;
+use datafusion_common::tree_node::Transformed;
 
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
@@ -149,6 +150,36 @@ fn evaluate_expr_with_null_column<'a>(
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let mut expr_rewrite = TypeCoercionRewriter { schema };
     expr.rewrite(&mut expr_rewrite).data()
+}
+
+/// Replaces columns by their name in the provided expression.
+///
+/// Replaces all column references in the expression tree by looking up their names
+/// in the provided HashMap and replacing them with the corresponding expression.
+///
+/// # Arguments
+///
+/// * `e` - The expression to transform
+/// * `replace_map` - A map from column names (flat_name) to replacement expressions
+///
+/// # Returns
+///
+/// The transformed expression with columns replaced according to the map
+pub fn replace_cols_by_name(
+    e: Expr,
+    replace_map: &HashMap<String, Expr>,
+) -> Result<Expr> {
+    e.transform_up(|expr| {
+        Ok(if let Expr::Column(c) = &expr {
+            match replace_map.get(&c.flat_name()) {
+                Some(new_c) => Transformed::yes(new_c.clone()),
+                None => Transformed::no(expr),
+            }
+        } else {
+            Transformed::no(expr)
+        })
+    })
+    .data()
 }
 
 #[cfg(test)]

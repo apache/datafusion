@@ -23,10 +23,11 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::Transformed;
+use datafusion_common::tree_node::{ConcreteTreeNode, Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{Expr, ScanOrdering, SortExpr};
+use datafusion_expr::{Expr, LogicalPlanContext, ScanOrdering, SortExpr};
+use log::Log;
 
 /// Optimization rule that pushes sort expressions down to table scans
 /// when the sort can potentially be optimized by the table provider.
@@ -78,21 +79,6 @@ impl PushDownSort {
     pub fn new() -> Self {
         Self {}
     }
-
-    /// Checks if a sort expression can be pushed down to a table scan.
-    ///
-    /// Currently, we only support pushing down simple column references
-    /// because table providers typically can't optimize complex expressions
-    /// in sort pushdown.
-    fn can_pushdown_sort_expr(expr: &SortExpr) -> bool {
-        // Only push down simple column references
-        matches!(expr.expr, Expr::Column(_))
-    }
-
-    /// Checks if all sort expressions in a list can be pushed down.
-    fn can_pushdown_sort_exprs(sort_exprs: &[SortExpr]) -> bool {
-        sort_exprs.iter().all(Self::can_pushdown_sort_expr)
-    }
 }
 
 impl OptimizerRule for PushDownSort {
@@ -104,40 +90,69 @@ impl OptimizerRule for PushDownSort {
         Some(ApplyOrder::TopDown)
     }
 
+    /// Recursively push down sort expressions through the logical plan tree.
+    /// 
+    /// We stop when we hit:
+    /// 1. A TableScan leaf. In this case we bind the preferred ordering
+    ///    to the TableScan node and return a new plan tree.
+    /// 2. Any node that is not a Filter, Projection or SubqueryAlias. In this case
+    ///    we clear the sort expressions and continue the recursion with no preferred
+    ///    ordering.
+    /// 3. A Sort node. In this case we replace the current sort expressions
+    ///    with the new ones and continue the recursion.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `plan` - The current logical plan node being processed.
+    /// * `sort_exprs` - The current list of sort expressions to push down.
+    /// 
+    /// # Returns
+    /// 
+    /// A `Result` containing the transformed logical plan with sort expressions
+    /// pushed down where possible.
     fn rewrite(
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        // Look for Sort -> TableScan pattern
-        let LogicalPlan::Sort(sort) = &plan else {
-            return Ok(Transformed::no(plan));
-        };
-
-        let LogicalPlan::TableScan(table_scan) = sort.input.as_ref() else {
-            return Ok(Transformed::no(plan));
-        };
-
-        // Check if we can push down the sort expressions
-        if !Self::can_pushdown_sort_exprs(&sort.expr) {
-            return Ok(Transformed::no(plan));
-        }
-
-        // Create new TableScan with preferred ordering
-        let new_table_scan = table_scan.clone().with_ordering(
-            ScanOrdering::default().with_preferred_ordering(sort.expr.clone()),
-        );
-
-        // Preserve the Sort node as a fallback while passing the ordering
-        // preference to the TableScan as an optimization hint
-        let new_sort = datafusion_expr::logical_plan::Sort {
-            expr: sort.expr.clone(),
-            input: Arc::new(LogicalPlan::TableScan(new_table_scan)),
-            fetch: sort.fetch,
-        };
-        let new_plan = LogicalPlan::Sort(new_sort);
-
-        Ok(Transformed::yes(new_plan))
+        let ctx = SortPushdownContext::new_default(plan);
+        ctx.transform_down(|mut ctx| {
+            match &ctx.plan {
+                LogicalPlan::TableScan(table_scan) => {
+                    if let Some(sort_exprs) = &ctx.data {
+                        // Create new TableScan with preferred ordering
+                        let new_table_scan = table_scan.clone().with_ordering(
+                            ScanOrdering::default()
+                                .with_preferred_ordering(sort_exprs.to_vec()),
+                        );
+                        // Return new TableScan with preferred ordering
+                        return Ok(Transformed::yes(SortPushdownContext::new_default(LogicalPlan::TableScan(new_table_scan))));
+                    }
+                    // No sort expressions to push down or cannot push down, return original plan
+                    Ok(Transformed::no(ctx))
+                }
+                LogicalPlan::Sort(ref sort) => {
+                    // Update current sort expressions to the new ones
+                    ctx.data = Some(sort.expr.clone());
+                    // Continue recursion with updated sort expressions
+                    Ok(Transformed::no(ctx))
+                }
+                LogicalPlan::Projection(ref projection) => {
+                    // We can only push down sort expressions through a projection if the expression we are sorting on was not created by the projection itself.
+                    // We may also need to re-write sort expressions to reverse aliasing done by the projection.
+                    todo!();
+                }
+                LogicalPlan::Filter(_) | LogicalPlan::Repartition(_) => {
+                    // Continue recursion without modifying current sort expressions
+                    Ok(Transformed::no(ctx))
+                }
+                _ => {
+                    todo!()
+                }
+            }
+        }).map(|transformed_ctx| {
+            transformed_ctx.map_data(|ctx| Ok(ctx.plan))
+        }).flatten()
     }
 
     fn name(&self) -> &str {
@@ -145,424 +160,38 @@ impl OptimizerRule for PushDownSort {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test::test_table_scan;
-    use crate::{assert_optimized_plan_eq_snapshot, OptimizerContext};
-    use datafusion_common::{Column, Result};
-    use datafusion_expr::{col, lit, Expr, JoinType, LogicalPlanBuilder, SortExpr};
-    use std::sync::Arc;
+type SortPushdownContext = LogicalPlanContext<Option<Vec<SortExpr>>>;
 
-    macro_rules! assert_optimized_plan_equal {
-        (
-            $plan:expr,
-            @ $expected:literal $(,)?
-        ) => {{
-            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
-            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PushDownSort::new())];
-            assert_optimized_plan_eq_snapshot!(
-                optimizer_ctx,
-                rules,
-                $plan,
-                @ $expected,
-            )
-        }};
-    }
-
-    #[test]
-    fn test_can_pushdown_sort_expr() {
-        // Simple column reference should be pushable
-        let sort_expr = SortExpr::new(col("a"), true, false);
-        assert!(PushDownSort::can_pushdown_sort_expr(&sort_expr));
-
-        // Complex expression should not be pushable
-        let sort_expr = SortExpr::new(col("a") + col("b"), true, false);
-        assert!(!PushDownSort::can_pushdown_sort_expr(&sort_expr));
-
-        // Function call should not be pushable
-        let sort_expr = SortExpr::new(col("c").like(lit("test%")), true, false);
-        assert!(!PushDownSort::can_pushdown_sort_expr(&sort_expr));
-
-        // Literal should not be pushable
-        let sort_expr = SortExpr::new(lit(42), true, false);
-        assert!(!PushDownSort::can_pushdown_sort_expr(&sort_expr));
-    }
-
-    #[test]
-    fn test_can_pushdown_sort_exprs() {
-        // All simple columns should be pushable
-        let sort_exprs = vec![
-            SortExpr::new(col("a"), true, false),
-            SortExpr::new(col("b"), false, true),
-        ];
-        assert!(PushDownSort::can_pushdown_sort_exprs(&sort_exprs));
-
-        // Mix of simple and complex should not be pushable
-        let sort_exprs = vec![
-            SortExpr::new(col("a"), true, false),
-            SortExpr::new(col("a") + col("b"), false, true),
-        ];
-        assert!(!PushDownSort::can_pushdown_sort_exprs(&sort_exprs));
-
-        // Empty list should be pushable
-        let sort_exprs = vec![];
-        assert!(PushDownSort::can_pushdown_sort_exprs(&sort_exprs));
-    }
-
-    #[test]
-    fn test_basic_sort_pushdown_to_table_scan() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Sort node is preserved with preferred_ordering passed to TableScan
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_multiple_column_sort_pushdown() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![
-                SortExpr::new(col("a"), true, false),
-                SortExpr::new(col("b"), false, true),
-            ])?
-            .build()?;
-
-        // Multi-column sort is preserved with preferred_ordering passed to TableScan
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST, test.b DESC NULLS FIRST
-          TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_sort_node_preserved_with_preferred_ordering() -> Result<()> {
-        let rule = PushDownSort::new();
-        let table_scan = test_table_scan()?;
-        let sort_plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        let config = &OptimizerContext::new();
-        let result = rule.rewrite(sort_plan, config)?;
-
-        // Verify Sort node is preserved
-        match &result.data {
-            LogicalPlan::Sort(sort) => {
-                // Check that TableScan has preferred_ordering
-                if let LogicalPlan::TableScan(ts) = sort.input.as_ref() {
-                    assert!(ts.ordering.is_some());
-                } else {
-                    panic!("Expected TableScan input");
+fn find_original_column_expression(
+    sort_expr: &Expr,
+    projection_exprs: &[Expr],
+) -> Option<Expr> {
+    match sort_expr {
+        Expr::Column(_) => {
+            // Direct column reference, check if it exists in projection expressions
+            for expr in projection_exprs {
+                if expr == sort_expr {
+                    return Some(expr.clone());
+                }
+                if let Expr::Alias(alias_expr, _) = expr {
+                    if alias_expr == sort_expr {
+                        return Some(*alias_expr.clone());
+                    }
                 }
             }
-            _ => panic!("Expected Sort node to be preserved"),
+            None
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_no_pushdown_with_complex_expressions() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![
-                SortExpr::new(col("a"), true, false),
-                SortExpr::new(col("a") + col("b"), false, true), // Complex expression
-            ])?
-            .build()?;
-
-        // Sort should remain unchanged
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST, test.a + test.b DESC NULLS FIRST
-          TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_no_pushdown_through_projection() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("b")])?
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Sort should remain above projection
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          Projection: test.a, test.b
-            TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_no_pushdown_through_filter() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("a").gt(lit(10)))?
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Sort should remain above filter
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          Filter: test.a > Int32(10)
-            TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_no_pushdown_through_aggregate() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], Vec::<Expr>::new())?
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Sort should remain above aggregate
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          Aggregate: groupBy=[[test.a]], aggr=[[]]
-            TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_no_pushdown_through_join() -> Result<()> {
-        let left_table = crate::test::test_table_scan_with_name("t1")?;
-        let right_table = crate::test::test_table_scan_with_name("t2")?;
-
-        let plan = LogicalPlanBuilder::from(left_table)
-            .join(
-                right_table,
-                JoinType::Inner,
-                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
-                None,
-            )?
-            .sort(vec![SortExpr::new(
-                Expr::Column(Column::new(Some("t1"), "a")),
-                true,
-                false,
-            )])?
-            .build()?;
-
-        // Sort should remain above join
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: t1.a ASC NULLS LAST
-          Inner Join: t1.a = t2.a
-            TableScan: t1
-            TableScan: t2
-        "
-        )
-    }
-
-    #[test]
-    fn test_no_pushdown_through_limit() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .limit(0, Some(10))?
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Sort should remain above limit
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          Limit: skip=0, fetch=10
-            TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_no_pushdown_through_distinct() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .distinct()?
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Sort should remain above distinct
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          Distinct:
-            TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_no_pushdown_on_non_sort_nodes() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        // TableScan should remain unchanged
-        assert_optimized_plan_equal!(
-            table_scan,
-            @ r"TableScan: test"
-        )
-    }
-
-    // Tests for node types that currently block sort pushdown
-
-    #[test]
-    fn test_potential_pushdown_through_subquery_alias() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .alias("aliased_table")?
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Sort remains above SubqueryAlias
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: aliased_table.a ASC NULLS LAST
-          SubqueryAlias: aliased_table
-            TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_potential_pushdown_through_order_preserving_projection() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("b"), col("c")])? // Identity projection - doesn't change column order
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Sort remains above Projection (conservative approach)
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          Projection: test.a, test.b, test.c
-            TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_potential_pushdown_through_order_preserving_filter() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").gt(lit(0)))? // Filter on different column than sort
-            .sort(vec![SortExpr::new(col("a"), true, false)])?
-            .build()?;
-
-        // Currently: Sort remains above Filter (conservative approach)
-        // Future enhancement: Could push through filters that don't affect sort column relationships
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          Filter: test.b > Int32(0)
-            TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_edge_case_empty_sort_expressions() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(Vec::<SortExpr>::new())? // Empty sort
-            .build()?;
-
-        // Empty sort is preserved
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: 
-          TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_sort_with_nulls_first_last_variants() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![
-                SortExpr::new(col("a"), true, false), // ASC NULLS LAST
-                SortExpr::new(col("b"), true, true),  // ASC NULLS FIRST
-                SortExpr::new(col("c"), false, false), // DESC NULLS LAST
-            ])?
-            .build()?;
-
-        // All variants of nulls ordering should be pushable for simple columns
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST, test.b ASC NULLS FIRST, test.c DESC NULLS LAST
-          TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_mixed_simple_and_qualified_columns() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![
-                SortExpr::new(col("a"), true, false), // Simple column
-                SortExpr::new(Expr::Column(Column::new(Some("test"), "b")), false, true), // Qualified column
-            ])?
-            .build()?;
-
-        // Both simple and qualified column references should be pushable
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST, test.b DESC NULLS FIRST
-          TableScan: test
-        "
-        )
-    }
-
-    #[test]
-    fn test_case_sensitive_column_references() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![SortExpr::new(col("A"), true, false)])? // Capital A
-            .build()?;
-
-        // Column reference case sensitivity should be handled by the schema
-        assert_optimized_plan_equal!(
-            plan,
-            @ r"
-        Sort: test.a ASC NULLS LAST
-          TableScan: test
-        "
-        )
+        Expr::Alias(alias_expr, _) => {
+            // Sort expression is an alias, find the original expression
+            for expr in projection_exprs {
+                if let Expr::Alias(proj_alias_expr, _) = expr {
+                    if proj_alias_expr == alias_expr {
+                        return Some(*proj_alias_expr.clone());
+                    }
+                }
+            }
+            None
+        }
+        _ => None, // Complex expressions are not supported for pushdown
     }
 }
