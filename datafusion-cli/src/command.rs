@@ -128,7 +128,7 @@ impl Command {
                     let profile_mode = mode
                         .parse()
                         .map_err(|_|
-                            exec_datafusion_err!("Failed to parse input: {mode}. Valid options are disabled, enabled")
+                            exec_datafusion_err!("Failed to parse input: {mode}. Valid options are disabled, summary, trace")
                         )?;
                     print_options
                         .instrumented_registry
@@ -165,7 +165,7 @@ impl Command {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
             Self::ObjectStoreProfileMode(_) => (
-                "\\object_store_profiling (disabled|enabled)",
+                "\\object_store_profiling (disabled|summary|trace)",
                 "print or set object store profile mode",
             ),
         }
@@ -312,13 +312,22 @@ mod tests {
             InstrumentedObjectStoreMode::default()
         );
 
-        cmd = "object_store_profiling enabled"
+        cmd = "object_store_profiling summary"
             .parse()
             .expect("expected parse to succeed");
         assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
         assert_eq!(
             print_options.instrumented_registry.instrument_mode(),
-            InstrumentedObjectStoreMode::Enabled
+            InstrumentedObjectStoreMode::Summary
+        );
+
+        cmd = "object_store_profiling trace"
+            .parse()
+            .expect("expected parse to succeed");
+        assert!(cmd.execute(&ctx, &mut print_options).await.is_ok());
+        assert_eq!(
+            print_options.instrumented_registry.instrument_mode(),
+            InstrumentedObjectStoreMode::Trace
         );
 
         cmd = "object_store_profiling does_not_exist"

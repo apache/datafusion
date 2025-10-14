@@ -48,8 +48,10 @@ pub enum InstrumentedObjectStoreMode {
     /// Disable collection of profiling data
     #[default]
     Disabled,
-    /// Enable collection of profiling data
-    Enabled,
+    /// Enable collection of profiling data and output a summary
+    Summary,
+    /// Enable collection of profiling data and output a summary and all details
+    Trace,
 }
 
 impl fmt::Display for InstrumentedObjectStoreMode {
@@ -64,7 +66,8 @@ impl FromStr for InstrumentedObjectStoreMode {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "disabled" => Ok(Self::Disabled),
-            "enabled" => Ok(Self::Enabled),
+            "summary" => Ok(Self::Summary),
+            "trace" => Ok(Self::Trace),
             _ => Err(DataFusionError::Execution(format!("Unrecognized mode {s}"))),
         }
     }
@@ -73,7 +76,8 @@ impl FromStr for InstrumentedObjectStoreMode {
 impl From<u8> for InstrumentedObjectStoreMode {
     fn from(value: u8) -> Self {
         match value {
-            1 => InstrumentedObjectStoreMode::Enabled,
+            1 => InstrumentedObjectStoreMode::Summary,
+            2 => InstrumentedObjectStoreMode::Trace,
             _ => InstrumentedObjectStoreMode::Disabled,
         }
     }
@@ -434,16 +438,21 @@ mod tests {
             InstrumentedObjectStoreMode::Disabled
         ));
         assert!(matches!(
-            "EnABlEd".parse().unwrap(),
-            InstrumentedObjectStoreMode::Enabled
+            "SUmMaRy".parse().unwrap(),
+            InstrumentedObjectStoreMode::Summary
+        ));
+        assert!(matches!(
+            "TRaCe".parse().unwrap(),
+            InstrumentedObjectStoreMode::Trace
         ));
         assert!("does_not_exist"
             .parse::<InstrumentedObjectStoreMode>()
             .is_err());
 
         assert!(matches!(0.into(), InstrumentedObjectStoreMode::Disabled));
-        assert!(matches!(1.into(), InstrumentedObjectStoreMode::Enabled));
-        assert!(matches!(2.into(), InstrumentedObjectStoreMode::Disabled));
+        assert!(matches!(1.into(), InstrumentedObjectStoreMode::Summary));
+        assert!(matches!(2.into(), InstrumentedObjectStoreMode::Trace));
+        assert!(matches!(3.into(), InstrumentedObjectStoreMode::Disabled));
     }
 
     #[test]
@@ -455,8 +464,8 @@ mod tests {
             InstrumentedObjectStoreMode::default()
         );
 
-        reg = reg.with_profile_mode(InstrumentedObjectStoreMode::Enabled);
-        assert_eq!(reg.instrument_mode(), InstrumentedObjectStoreMode::Enabled);
+        reg = reg.with_profile_mode(InstrumentedObjectStoreMode::Trace);
+        assert_eq!(reg.instrument_mode(), InstrumentedObjectStoreMode::Trace);
 
         let store = object_store::memory::InMemory::new();
         let url = "mem://test".parse().unwrap();
@@ -484,7 +493,7 @@ mod tests {
         let _ = instrumented.get(&path).await.unwrap();
         assert!(instrumented.requests.lock().is_empty());
 
-        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Enabled);
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
         assert!(instrumented.requests.lock().is_empty());
         let _ = instrumented.get(&path).await.unwrap();
         assert_eq!(instrumented.requests.lock().len(), 1);
