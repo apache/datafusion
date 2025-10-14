@@ -287,6 +287,7 @@ mod tests {
             InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
         },
         print_options::MaxRows,
+        progress::ProgressConfig,
     };
 
     use super::*;
@@ -300,6 +301,7 @@ mod tests {
             quiet: false,
             maxrows: MaxRows::Unlimited,
             color: true,
+            progress: ProgressConfig::default(),
             instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
         };
 
