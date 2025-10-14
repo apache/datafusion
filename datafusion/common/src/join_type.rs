@@ -74,6 +74,15 @@ pub enum JoinType {
     RightMark,
 }
 
+// Semi/anti joins intentionally omitted: they only emit subsets of the left input and thus do
+// not "preserve" every row for dynamic filter purposes.
+const LEFT_PRESERVING: &[JoinType] =
+    &[JoinType::Left, JoinType::Full, JoinType::LeftMark];
+
+// Symmetric rationale applies on the right: semi/anti joins do not preserve all right rows.
+const RIGHT_PRESERVING: &[JoinType] =
+    &[JoinType::Right, JoinType::Full, JoinType::RightMark];
+
 impl JoinType {
     pub fn is_outer(self) -> bool {
         self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
@@ -112,6 +121,31 @@ impl JoinType {
                 | JoinType::LeftMark
                 | JoinType::RightMark
         )
+    }
+
+    /// Returns true if this join type preserves all rows from the specified `side`.
+    pub fn preserves(self, side: JoinSide) -> bool {
+        match side {
+            JoinSide::Left => LEFT_PRESERVING.contains(&self),
+            JoinSide::Right => RIGHT_PRESERVING.contains(&self),
+            JoinSide::None => false,
+        }
+    }
+
+    /// Returns true if this join type preserves all rows from its left input.
+    ///
+    /// For [`JoinType::Left`], [`JoinType::Full`], and [`JoinType::LeftMark`] joins
+    /// every row from the left side will appear in the output at least once.
+    pub fn preserves_left(self) -> bool {
+        self.preserves(JoinSide::Left)
+    }
+
+    /// Returns true if this join type preserves all rows from its right input.
+    ///
+    /// For [`JoinType::Right`], [`JoinType::Full`], and [`JoinType::RightMark`] joins
+    /// every row from the right side will appear in the output at least once.
+    pub fn preserves_right(self) -> bool {
+        self.preserves(JoinSide::Right)
     }
 }
 
@@ -194,5 +228,59 @@ impl JoinSide {
             JoinSide::Right => JoinSide::Left,
             JoinSide::None => JoinSide::None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_join_type_swap() {
+        assert_eq!(JoinType::Inner.swap(), JoinType::Inner);
+        assert_eq!(JoinType::Left.swap(), JoinType::Right);
+        assert_eq!(JoinType::Right.swap(), JoinType::Left);
+        assert_eq!(JoinType::Full.swap(), JoinType::Full);
+        assert_eq!(JoinType::LeftSemi.swap(), JoinType::RightSemi);
+        assert_eq!(JoinType::RightSemi.swap(), JoinType::LeftSemi);
+        assert_eq!(JoinType::LeftAnti.swap(), JoinType::RightAnti);
+        assert_eq!(JoinType::RightAnti.swap(), JoinType::LeftAnti);
+        assert_eq!(JoinType::LeftMark.swap(), JoinType::RightMark);
+        assert_eq!(JoinType::RightMark.swap(), JoinType::LeftMark);
+    }
+
+    #[test]
+    fn test_join_type_supports_swap() {
+        use JoinType::*;
+        let supported = [
+            Inner, Left, Right, Full, LeftSemi, RightSemi, LeftAnti, RightAnti,
+        ];
+        for jt in supported {
+            assert!(jt.supports_swap(), "{jt:?} should support swap");
+        }
+        let not_supported = [LeftMark, RightMark];
+        for jt in not_supported {
+            assert!(!jt.supports_swap(), "{jt:?} should not support swap");
+        }
+    }
+
+    #[test]
+    fn test_preserves_sides() {
+        use JoinSide::*;
+
+        assert!(JoinType::Left.preserves(Left));
+        assert!(JoinType::Full.preserves(Left));
+        assert!(JoinType::LeftMark.preserves(Left));
+        assert!(!JoinType::LeftSemi.preserves(Left));
+
+        assert!(JoinType::Right.preserves(Right));
+        assert!(JoinType::Full.preserves(Right));
+        assert!(JoinType::RightMark.preserves(Right));
+        assert!(!JoinType::RightSemi.preserves(Right));
+
+        assert!(!JoinType::LeftAnti.preserves(Left));
+        assert!(!JoinType::LeftAnti.preserves(Right));
+        assert!(!JoinType::RightAnti.preserves(Left));
+        assert!(!JoinType::RightAnti.preserves(Right));
     }
 }
