@@ -1757,6 +1757,7 @@ impl LogicalPlan {
                         ref projection,
                         ref filters,
                         ref fetch,
+                        ref ordering,
                         ..
                     }) => {
                         let projected_fields = match projection {
@@ -1822,6 +1823,20 @@ impl LogicalPlan {
 
                         if let Some(n) = fetch {
                             write!(f, ", fetch={n}")?;
+                        }
+
+                        if let Some(ordering) = ordering {
+                            if let Some(preferred_ordering) = &ordering.preferred_ordering {
+                                write!(
+                                    f,
+                                    " preferred_ordering=[{}]",
+                                    preferred_ordering
+                                        .iter()
+                                        .map(|e| e.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )?;
+                            }
                         }
 
                         Ok(())

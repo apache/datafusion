@@ -195,7 +195,9 @@ impl OptimizerRule for PushDownSort {
                     // Continue recursion with potentially updated sort expressions
                     Ok(Transformed::no(ctx))
                 }
-                LogicalPlan::Filter(_) | LogicalPlan::Repartition(_) => {
+                LogicalPlan::Filter(_)
+                | LogicalPlan::Repartition(_)
+                | LogicalPlan::SubqueryAlias(_) => {
                     // Continue recursion without modifying current sort expressions
                     Ok(Transformed::no(ctx))
                 }
@@ -217,3 +219,539 @@ impl OptimizerRule for PushDownSort {
 }
 
 type SortPushdownContext = LogicalPlanContext<Option<Vec<SortExpr>>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assert_optimized_plan_eq_snapshot;
+    use crate::test::*;
+    use crate::OptimizerContext;
+    use datafusion_common::Result;
+    use datafusion_expr::test::function_stub::sum;
+    use datafusion_expr::{
+        col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, ExprFunctionExt,
+    };
+    use std::sync::Arc;
+
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> =
+                vec![Arc::new(PushDownSort::new())];
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
+    }
+
+    // ===== Basic Sort Pushdown Tests =====
+
+    #[test]
+    fn sort_before_table_scan() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_with_multiple_columns() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![
+                col("a").sort(true, false),
+                col("b").sort(false, true),
+                col("c").sort(true, true),
+            ])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST, test.b DESC NULLS FIRST, test.c ASC NULLS FIRST
+          TableScan: test preferred_ordering=[test.a ASC NULLS LAST, test.b DESC NULLS FIRST, test.c ASC NULLS FIRST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_with_options() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![
+                col("a").sort(false, true), // DESC NULLS FIRST
+                col("b").sort(true, true),  // ASC NULLS FIRST
+            ])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a DESC NULLS FIRST, test.b ASC NULLS FIRST
+          TableScan: test preferred_ordering=[test.a DESC NULLS FIRST, test.b ASC NULLS FIRST]
+        "
+        )
+    }
+
+    #[test]
+    fn no_sort_no_pushdown() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan).build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test"
+        )
+    }
+
+    // ===== Sort Through Projection Tests =====
+
+    #[test]
+    fn sort_through_simple_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Projection: test.a, test.b
+            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_through_projection_with_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("b"), col("c")])?
+            .sort(vec![col("b").sort(true, false)])?
+            .build()?;
+
+        // Sort on aliased column 'b' should be rewritten to sort on 'a'
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: b ASC NULLS LAST
+          Projection: test.a AS b, test.c
+            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_through_complex_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), (col("b") + col("c")).alias("bc")])?
+            .sort(vec![col("bc").sort(true, false)])?
+            .build()?;
+
+        // Sort on computed column should not push down
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: bc ASC NULLS LAST
+          Projection: test.a, test.b + test.c AS bc
+            TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn sort_through_multiple_projections() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .project(vec![col("a"), col("c")])?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Projection: test.a, test.c
+            Projection: test.a, test.b, test.c
+              TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_partial_pushdown_through_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), (col("b") + col("c")).alias("bc")])?
+            .sort(vec![
+                col("a").sort(true, false),
+                col("bc").sort(false, true),
+            ])?
+            .build()?;
+
+        // First sort column can push, second cannot (it's computed)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST, bc DESC NULLS FIRST
+          Projection: test.a, test.b + test.c AS bc
+            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_stops_at_computed_column() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), (col("b") + col("c")).alias("bc"), col("c")])?
+            .sort(vec![
+                col("bc").sort(true, false),
+                col("c").sort(true, false),
+            ])?
+            .build()?;
+
+        // Since first sort column is computed, nothing should push down
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: bc ASC NULLS LAST, test.c ASC NULLS LAST
+          Projection: test.a, test.b + test.c AS bc, test.c
+            TableScan: test
+        "
+        )
+    }
+
+    // ===== Sort Through Filter Tests =====
+
+    #[test]
+    fn sort_through_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").gt(lit(10i64)))?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Filter: test.a > Int64(10)
+            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_through_filter_and_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(col("a").gt(lit(10i64)))?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Filter: test.a > Int64(10)
+            Projection: test.a, test.b
+              TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    // ===== Sort Through Repartition Tests =====
+
+    #[test]
+    fn sort_through_repartition() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .repartition(datafusion_expr::Partitioning::RoundRobinBatch(4))?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Repartition: RoundRobinBatch(4)
+            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    // ===== Sort Replacement Tests =====
+
+    #[test]
+    fn multiple_sorts() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("a").sort(true, false)])?
+            .sort(vec![col("b").sort(false, true)])?
+            .build()?;
+
+        // The outer sort should replace the inner sort for pushdown
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.b DESC NULLS FIRST
+          Sort: test.a ASC NULLS LAST
+            TableScan: test preferred_ordering=[test.b DESC NULLS FIRST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_updates_existing_sort() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("a").sort(true, false), col("b").sort(true, false)])?
+            .project(vec![col("a"), col("b"), col("c")])?
+            .sort(vec![col("c").sort(false, true)])?
+            .build()?;
+
+        // Outer sort should be what gets pushed down
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.c DESC NULLS FIRST
+          Projection: test.a, test.b, test.c
+            Sort: test.a ASC NULLS LAST, test.b ASC NULLS LAST
+              TableScan: test preferred_ordering=[test.c DESC NULLS FIRST]
+        "
+        )
+    }
+
+    // ===== Boundary Case Tests =====
+
+    #[test]
+    fn sort_blocked_by_limit() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(0, Some(10))?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        // Sort cannot push through limit
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Limit: skip=0, fetch=10
+            TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn sort_blocked_by_aggregate() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("b"))])?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        // Sort cannot push through aggregate
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]
+            TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn sort_blocked_by_join() -> Result<()> {
+        let left = test_table_scan()?;
+        let right = test_table_scan_with_name("test2")?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                datafusion_expr::JoinType::Inner,
+                (
+                    vec![datafusion_common::Column::from_name("a")],
+                    vec![datafusion_common::Column::from_name("a")],
+                ),
+                None,
+            )?
+            .sort(vec![col("test.a").sort(true, false)])?
+            .build()?;
+
+        // Sort cannot push through join
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Inner Join: test.a = test2.a
+            TableScan: test
+            TableScan: test2
+        "
+        )
+    }
+
+    #[test]
+    fn sort_blocked_by_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::from(datafusion_expr::expr::WindowFunction::new(
+            datafusion_expr::WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("b").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        // Sort cannot push through window
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
+    }
+
+    // ===== Edge Case Tests =====
+
+    #[test]
+    fn sort_with_special_column_names() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_expr::logical_plan::table_scan;
+
+        let schema = Schema::new(vec![
+            Field::new("$a", DataType::UInt32, false),
+            Field::new("$b", DataType::UInt32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("$a").sort(true, false)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.$a ASC NULLS LAST
+          TableScan: test preferred_ordering=[test.$a ASC NULLS LAST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_through_subquery_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .alias("subquery")?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        // Sort should pass through SubqueryAlias
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: subquery.a ASC NULLS LAST
+          SubqueryAlias: subquery
+            TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_with_union() -> Result<()> {
+        let left = test_table_scan()?;
+        let right = test_table_scan_with_name("test2")?;
+        let plan = LogicalPlanBuilder::from(left)
+            .union(right)?
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        // Sort cannot push through union
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: a ASC NULLS LAST
+          Union
+            TableScan: test
+            TableScan: test2
+        "
+        )
+    }
+
+    // ===== Integration Tests =====
+
+    #[test]
+    fn complex_plan_with_sort() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .filter(col("b").gt(lit(5i64)))?
+            .project(vec![col("a").alias("x"), col("c")])?
+            .sort(vec![col("x").sort(true, false), col("c").sort(false, true)])?
+            .build()?;
+
+        // Sort should push through multiple projections and filter
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: x ASC NULLS LAST, test.c DESC NULLS FIRST
+          Projection: test.a AS x, test.c
+            Filter: test.b > Int64(5)
+              Projection: test.a, test.b, test.c
+                TableScan: test preferred_ordering=[test.a ASC NULLS LAST, test.c DESC NULLS FIRST]
+        "
+        )
+    }
+
+    #[test]
+    fn sort_preserves_original_node() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+
+        // Verify the original Sort node is preserved
+        let optimized = {
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+                vec![Arc::new(PushDownSort::new())];
+            let optimizer = crate::Optimizer::with_rules(rules);
+            optimizer.optimize(plan, &optimizer_ctx, |_, _| {})?
+        };
+
+        // Check that the optimized plan still has a Sort node at the top
+        assert!(matches!(optimized, LogicalPlan::Sort(_)));
+
+        Ok(())
+    }
+}
