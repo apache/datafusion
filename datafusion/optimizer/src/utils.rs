@@ -167,7 +167,7 @@ fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 /// # Returns
 ///
 /// The transformed expression with columns replaced according to the map
-pub(crate) fn replace_cols_by_name(
+pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {

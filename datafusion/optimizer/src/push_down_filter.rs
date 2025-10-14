@@ -41,10 +41,12 @@ use datafusion_expr::{
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{
-    build_schema_remapping, has_all_column_refs, is_restrict_null_predicate,
-    replace_cols_by_name,
+    build_schema_remapping, has_all_column_refs, is_restrict_null_predicate
 };
 use crate::{OptimizerConfig, OptimizerRule};
+
+// Re-export from here for backwards compatibility; it was moved from this module into `utils`.
+pub use crate::utils::replace_cols_by_name;
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
 /// they are applied as early as possible.
