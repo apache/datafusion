@@ -54,6 +54,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::ExplainFormat;
+use datafusion_common::metadata::check_metadata_with_storage_equal;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -1499,6 +1500,7 @@ impl LogicalPlan {
     ///
     /// Note that this will drop any extension or field metadata attached to parameters. Use
     /// [`LogicalPlan::get_parameter_fields`] to keep extension metadata.
+    #[deprecated]
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
@@ -1524,12 +1526,12 @@ impl LogicalPlan {
                         let prev = param_types.get(id);
                         match (prev, field) {
                             (Some(Some(prev)), Some(field)) => {
-                                // This check is possibly too strict (requires nullability and field
-                                // metadata align perfectly, rather than compute true type equality
-                                // when field metadata is representing an extension type)
-                                if prev != field {
-                                    plan_err!("Conflicting types for {id}")?;
-                                }
+                                check_metadata_with_storage_equal(
+                                    (field.data_type(), Some(field.metadata())),
+                                    (prev.data_type(), Some(prev.metadata())),
+                                    "parameter",
+                                    &format!(": Conflicting types for id {id}"),
+                                )?;
                             }
                             (_, Some(field)) => {
                                 param_types.insert(id.clone(), Some(Arc::clone(field)));
@@ -5163,7 +5165,7 @@ mod tests {
             .unwrap();
 
         // Check that the placeholder parameters have not received a DataType.
-        let params = plan.get_parameter_types().unwrap();
+        let params = plan.get_parameter_fields().unwrap();
         assert_eq!(params.len(), 1);
 
         let parameter_type = params.clone().get(placeholder_value).unwrap().clone();
