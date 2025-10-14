@@ -56,7 +56,7 @@ use datafusion_expr::{Expr, LogicalPlanContext, ScanOrdering, SortExpr};
 /// Sort: test.a ASC NULLS LAST
 ///   TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
 /// ```
-/// 
+///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 #[derive(Default, Debug)]
 pub struct PushDownSort {}
