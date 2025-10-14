@@ -882,12 +882,12 @@ impl LogicalPlan {
 /// to perform mutable operations via [`Self::update_plan_from_children`].
 /// After mutating the `LogicalPlanContext.children`, or after creating the `LogicalPlanContext`,
 /// call `update_plan_from_children` to sync.
-/// 
+///
 /// See also:
 /// - [`datafusion_common::tree_node::TreeNode`] trait for tree traversal and mutation utilities.
 /// - [`datafusion_common::tree_node::ConcreteTreeNode`] trait for integrating with the tree node utilities.
 /// - [`datafusion::physical_plan::tree_node::PlanContext`] for a similar context for physical plans.
-/// 
+///
 /// [`datafusion::physical_plan::tree_node::PlanContext`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/tree_node/struct.PlanContext.html
 #[derive(Debug, Clone)]
 pub struct LogicalPlanContext<T: Sized> {

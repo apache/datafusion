@@ -102,6 +102,11 @@ pub struct SortExprNodeCollection {
     pub sort_expr_nodes: ::prost::alloc::vec::Vec<SortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScanOrderingNode {
+    #[prost(message, optional, tag = "1")]
+    pub preferred_ordering: ::core::option::Option<SortExprNodeCollection>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListingTableScanNode {
     #[prost(message, optional, tag = "14")]
     pub table_name: ::core::option::Option<TableReference>,
@@ -123,6 +128,8 @@ pub struct ListingTableScanNode {
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
+    #[prost(message, optional, tag = "17")]
+    pub ordering: ::core::option::Option<ScanOrderingNode>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"

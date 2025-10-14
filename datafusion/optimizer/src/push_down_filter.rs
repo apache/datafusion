@@ -41,7 +41,7 @@ use datafusion_expr::{
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{
-    build_schema_remapping, has_all_column_refs, is_restrict_null_predicate
+    build_schema_remapping, has_all_column_refs, is_restrict_null_predicate,
 };
 use crate::{OptimizerConfig, OptimizerRule};
 

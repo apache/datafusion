@@ -57,8 +57,8 @@ use datafusion::{
 };
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    context, internal_datafusion_err, internal_err, not_impl_err, plan_err, Result,
-    TableReference, ToDFSchema,
+    context, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    DataFusionError, Result, TableReference, ToDFSchema,
 };
 use datafusion_expr::{
     dml,
@@ -495,13 +495,25 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection = Some(column_indices);
                 }
 
-                LogicalPlanBuilder::scan_with_filters(
+                let ordering = scan.ordering.as_ref().map(|o| {
+                    o.preferred_ordering
+                        .as_ref()
+                        .map(|so| from_proto::parse_sorts(&so.sort_expr_nodes, ctx, extension_codec))
+                        .transpose()
+                }).transpose()?;
+
+                let mut scan = TableScan::try_new(
                     table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
                     filters,
-                )?
-                .build()
+                    None,
+                )?;
+                if let Some(ordering) = ordering {
+                    scan = scan.with_ordering(ordering);
+                }
+
+                Ok(LogicalPlan::TableScan(scan))
             }
             LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -1003,6 +1015,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 source,
                 filters,
                 projection,
+                ordering,
                 ..
             }) => {
                 let provider = source_as_provider(source)?;
@@ -1118,6 +1131,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
+                    let ordering = ordering
+                        .as_ref()
+                        .map(|ordering| {
+                            Ok::<_, DataFusionError>(protobuf::ScanOrderingNode {
+                                preferred_ordering: ordering
+                                    .preferred_ordering
+                                    .as_ref()
+                                    .map(|order| {
+                                        Ok::<_, DataFusionError>(SortExprNodeCollection {
+                                            sort_expr_nodes: serialize_sorts(
+                                                order,
+                                                extension_codec,
+                                            )?,
+                                        })
+                                    })
+                                    .transpose()?,
+                            })
+                        })
+                        .transpose()?;
+
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
                             protobuf::ListingTableScanNode {
@@ -1136,6 +1169,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 filters,
                                 target_partitions: options.target_partitions as u32,
                                 file_sort_order: exprs_vec,
+                                ordering,
                             },
                         )),
                     })
