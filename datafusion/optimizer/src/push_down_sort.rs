@@ -41,7 +41,7 @@ use datafusion_expr::{Expr, LogicalPlanContext, ScanOrdering, SortExpr};
 /// This means that the [`TableProvider`] can choose to ignore the preferred ordering
 /// or only partially satisfy it. The original `Sort` node ensures that the final output
 /// ordering is always correct.
-/// 
+///
 /// Physical optimizer rules can later remove redundant sorts if they can prove
 /// that the output is already sorted as required.
 ///
@@ -53,7 +53,7 @@ use datafusion_expr::{Expr, LogicalPlanContext, ScanOrdering, SortExpr};
 ///   TableScan: test
 ///
 /// After optimization:
-/// Sort: test.a ASC NULLS LAST 
+/// Sort: test.a ASC NULLS LAST
 ///   TableScan: test preferred_ordering=[test.a ASC NULLS LAST]
 /// ```
 #[derive(Default, Debug)]
