@@ -561,13 +561,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// * `Some(ScalarUDF)` - A new instance of this function configured with the new settings
     /// * `None` - If this function does not support runtime reconfiguration
     ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
-    ///     Some(MyConfigDependentFunc::new_with_config(config).into())
-    /// }
-    /// ```
     fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
         None
     }
