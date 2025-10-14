@@ -523,7 +523,11 @@ pub fn serialize_file_scan_config(
         .cloned()
         .collect::<Vec<_>>();
     fields.extend(conf.table_partition_cols.iter().cloned());
-    let schema = Arc::new(arrow::datatypes::Schema::new(fields.clone()));
+
+    let schema = Arc::new(
+        arrow::datatypes::Schema::new(fields.clone())
+            .with_metadata(conf.file_schema.metadata.clone()),
+    );
 
     Ok(protobuf::FileScanExecConf {
         file_groups,
