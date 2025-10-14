@@ -121,7 +121,7 @@ pub fn projected(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(ProjectedExpr::maybe_wrap(expr, input_schema)?)
+    ProjectedExpr::maybe_wrap(expr, input_schema)
 }
 
 impl PhysicalExpr for ProjectedExpr {

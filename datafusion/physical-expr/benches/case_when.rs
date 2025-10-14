@@ -102,7 +102,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
                 )
                 .unwrap(),
             );
-            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+            b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
         },
     );
 
@@ -123,7 +123,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
                 )
                 .unwrap(),
             );
-            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+            b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
         },
     );
 
@@ -144,7 +144,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
                 )
                 .unwrap(),
             );
-            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+            b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
         },
     );
 
@@ -165,7 +165,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
                 )
                 .unwrap(),
             );
-            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+            b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
         },
     );
 
@@ -180,7 +180,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
             )
                 .unwrap(),
         );
-        b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+        b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
     });
 }
 
