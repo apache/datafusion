@@ -244,11 +244,13 @@ where
 /// # use std::sync::LazyLock;
 /// # use arrow::datatypes::{DataType, Field, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation, LimitEffect};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// # use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+/// # use datafusion_physical_expr_common::physical_expr;
+/// # use std::sync::Arc;
 ///
 /// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// struct SmoothIt {
@@ -295,6 +297,9 @@ where
 ///    fn documentation(&self) -> Option<&Documentation> {
 ///      Some(get_doc())
 ///    }
+///     fn limit_effect(&self, _args: &[Arc<dyn physical_expr::PhysicalExpr>]) -> LimitEffect {
+///         LimitEffect::Unknown
+///     }
 /// }
 ///
 /// // Create a new WindowUDF from the implementation
@@ -421,6 +426,23 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// If not causal, returns the effect this function will have on the window
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
+    }
+}
+
+/// the effect this function will have on the limit pushdown
+pub enum LimitEffect {
+    /// Does not affect the limit (i.e. this is causal)
+    None,
+    /// Either undeclared, or dynamic (only evaluatable at run time)
+    Unknown,
+    /// Grow the limit by N rows
+    Relative(usize),
+    /// Limit needs to be at least N rows
+    Absolute(usize),
 }
 
 pub enum ReversedUDWF {
@@ -530,19 +552,25 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
+
+    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        self.inner.limit_effect(args)
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
+    use crate::{LimitEffect, PartitionEvaluator, WindowUDF, WindowUDFImpl};
     use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use std::any::Any;
     use std::cmp::Ordering;
     use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AWindowUDF {
@@ -580,6 +608,10 @@ mod test {
         }
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
 
@@ -619,6 +651,10 @@ mod test {
         }
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
 
