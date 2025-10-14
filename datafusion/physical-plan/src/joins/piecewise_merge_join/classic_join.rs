@@ -302,11 +302,11 @@ impl ClassicPWMJStream {
             }
 
             // Nothing pending; hand back whatever `resolve` returned (often empty) and move on.
-            // if self.batch_process_state.output_batches.is_empty() {
-            self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+            if self.batch_process_state.output_batches.is_empty() {
+                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
 
-            return Ok(StatefulStreamResult::Ready(Some(batch)));
-            // }
+                return Ok(StatefulStreamResult::Ready(Some(batch)));
+            }
         }
 
         Ok(StatefulStreamResult::Ready(Some(batch)))

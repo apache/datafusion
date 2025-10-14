@@ -547,7 +547,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 metrics.clone(),
                 reservation,
                 build_visited_indices_map(self.join_type),
-                partition,
+                self.num_partitions,
             ))
         })?;
 
