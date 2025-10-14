@@ -17,8 +17,8 @@
 
 pub mod bit_count;
 pub mod bit_get;
-pub mod bitwise_not;
 pub mod bit_shift;
+pub mod bitwise_not;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
