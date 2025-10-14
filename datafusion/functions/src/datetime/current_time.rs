@@ -96,18 +96,18 @@ impl ScalarUDFImpl for CurrentTimeFunc {
     ) -> Result<ExprSimplifyResult> {
         let now_ts = info.execution_props().query_execution_start_time;
 
-        let nano = if let Some(config) = info.execution_props().config_options() {
-            if let Ok(tz) = config.execution.time_zone.parse::<Tz>() {
-                let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
-                local_now
-                    .timestamp_nanos_opt()
-                    .map(|ts| ts % 86400000000000)
-            } else {
-                now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000)
-            }
-        } else {
-            now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000)
-        };
+        // Try to get timezone from config and convert to local time
+        let nano = info
+            .execution_props()
+            .config_options()
+            .and_then(|config| config.execution.time_zone.parse::<Tz>().ok())
+            .map_or_else(
+                || datetime_to_time_nanos(&now_ts),
+                |tz| {
+                    let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
+                    datetime_to_time_nanos(&local_now)
+                },
+            );
 
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Time64Nanosecond(nano),
@@ -118,4 +118,10 @@ impl ScalarUDFImpl for CurrentTimeFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// Extracts the time of day in nanoseconds from a DateTime (0 to 86400000000000)
+/// Returns nanoseconds since 00:00 hrs.
+fn datetime_to_time_nanos<Tz: TimeZone>(dt: &chrono::DateTime<Tz>) -> Option<i64> {
+    dt.timestamp_nanos_opt().map(|ts| ts % 86400000000000)
 }

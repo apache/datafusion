@@ -68,7 +68,7 @@ true
 query B
 SELECT 
   current_time() = current_time() AND
-  current_time() = current_time()
+  current_time() = current_time();
 ----
 true
 
