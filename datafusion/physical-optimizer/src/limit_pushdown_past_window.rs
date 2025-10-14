@@ -167,7 +167,6 @@ fn grow_limit(window: &BoundedWindowAggExec, ctx: &mut TraverseState) -> bool {
 
         // grow based on frames
         let frame = expr.get_window_frame();
-        // TODO https://github.com/apache/datafusion/pull/17347#discussion_r2310673423
         if frame.units != WindowFrameUnits::Rows {
             return false; // expression-based limits not statically evaluatable
         }
