@@ -67,7 +67,7 @@ Timestamp(Nanosecond, None)
 query T
 SELECT arrow_typeof(now())
 ----
-Timestamp(Nanosecond, Some("+00"))
+Timestamp(Nanosecond, Some("+00:00"))
 
 # arrow_typeof_timestamp_date32(
 query T
