@@ -2599,7 +2599,7 @@ impl PartialOrd for Window {
 /// - If this information is completely ignored, e.g. data is scanned randomly, the query will still be correct because a sort will be applied to the data.
 /// - Partially ordered data will also be re-sorted but this may result in optimizations like early stopping, additional data pruning, reduced memory usage during the sort, etc.
 /// - If the scan produces exactly the requested ordering, and sets it's properties to reflect this, upstream sorts may be optimized away.
-/// 
+///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Default)]
 pub struct ScanOrdering {

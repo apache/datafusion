@@ -24,9 +24,7 @@ use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     internal_err, plan_err, qualified_name, Column, DFSchema, Result,
 };
@@ -42,7 +40,9 @@ use datafusion_expr::{
 
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
-use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
+use crate::utils::{
+    has_all_column_refs, is_restrict_null_predicate, replace_cols_by_name,
+};
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
@@ -1386,24 +1386,6 @@ impl PushDownFilter {
     pub fn new() -> Self {
         Self {}
     }
-}
-
-/// replaces columns by its name on the projection.
-pub fn replace_cols_by_name(
-    e: Expr,
-    replace_map: &HashMap<String, Expr>,
-) -> Result<Expr> {
-    e.transform_up(|expr| {
-        Ok(if let Expr::Column(c) = &expr {
-            match replace_map.get(&c.flat_name()) {
-                Some(new_c) => Transformed::yes(new_c.clone()),
-                None => Transformed::no(expr),
-            }
-        } else {
-            Transformed::no(expr)
-        })
-    })
-    .data()
 }
 
 /// check whether the expression uses the columns in `check_map`.

@@ -918,14 +918,11 @@ impl<T> LogicalPlanContext<T> {
             .clone()
             .map_children(|_| {
                 // Replace each child with the corresponding child from our context
-                child_iter
-                    .next()
-                    .map(Transformed::no)
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Internal(
-                            "Mismatch between plan children and context children".to_string(),
-                        )
-                    })
+                child_iter.next().map(Transformed::no).ok_or_else(|| {
+                    datafusion_common::DataFusionError::Internal(
+                        "Mismatch between plan children and context children".to_string(),
+                    )
+                })
             })?
             .data;
 
