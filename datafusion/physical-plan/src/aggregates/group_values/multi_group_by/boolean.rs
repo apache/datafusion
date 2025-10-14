@@ -110,20 +110,26 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
+        enum Nulls {
+            All,
+            Some,
+            None,
+        }
+
         let arr = array.as_boolean();
 
         let null_count = array.null_count();
         let num_rows = array.len();
         let all_null_or_non_null = if null_count == 0 {
-            Some(true)
+            Nulls::None
         } else if null_count == num_rows {
-            Some(false)
+            Nulls::All
         } else {
-            None
+            Nulls::Some
         };
 
         match (NULLABLE, all_null_or_non_null) {
-            (true, None) => {
+            (true, Nulls::Some) => {
                 for &row in rows {
                     if array.is_null(row) {
                         self.nulls.append(true);
@@ -135,14 +141,14 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
                 }
             }
 
-            (true, Some(true)) => {
+            (true, Nulls::None) => {
                 self.nulls.append_n(rows.len(), false);
                 for &row in rows {
                     self.buffer.append(arr.value(row));
                 }
             }
 
-            (true, Some(false)) => {
+            (true, Nulls::All) => {
                 self.nulls.append_n(rows.len(), true);
                 self.buffer.append_n(rows.len(), bool::default());
             }
