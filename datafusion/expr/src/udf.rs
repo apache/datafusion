@@ -205,10 +205,6 @@ impl ScalarUDF {
         self.inner.return_type(arg_types)
     }
 
-    pub fn need_config(&self) -> bool {
-        self.inner.need_config()
-    }
-
     /// Return the datatype this function returns given the input argument types.
     ///
     /// See [`ScalarUDFImpl::return_field_from_args`] for more details.
@@ -550,9 +546,30 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
-
-    fn need_config(&self) -> bool {
-        false
+    /// Create a new instance of this function with updated configuration.
+    ///
+    /// This method is called when configuration options change at runtime
+    /// (e.g., via `SET` statements) to allow functions that depend on
+    /// configuration to update themselves accordingly.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The updated configuration options
+    ///
+    /// # Returns
+    ///
+    /// * `Some(ScalarUDF)` - A new instance of this function configured with the new settings
+    /// * `None` - If this function does not support runtime reconfiguration
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+    ///     Some(MyConfigDependentFunc::new_with_config(config).into())
+    /// }
+    /// ```
+    fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+        None
     }
 
     /// What type will be returned by this function, given the arguments?

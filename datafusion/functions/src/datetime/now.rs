@@ -25,8 +25,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -89,8 +89,8 @@ impl ScalarUDFImpl for NowFunc {
         &self.signature
     }
 
-    fn need_config(&self) -> bool {
-        true
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        Some(Self::new_with_config(config).into())
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {

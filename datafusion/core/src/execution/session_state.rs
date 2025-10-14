@@ -59,8 +59,6 @@ use datafusion_expr::TableSource;
 use datafusion_expr::{
     AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, WindowUDF,
 };
-use datafusion_functions::datetime::now::NowFunc;
-use datafusion_functions::init_udf_with_config;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
@@ -1420,26 +1418,31 @@ impl SessionStateBuilder {
         }
 
         if let Some(scalar_functions) = scalar_functions {
-            scalar_functions.into_iter().for_each(|udf| {
-                if udf.need_config() {
-                    // Register now() with the configured timezone
-                    // The now() function depends on the timezone configuration, so we need to
-                    // register it after the config is set to ensure it uses the correct timezone
-                    let new_udf = init_udf_with_config!(
-                        udf.clone(),
-                        state.config.options(),
-                        NowFunc
-                    );
-                    if let Err(e) = state.register_udf(new_udf) {
-                        info!("Unable to register UDF: {e}")
-                    };
-                } else {
-                    let existing_udf = state.register_udf(udf);
-                    if let Ok(Some(existing_udf)) = existing_udf {
-                        debug!("Overwrote an existing UDF: {}", existing_udf.name());
+            for udf in scalar_functions {
+                let config_options = state.config().options();
+                match udf.inner().with_updated_config(config_options) {
+                    Some(new_udf) => {
+                        if let Err(err) = state.register_udf(Arc::new(new_udf)) {
+                            debug!(
+                                "Failed to re-register updated UDF '{}': {}",
+                                udf.name(),
+                                err
+                            );
+                        }
                     }
+                    None => match state.register_udf(udf.clone()) {
+                        Ok(Some(existing)) => {
+                            debug!("Overwrote existing UDF '{}'", existing.name());
+                        }
+                        Ok(None) => {
+                            debug!("Registered UDF '{}'", udf.name());
+                        }
+                        Err(err) => {
+                            debug!("Failed to register UDF '{}': {}", udf.name(), err);
+                        }
+                    },
                 }
-            });
+            }
         }
 
         if let Some(aggregate_functions) = aggregate_functions {
