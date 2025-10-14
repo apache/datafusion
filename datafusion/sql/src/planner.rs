@@ -602,6 +602,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 let inner_data_type = self.convert_data_type(inner_sql_type)?;
+
+                // Lists are allowed to have an arbitrarily named field;
+                // however, a name other than 'item' will cause it to fail an
+                // == check against a more idiomatically created list in
+                // arrow-rs which causes issues. We use the low-level
+                // constructor here to preserve extension metadata from the
+                // child type.
                 Ok(Field::new(
                     "",
                     DataType::List(

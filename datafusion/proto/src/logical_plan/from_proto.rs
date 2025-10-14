@@ -604,7 +604,6 @@ pub fn parse_expr(
         }) => match data_type {
             None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
             Some(data_type) => {
-                // Foofy
                 let field =
                     Field::new("", data_type.try_into()?, nullable.unwrap_or(true))
                         .with_metadata(metadata.clone());

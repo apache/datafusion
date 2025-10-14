@@ -986,6 +986,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => expr,
         };
 
+        // Currently drops metadata attached to the type
+        // https://github.com/apache/datafusion/issues/18060
         Ok(Expr::Cast(Cast::new(
             Box::new(expr),
             dt.data_type().clone(),

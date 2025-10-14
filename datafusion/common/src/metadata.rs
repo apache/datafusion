@@ -95,7 +95,7 @@ pub fn check_metadata_with_storage_equal(
         );
     }
 
-    let metdata_equal = match (actual.1, expected.1) {
+    let metadata_equal = match (actual.1, expected.1) {
         (None, None) => true,
         (None, Some(expected_metadata)) => expected_metadata.is_empty(),
         (Some(actual_metadata), None) => actual_metadata.is_empty(),
@@ -104,7 +104,7 @@ pub fn check_metadata_with_storage_equal(
         }
     };
 
-    if !metdata_equal {
+    if !metadata_equal {
         return _plan_err!(
             "Expected {what} of type {}, got {}{context}",
             format_type_and_metadata(expected.0, expected.1),
