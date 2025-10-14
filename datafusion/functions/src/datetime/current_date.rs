@@ -103,17 +103,17 @@ impl ScalarUDFImpl for CurrentDateFunc {
         let now_ts = info.execution_props().query_execution_start_time;
 
         // Get timezone from config and convert to local time
-        let days = if let Some(config) = info.execution_props().config_options() {
-            if let Ok(tz) = config.execution.time_zone.parse::<Tz>() {
-                let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
-                datetime_to_days(&local_now)
-            } else {
-                datetime_to_days(&now_ts)
-            }
-        } else {
-            datetime_to_days(&now_ts)
-        };
-
+        let days = info
+            .execution_props()
+            .config_options()
+            .and_then(|config| config.execution.time_zone.parse::<Tz>().ok())
+            .map_or_else(
+                || datetime_to_days(&now_ts),
+                |tz| {
+                    let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
+                    datetime_to_days(&local_now)
+                },
+            );
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Date32(Some(days)),
             None,
