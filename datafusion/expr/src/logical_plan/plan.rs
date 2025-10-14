@@ -2609,25 +2609,25 @@ impl PartialOrd for Window {
 }
 
 /// Communicates the desired ordering of the output of a scan operation.
-/// 
+///
 /// Preferred orderings can potentially help DataFusion optimize queries, even in cases
-/// when the output does not completely follow that order. This is information passed 
+/// when the output does not completely follow that order. This is information passed
 /// to the scan about what might help.
-/// 
+///
 /// For example, a query with `ORDER BY time DESC LIMIT 10`, DataFusion's dynamic
 /// predicates and TopK operator will work better if the data is roughly ordered by descending
 /// time (more recent data first).
-/// 
+///
 /// Implementers of [`TableProvider`] should use this information to optimize the order in which data is output from the scan.
-/// 
+///
 /// It is a hint and not a requirement:
 /// - If this information is completely ignored, e.g. data is scanned randomly, the query will still be correct because a sort will be applied to the data.
 /// - Partially ordered data will also be re-sorted but this may result in optimizations like early stopping, additional data pruning, reduced memory usage during the sort, etc.
 /// - If the scan produces exactly the requested ordering, and sets it's properties to reflect this, upstream sorts may be optimized away.
-/// 
-/// Actually removing unecessary sorts is done at the physical plan level: logical operators like a join may or may not preserve ordering
+///
+/// Actually removing unnecessary sorts is done at the physical plan level: logical operators like a join may or may not preserve ordering
 /// depending on what physical operator is chosen (e.g. HashJoin vs. SortMergeJoin).
-/// If you as a [`TableProvider`] implementer would like to eliminiate unecessary sorts you shuold make sure the [`ExecutionPlan`]
+/// If you as a [`TableProvider`] implementer would like to eliminiate unnecessary sorts you should make sure the [`ExecutionPlan`]
 /// you produce reflects the ordering in it's properties.
 ///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
