@@ -51,6 +51,10 @@ impl Literal {
     }
 
     /// Cast this literal's storage type
+    ///
+    /// This operation assumes that if the underlying [ScalarValue] can be casted
+    /// to a given type that any extension type represented by the metadata is also
+    /// valid.
     pub fn cast_storage_to(
         &self,
         target_type: &DataType,
