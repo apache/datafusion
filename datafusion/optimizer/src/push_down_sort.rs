@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::replace_cols_by_name;
+use crate::utils::{build_schema_remapping, replace_cols_by_name};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -201,19 +201,69 @@ impl OptimizerRule for PushDownSort {
                         for child in ctx.children.iter_mut() {
                             child.data = data_to_propagate.clone();
                         }
-                    } else {
-                        // No sort expressions to propagate, clear children data
-                        for child in ctx.children.iter_mut() {
-                            child.data = None;
-                        }
+
+                        return Ok(Transformed::no(ctx));
                     }
 
                     // Continue recursion with potentially updated sort expressions
                     Ok(Transformed::no(ctx))
                 }
+                LogicalPlan::SubqueryAlias(ref subquery_alias) => {
+                    // Similar to Projection, we need to rewrite sort expressions through the SubqueryAlias
+                    // by replacing column references that use the alias qualifier with the underlying
+                    // table qualifier.
+
+                    if let Some(sort_exprs) = &ctx.data {
+                        // Build mapping: alias.field_name -> underlying Column(qualifier, field_name)
+                        let replace_map = build_schema_remapping(
+                            &subquery_alias.schema,
+                            subquery_alias.input.schema(),
+                        );
+
+                        // Rewrite sort expressions to use underlying qualifiers
+                        let mut rewritten_sorts = Vec::new();
+                        for sort_expr in sort_exprs {
+                            match replace_cols_by_name(
+                                sort_expr.expr.clone(),
+                                &replace_map,
+                            ) {
+                                Ok(rewritten_expr) => {
+                                    rewritten_sorts.push(SortExpr {
+                                        expr: rewritten_expr,
+                                        asc: sort_expr.asc,
+                                        nulls_first: sort_expr.nulls_first,
+                                    });
+                                }
+                                Err(_) => {
+                                    // Cannot rewrite, stop here
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Update context with rewritten sort expressions
+                        ctx.data = if rewritten_sorts.is_empty() {
+                            None
+                        } else {
+                            Some(rewritten_sorts.clone())
+                        };
+
+                        // Propagate rewritten sort expressions to children
+                        let data_to_propagate = ctx.data.clone();
+                        for child in ctx.children.iter_mut() {
+                            child.data = data_to_propagate.clone();
+                        }
+                    } else {
+                        // No sort expressions to propagate
+                        for child in ctx.children.iter_mut() {
+                            child.data = None;
+                        }
+                    }
+
+                    Ok(Transformed::no(ctx))
+                }
                 LogicalPlan::Filter(_)
                 | LogicalPlan::Repartition(_)
-                | LogicalPlan::SubqueryAlias(_)
                 | LogicalPlan::Limit(_) => {
                     // Propagate current sort expressions to children without modification
                     let current_data = ctx.data.clone();
@@ -425,19 +475,23 @@ mod tests {
     fn sort_rewrites_expression_to_source_columns() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), (col("b") + col("c") + lit(1)).alias("bc1"), col("c")])?
+            .project(vec![
+                col("a"),
+                (col("b") + col("c") + lit(1)).alias("bc1"),
+                col("c"),
+            ])?
             .sort(vec![
                 col("bc1").sort(true, false),
                 col("c").sort(true, false),
             ])?
             .build()?;
 
-        // We can succesfully rewrite the sort expression `bc` to `b + c` and push it down
+        // We can succesfully rewrite the sort expression `bc1` to `b + c + 1` and push it down
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Sort: bc ASC NULLS LAST, test.c ASC NULLS LAST
-          Projection: test.a, test.b + test.c AS bc, test.c
+        Sort: bc1 ASC NULLS LAST, test.c ASC NULLS LAST
+          Projection: test.a, test.b + test.c + Int32(1) AS bc1, test.c
             TableScan: test preferred_ordering=[test.b + test.c + Int32(1) ASC NULLS LAST, test.c ASC NULLS LAST]
         "
         )

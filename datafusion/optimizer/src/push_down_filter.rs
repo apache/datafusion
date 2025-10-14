@@ -41,7 +41,8 @@ use datafusion_expr::{
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{
-    has_all_column_refs, is_restrict_null_predicate, replace_cols_by_name,
+    build_schema_remapping, has_all_column_refs, is_restrict_null_predicate,
+    replace_cols_by_name,
 };
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -836,17 +837,10 @@ impl OptimizerRule for PushDownFilter {
                 insert_below(LogicalPlan::Sort(sort), new_filter)
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
-                let mut replace_map = HashMap::new();
-                for (i, (qualifier, field)) in
-                    subquery_alias.input.schema().iter().enumerate()
-                {
-                    let (sub_qualifier, sub_field) =
-                        subquery_alias.schema.qualified_field(i);
-                    replace_map.insert(
-                        qualified_name(sub_qualifier, sub_field.name()),
-                        Expr::Column(Column::new(qualifier.cloned(), field.name())),
-                    );
-                }
+                let replace_map = build_schema_remapping(
+                    &subquery_alias.schema,
+                    subquery_alias.input.schema(),
+                );
                 let new_predicate = replace_cols_by_name(filter.predicate, &replace_map)?;
 
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
@@ -951,15 +945,8 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::Union(ref union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
                 for input in &union.inputs {
-                    let mut replace_map = HashMap::new();
-                    for (i, (qualifier, field)) in input.schema().iter().enumerate() {
-                        let (union_qualifier, union_field) =
-                            union.schema.qualified_field(i);
-                        replace_map.insert(
-                            qualified_name(union_qualifier, union_field.name()),
-                            Expr::Column(Column::new(qualifier.cloned(), field.name())),
-                        );
-                    }
+                    let replace_map =
+                        build_schema_remapping(&union.schema, input.schema());
 
                     let push_predicate =
                         replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
