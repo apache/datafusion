@@ -1084,7 +1084,7 @@ impl SessionContext {
                 .filter_map(|name| {
                     state.udf(&name).ok().and_then(|udf| {
                         udf.inner()
-                            .with_updated_config(&config_options)
+                            .with_updated_config(config_options)
                             .map(Arc::new)
                     })
                 })

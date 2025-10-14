@@ -1430,7 +1430,7 @@ impl SessionStateBuilder {
                             );
                         }
                     }
-                    None => match state.register_udf(udf.clone()) {
+                    None => match state.register_udf(Arc::clone(&udf)) {
                         Ok(Some(existing)) => {
                             debug!("Overwrote existing UDF '{}'", existing.name());
                         }
