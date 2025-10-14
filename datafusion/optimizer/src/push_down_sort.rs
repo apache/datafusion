@@ -284,8 +284,7 @@ impl OptimizerRule for PushDownSort {
                 }
             }
         })
-        .map(|transformed_ctx| transformed_ctx.map_data(|ctx| Ok(ctx.plan)))
-        .flatten()
+        .and_then(|transformed_ctx| transformed_ctx.map_data(|ctx| Ok(ctx.plan)))
     }
 
     fn name(&self) -> &str {
