@@ -25,11 +25,13 @@ use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::{
-    Documentation, Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, Expr, LimitEffect, PartitionEvaluator, Signature, Volatility,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
@@ -155,6 +157,10 @@ impl WindowUDFImpl for Ntile {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 

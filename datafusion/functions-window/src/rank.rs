@@ -29,10 +29,11 @@ use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_doc::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
@@ -238,6 +239,14 @@ impl WindowUDFImpl for Rank {
             RankType::Basic => Some(get_rank_doc()),
             RankType::Dense => Some(get_dense_rank_doc()),
             RankType::Percent => Some(get_percent_rank_doc()),
+        }
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        match self.rank_type {
+            RankType::Basic => LimitEffect::None,
+            RankType::Dense => LimitEffect::None,
+            RankType::Percent => LimitEffect::Unknown,
         }
     }
 }

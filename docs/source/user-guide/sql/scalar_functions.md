@@ -2403,7 +2403,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `current_date`
 
-Returns the current UTC date.
+Returns the current date in the session time zone.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 
