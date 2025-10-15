@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Apache DataFusion CSV DataSource
+# Apache DataFusion Arrow DataSource
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
