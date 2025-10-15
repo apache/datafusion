@@ -255,13 +255,6 @@ impl ScalarUDF {
     /// Determines which of the arguments passed to this function are evaluated eagerly
     /// and which may be evaluated lazily.
     ///
-    /// If all arguments are evaluated eagerly this function may either return `None` or `Some(args, vec![])`.
-    ///
-    /// When `Some` is returned the first value of the tuple are the eagerly evaluated arguments,
-    /// and the second value of the tuple are the arguments that may be evaluated lazily.
-    /// The two sets of arguments are guaranteed to be disjunct, and each argument from `args` will
-    /// only be present in one the two `Vec`s.
-    ///
     /// See [ScalarUDFImpl::conditional_arguments] for more information.
     pub fn conditional_arguments<'a>(
         &self,
@@ -688,14 +681,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Determines which of the arguments passed to this function are evaluated eagerly
     /// and which may be evaluated lazily.
     ///
-    /// If all arguments are eagerly evaluated this function is allowed, but is not required to,
-    /// return `None`. Returning `None` is a micro optimization that saves a needless `Vec`
+    /// If this function returns `None`, all arguments are eagerly evaluated.
+    /// Returning `None` is a micro optimization that saves a needless `Vec`
     /// allocation.
     ///
-    /// When `Some` is returned, implementations must ensure that the two returned `Vec`s are
-    /// disjunct, and that each argument from `args` is present in one the two `Vec`s.
+    /// If the function returns `Some`, returns (`eager`, `lazy`) where `eager`
+    /// are the arguments that are always evaluated, and `lazy` are the
+    /// arguments that may be evaluated lazily (i.e. may not be evaluated at all
+    /// in some cases).
     ///
-    /// When overriding this function, [ScalarUDFImpl::short_circuits] should also be overridden to return `true`.
+    /// Implementations must ensure that the two returned `Vec`s are disjunct,
+    /// and that each argument from `args` is present in one the two `Vec`s.
+    ///
+    /// When overriding this function, [ScalarUDFImpl::short_circuits] must
+    /// be overridden to return `true`.
     fn conditional_arguments<'a>(
         &self,
         args: &'a [Expr],
