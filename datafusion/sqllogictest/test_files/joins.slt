@@ -5217,7 +5217,7 @@ ORDER BY 1
 physical_plan
 01)SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
-03)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
 04)------CoalesceBatchesExec: target_batch_size=3
 05)--------FilterExec: t1_id@0 > 10
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]

@@ -63,7 +63,7 @@ impl PiecewiseMergeJoinStreamState {
 /// Note the compare key in the join predicate might include expressions on the original
 /// columns, so we store the evaluated compare key separately.
 /// e.g. For join predicate `buffer.v1 < (stream.v1 + 1)`, the `compare_key_values` field stores
-/// the evaluted `stream.v1 + 1` array.
+/// the evaluated `stream.v1 + 1` array.
 pub(super) struct SortedStreamBatch {
     pub batch: RecordBatch,
     compare_key_values: Vec<ArrayRef>,
@@ -412,6 +412,8 @@ struct BatchProcessState {
     found: bool,
     // Signals to continue processing the current stream batch
     continue_process: bool,
+    // Skip nulls
+    processed_null_count: bool,
 }
 
 impl BatchProcessState {
@@ -423,6 +425,7 @@ impl BatchProcessState {
             start_stream_idx: 0,
             found: false,
             continue_process: true,
+            processed_null_count: false,
         }
     }
 
@@ -432,6 +435,7 @@ impl BatchProcessState {
         self.start_stream_idx = 0;
         self.found = false;
         self.continue_process = true;
+        self.processed_null_count = false;
     }
 }
 
@@ -459,9 +463,17 @@ fn resolve_classic_join(
 ) -> Result<RecordBatch> {
     let buffered_len = buffered_side.buffered_data.values().len();
     let stream_values = stream_batch.compare_key_values();
-
+    
     let mut buffer_idx = batch_process_state.start_buffer_idx;
-    let stream_idx = batch_process_state.start_stream_idx;
+    let mut stream_idx = batch_process_state.start_stream_idx;
+
+    if !batch_process_state.processed_null_count {
+        let buffered_null_idx = buffered_side.buffered_data.values().null_count();
+        let stream_null_idx = stream_values[0].null_count();
+        buffer_idx = buffered_null_idx;
+        stream_idx = stream_null_idx;
+        batch_process_state.processed_null_count = true;
+    }
 
     // Our buffer_idx variable allows us to start probing on the buffered side where we last matched
     // in the previous stream row.

@@ -307,16 +307,16 @@ impl PiecewiseMergeJoinExec {
                 // For left existence joins the inputs will be swapped so the sort
                 // options are switched
                 if is_right_existence_join(join_type) {
-                    SortOptions::new(false, false)
+                    SortOptions::new(false, true)
                 } else {
-                    SortOptions::new(true, false)
+                    SortOptions::new(true, true)
                 }
             }
             Operator::Gt | Operator::GtEq => {
                 if is_right_existence_join(join_type) {
-                    SortOptions::new(true, false)
+                    SortOptions::new(true, true)
                 } else {
-                    SortOptions::new(false, false)
+                    SortOptions::new(false, true)
                 }
             }
             _ => {
