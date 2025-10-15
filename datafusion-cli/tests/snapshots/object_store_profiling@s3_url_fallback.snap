@@ -39,6 +39,17 @@ Object Store Profiling
 Instrumented Object Store: instrument_mode: Enabled, inner: AmazonS3(data)
 <TIMESTAMP> operation=Get duration=[DURATION] size=1006 path=cars.csv
 
+Summaries:
+Get
+count: 1
+[SUMMARY_DURATION]
+[SUMMARY_DURATION]
+[SUMMARY_DURATION]
+size min: 1006 B
+size max: 1006 B
+size avg: 1006 B
+size sum: 1006 B
+
 ObjectStore Profile mode set to Disabled
 +-----+-------+---------------------+
 | car | speed | time                |
