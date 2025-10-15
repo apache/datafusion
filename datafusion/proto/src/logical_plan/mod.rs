@@ -34,32 +34,20 @@ use crate::{
 
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaBuilder, SchemaRef};
-use datafusion::datasource::cte_worktable::CteWorkTable;
-use datafusion::datasource::file_format::arrow::ArrowFormat;
-#[cfg(feature = "avro")]
-use datafusion::datasource::file_format::avro::AvroFormat;
-#[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::{
-    file_type_to_format, format_as_file_type, FileFormatFactory,
-};
-use datafusion::{
-    datasource::{
-        file_format::{
-            csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat, FileFormat,
-        },
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
-        view::ViewTable,
-        TableProvider,
-    },
-    datasource::{provider_as_source, source_as_provider},
-    prelude::SessionContext,
-};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     context, internal_datafusion_err, internal_err, not_impl_err, plan_err, Result,
     TableReference, ToDFSchema,
 };
+use datafusion_datasource::file_format::{
+    file_type_to_format, format_as_file_type, FileFormat, FileFormatFactory,
+};
+use datafusion_datasource_arrow::file_format::ArrowFormat;
+#[cfg(feature = "avro")]
+use datafusion_datasource_avro::file_format::AvroFormat;
+use datafusion_datasource_json::file_format::JsonFormat as OtherNdJsonFormat;
+#[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::file_format::ParquetFormat;
 use datafusion_expr::{
     dml,
     logical_plan::{
@@ -77,6 +65,14 @@ use datafusion_expr::{
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
+use datafusion_catalog::cte_worktable::CteWorkTable;
+use datafusion_catalog::default_table_source::{provider_as_source, source_as_provider};
+use datafusion_catalog::view::ViewTable;
+use datafusion_catalog::TableProvider;
+use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource_csv::CsvFormat;
+use datafusion_execution::TaskContext;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -96,7 +92,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
 
     fn try_into_logical_plan(
         &self,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan>;
 
@@ -113,7 +109,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         &self,
         buf: &[u8],
         inputs: &[LogicalPlan],
-        ctx: &SessionContext,
+        ctx: &TaskContext,
     ) -> Result<Extension>;
 
     fn try_encode(&self, node: &Extension, buf: &mut Vec<u8>) -> Result<()>;
@@ -123,7 +119,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         buf: &[u8],
         table_ref: &TableReference,
         schema: SchemaRef,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>>;
 
     fn try_encode_table_provider(
@@ -136,7 +132,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
     fn try_decode_file_format(
         &self,
         _buf: &[u8],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn FileFormatFactory>> {
         not_impl_err!("LogicalExtensionCodec is not provided for file format")
     }
@@ -184,7 +180,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Extension> {
         not_impl_err!("LogicalExtensionCodec is not provided")
     }
@@ -198,7 +194,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>> {
         not_impl_err!("LogicalExtensionCodec is not provided")
     }
@@ -242,7 +238,7 @@ fn from_table_reference(
 /// serialized by [from_table_source]
 fn to_table_source(
     node: &Option<Box<LogicalPlanNode>>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     extension_codec: &dyn LogicalExtensionCodec,
 ) -> Result<Arc<dyn TableSource>> {
     if let Some(node) = node {
@@ -296,7 +292,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
     fn try_into_logical_plan(
         &self,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
@@ -475,10 +471,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_schema(Arc::new(schema));
 
                 let provider = ListingTable::try_new(config)?.with_cache(
-                    ctx.state()
-                        .runtime_env()
-                        .cache_manager
-                        .get_file_statistic_cache(),
+                    ctx.runtime_env().cache_manager.get_file_statistic_cache(),
                 );
 
                 let table_name =
@@ -547,7 +540,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
             }
             LogicalPlanType::Repartition(repartition) => {
-                use datafusion::logical_expr::Partitioning;
+                use datafusion_expr::Partitioning;
                 let input: LogicalPlan =
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
@@ -594,11 +587,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                 } else {
                     None
                 };
-
-                let file_type = create_extern_table.file_type.as_str();
-                if ctx.table_factory(file_type).is_none() {
-                    internal_err!("No TableProviderFactory for file type: {file_type}")?
-                }
 
                 let mut order_exprs = vec![];
                 for expr in &create_extern_table.order_exprs {
@@ -961,14 +949,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
-            LogicalPlanType::Dml(dml_node) => Ok(LogicalPlan::Dml(
-                datafusion::logical_expr::DmlStatement::new(
+            LogicalPlanType::Dml(dml_node) => {
+                Ok(LogicalPlan::Dml(datafusion_expr::DmlStatement::new(
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
                     to_table_source(&dml_node.target, ctx, extension_codec)?,
                     dml_node.dml_type().into(),
                     Arc::new(into_logical_plan!(dml_node.input, ctx, extension_codec)?),
-                ),
-            )),
+                )))
+            }
         }
     }
 
@@ -1417,7 +1405,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 partitioning_scheme,
             }) => {
-                use datafusion::logical_expr::Partitioning;
+                use datafusion_expr::Partitioning;
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,

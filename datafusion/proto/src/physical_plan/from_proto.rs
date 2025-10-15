@@ -28,26 +28,27 @@ use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::file_format::csv::CsvSink;
-use datafusion::datasource::file_format::json::JsonSink;
+use arrow::datatypes::Schema;
+use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile};
+use datafusion_datasource_csv::file_format::CsvSink;
+use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
-use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
-};
-use datafusion::execution::{FunctionRegistry, TaskContext};
-use datafusion::logical_expr::WindowFunctionDefinition;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::expressions::{
+use datafusion_datasource_parquet::file_format::ParquetSink;
+use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_execution::{FunctionRegistry, TaskContext};
+use datafusion_expr::WindowFunctionDefinition;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion_physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
+use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
 
 use crate::convert_required;

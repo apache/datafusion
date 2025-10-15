@@ -28,7 +28,9 @@ use crate::datasource::listing::{
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::DataType;
-use datafusion_common::{arrow_datafusion_err, internal_datafusion_err, plan_err, DataFusionError, ToDFSchema};
+use datafusion_common::{
+    arrow_datafusion_err, internal_datafusion_err, plan_err, DataFusionError, ToDFSchema,
+};
 use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
 
