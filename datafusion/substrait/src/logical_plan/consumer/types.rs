@@ -17,6 +17,7 @@
 
 use super::utils::{from_substrait_precision, next_struct_field_name, DEFAULT_TIMEZONE};
 use super::SubstraitConsumer;
+use crate::variation_const::FLOAT_16_TYPE_NAME;
 #[allow(deprecated)]
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
@@ -251,6 +252,7 @@ pub fn from_substrait_type(
                     match name.as_ref() {
                         // Kept for backwards compatibility, producers should use IntervalCompound instead
                         INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+                        FLOAT_16_TYPE_NAME => Ok(DataType::Float16),
                         _ => not_impl_err!(
                                 "Unsupported Substrait user defined type with ref {} and variation {}",
                                 u.type_reference,
@@ -304,7 +306,7 @@ pub fn from_substrait_named_struct(
         })?,
         &base_schema.names,
         &mut name_idx,
-    );
+    )?;
     if name_idx != base_schema.names.len() {
         return substrait_err!(
             "Names list must match exactly to nested schema, but found {} uses for {} names",
@@ -312,7 +314,7 @@ pub fn from_substrait_named_struct(
             base_schema.names.len()
         );
     }
-    DFSchema::try_from(Schema::new(fields?))
+    DFSchema::try_from(Schema::new(fields))
 }
 
 fn from_substrait_struct_type(
