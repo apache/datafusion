@@ -58,7 +58,6 @@ workspace = true
 name = "datafusion_datasource_arrow"
 path = "src/mod.rs"
 
-
 [features]
 compression = [
     "arrow-ipc/zstd",
