@@ -23,6 +23,8 @@ use datafusion_session::Session;
 use futures::StreamExt;
 use std::collections::HashMap;
 
+/// Extension trait for [`ListingTable`] that supports inferring schemas
+///
 /// This trait exists because the following inference methods only
 /// work for [`SessionState`] implementations of [`Session`].
 /// See [`ListingTableConfig`] for the remaining inference methods.
@@ -122,7 +124,6 @@ mod tests {
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
-    use async_trait::async_trait;
     use datafusion_catalog::TableProvider;
     use datafusion_catalog_listing::{
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
@@ -131,12 +132,10 @@ mod tests {
         assert_contains, plan_err,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
-        ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
+        ColumnStatistics, DataFusionError, Result, ScalarValue,
     };
-    use datafusion_datasource::file::FileSource;
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_scan_config::FileScanConfig;
     use datafusion_datasource::schema_adapter::{
         SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
@@ -147,11 +146,8 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::{collect, ExecutionPlan, ExecutionPlanProperties};
-    use datafusion_session::Session;
-    use object_store::{ObjectMeta, ObjectStore};
+    use datafusion_physical_plan::{collect, ExecutionPlanProperties};
     use rstest::rstest;
-    use std::any::Any;
     use std::collections::HashMap;
     use std::io::Write;
     use std::sync::Arc;
@@ -194,30 +190,25 @@ mod tests {
         let table_path = ListingTableUrl::parse(filename)?;
 
         // Test default schema source
-        let config = ListingTableConfig::new(table_path.clone());
+        let format = CsvFormat::default();
+        let options = ListingOptions::new(Arc::new(format));
+        let config =
+            ListingTableConfig::new(table_path.clone()).with_listing_options(options);
         assert_eq!(config.schema_source(), SchemaSource::Unset);
 
         // Test schema source after setting a schema explicitly
         let provided_schema = create_test_schema();
-        let config_with_schema = config
-            .clone()
-            .with_listing_options(mock_listing_config_options())
-            .with_schema(provided_schema.clone());
+        let config_with_schema = config.clone().with_schema(provided_schema.clone());
         assert_eq!(config_with_schema.schema_source(), SchemaSource::Specified);
 
         // Test schema source after inferring schema
-        let format = CsvFormat::default();
-        let options = ListingOptions::new(Arc::new(format));
-        let config_with_options = config.with_listing_options(options.clone());
-        assert_eq!(config_with_options.schema_source(), SchemaSource::Unset);
+        assert_eq!(config.schema_source(), SchemaSource::Unset);
 
-        let config_with_inferred = config_with_options.infer_schema(&ctx.state()).await?;
+        let config_with_inferred = config.infer_schema(&ctx.state()).await?;
         assert_eq!(config_with_inferred.schema_source(), SchemaSource::Inferred);
 
         // Test schema preservation through operations
-        let config_with_schema_and_options = config_with_schema
-            .clone()
-            .with_listing_options(options.clone());
+        let config_with_schema_and_options = config_with_schema.clone();
         assert_eq!(
             config_with_schema_and_options.schema_source(),
             SchemaSource::Specified
@@ -1029,65 +1020,6 @@ mod tests {
         Ok(())
     }
 
-    #[derive(Debug)]
-    struct TestFileFormat;
-    #[async_trait]
-    impl FileFormat for TestFileFormat {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn get_ext(&self) -> String {
-            "test_file_format_ext".to_string()
-        }
-
-        fn get_ext_with_compression(
-            &self,
-            _file_compression_type: &FileCompressionType,
-        ) -> Result<String> {
-            Ok("test_file_format_ext".to_string())
-        }
-
-        fn compression_type(&self) -> Option<FileCompressionType> {
-            None
-        }
-
-        async fn infer_schema(
-            &self,
-            _state: &dyn Session,
-            _store: &Arc<dyn ObjectStore>,
-            _objects: &[ObjectMeta],
-        ) -> Result<SchemaRef> {
-            unimplemented!()
-        }
-
-        async fn infer_stats(
-            &self,
-            _state: &dyn Session,
-            _store: &Arc<dyn ObjectStore>,
-            _table_schema: SchemaRef,
-            _object: &ObjectMeta,
-        ) -> Result<Statistics> {
-            unimplemented!()
-        }
-
-        async fn create_physical_plan(
-            &self,
-            _state: &dyn Session,
-            _conf: FileScanConfig,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
-        }
-
-        fn file_source(&self) -> Arc<dyn FileSource> {
-            unimplemented!()
-        }
-    }
-
-    fn mock_listing_config_options() -> ListingOptions {
-        ListingOptions::new(Arc::new(TestFileFormat))
-    }
-
     #[tokio::test]
     async fn infer_preserves_provided_schema() -> Result<()> {
         let ctx = SessionContext::new();
@@ -1098,8 +1030,10 @@ mod tests {
 
         let provided_schema = create_test_schema();
 
+        let format = CsvFormat::default();
+        let options = ListingOptions::new(Arc::new(format));
         let config = ListingTableConfig::new(table_path)
-            .with_listing_options(mock_listing_config_options())
+            .with_listing_options(options)
             .with_schema(Arc::clone(&provided_schema));
 
         let config = config.infer(&ctx.state()).await?;
@@ -1165,9 +1099,8 @@ mod tests {
             table_path1.clone(),
             table_path2.clone(),
         ])
-        .with_listing_options(mock_listing_config_options())
-        .with_schema(schema_3cols)
-        .with_listing_options(options.clone());
+        .with_listing_options(options.clone())
+        .with_schema(schema_3cols);
         let config2 = config2.infer_schema(&ctx.state()).await?;
         assert_eq!(config2.schema_source(), SchemaSource::Specified);
 
@@ -1190,9 +1123,8 @@ mod tests {
             table_path1.clone(),
             table_path2.clone(),
         ])
-        .with_listing_options(mock_listing_config_options())
-        .with_schema(schema_4cols)
-        .with_listing_options(options.clone());
+        .with_listing_options(options.clone())
+        .with_schema(schema_4cols);
         let config3 = config3.infer_schema(&ctx.state()).await?;
         assert_eq!(config3.schema_source(), SchemaSource::Specified);
 
