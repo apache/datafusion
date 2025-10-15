@@ -2032,7 +2032,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-arrow"
-version = "50.1.0"
+version = "50.2.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
