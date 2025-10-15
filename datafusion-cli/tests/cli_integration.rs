@@ -416,6 +416,15 @@ async fn test_object_store_profiling() {
         "<TIMESTAMP> operation=$1 duration=[DURATION] size=$2 path=$3",
     );
 
+    // We also need to filter out the durations reported in the summary output
+    //
+    // Example line(s) to filter:
+    //
+    // duration min: 0.000729s
+    // duration max: 0.000729s
+    // duration avg: 0.000729s
+    settings.add_filter(r"duration (min|max|avg): \d+\.\d{6}s", "[SUMMARY_DURATION]");
+
     let _bound = settings.bind_to_scope();
 
     let input = r#"
