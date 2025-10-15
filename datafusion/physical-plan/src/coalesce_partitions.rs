@@ -28,11 +28,14 @@ use super::{
     Statistics,
 };
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -259,6 +262,15 @@ impl ExecutionPlan for CoalescePartitionsExec {
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        FilterDescription::from_children(parent_filters, &self.children())
     }
 }
 
