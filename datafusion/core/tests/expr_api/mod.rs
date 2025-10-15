@@ -320,6 +320,22 @@ async fn test_create_physical_expr() {
     create_simplified_expr_test(lit(1i32) + lit(2i32), "3");
 }
 
+#[test]
+fn test_create_physical_expr_nvl2() {
+    evaluate_expr_test(
+        nvl2(col("i"), lit(1i64), lit(0i64)),
+        vec![
+            "+------+",
+            "| expr |",
+            "+------+",
+            "| 1    |",
+            "| 0    |",
+            "| 1    |",
+            "+------+",
+        ],
+    );
+}
+
 #[tokio::test]
 async fn test_create_physical_expr_coercion() {
     // create_physical_expr does apply type coercion and unwrapping in cast
