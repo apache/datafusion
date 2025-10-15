@@ -463,7 +463,7 @@ fn resolve_classic_join(
 ) -> Result<RecordBatch> {
     let buffered_len = buffered_side.buffered_data.values().len();
     let stream_values = stream_batch.compare_key_values();
-    
+
     let mut buffer_idx = batch_process_state.start_buffer_idx;
     let mut stream_idx = batch_process_state.start_stream_idx;
 
