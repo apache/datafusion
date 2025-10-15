@@ -239,7 +239,7 @@ pub fn logical_plan_to_json_with_extension_codec(
 
 /// Deserialize a LogicalPlan from JSON
 #[cfg(feature = "json")]
-pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
+pub fn logical_plan_from_json(json: &str, ctx: &TaskContext) -> Result<LogicalPlan> {
     let extension_codec = DefaultLogicalExtensionCodec {};
     logical_plan_from_json_with_extension_codec(json, ctx, &extension_codec)
 }
@@ -313,7 +313,7 @@ pub fn physical_plan_from_json(
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    back.try_into_physical_plan(&ctx.task_ctx(), &extension_codec)
+    back.try_into_physical_plan(&ctx, &extension_codec)
 }
 
 /// Deserialize a PhysicalPlan from bytes

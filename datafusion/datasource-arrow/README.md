@@ -31,4 +31,4 @@ reason to use this crate directly in your project as well.
 [apache arrow]: https://arrow.apache.org/
 [apache datafusion]: https://datafusion.apache.org/
 [`datafusion`]: https://crates.io/crates/datafusion
-[Arrow IPC format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
+[arrow ipc format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
