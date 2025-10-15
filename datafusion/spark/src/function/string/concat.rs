@@ -123,7 +123,8 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
 }
 
 /// Compute NULL mask for the arguments
-/// Returns None if all scalars and any is NULL, or a Vec<bool> for arrays
+/// Returns None if all scalars and any is NULL, or a Vector of
+/// boolean representing the null mask for incoming arrays
 fn compute_null_mask(
     args: &[ColumnarValue],
     number_rows: usize,
