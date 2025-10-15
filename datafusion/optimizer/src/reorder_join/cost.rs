@@ -27,6 +27,10 @@ fn estimate_cardinality(plan: &LogicalPlan) -> Result<usize> {
             let input_cardinality = estimate_cardinality(&filter.input)?;
             Ok((0.1 * input_cardinality as f64) as usize)
         }
+        LogicalPlan::Aggregate(agg) => {
+            let input_cardinality = estimate_cardinality(&agg.input)?;
+            Ok((0.1 * input_cardinality as f64) as usize)
+        }
         LogicalPlan::TableScan(scan) => {
             let statistics = scan
                 .source
