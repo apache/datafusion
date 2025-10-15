@@ -104,8 +104,7 @@ impl ScalarUDFImpl for NVL2Func {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [test, if_non_null, if_null] =
-            take_function_args(self.name(), args.args)?;
+        let [test, if_non_null, if_null] = take_function_args(self.name(), args.args)?;
 
         match test {
             ColumnarValue::Scalar(test_scalar) => {
