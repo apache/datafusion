@@ -30,7 +30,7 @@ use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::DataFrame;
-use datafusion_common::ScalarValue;
+use datafusion_common::{config::Dialect, ScalarValue};
 use datafusion_expr::Expr::Literal;
 use datafusion_expr::{cast, col, lit, not, try_cast, when};
 use datafusion_functions::expr_fn::{
@@ -288,7 +288,10 @@ fn benchmark_with_param_values_many_columns(
     }
     // SELECT max(attr0), ..., max(attrN) FROM t1.
     let query = format!("SELECT {aggregates} FROM t1");
-    let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
+    let statement = ctx
+        .state()
+        .sql_to_statement(&query, &Dialect::Generic)
+        .unwrap();
     let plan =
         rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
     b.iter(|| {
