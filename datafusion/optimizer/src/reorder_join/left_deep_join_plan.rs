@@ -395,39 +395,58 @@ impl<'graph> PrecedenceTreeNode<'graph> {
     fn denormalize(&mut self) -> Result<()> {
         // Normalized trees must have 0 or 1 children
         match self.children.len() {
-            0 => return Ok(()),
+            0 => (),
             1 => self.children[0].denormalize()?,
             _ => return plan_err!("Tree is not normalized"),
         }
 
         // Split query nodes into a chain based on neighbor relationships
         while self.query_nodes.len() > 1 {
-            let child_id = self.children[0].query_nodes[0].node_id;
-            let child_node = self.query_graph.get_node(child_id).unwrap();
-            let neighbours = child_node.neighbours(child_id, self.query_graph);
+            if self.children.is_empty() {
+                let highest_rank_idx = self
+                    .query_nodes
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.rank().partial_cmp(&b.rank()).unwrap())
+                    .map(|(idx, _)| idx)
+                    .unwrap();
 
-            // Find the highest-ranked neighbor node
-            let highest_rank_idx = self
-                .query_nodes
-                .iter()
-                .enumerate()
-                .filter(|(_, node)| neighbours.contains(&node.node_id))
-                .max_by(|(_, a), (_, b)| a.rank().partial_cmp(&b.rank()).unwrap())
-                .map(|(idx, _)| idx)
-                .unwrap();
+                let node = self.query_nodes.remove(highest_rank_idx);
 
-            let node = self.query_nodes.remove(highest_rank_idx);
-
-            // Insert the node between current and its child
-            let child = std::mem::replace(
-                &mut self.children[0],
-                PrecedenceTreeNode {
+                self.children.push(PrecedenceTreeNode {
                     query_nodes: vec![node],
                     children: Vec::new(),
                     query_graph: self.query_graph,
-                },
-            );
-            self.children[0].children = vec![child];
+                });
+            } else {
+                let child_id = self.children[0].query_nodes[0].node_id;
+                let child_node = self.query_graph.get_node(child_id).unwrap();
+                let neighbours = child_node.neighbours(child_id, self.query_graph);
+
+                // Find the highest-ranked neighbor node
+                let highest_rank_idx = self
+                    .query_nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, node)| neighbours.contains(&node.node_id))
+                    .max_by(|(_, a), (_, b)| a.rank().partial_cmp(&b.rank()).unwrap())
+                    .map(|(idx, _)| idx)
+                    .unwrap();
+
+                let node = self.query_nodes.remove(highest_rank_idx);
+
+                let child = std::mem::replace(
+                    &mut self.children[0],
+                    PrecedenceTreeNode {
+                        query_nodes: vec![node],
+                        children: Vec::new(),
+                        query_graph: self.query_graph,
+                    },
+                );
+                self.children[0].children = vec![child];
+            };
+
+            // Insert the node between current and its child
         }
         Ok(())
     }
@@ -545,11 +564,9 @@ impl<'graph> PrecedenceTreeNode<'graph> {
 mod tests {
     use super::*;
     use crate::reorder_join::cost::JoinCostEstimator;
-    use crate::reorder_join::query_graph::Node;
     use crate::test::*;
-    use datafusion_common::{JoinConstraint, NullEquality};
     use datafusion_expr::logical_plan::JoinType;
-    use datafusion_expr::{col, LogicalPlanBuilder};
+    use datafusion_expr::LogicalPlanBuilder;
 
     /// A simple cost estimator for testing
     #[derive(Debug)]
@@ -621,67 +638,15 @@ mod tests {
             )?
             .build()?;
 
-        // Manually construct a QueryGraph since From<LogicalPlan> is not yet implemented
-        let mut query_graph = QueryGraph::new();
+        let query_graph = QueryGraph::try_from(plan).unwrap();
 
-        // Add root node (customer)
-        let customer_id = query_graph.nodes.insert(Node {
-            plan: Arc::new(customer),
-            connections: Vec::new(),
-        });
+        let optimized_plan =
+            optimal_left_deep_join_plan(query_graph, Rc::new(TestCostEstimator)).unwrap();
 
-        // Build join info for customer-orders
-        let customer_orders_join = datafusion_expr::Join {
-            left: Arc::new(scan_tpch_table_with_stats("customer", 150)),
-            right: Arc::new(scan_tpch_table_with_stats("orders", 1500)),
-            on: vec![(col("c_custkey"), col("o_custkey"))],
-            filter: None,
-            join_type: JoinType::Inner,
-            join_constraint: JoinConstraint::On,
-            schema: Arc::clone(plan.schema()),
-            null_equality: NullEquality::NullEqualsNothing,
-        };
-
-        // Add orders node
-        let orders_id = query_graph.add_node_with_edge(
-            customer_id,
-            Arc::new(orders),
-            customer_orders_join,
-        );
-        assert!(orders_id.is_some());
-        let orders_id = orders_id.unwrap();
-
-        // Build join info for orders-lineitem
-        let orders_lineitem_join = datafusion_expr::Join {
-            left: Arc::new(scan_tpch_table_with_stats("orders", 1500)),
-            right: Arc::new(scan_tpch_table_with_stats("lineitem", 6000)),
-            on: vec![(col("o_orderkey"), col("l_orderkey"))],
-            filter: None,
-            join_type: JoinType::Inner,
-            join_constraint: JoinConstraint::On,
-            schema: Arc::clone(plan.schema()),
-            null_equality: NullEquality::NullEqualsNothing,
-        };
-
-        // Add lineitem node
-        let lineitem_id = query_graph.add_node_with_edge(
-            orders_id,
-            Arc::new(lineitem),
-            orders_lineitem_join,
-        );
-        assert!(lineitem_id.is_some());
-
-        // Run the optimizer
-        let cost_estimator = Rc::new(TestCostEstimator);
-        let optimized_plan = optimal_left_deep_join_plan(query_graph, cost_estimator)?;
-
-        // Verify the result is a valid join plan
-        // The optimizer should produce a left-deep join tree
-        assert!(matches!(optimized_plan, LogicalPlan::Join(_)));
-
-        println!("Optimized plan:\n{}", optimized_plan.display_indent());
+        println!("{}", optimized_plan.display_indent());
 
         panic!();
+
         Ok(())
     }
 }
