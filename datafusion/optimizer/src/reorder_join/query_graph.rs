@@ -155,12 +155,108 @@ impl QueryGraph {
     }
 }
 
+/// Extracts the join subtree from a logical plan, separating it from wrapper operators.
+///
+/// This function traverses the plan tree from the root downward, collecting all non-join
+/// operators until it finds the topmost join node. The join subtree (all consecutive joins)
+/// is extracted and returned separately from the wrapper operators.
+///
+/// # Arguments
+///
+/// * `plan` - The logical plan to extract from
+///
+/// # Returns
+///
+/// Returns a tuple of (join_subtree, wrapper_operators) where:
+/// - `join_subtree` is the topmost join and all joins beneath it
+/// - `wrapper_operators` is a vector of non-join operators above the joins, in order from root to join
+///
+/// # Errors
+///
+/// Returns an error if the plan doesn't contain any joins.
+pub(crate) fn extract_join_subtree(
+    plan: LogicalPlan,
+) -> Result<(LogicalPlan, Vec<LogicalPlan>)> {
+    let mut wrappers = Vec::new();
+    let mut current = plan;
+
+    // Descend through non-join nodes until we find a join
+    loop {
+        match current {
+            LogicalPlan::Join(_) => {
+                // Found the join subtree root
+                return Ok((current, wrappers));
+            }
+            other => {
+                // Check if this node contains joins in its children
+                if !contains_join(&other) {
+                    return plan_err!(
+                        "Plan does not contain any join nodes: {}",
+                        other.display()
+                    );
+                }
+
+                // This node is a wrapper - store it and descend to its child
+                // For now, we only support single-child wrappers (Filter, Sort, Limit, Aggregate, etc.)
+                let inputs = other.inputs();
+                if inputs.len() != 1 {
+                    return plan_err!(
+                        "Join extraction only supports single-input operators, found {} inputs in: {}",
+                        inputs.len(),
+                        other.display()
+                    );
+                }
+
+                wrappers.push(other.clone());
+                current = (*inputs[0]).clone();
+            }
+        }
+    }
+}
+
+/// Reconstructs a logical plan by wrapping an optimized join plan with the original wrapper operators.
+///
+/// This function takes an optimized join plan and re-applies the wrapper operators (Filter, Sort,
+/// Aggregate, etc.) that were removed during extraction. The wrappers are applied in reverse order
+/// (innermost to outermost) to reconstruct the original plan structure.
+///
+/// # Arguments
+///
+/// * `join_plan` - The optimized join plan to wrap
+/// * `wrappers` - Vector of wrapper operators in order from outermost to innermost (root to join)
+///
+/// # Returns
+///
+/// Returns the fully reconstructed logical plan with all wrapper operators reapplied.
+///
+/// # Errors
+///
+/// Returns an error if reconstructing any wrapper operator fails.
+pub(crate) fn reconstruct_plan(
+    join_plan: LogicalPlan,
+    wrappers: Vec<LogicalPlan>,
+) -> Result<LogicalPlan> {
+    let mut current = join_plan;
+
+    // Apply wrappers in reverse order (from innermost to outermost)
+    for wrapper in wrappers.into_iter().rev() {
+        // Use with_new_exprs to reconstruct the wrapper with the new input
+        current = wrapper.with_new_exprs(wrapper.expressions(), vec![current])?;
+    }
+
+    Ok(current)
+}
+
 impl TryFrom<LogicalPlan> for QueryGraph {
     type Error = DataFusionError;
 
     fn try_from(value: LogicalPlan) -> Result<Self, Self::Error> {
+        // First, extract the join subtree from any wrapper operators
+        let (join_subtree, _wrappers) = extract_join_subtree(value)?;
+
+        // Now convert only the join subtree to a query graph
         let mut query_graph = QueryGraph::new();
-        flatten_joins_recursive(value, &mut query_graph)?;
+        flatten_joins_recursive(join_subtree, &mut query_graph)?;
         Ok(query_graph)
     }
 }

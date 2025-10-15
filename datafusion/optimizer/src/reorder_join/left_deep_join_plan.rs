@@ -665,14 +665,27 @@ mod tests {
             .limit(0, Some(100))?
             .build()?;
 
-        let query_graph = QueryGraph::try_from(plan).unwrap();
+        // Extract the join subtree and wrappers
+        let (join_subtree, wrappers) =
+            crate::reorder_join::query_graph::extract_join_subtree(plan).unwrap();
 
-        let optimized_plan =
+        // Convert join subtree to query graph
+        let query_graph = QueryGraph::try_from(join_subtree).unwrap();
+
+        // Optimize the joins
+        let optimized_joins =
             optimal_left_deep_join_plan(query_graph, Rc::new(TestCostEstimator)).unwrap();
 
+        // Reconstruct the full plan with wrappers
+        let optimized_plan =
+            crate::reorder_join::query_graph::reconstruct_plan(optimized_joins, wrappers)
+                .unwrap();
+
+        println!("Optimized Plan:");
         println!("{}", optimized_plan.display_indent());
 
-        panic!();
+        // Verify the plan structure
+        assert!(matches!(optimized_plan, LogicalPlan::Limit(_)));
 
         Ok(())
     }
