@@ -78,14 +78,14 @@ pub fn optimal_left_deep_join_plan(
 struct QueryNode {
     node_id: NodeId,
     // T in [IbarakiKameda84]
-    cardinality: usize,
+    selectivity: usize,
     // C in [IbarakiKameda84]
     cost: f64,
 }
 
 impl QueryNode {
     fn rank(&self) -> f64 {
-        (self.cardinality - 1) as f64 / self.cost
+        (self.selectivity - 1) as f64 / self.cost
     }
 }
 
@@ -239,7 +239,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         Ok(PrecedenceTreeNode {
             query_nodes: vec![QueryNode {
                 node_id,
-                cardinality: (selectivity * input_cardinality as f64) as usize,
+                selectivity: (selectivity * input_cardinality as f64) as usize,
                 cost: cost_estimator.cost(selectivity, input_cardinality),
             }],
             children,
@@ -254,7 +254,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                 .iter()
                 .fold((1, 0.0), |(cardinality, cost), node| {
                     let cost = cost + cardinality as f64 * node.cost;
-                    let cardinality = cardinality * node.cardinality;
+                    let cardinality = cardinality * node.selectivity;
                     (cardinality, cost)
                 });
         if cost == 0.0 {
@@ -521,7 +521,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         let cost = match self.children.len() {
             0 => cost + cardinality as f64 * self.query_nodes[0].cost,
             1 => self.children[0].cost(
-                cardinality * self.query_nodes[0].cardinality,
+                cardinality * self.query_nodes[0].selectivity,
                 cost + cardinality as f64 * self.query_nodes[0].cost,
             )?,
             _ => {
