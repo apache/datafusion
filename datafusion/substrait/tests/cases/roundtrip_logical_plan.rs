@@ -1478,6 +1478,30 @@ async fn roundtrip_read_filter() -> Result<()> {
     roundtrip_verify_read_filter_count("SELECT a FROM data where a < 5", 1).await
 }
 
+#[tokio::test]
+async fn scalar_subquery_in_select() -> Result<()> {
+    // Scalar subqueries get converted to LEFT joins during optimization
+    // This tests that the LEFT join without equi-join conditions can roundtrip
+    let plan = generate_plan_from_sql(
+        "SELECT a, (SELECT MAX(b) FROM data2) as max_b FROM data",
+        false,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: data.a, max(data2.b) AS max_b
+      Left Join: 
+        TableScan: data projection=[a]
+        Aggregate: groupBy=[[]], aggr=[[max(data2.b)]]
+          TableScan: data2 projection=[b], partial_filters=[Boolean(true)]
+    "#
+    );
+    Ok(())
+}
+
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
     // search for target_rel and field value in proto
     match &rel.rel_type {
