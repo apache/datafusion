@@ -1,13 +1,16 @@
 use datafusion_common::{plan_datafusion_err, plan_err, stats::Precision, Result};
-use datafusion_expr::{Join, LogicalPlan};
+use datafusion_expr::{Join, JoinType, LogicalPlan};
 
 pub trait JoinCostEstimator: std::fmt::Debug {
     fn cardinality(&self, plan: &LogicalPlan) -> Option<usize> {
         estimate_cardinality(plan).ok()
     }
 
-    fn selectivity(&self, _join: &Join) -> f64 {
-        0.1
+    fn selectivity(&self, join: &Join) -> f64 {
+        match join.join_type {
+            JoinType::Inner => 0.1,
+            _ => 1.0,
+        }
     }
 
     fn cost(&self, selectivity: f64, cardinality: usize) -> f64 {
