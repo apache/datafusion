@@ -19,11 +19,11 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};

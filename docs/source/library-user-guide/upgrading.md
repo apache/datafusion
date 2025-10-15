@@ -212,6 +212,12 @@ use datafusion_physical_expr_adapter::{
 };
 ```
 
+### Upgrade to arrow `56.0.0` and parquet `56.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `56.0.0`. See the [release notes](https://github.com/apache/arrow-rs/releases/tag/56.0.0)
+for more details.
+
 ### Added `ExecutionPlan::reset_state`
 
 In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the presence of a query such as `ORDER BY ... LIMIT ...`)

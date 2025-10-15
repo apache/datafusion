@@ -15,14 +15,13 @@ aroun = "aroun"
 abov = "abov"
 Ois = "Ois"
 alo = "alo"
-Byt = "Byt"
-nteger = "nteger"
 
 # abbreviations, common words, etc.
 typ = "typ"
 datas = "datas"
 YOUY = "YOUY"
 lits = "lits"
+nteger = "nteger"
 
 # exposed to public API
 Serializeable = "Serializeable"
