@@ -53,7 +53,7 @@ use datafusion::datasource::physical_plan::AvroSource;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::{
-    CsvSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
+    CsvSource, FileScanConfig, FileScanConfigBuilder, FileSource, JsonSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
@@ -2589,8 +2589,8 @@ impl protobuf::PhysicalPlanNode {
             data_source_exec.downcast_to_file_source::<ParquetSource>()
         {
             let predicate = conf
-                .predicate()
-                .map(|pred| serialize_physical_expr(pred, extension_codec))
+                .filter()
+                .map(|pred| serialize_physical_expr(&pred, extension_codec))
                 .transpose()?;
             return Ok(Some(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
