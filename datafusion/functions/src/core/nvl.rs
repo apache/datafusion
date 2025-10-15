@@ -27,7 +27,7 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "Conditional Functions"),
-    description = "Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_.",
+    description = "Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_ and _expression2_ is not evaluated. This function can be used to substitute a default value for NULL values.",
     syntax_example = "nvl(expression1, expression2)",
     sql_example = r#"```sql
 > select nvl(null, 'a');
