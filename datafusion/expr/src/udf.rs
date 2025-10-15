@@ -550,7 +550,15 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// This method is called when configuration options change at runtime
     /// (e.g., via `SET` statements) to allow functions that depend on
-    /// configuration to update themselves accordingly.
+    /// configuration to update themselves accordingly. 
+    ///
+    /// Note the current [`ConfigOptions`] are also passed to [`Self::invoke_with_args`] so
+    /// this API is not needed for functions where the values may
+    /// depend on the current options. 
+    ///
+    /// This API is useful for functions where the return
+    /// **type** depends on the configuration options, such as the `now()` function
+    /// which depends on the current timezone. 
     ///
     /// # Arguments
     ///
