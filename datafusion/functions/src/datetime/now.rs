@@ -48,11 +48,12 @@ pub struct NowFunc {
 
 impl Default for NowFunc {
     fn default() -> Self {
-        Self::new()
+        Self::new_with_config(&ConfigOptions::default())
     }
 }
 
 impl NowFunc {
+    #[deprecated(since = "50.2.0", note = "use `new_with_config` instead")]
     pub fn new() -> Self {
         Self {
             signature: Signature::nullary(Volatility::Stable),
