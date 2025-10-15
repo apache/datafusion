@@ -377,11 +377,9 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                             null_string.clone(),
                             with_null_string,
                         )?;
-                    } else {
-                        if with_null_string {
-                            arg.push_str(&null_string);
-                            arg.push_str(&delimiter);
-                        }
+                    } else if with_null_string {
+                        arg.push_str(&null_string);
+                        arg.push_str(&delimiter);
                     }
                 }
 
@@ -399,11 +397,9 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                             null_string.clone(),
                             with_null_string,
                         )?;
-                    } else {
-                        if with_null_string {
-                            arg.push_str(&null_string);
-                            arg.push_str(&delimiter);
-                        }
+                    } else if with_null_string {
+                        arg.push_str(&null_string);
+                        arg.push_str(&delimiter);
                     }
                 }
 
@@ -420,11 +416,9 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                             null_string.clone(),
                             with_null_string,
                         )?;
-                    } else {
-                        if with_null_string {
-                            arg.push_str(&null_string);
-                            arg.push_str(&delimiter);
-                        }
+                    } else if with_null_string {
+                        arg.push_str(&null_string);
+                        arg.push_str(&delimiter);
                     }
                 }
 
