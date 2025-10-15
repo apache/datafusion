@@ -17,7 +17,6 @@
 
 //! Execution plans that read file formats
 
-mod arrow_file;
 pub mod csv;
 pub mod json;
 

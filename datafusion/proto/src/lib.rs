@@ -34,8 +34,8 @@
 //!
 //! [`LogicalPlan`]: datafusion_expr::LogicalPlan
 //! [`Expr`]: datafusion_expr::Expr
-//! [`ExecutionPlan`]: datafusion::physical_plan::ExecutionPlan
-//! [`PhysicalExpr`]: datafusion::physical_expr::PhysicalExpr
+//! [`ExecutionPlan`]: datafusion_physical_plan::ExecutionPlan
+//! [`PhysicalExpr`]: datafusion_physical_expr::PhysicalExpr
 //!
 //! Internally, this crate is implemented by converting the plans to [protocol
 //! buffers] using [prost].

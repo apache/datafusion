@@ -216,7 +216,7 @@ pub trait ListingTableConfigExt {
     /// The format is inferred based on the first `table_path`.
     async fn infer_options(self, state: &dyn Session) -> Result<ListingTableConfig>;
 
-    /// Convenience method to call both [`Self::infer_options`] and [`Self::infer_schema`]
+    /// Convenience method to call both [`Self::infer_options`] and [`ListingTableConfig::infer_schema`]
     async fn infer(self, state: &dyn Session) -> Result<ListingTableConfig>;
 }
 

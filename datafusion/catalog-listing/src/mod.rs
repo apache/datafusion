@@ -65,6 +65,12 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+// The following line ensures `cargo machete` does not incorrectly
+// identify this as a unused dependency since it only is used in
+// docstrings.
+#[cfg(doctest)]
+use datafusion_datasource_parquet::file_format::ParquetFormat as _;
+
 pub mod helpers;
 
 /// Indicates the source of the schema for a [`ListingTable`]
@@ -127,7 +133,7 @@ impl ListingTableConfig {
 
     /// Creates new [`ListingTableConfig`] with multiple table paths.
     ///
-    /// See [`Self::infer_options`] for details on what happens with multiple paths
+    ///  See `ListingTableConfigExt::infer_options` for details on what happens with multiple paths
     pub fn new_with_multi_paths(table_paths: Vec<ListingTableUrl>) -> Self {
         Self {
             table_paths,
@@ -187,7 +193,7 @@ impl ListingTableConfig {
     /// Add `listing_options` to [`ListingTableConfig`]
     ///
     /// If not provided, format and other options are inferred via
-    /// [`Self::infer_options`].
+    /// `ListingTableConfigExt::infer_options`.
     ///
     /// # Example: Configuring Parquet Files with Custom Options
     /// ```rust
@@ -570,7 +576,7 @@ impl ListingOptions {
     /// ```
     ///
     /// [Hive Partitioning]: https://docs.cloudera.com/HDPDocuments/HDP2/HDP-2.1.3/bk_system-admin-guide/content/hive_partitioned_tables.html
-    /// [`wrap_partition_type_in_dict`]: crate::datasource::physical_plan::wrap_partition_type_in_dict
+    /// [`wrap_partition_type_in_dict`]: datafusion_datasource::file_scan_config::wrap_partition_type_in_dict
     pub fn with_table_partition_cols(
         mut self,
         table_partition_cols: Vec<(String, DataType)>,
@@ -840,16 +846,15 @@ impl ListingOptions {
 /// 1. [`ListingTableConfig`]: Configuration options
 /// 1. [`DataSourceExec`]: `ExecutionPlan` used by `ListingTable`
 ///
-/// [`DataSourceExec`]: crate::datasource::source::DataSourceExec
+/// [`DataSourceExec`]: datafusion_datasource::source::DataSourceExec
 ///
 /// # Caching Metadata
 ///
 /// Some formats, such as Parquet, use the `FileMetadataCache` to cache file
 /// metadata that is needed to execute but expensive to read, such as row
-/// groups and statistics. The cache is scoped to the [`SessionContext`] and can
+/// groups and statistics. The cache is scoped to the `SessionContext` and can
 /// be configured via the [runtime config options].
 ///
-/// [`SessionContext`]: crate::prelude::SessionContext
 /// [runtime config options]: https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings
 ///
 /// # Example: Read a directory of parquet files using a [`ListingTable`]
