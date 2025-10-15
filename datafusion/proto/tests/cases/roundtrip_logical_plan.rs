@@ -2729,7 +2729,7 @@ async fn roundtrip_custom_listing_tables_schema_table_scan_projection() -> Resul
     .build()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
+    let new_plan = logical_plan_from_bytes(&bytes, &ctx.state().task_ctx())?;
 
     assert_eq!(plan, new_plan);
     Ok(())
