@@ -1295,19 +1295,28 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
-                        let side_of = |e: &Expr| -> Result<&'static str> {
+                        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+                        enum Side {
+                            Left,
+                            Right,
+                            Both,
+                        }
+
+                        let side_of = |e: &Expr| -> Result<Side> {
                             let cols = e.column_refs();
-                            let in_left = cols
+                            let any_left = cols
                                 .iter()
-                                .all(|c| left_df_schema.index_of_column(c).is_ok());
-                            let in_right = cols
+                                .any(|c| left_df_schema.index_of_column(c).is_ok());
+                            let any_right = cols
                                 .iter()
-                                .all(|c| right_df_schema.index_of_column(c).is_ok());
-                            match (in_left, in_right) {
-                                (true, false) => Ok("left"),
-                                (false, true) => Ok("right"),
+                                .any(|c| right_df_schema.index_of_column(c).is_ok());
+
+                            Ok(match (any_left, any_right) {
+                                (true, false) => Side::Left,
+                                (false, true) => Side::Right,
+                                (true, true) => Side::Both,
                                 _ => unreachable!(),
-                            }
+                            })
                         };
 
                         let mut lhs_logical = &be.left;
@@ -1315,10 +1324,23 @@ impl DefaultPhysicalPlanner {
 
                         let left_side = side_of(lhs_logical)?;
                         let right_side = side_of(rhs_logical)?;
-                        if left_side == "right" && right_side == "left" {
+                        if matches!(left_side, Side::Both)
+                            || matches!(right_side, Side::Both)
+                        {
+                            return Ok(Arc::new(NestedLoopJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                join_filter,
+                                join_type,
+                                None,
+                            )?));
+                        }
+
+                        if left_side == Side::Right && right_side == Side::Left {
                             std::mem::swap(&mut lhs_logical, &mut rhs_logical);
                             op = reverse_ineq(op);
-                        } else if !(left_side == "left" && right_side == "right") {
+                        } else if !(left_side == Side::Left && right_side == Side::Right)
+                        {
                             return plan_err!(
                                 "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
                                 op

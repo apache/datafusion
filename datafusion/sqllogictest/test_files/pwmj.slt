@@ -304,6 +304,42 @@ ORDER BY 1,2;
 ----
 2 1
 
+# Verify this will offload this query to Nested Loop Join
+query II
+SELECT t1.id AS left_id, t2.id AS right_id
+FROM null_join_t1 t1
+JOIN null_join_t2 t2
+  ON t1.id < (t1.id + t2.id)
+ORDER BY 1,2;
+----
+1 1
+1 3
+2 1
+2 3
+
+query TT
+EXPLAIN
+SELECT t1.id AS left_id, t2.id AS right_id
+FROM null_join_t1 t1
+JOIN null_join_t2 t2
+  ON t1.id < (t1.id + t2.id)
+ORDER BY 1,2;
+----
+logical_plan
+01)Sort: left_id ASC NULLS LAST, right_id ASC NULLS LAST
+02)--Projection: t1.id AS left_id, t2.id AS right_id
+03)----Inner Join:  Filter: t1.id < t1.id + t2.id
+04)------SubqueryAlias: t1
+05)--------TableScan: null_join_t1 projection=[id]
+06)------SubqueryAlias: t2
+07)--------TableScan: null_join_t2 projection=[id]
+physical_plan
+01)SortExec: expr=[left_id@0 ASC NULLS LAST, right_id@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as left_id, id@1 as right_id]
+03)----NestedLoopJoinExec: join_type=Inner, filter=id@0 < id@0 + id@1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 query II
 SELECT t1.id AS left_id, t2.id AS right_id
 FROM null_join_t1 t1
