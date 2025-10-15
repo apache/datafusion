@@ -1789,7 +1789,6 @@ name = "datafusion"
 version = "50.2.0"
 dependencies = [
  "arrow",
- "arrow-ipc",
  "arrow-schema",
  "async-trait",
  "bytes",

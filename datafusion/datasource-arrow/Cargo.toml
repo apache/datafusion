@@ -32,7 +32,7 @@ all-features = true
 
 [dependencies]
 arrow = { workspace = true }
-arrow-ipc = { workspace = true }
+arrow-ipc = { workspace = true, optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
