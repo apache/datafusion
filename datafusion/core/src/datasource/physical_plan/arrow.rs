@@ -15,5 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Re-exports the [`datafusion_datasource_arrow::file_format`] module, and contains tests for it.
-pub use datafusion_datasource_arrow::file_format::*;
+//! Reexports the [`datafusion_datasource_arrow::source`] module, containing [Arrow] based [`FileSource`].
+//!
+//! [Arrow]: https://arrow.apache.org/docs/python/ipc.html
+//! [`FileSource`]: datafusion_datasource::file::FileSource
+
+pub use datafusion_datasource_arrow::source::*;
