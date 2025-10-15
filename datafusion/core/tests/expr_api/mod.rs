@@ -334,6 +334,19 @@ fn test_create_physical_expr_nvl2() {
             "+------+",
         ],
     );
+
+    evaluate_expr_test(
+        nvl2(lit(1i64), col("i"), lit(0i64)),
+        vec![
+            "+------+",
+            "| expr |",
+            "+------+",
+            "| 10   |",
+            "|      |",
+            "| 5    |",
+            "+------+",
+        ],
+    );
 }
 
 #[tokio::test]
