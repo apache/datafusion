@@ -615,14 +615,25 @@ mod tests {
     /// Test three-way join: customer -> orders -> lineitem
     #[test]
     fn test_three_way_join_customer_orders_lineitem() -> Result<()> {
+        use datafusion_expr::test::function_stub::sum;
+        use datafusion_expr::{col, in_subquery, lit};
         // Create the base table scans with statistics
-        let customer = scan_tpch_table_with_stats("customer", 150);
-        let orders = scan_tpch_table_with_stats("orders", 1500);
-        let lineitem = scan_tpch_table_with_stats("lineitem", 6000);
+        // Create the base table scans with statistics
+        let customer = scan_tpch_table_with_stats("customer", 150_000);
+        let orders = scan_tpch_table_with_stats("orders", 1_500_000);
+        let lineitem = scan_tpch_table_with_stats("lineitem", 6_000_000);
 
-        // Build a join plan: customer JOIN orders JOIN lineitem
-        // customer.c_custkey = orders.o_custkey
-        // orders.o_orderkey = lineitem.l_orderkey
+        // Step 1: Build the subquery
+        // SELECT l_orderkey FROM lineitem
+        // GROUP BY l_orderkey
+        // HAVING sum(l_quantity) > 300
+        let subquery = LogicalPlanBuilder::from(lineitem.clone())
+            .aggregate(vec![col("l_orderkey")], vec![sum(col("l_quantity"))])?
+            .filter(sum(col("l_quantity")).gt(lit(300)))?
+            .project(vec![col("l_orderkey")])?
+            .build()?;
+
+        // Step 2: Build the main query with joins
         let plan = LogicalPlanBuilder::from(customer.clone())
             .join(
                 orders.clone(),
@@ -636,6 +647,22 @@ mod tests {
                 (vec!["o_orderkey"], vec!["l_orderkey"]),
                 None,
             )?
+            // Step 3: Apply the IN subquery filter
+            .filter(in_subquery(col("o_orderkey"), Arc::new(subquery)))?
+            // Step 4: Aggregate
+            .aggregate(
+                vec![
+                    col("c_name"),
+                    col("c_custkey"),
+                    col("o_orderkey"),
+                    col("o_totalprice"),
+                ],
+                vec![sum(col("l_quantity"))],
+            )?
+            // Step 5: Sort
+            .sort(vec![col("o_totalprice").sort(false, true)])?
+            // Step 6: Limit
+            .limit(0, Some(100))?
             .build()?;
 
         let query_graph = QueryGraph::try_from(plan).unwrap();
