@@ -34,6 +34,7 @@ mod tests {
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use async_trait::async_trait;
     use datafusion_catalog::TableProvider;
     use datafusion_catalog_listing::{
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
@@ -42,10 +43,12 @@ mod tests {
         assert_contains, plan_err,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
-        ColumnStatistics, DataFusionError, Result, ScalarValue,
+        ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
     };
+    use datafusion_datasource::file::FileSource;
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
+    use datafusion_datasource::file_scan_config::FileScanConfig;
     use datafusion_datasource::schema_adapter::{
         SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
@@ -56,8 +59,11 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::{collect, ExecutionPlanProperties};
+    use datafusion_physical_plan::{collect, ExecutionPlan, ExecutionPlanProperties};
+    use datafusion_session::Session;
+    use object_store::{ObjectMeta, ObjectStore};
     use rstest::rstest;
+    use std::any::Any;
     use std::collections::HashMap;
     use std::io::Write;
     use std::sync::Arc;
@@ -105,7 +111,10 @@ mod tests {
 
         // Test schema source after setting a schema explicitly
         let provided_schema = create_test_schema();
-        let config_with_schema = config.clone().with_schema(provided_schema.clone());
+        let config_with_schema = config
+            .clone()
+            .with_listing_options(mock_listing_config_options())
+            .with_schema(provided_schema.clone());
         assert_eq!(config_with_schema.schema_source(), SchemaSource::Specified);
 
         // Test schema source after inferring schema
@@ -932,6 +941,65 @@ mod tests {
         Ok(())
     }
 
+    #[derive(Debug)]
+    struct TestFileFormat;
+    #[async_trait]
+    impl FileFormat for TestFileFormat {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn get_ext(&self) -> String {
+            "test_file_format_ext".to_string()
+        }
+
+        fn get_ext_with_compression(
+            &self,
+            _file_compression_type: &FileCompressionType,
+        ) -> Result<String> {
+            Ok("test_file_format_ext".to_string())
+        }
+
+        fn compression_type(&self) -> Option<FileCompressionType> {
+            None
+        }
+
+        async fn infer_schema(
+            &self,
+            _state: &dyn Session,
+            _store: &Arc<dyn ObjectStore>,
+            _objects: &[ObjectMeta],
+        ) -> Result<SchemaRef> {
+            unimplemented!()
+        }
+
+        async fn infer_stats(
+            &self,
+            _state: &dyn Session,
+            _store: &Arc<dyn ObjectStore>,
+            _table_schema: SchemaRef,
+            _object: &ObjectMeta,
+        ) -> Result<Statistics> {
+            unimplemented!()
+        }
+
+        async fn create_physical_plan(
+            &self,
+            _state: &dyn Session,
+            _conf: FileScanConfig,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn file_source(&self) -> Arc<dyn FileSource> {
+            unimplemented!()
+        }
+    }
+
+    fn mock_listing_config_options() -> ListingOptions {
+        ListingOptions::new(Arc::new(TestFileFormat))
+    }
+
     #[tokio::test]
     async fn infer_preserves_provided_schema() -> Result<()> {
         let ctx = SessionContext::new();
@@ -942,8 +1010,9 @@ mod tests {
 
         let provided_schema = create_test_schema();
 
-        let config =
-            ListingTableConfig::new(table_path).with_schema(Arc::clone(&provided_schema));
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(mock_listing_config_options())
+            .with_schema(Arc::clone(&provided_schema));
 
         let config = config.infer(&ctx.state()).await?;
 
@@ -1008,6 +1077,7 @@ mod tests {
             table_path1.clone(),
             table_path2.clone(),
         ])
+        .with_listing_options(mock_listing_config_options())
         .with_schema(schema_3cols)
         .with_listing_options(options.clone());
         let config2 = config2.infer_schema(&ctx.state()).await?;
@@ -1032,6 +1102,7 @@ mod tests {
             table_path1.clone(),
             table_path2.clone(),
         ])
+        .with_listing_options(mock_listing_config_options())
         .with_schema(schema_4cols)
         .with_listing_options(options.clone());
         let config3 = config3.infer_schema(&ctx.state()).await?;

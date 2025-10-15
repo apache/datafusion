@@ -34,7 +34,8 @@ use arrow::ipc::{root_as_message, CompressionType};
 use datafusion_common::error::Result;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
+    internal_datafusion_err, not_impl_err, DataFusionError, GetExt, Statistics,
+    DEFAULT_ARROW_EXTENSION,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
@@ -127,8 +128,8 @@ impl FileFormat for ArrowFormat {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
-            _ => Err(DataFusionError::Internal(
-                "Arrow FileFormat does not support compression.".into(),
+            _ => Err(internal_datafusion_err!(
+                "Arrow FileFormat does not support compression."
             )),
         }
     }

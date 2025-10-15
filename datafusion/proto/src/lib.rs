@@ -93,7 +93,7 @@
 //!  let bytes = logical_plan_to_bytes(&plan)?;
 //!
 //!  // Decode bytes from somewhere (over network, etc.) back to LogicalPlan
-//!  let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+//!  let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.state().task_ctx())?;
 //!  assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
 //! # Ok(())
 //! # }
