@@ -160,6 +160,16 @@ SELECT NVL(1, 1/0);
 query error DataFusion error: Arrow error: Divide by zero error
 SELECT NVL(NULL, 1/0);
 
+# Expect the query plan to show nvl as a case expression
+query I
+select NVL(int_field, 9999) FROM test;
+----
+1
+2
+3
+9999
+4
+9999
 
 # Expect the query plan to show nvl as a case expression
 query TT
