@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::aggregates::group_values::multi_group_by::Nulls;
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
@@ -110,12 +111,6 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
-        enum Nulls {
-            All,
-            Some,
-            None,
-        }
-
         let arr = array.as_boolean();
 
         let null_count = array.null_count();
