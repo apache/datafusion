@@ -194,6 +194,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 group_by_expr,
                 planner_context,
             ),
+            PipeOperator::Join(join) => {
+                self.parse_relation_join(plan, join, planner_context)
+            }
 
             x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }

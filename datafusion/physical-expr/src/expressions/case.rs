@@ -155,10 +155,7 @@ impl CaseExpr {
                 && else_expr.as_ref().unwrap().as_any().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
-            } else if when_then_expr.len() == 1
-                && is_cheap_and_infallible(&(when_then_expr[0].1))
-                && else_expr.as_ref().is_some_and(is_cheap_and_infallible)
-            {
+            } else if when_then_expr.len() == 1 && else_expr.is_some() {
                 EvalMethod::ExpressionOrExpression
             } else {
                 EvalMethod::NoExpression
@@ -424,6 +421,16 @@ impl CaseExpr {
                 Box::new(e),
             )
         })?;
+
+        // For the true and false/null selection vectors, bypass `evaluate_selection` and merging
+        // results. This avoids materializing the array for the other branch which we will discard
+        // entirely anyway.
+        let true_count = when_value.true_count();
+        if true_count == batch.num_rows() {
+            return self.when_then_expr[0].1.evaluate(batch);
+        } else if true_count == 0 {
+            return self.else_expr.as_ref().unwrap().evaluate(batch);
+        }
 
         // Treat 'NULL' as false value
         let when_value = match when_value.null_count() {
