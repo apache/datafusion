@@ -175,6 +175,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
             graph,
             &mut remaining,
             cost_estimator,
+            true,
         )
     }
 
@@ -208,6 +209,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         query_graph: &'graph QueryGraph,
         remaining: &mut HashSet<NodeId>,
         cost_estimator: Rc<dyn JoinCostEstimator>,
+        is_root: bool,
     ) -> Result<Self> {
         let node = query_graph
             .get_node(node_id)
@@ -232,6 +234,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                     query_graph,
                     remaining,
                     Rc::clone(&cost_estimator),
+                    false,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -240,7 +243,11 @@ impl<'graph> PrecedenceTreeNode<'graph> {
             query_nodes: vec![QueryNode {
                 node_id,
                 selectivity: (selectivity * input_cardinality as f64) as usize,
-                cost: cost_estimator.cost(selectivity, input_cardinality),
+                cost: if is_root {
+                    0.0
+                } else {
+                    cost_estimator.cost(selectivity, input_cardinality)
+                },
             }],
             children,
             query_graph,
