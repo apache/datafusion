@@ -32,6 +32,10 @@ use std::sync::Arc;
 ///
 /// Concatenates multiple input strings into a single string.
 /// Returns NULL if any input is NULL.
+///
+/// Differences with DataFusion concat:
+/// - Support 0 arguments
+/// - Return NULL if any input is NULL
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkConcat {
     signature: Signature,
@@ -124,7 +128,7 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
 }
 
 /// Compute NULL mask for the arguments using NullBuffer::union
-/// Returns None if all scalars and any is NULL, or an Option<NullBuffer>
+/// Returns None if all scalars and any is NULL, or an Option of NullBuffer
 /// representing the combined null mask for incoming arrays
 fn compute_null_mask(
     args: &[ColumnarValue],
