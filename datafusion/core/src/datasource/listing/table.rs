@@ -2732,6 +2732,52 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_listing_table_prunes_extra_files_in_hive() -> Result<()> {
+        let files = [
+            "bucket/test/pid=1/file1",
+            "bucket/test/pid=1/file2",
+            "bucket/test/pid=2/file3",
+            "bucket/test/pid=2/file4",
+            "bucket/test/other/file5",
+        ];
+
+        let ctx = SessionContext::new();
+        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_table_partition_cols(vec![("pid".to_string(), DataType::Int32)]);
+
+        let table_path = ListingTableUrl::parse("test:///bucket/test/").unwrap();
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema));
+
+        let table = ListingTable::try_new(config)?;
+
+        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        assert_eq!(file_list.len(), 1);
+
+        let files = file_list[0].clone();
+
+        assert_eq!(
+            files
+                .iter()
+                .map(|f| f.path().to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "bucket/test/pid=1/file1",
+                "bucket/test/pid=1/file2",
+                "bucket/test/pid=2/file3",
+                "bucket/test/pid=2/file4",
+            ]
+        );
+
+        Ok(())
+    }
+
     #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_table_stats_behaviors() -> Result<()> {
@@ -2750,6 +2796,7 @@ mod tests {
         let config_default = ListingTableConfig::new(table_path.clone())
             .with_listing_options(opt_default)
             .with_schema(schema_default);
+
         let table_default = ListingTable::try_new(config_default)?;
 
         let exec_default = table_default.scan(&state, None, &[], None).await?;

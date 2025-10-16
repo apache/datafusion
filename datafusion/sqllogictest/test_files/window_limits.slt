@@ -1,0 +1,769 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# see https://datafusion.apache.org/user-guide/sql/window_functions.html#syntax for field names & examples
+statement ok
+CREATE EXTERNAL TABLE employees (
+  depname VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  empno INT NOT NULL,
+  salary BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL,
+  hire_date DATE NOT NULL,
+  c15 TIMESTAMP NOT NULL,
+)
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100_with_dates.csv'
+OPTIONS ('format.has_header' 'true');
+
+# lead defaults to 1 and should grow limit
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query I
+SELECT LEAD(empno) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+299
+363
+417
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query I
+SELECT LEAD(empno) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+299
+363
+417
+
+query TT
+EXPLAIN
+SELECT LEAD(empno) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+logical_plan
+01)Projection: lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--Limit: skip=0, fetch=3
+03)----WindowAggr: windowExpr=[[lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno]
+physical_plan
+01)ProjectionExec: expr=[lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----BoundedWindowAggExec: wdw=[lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=4), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+
+# lead defaults can lookahead by any amount and should grow limit
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query I
+SELECT LEAD(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+363
+417
+794
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query I
+SELECT LEAD(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+363
+417
+794
+
+query TT
+EXPLAIN
+SELECT LEAD(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+logical_plan
+01)Projection: lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--Limit: skip=0, fetch=3
+03)----WindowAggr: windowExpr=[[lead(employees.empno, Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno]
+physical_plan
+01)ProjectionExec: expr=[lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----BoundedWindowAggExec: wdw=[lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+
+# Should use the max of leads
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query IIII
+SELECT
+  empno,
+  LEAD(salary, 1) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead1,
+  LEAD(salary, 3) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead3,
+  LEAD(salary, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead5
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 28774375 557517119 4015442341
+299 1865307672 4061635107 3542840110
+363 557517119 4015442341 1088543984
+417 4061635107 3542840110 1362369177
+794 4015442341 1088543984 145294611
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query IIII
+SELECT
+  empno,
+  LEAD(salary, 1) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead1,
+  LEAD(salary, 3) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead3,
+  LEAD(salary, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead5
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 28774375 557517119 4015442341
+299 1865307672 4061635107 3542840110
+363 557517119 4015442341 1088543984
+417 4061635107 3542840110 1362369177
+794 4015442341 1088543984 145294611
+
+query TT
+EXPLAIN
+SELECT
+  empno,
+  LEAD(salary, 1) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead1,
+  LEAD(salary, 3) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead3,
+  LEAD(salary, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead5
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+logical_plan
+01)Sort: employees.empno ASC NULLS LAST, fetch=5
+02)--Projection: employees.empno, lead(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead1, lead(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead3, lead(employees.salary,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead5
+03)----WindowAggr: windowExpr=[[lead(employees.salary, Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(employees.salary, Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(employees.salary, Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno, salary]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, lead(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as lead1, lead(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as lead3, lead(employees.salary,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as lead5]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----BoundedWindowAggExec: wdw=[lead(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "lead(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "lead(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(employees.salary,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "lead(employees.salary,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=10), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+
+# 2 < 3... nth_value should not grow the limit
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query I
+SELECT NTH_VALUE(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+NULL
+299
+299
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query I
+SELECT NTH_VALUE(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+NULL
+299
+299
+
+query TT
+EXPLAIN
+SELECT NTH_VALUE(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+logical_plan
+01)Projection: nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--Limit: skip=0, fetch=3
+03)----WindowAggr: windowExpr=[[nth_value(employees.empno, Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno]
+physical_plan
+01)ProjectionExec: expr=[nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----BoundedWindowAggExec: wdw=[nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=3), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+
+# 5 > 3... nth_value still won't grow the limit - it's causal
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query I
+SELECT NTH_VALUE(empno, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+NULL
+NULL
+NULL
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query I
+SELECT NTH_VALUE(empno, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+NULL
+NULL
+NULL
+
+query TT
+EXPLAIN
+SELECT NTH_VALUE(empno, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
+----
+logical_plan
+01)Projection: nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--Limit: skip=0, fetch=3
+03)----WindowAggr: windowExpr=[[nth_value(employees.empno, Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno]
+physical_plan
+01)ProjectionExec: expr=[nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----BoundedWindowAggExec: wdw=[nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=3), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+
+# aggregate functions shouldn't affect the window
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query TIIRII
+SELECT
+  depname,
+  empno,
+  SUM(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum,
+  AVG(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_avg,
+  MIN(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_min,
+  MAX(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_max
+FROM employees
+LIMIT 5;
+----
+a 102 3276123488 3276123488 3276123488 3276123488
+e 299 3304897863 1652448931.5 28774375 3276123488
+a 363 5170205535 1723401845 28774375 3276123488
+e 417 5727722654 1431930663.5 28774375 3276123488
+d 794 9789357761 1957871552.2 28774375 4061635107
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query TIIRII
+SELECT
+  depname,
+  empno,
+  SUM(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum,
+  AVG(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_avg,
+  MIN(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_min,
+  MAX(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_max
+FROM employees
+LIMIT 5;
+----
+a 102 3276123488 3276123488 3276123488 3276123488
+e 299 3304897863 1652448931.5 28774375 3276123488
+a 363 5170205535 1723401845 28774375 3276123488
+e 417 5727722654 1431930663.5 28774375 3276123488
+d 794 9789357761 1957871552.2 28774375 4061635107
+
+query TT
+EXPLAIN
+SELECT
+  depname,
+  empno,
+  SUM(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum,
+  AVG(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_avg,
+  MIN(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_min,
+  MAX(salary)       OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_max
+FROM employees
+LIMIT 5;
+----
+logical_plan
+01)Projection: employees.depname, employees.empno, sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_sum, avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_avg, min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_min, max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_max
+02)--Limit: skip=0, fetch=5
+03)----WindowAggr: windowExpr=[[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, avg(CAST(employees.salary AS Float64)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[depname, empno, salary]
+physical_plan
+01)ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as running_sum, avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as running_avg, min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as running_min, max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as running_max]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----BoundedWindowAggExec: wdw=[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=5), expr=[empno@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true
+
+# ranking functions that don't affect the limit
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query IIII
+SELECT
+  empno,
+  row_number() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rn,
+  rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rnk,
+  dense_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS drnk
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 1 1 1
+299 2 2 2
+363 3 3 3
+417 4 4 4
+794 5 5 5
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query IIII
+SELECT
+  empno,
+  row_number() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rn,
+  rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rnk,
+  dense_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS drnk
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 1 1 1
+299 2 2 2
+363 3 3 3
+417 4 4 4
+794 5 5 5
+
+query TT
+EXPLAIN
+SELECT
+  empno,
+  row_number() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rn,
+  rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rnk,
+  dense_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS drnk
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+logical_plan
+01)Sort: employees.empno ASC NULLS LAST, fetch=5
+02)--Projection: employees.empno, row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rnk, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS drnk
+03)----WindowAggr: windowExpr=[[row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rnk, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as drnk]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+
+# Unoptimizable global ranking functions
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query IRRI
+SELECT
+  empno,
+  percent_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS pr,
+  cume_dist() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cd,
+  ntile(4) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS nt
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 0 0.01 1
+299 0.010101010101 0.02 1
+363 0.020202020202 0.03 1
+417 0.030303030303 0.04 1
+794 0.040404040404 0.05 1
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query IRRI
+SELECT
+  empno,
+  percent_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS pr,
+  cume_dist() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cd,
+  ntile(4) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS nt
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 0 0.01 1
+299 0.010101010101 0.02 1
+363 0.020202020202 0.03 1
+417 0.030303030303 0.04 1
+794 0.040404040404 0.05 1
+
+query TT
+EXPLAIN
+SELECT
+  empno,
+  percent_rank() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS pr,
+  cume_dist() OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cd,
+  ntile(4) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS nt
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+logical_plan
+01)Sort: employees.empno ASC NULLS LAST, fetch=5
+02)--Projection: employees.empno, percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS pr, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS cd, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS nt
+03)----WindowAggr: windowExpr=[[percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as pr, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as cd, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as nt]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----WindowAggExec: wdw=[percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }]
+04)------SortExec: expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
+
+# Analytical functions that don't lookahead
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query IIIII
+SELECT
+  empno,
+  first_value(salary) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS fv,
+  lag(salary, 1) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS l1,
+  last_value(salary) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lv,
+  nth_value(salary, 3) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS n3
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 3276123488 NULL 3276123488 NULL
+299 3276123488 3276123488 28774375 NULL
+363 3276123488 28774375 1865307672 1865307672
+417 3276123488 1865307672 557517119 1865307672
+794 3276123488 557517119 4061635107 1865307672
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query IIIII
+SELECT
+  empno,
+  first_value(salary) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS fv,
+  lag(salary, 1) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS l1,
+  last_value(salary) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lv,
+  nth_value(salary, 3) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS n3
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+102 3276123488 NULL 3276123488 NULL
+299 3276123488 3276123488 28774375 NULL
+363 3276123488 28774375 1865307672 1865307672
+417 3276123488 1865307672 557517119 1865307672
+794 3276123488 557517119 4061635107 1865307672
+
+query TT
+EXPLAIN
+SELECT
+  empno,
+  first_value(salary) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS fv,
+  lag(salary, 1) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS l1,
+  last_value(salary) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lv,
+  nth_value(salary, 3) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS n3
+FROM employees
+ORDER BY empno
+LIMIT 5;
+----
+logical_plan
+01)Sort: employees.empno ASC NULLS LAST, fetch=5
+02)--Projection: employees.empno, first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS fv, lag(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS l1, last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lv, nth_value(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS n3
+03)----WindowAggr: windowExpr=[[first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lag(employees.salary, Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(employees.salary, Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno, salary]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as fv, lag(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as l1, last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as lv, nth_value(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as n3]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----BoundedWindowAggExec: wdw=[first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lag(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "lag(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "nth_value(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+
+# should handle partition by unoptimized
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query TIII
+SELECT depname, empno, salary, SUM(salary) OVER (
+        PARTITION BY depname
+        ORDER BY empno
+        ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+    ) AS running_sum
+FROM employees
+ORDER BY depname
+LIMIT 5
+----
+a 102 3276123488 3276123488
+a 363 1865307672 5141431160
+a 829 4015442341 5880750013
+a 2555 145294611 4160736952
+a 2809 754775609 900070220
+
+query TT
+EXPLAIN
+SELECT depname, empno, salary, SUM(salary) OVER (
+        PARTITION BY depname
+        ORDER BY empno
+        ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+    ) AS running_sum
+FROM employees
+ORDER BY depname
+LIMIT 5
+----
+logical_plan
+01)Sort: employees.depname ASC NULLS LAST, fetch=5
+02)--Projection: employees.depname, employees.empno, employees.salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS running_sum
+03)----WindowAggr: windowExpr=[[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[depname, empno, salary]
+physical_plan
+01)SortPreservingMergeExec: [depname@0 ASC NULLS LAST], fetch=5
+02)--ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, salary@2 as salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@3 as running_sum]
+03)----BoundedWindowAggExec: wdw=[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { name: "sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=4
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true
+
+# should handle partition by optimized
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query TIII
+SELECT depname, empno, salary, SUM(salary) OVER (
+        PARTITION BY depname
+        ORDER BY empno
+        ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+    ) AS running_sum
+FROM employees
+ORDER BY depname
+LIMIT 5
+----
+a 102 3276123488 3276123488
+a 363 1865307672 5141431160
+a 829 4015442341 5880750013
+a 2555 145294611 4160736952
+a 2809 754775609 900070220
+
+query TT
+EXPLAIN
+SELECT depname, empno, salary, SUM(salary) OVER (
+        PARTITION BY depname
+        ORDER BY empno
+        ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+    ) AS running_sum
+FROM employees
+ORDER BY depname
+LIMIT 5
+----
+logical_plan
+01)Sort: employees.depname ASC NULLS LAST, fetch=5
+02)--Projection: employees.depname, employees.empno, employees.salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS running_sum
+03)----WindowAggr: windowExpr=[[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[depname, empno, salary]
+physical_plan
+01)SortPreservingMergeExec: [depname@0 ASC NULLS LAST], fetch=5
+02)--ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, salary@2 as salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@3 as running_sum]
+03)----BoundedWindowAggExec: wdw=[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { name: "sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=5), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=4
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true
+
+# unbounded following
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query I
+SELECT LEAD(salary) OVER (ORDER BY empno ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM employees
+LIMIT 5;
+----
+28774375
+1865307672
+557517119
+4061635107
+4015442341
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query I
+SELECT LEAD(salary) OVER (ORDER BY empno ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM employees
+LIMIT 5;
+----
+28774375
+1865307672
+557517119
+4061635107
+4015442341
+
+# RANGE
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query I
+SELECT LEAD(salary) OVER (ORDER BY empno RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM employees
+LIMIT 5;
+----
+28774375
+1865307672
+557517119
+4061635107
+4015442341
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query I
+SELECT LEAD(salary) OVER (ORDER BY empno RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM employees
+LIMIT 5;
+----
+28774375
+1865307672
+557517119
+4061635107
+4015442341
+
+# multiple windows
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query II
+SELECT
+    LEAD(salary, 1) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+    LEAD(salary, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM employees
+LIMIT 5;
+----
+28774375 4015442341
+1865307672 3542840110
+557517119 1088543984
+4061635107 1362369177
+4015442341 145294611
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query II
+SELECT
+    LEAD(salary, 1) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+    LEAD(salary, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM employees
+LIMIT 5;
+----
+28774375 4015442341
+1865307672 3542840110
+557517119 1088543984
+4061635107 1362369177
+4015442341 145294611
+
+# sliding
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query III
+SELECT
+    empno,
+    salary,
+    SUM(salary) OVER (ORDER BY empno ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS sliding_sum
+FROM employees
+LIMIT 3;
+----
+102 3276123488 3276123488
+299 28774375 3304897863
+363 1865307672 5170205535
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query III
+SELECT
+    empno,
+    salary,
+    SUM(salary) OVER (ORDER BY empno ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS sliding_sum
+FROM employees
+LIMIT 3;
+----
+102 3276123488 3276123488
+299 28774375 3304897863
+363 1865307672 5170205535
+
+# sliding lead
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query III
+SELECT
+    empno,
+    salary,
+    LEAD(salary, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead2
+FROM employees
+LIMIT 3;
+----
+102 3276123488 1865307672
+299 28774375 557517119
+363 1865307672 4061635107
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query III
+SELECT
+    empno,
+    salary,
+    LEAD(salary, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead2
+FROM employees
+LIMIT 3;
+----
+102 3276123488 1865307672
+299 28774375 557517119
+363 1865307672 4061635107
+
+query TT
+EXPLAIN
+SELECT
+    empno,
+    salary,
+    LEAD(salary, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS lead2
+FROM employees
+LIMIT 3;
+----
+logical_plan
+01)Projection: employees.empno, employees.salary, lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead2
+02)--Limit: skip=0, fetch=3
+03)----WindowAggr: windowExpr=[[lead(employees.salary, Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[empno, salary]
+physical_plan
+01)ProjectionExec: expr=[empno@0 as empno, salary@1 as salary, lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as lead2]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----BoundedWindowAggExec: wdw=[lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
