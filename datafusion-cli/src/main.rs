@@ -151,7 +151,7 @@ struct Args {
 
     #[clap(
         long,
-        help = "Specify the default object_store_profiling mode, defaults to 'disabled'.\n[possible values: disabled, enabled]",
+        help = "Specify the default object_store_profiling mode, defaults to 'disabled'.\n[possible values: disabled, summary, trace]",
         default_value_t = InstrumentedObjectStoreMode::Disabled
     )]
     object_store_profiling: InstrumentedObjectStoreMode,

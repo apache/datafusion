@@ -434,8 +434,11 @@ LOCATION 's3://data/cars.csv';
 
 -- Initial query should not show any profiling as the object store is not instrumented yet
 SELECT * from CARS LIMIT 1;
-\object_store_profiling enabled
--- Query again to see the profiling output
+\object_store_profiling trace
+-- Query again to see the full profiling output
+SELECT * from CARS LIMIT 1;
+\object_store_profiling summary
+-- Query again to see the summarized profiling output
 SELECT * from CARS LIMIT 1;
 \object_store_profiling disabled
 -- Final query should not show any profiling as we disabled it again

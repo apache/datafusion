@@ -8,7 +8,7 @@ info:
     AWS_ALLOW_HTTP: "true"
     AWS_ENDPOINT: "http://localhost:55031"
     AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
-  stdin: "\n    CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION 's3://data/cars.csv';\n\n-- Initial query should not show any profiling as the object store is not instrumented yet\nSELECT * from CARS LIMIT 1;\n\\object_store_profiling enabled\n-- Query again to see the profiling output\nSELECT * from CARS LIMIT 1;\n\\object_store_profiling disabled\n-- Final query should not show any profiling as we disabled it again\nSELECT * from CARS LIMIT 1;\n"
+  stdin: "\n    CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION 's3://data/cars.csv';\n\n-- Initial query should not show any profiling as the object store is not instrumented yet\nSELECT * from CARS LIMIT 1;\n\\object_store_profiling trace\n-- Query again to see the full profiling output\nSELECT * from CARS LIMIT 1;\n\\object_store_profiling summary\n-- Query again to see the summarized profiling output\nSELECT * from CARS LIMIT 1;\n\\object_store_profiling disabled\n-- Final query should not show any profiling as we disabled it again\nSELECT * from CARS LIMIT 1;\n"
 snapshot_kind: text
 ---
 success: true
@@ -26,7 +26,7 @@ exit_code: 0
 1 row(s) fetched. 
 [ELAPSED]
 
-ObjectStore Profile mode set to Enabled
+ObjectStore Profile mode set to Trace
 +-----+-------+---------------------+
 | car | speed | time                |
 +-----+-------+---------------------+
@@ -36,9 +36,31 @@ ObjectStore Profile mode set to Enabled
 [ELAPSED]
 
 Object Store Profiling
-Instrumented Object Store: instrument_mode: Enabled, inner: AmazonS3(data)
+Instrumented Object Store: instrument_mode: Trace, inner: AmazonS3(data)
 <TIMESTAMP> operation=Get duration=[DURATION] size=1006 path=cars.csv
 
+Summaries:
+Get
+count: 1
+[SUMMARY_DURATION]
+[SUMMARY_DURATION]
+[SUMMARY_DURATION]
+size min: 1006 B
+size max: 1006 B
+size avg: 1006 B
+size sum: 1006 B
+
+ObjectStore Profile mode set to Summary
++-----+-------+---------------------+
+| car | speed | time                |
++-----+-------+---------------------+
+| red | 20.0  | 1996-04-12T12:05:03 |
++-----+-------+---------------------+
+1 row(s) fetched. 
+[ELAPSED]
+
+Object Store Profiling
+Instrumented Object Store: instrument_mode: Summary, inner: AmazonS3(data)
 Summaries:
 Get
 count: 1
