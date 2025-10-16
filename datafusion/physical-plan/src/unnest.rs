@@ -85,15 +85,15 @@ impl UnnestExec {
         struct_column_indices: Vec<usize>,
         schema: SchemaRef,
         options: UnnestOptions,
-    ) -> Self {
+    ) -> Result<Self> {
         let cache = Self::compute_properties(
             &input,
             &list_column_indices,
             &struct_column_indices,
             Arc::clone(&schema),
-        );
+        )?;
 
-        UnnestExec {
+        Ok(UnnestExec {
             input,
             schema,
             list_column_indices,
@@ -101,7 +101,7 @@ impl UnnestExec {
             options,
             metrics: Default::default(),
             cache,
-        }
+        })
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -110,7 +110,7 @@ impl UnnestExec {
         list_column_indices: &[ListUnnest],
         struct_column_indices: &[usize],
         schema: SchemaRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Find out which indices are not unnested, such that they can be copied over from the input plan
         let input_schema = input.schema();
         let mut unnested_indices = BooleanBufferBuilder::new(input_schema.fields().len());
@@ -118,8 +118,8 @@ impl UnnestExec {
         for list_unnest in list_column_indices {
             unnested_indices.set_bit(list_unnest.index_in_input_schema, true);
         }
-        for list_unnest in struct_column_indices {
-            unnested_indices.set_bit(*list_unnest, true)
+        for struct_unnest in struct_column_indices {
+            unnested_indices.set_bit(*struct_unnest, true)
         }
         let unnested_indices = unnested_indices.finish();
         let non_unnested_indices: Vec<usize> = (0..input_schema.fields().len())
@@ -137,7 +137,12 @@ impl UnnestExec {
                     .fields()
                     .iter()
                     .position(|output_field| output_field.name() == input_field.name())
-                    .expect("Non-unnested column must exist in output schema");
+                    .ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "Non-unnested column '{}' must exist in output schema",
+                            input_field.name()
+                        )
+                    })?;
 
                 let input_col = Arc::new(Column::new(input_field.name(), input_idx))
                     as Arc<dyn PhysicalExpr>;
@@ -145,9 +150,9 @@ impl UnnestExec {
                     as Arc<dyn PhysicalExpr>;
                 // Use From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets
                 let targets = vec![(target_col, output_idx)].into();
-                (input_col, targets)
+                Ok((input_col, targets))
             })
-            .collect(); // Use FromIterator to collect the projection mapping
+            .collect::<Result<ProjectionMapping>>()?;
 
         // Create the unnest's equivalence properties by copying the input plan's equivalence properties
         // for the unaffected columns. Except for the constraints, which are removed entirely because
@@ -162,12 +167,12 @@ impl UnnestExec {
             .output_partitioning()
             .project(&projection_mapping, &eq_properties);
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             input.pipeline_behavior(),
             input.boundedness(),
-        )
+        ))
     }
 
     /// Input execution plan
@@ -234,7 +239,7 @@ impl ExecutionPlan for UnnestExec {
             self.struct_column_indices.clone(),
             Arc::clone(&self.schema),
             self.options.clone(),
-        )))
+        )?))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
