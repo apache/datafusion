@@ -705,6 +705,16 @@ fn test_prepare_statement_to_plan_one_param() {
 }
 
 #[test]
+fn test_update_infer_with_metadata() {
+    // TODO
+}
+
+#[test]
+fn test_insert_infer_with_metadata() {
+    // TOOD
+}
+
+#[test]
 fn test_prepare_statement_to_plan_data_type() {
     let sql = "PREPARE my_plan(DOUBLE) AS SELECT id, age  FROM person WHERE age = $1";
 
