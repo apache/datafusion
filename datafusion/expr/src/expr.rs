@@ -3615,9 +3615,9 @@ mod test {
 
     #[test]
     fn infer_placeholder_with_metadata() {
-        // name == $1
+        // name == $1, where name is a non-nullable string
         let schema =
-            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)
                 .with_metadata(
                     [("some_key".to_string(), "some_value".to_string())].into(),
                 )]));
@@ -3634,9 +3634,11 @@ mod test {
                         &DataType::Utf8
                     );
                     assert_eq!(
-                        placeholder.field.unwrap().metadata(),
+                        placeholder.field.as_ref().unwrap().metadata(),
                         df_schema.field(0).metadata()
                     );
+                    // Inferred placeholder should still be nullable
+                    assert!(placeholder.field.as_ref().unwrap().is_nullable());
                 }
                 _ => panic!("Expected Placeholder"),
             },
