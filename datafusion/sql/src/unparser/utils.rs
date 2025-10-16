@@ -27,8 +27,11 @@ use datafusion_common::{
     Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
+    expr::{self},
+    grouping::DummyGroupingUDAF,
+    utils::grouping_set_to_exprlist,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
+    Window,
 };
 
 use indexmap::IndexSet;
@@ -195,6 +198,17 @@ pub(crate) fn unproject_agg_exprs(
     agg: &Aggregate,
     windows: Option<&[&Window]>,
 ) -> Result<Expr> {
+    // replace grouping function
+    let expr = expr
+        .transform(|sub_expr| match sub_expr {
+            Expr::ScalarFunction(grouping) if grouping.name() == "grouping" => {
+                Ok(Transformed::yes(Expr::AggregateFunction(
+                    DummyGroupingUDAF::from_scalar_function(&grouping, agg)?,
+                )))
+            }
+            _ => Ok(Transformed::no(sub_expr)),
+        })
+        .map(|e| e.data)?;
     expr.transform(|sub_expr| {
             if let Expr::Column(c) = sub_expr {
                 if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
