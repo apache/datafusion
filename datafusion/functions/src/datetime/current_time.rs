@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn test_current_time_timezone_offset() {
         // Use a fixed start time for consistent testing
-        let start_time = Utc.with_ymd_and_hms(2025, 01, 01, 12, 0, 0).unwrap();
+        let start_time = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).unwrap();
 
         // Test with UTC+05:00
         let info_plus_5 = set_session_timezone_env("+05:00", start_time);
