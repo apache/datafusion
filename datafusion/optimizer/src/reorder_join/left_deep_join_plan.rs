@@ -492,6 +492,10 @@ impl<'graph> PrecedenceTreeNode<'graph> {
             .as_ref()
             .clone();
 
+        // Track all processed nodes
+        let mut processed_nodes = HashSet::new();
+        processed_nodes.insert(current_node_id);
+
         // Walk down the chain, joining each subsequent node
         let mut current_chain = &self;
 
@@ -507,19 +511,22 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                 .as_ref()
                 .clone();
 
-            // Find the edge connecting current and next nodes
-            let current_node =
-                query_graph.get_node(current_node_id).ok_or_else(|| {
-                    plan_datafusion_err!("Node {:?} not found", current_node_id)
+            // Find the edge connecting next_node to any processed node
+            let next_node =
+                query_graph.get_node(next_node_id).ok_or_else(|| {
+                    plan_datafusion_err!("Node {:?} not found", next_node_id)
                 })?;
 
-            let edge = current_node
-                .connection_with(next_node_id, query_graph)
+            let edge = processed_nodes
+                .iter()
+                .find_map(|&processed_id| {
+                    next_node.connection_with(processed_id, query_graph)
+                })
                 .ok_or_else(|| {
                     plan_datafusion_err!(
-                        "Edge between {:?} and {:?} not found",
-                        current_node_id,
-                        next_node_id
+                        "No edge found between {:?} and any processed nodes {:?}",
+                        next_node_id,
+                        processed_nodes
                     )
                 })?;
 
@@ -537,6 +544,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
 
             // Move to the next node in the chain
             current_node_id = next_node_id;
+            processed_nodes.insert(next_node_id);
             current_chain = child;
         }
 
