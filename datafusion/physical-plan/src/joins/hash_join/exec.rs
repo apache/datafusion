@@ -953,7 +953,7 @@ impl ExecutionPlan for HashJoinExec {
                 let left_stream = self.left.execute(partition, Arc::clone(&context))?;
 
                 let reservation =
-                    MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
+                    MemoryConsumer::new(format!("HashJoinInput[partition={partition}]"))
                         .register(context.memory_pool());
 
                 OnceFut::new(collect_left_input(
@@ -4381,13 +4381,13 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed for HashJoinInput[partition=1] with top memory consumers (across reservations) as:\n  HashJoinInput[partition=1]"
 
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120.0 B for HashJoinInput[1]"
+                "Failed to allocate additional 120.0 B for HashJoinInput[partition=1]"
             );
         }
 

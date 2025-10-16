@@ -496,7 +496,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
         // Initialization reservation for load of inner table
         let load_reservation =
-            MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
+            MemoryConsumer::new(format!("NestedLoopJoinLoad[partition={partition}]"))
                 .register(context.memory_pool());
 
         let build_side_data = self.build_side_data.try_once(|| {
@@ -2475,7 +2475,7 @@ pub(crate) mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for NestedLoopJoinLoad[0] with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]"
+                "Resources exhausted: Additional allocation failed for NestedLoopJoinLoad[partition=0] with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[partition=0]"
             );
         }
 
