@@ -58,8 +58,8 @@ pub fn optimal_left_deep_join_plan(
 
         best_graph = match best_graph.take() {
             Some(current) => {
-                let new_cost = precedence_graph.cost(1, 0.0)?;
-                if new_cost < current.cost(1, 0.0)? {
+                let new_cost = precedence_graph.cost()?;
+                if new_cost < current.cost()? {
                     Some(precedence_graph)
                 } else {
                     Some(current)
@@ -543,10 +543,14 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         Ok(current_plan)
     }
 
-    fn cost(&self, cardinality: usize, cost: f64) -> Result<f64> {
+    fn cost(&self) -> Result<f64> {
+        self.cost_recursive(self.query_nodes[0].selectivity, 0.0)
+    }
+
+    fn cost_recursive(&self, cardinality: usize, cost: f64) -> Result<f64> {
         let cost = match self.children.len() {
             0 => cost + cardinality as f64 * self.query_nodes[0].cost,
-            1 => self.children[0].cost(
+            1 => self.children[0].cost_recursive(
                 cardinality * self.query_nodes[0].selectivity,
                 cost + cardinality as f64 * self.query_nodes[0].cost,
             )?,
@@ -563,7 +567,15 @@ impl<'graph> PrecedenceTreeNode<'graph> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+    use crate::eliminate_filter::EliminateFilter;
+    use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
+    use crate::filter_null_join_keys::FilterNullJoinKeys;
+    use crate::optimizer::{Optimizer, OptimizerContext};
+    use crate::push_down_filter::PushDownFilter;
     use crate::reorder_join::cost::JoinCostEstimator;
+    use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
+    use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
     use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::LogicalPlanBuilder;
@@ -619,9 +631,9 @@ mod tests {
         use datafusion_expr::{col, in_subquery, lit};
         // Create the base table scans with statistics
         // Create the base table scans with statistics
-        let customer = scan_tpch_table_with_stats("customer", 150_000);
-        let orders = scan_tpch_table_with_stats("orders", 1_500_000);
-        let lineitem = scan_tpch_table_with_stats("lineitem", 6_000_000);
+        let customer = scan_tpch_table_with_stats("customer", 150);
+        let orders = scan_tpch_table_with_stats("orders", 1_500);
+        let lineitem = scan_tpch_table_with_stats("lineitem", 6_000);
 
         // Step 1: Build the subquery
         // SELECT l_orderkey FROM lineitem
@@ -664,6 +676,26 @@ mod tests {
             // Step 6: Limit
             .limit(0, Some(100))?
             .build()?;
+
+        println!("{}", plan.display_indent());
+
+        // Optimize the plan with custom optimizer before join reordering
+        // We exclude OptimizeProjections to keep joins consecutive
+        let config = OptimizerContext::new().with_skip_failing_rules(false);
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(DecorrelatePredicateSubquery::new()),
+            Arc::new(ScalarSubqueryToJoin::new()),
+            Arc::new(ExtractEquijoinPredicate::new()),
+            Arc::new(EliminateFilter::new()),
+            Arc::new(FilterNullJoinKeys::default()),
+            Arc::new(PushDownFilter::new()),
+            // Note: OptimizeProjections is intentionally excluded to keep joins consecutive
+        ]);
+        let plan = optimizer.optimize(plan, &config, |_, _| {}).unwrap();
+
+        println!("After standard optimization:");
+        println!("{}", plan.display_indent());
 
         // Extract the join subtree and wrappers
         let (join_subtree, wrappers) =
