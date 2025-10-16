@@ -30,7 +30,7 @@ use arrow::{
     },
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, stats::Precision,
+    downcast_value, exec_err, internal_err, not_impl_err, stats::Precision,
     utils::expr::COUNT_STAR_EXPANSION, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::{
@@ -326,7 +326,9 @@ impl AggregateUDFImpl for Count {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if !acc_args.is_distinct {
-            return Ok(Box::new(CountAccumulator::new()));
+            return Ok(Box::new(CountAccumulator::new_with_overflow_check(
+                acc_args.fail_on_overflow,
+            )));
         }
 
         if acc_args.exprs.len() > 1 {
@@ -418,7 +420,7 @@ impl AggregateUDFImpl for Count {
                 SlidingDistinctCountAccumulator::try_new(args.return_field.data_type())?;
             Ok(Box::new(acc))
         } else {
-            let acc = CountAccumulator::new();
+            let acc = CountAccumulator::new_with_overflow_check(args.fail_on_overflow);
             Ok(Box::new(acc))
         }
     }
@@ -505,12 +507,25 @@ impl Accumulator for SlidingDistinctCountAccumulator {
 #[derive(Debug)]
 struct CountAccumulator {
     count: i64,
+    fail_on_overflow: bool,
 }
 
 impl CountAccumulator {
     /// new count accumulator
+    #[allow(dead_code)]
     pub fn new() -> Self {
-        Self { count: 0 }
+        Self {
+            count: 0,
+            fail_on_overflow: false,
+        }
+    }
+
+    /// new count accumulator with overflow checking
+    pub fn new_with_overflow_check(fail_on_overflow: bool) -> Self {
+        Self {
+            count: 0,
+            fail_on_overflow,
+        }
     }
 }
 
@@ -521,13 +536,41 @@ impl Accumulator for CountAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count += (array.len() - null_count_for_multiple_cols(values)) as i64;
+        let non_null_count = (array.len() - null_count_for_multiple_cols(values)) as i64;
+        if self.fail_on_overflow {
+            match self.count.checked_add(non_null_count) {
+                Some(new_count) => self.count = new_count,
+                None => {
+                    return exec_err!(
+                        "Count operation overflowed: {} + {}",
+                        self.count,
+                        non_null_count
+                    )
+                }
+            }
+        } else {
+            self.count += non_null_count;
+        }
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count -= (array.len() - null_count_for_multiple_cols(values)) as i64;
+        let non_null_count = (array.len() - null_count_for_multiple_cols(values)) as i64;
+        if self.fail_on_overflow {
+            match self.count.checked_sub(non_null_count) {
+                Some(new_count) => self.count = new_count,
+                None => {
+                    return exec_err!(
+                        "Count retraction overflowed: {} - {}",
+                        self.count,
+                        non_null_count
+                    )
+                }
+            }
+        } else {
+            self.count -= non_null_count;
+        }
         Ok(())
     }
 
@@ -535,7 +578,20 @@ impl Accumulator for CountAccumulator {
         let counts = downcast_value!(states[0], Int64Array);
         let delta = &compute::sum(counts);
         if let Some(d) = delta {
-            self.count += *d;
+            if self.fail_on_overflow {
+                match self.count.checked_add(*d) {
+                    Some(new_count) => self.count = new_count,
+                    None => {
+                        return exec_err!(
+                            "Count merge operation overflowed: {} + {}",
+                            self.count,
+                            d
+                        )
+                    }
+                }
+            } else {
+                self.count += *d;
+            }
         }
         Ok(())
     }
@@ -904,6 +960,7 @@ mod tests {
             is_reversed: false,
             return_field: Arc::new(Field::new_list_field(DataType::Int64, true)),
             order_bys: &[],
+            fail_on_overflow: false,
         };
 
         let inner_dict =

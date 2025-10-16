@@ -1812,6 +1812,13 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .human_display(human_displan)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
+                        .with_fail_on_overflow(
+                            execution_props
+                                .config_options
+                                .as_ref()
+                                .map(|cfg| cfg.execution.fail_on_overflow)
+                                .unwrap_or(false),
+                        )
                         .build()
                         .map(Arc::new)?;
 

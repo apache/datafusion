@@ -40,7 +40,8 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, DataFusionError, HashSet, Result, ScalarValue,
+    exec_err, internal_datafusion_err, internal_err, DataFusionError, HashSet, Result,
+    ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
@@ -152,11 +153,13 @@ impl AggregateUDFImpl for Median {
                     Ok(Box::new(DistinctMedianAccumulator::<$t> {
                         data_type: $dt.clone(),
                         distinct_values: HashSet::new(),
+                        fail_on_overflow: acc_args.fail_on_overflow,
                     }))
                 } else {
                     Ok(Box::new(MedianAccumulator::<$t> {
                         data_type: $dt.clone(),
                         all_values: vec![],
+                        fail_on_overflow: acc_args.fail_on_overflow,
                     }))
                 }
             };
@@ -200,7 +203,10 @@ impl AggregateUDFImpl for Median {
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
-                Ok(Box::new(MedianGroupsAccumulator::<$t>::new($dt)))
+                Ok(Box::new(MedianGroupsAccumulator::<$t>::new(
+                    $dt,
+                    args.fail_on_overflow,
+                )))
             };
         }
 
@@ -236,6 +242,7 @@ impl AggregateUDFImpl for Median {
 struct MedianAccumulator<T: ArrowNumericType> {
     data_type: DataType,
     all_values: Vec<T::Native>,
+    fail_on_overflow: bool,
 }
 
 impl<T: ArrowNumericType> Debug for MedianAccumulator<T> {
@@ -287,7 +294,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let d = std::mem::take(&mut self.all_values);
-        let median = calculate_median::<T>(d);
+        let median = calculate_median::<T>(d, &self.data_type, self.fail_on_overflow)?;
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
@@ -307,13 +314,15 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 struct MedianGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,
     group_values: Vec<Vec<T::Native>>,
+    fail_on_overflow: bool,
 }
 
 impl<T: ArrowNumericType + Send> MedianGroupsAccumulator<T> {
-    pub fn new(data_type: DataType) -> Self {
+    pub fn new(data_type: DataType, fail_on_overflow: bool) -> Self {
         Self {
             data_type,
             group_values: Vec::new(),
+            fail_on_overflow,
         }
     }
 }
@@ -442,7 +451,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
         for values in emit_group_values {
-            let median = calculate_median::<T>(values);
+            let median =
+                calculate_median::<T>(values, &self.data_type, self.fail_on_overflow)?;
             evaluate_result_builder.append_option(median);
         }
 
@@ -516,6 +526,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 struct DistinctMedianAccumulator<T: ArrowNumericType> {
     data_type: DataType,
     distinct_values: HashSet<Hashable<T::Native>>,
+    fail_on_overflow: bool,
 }
 
 impl<T: ArrowNumericType> Debug for DistinctMedianAccumulator<T> {
@@ -568,7 +579,7 @@ impl<T: ArrowNumericType> Accumulator for DistinctMedianAccumulator<T> {
             .into_iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
-        let median = calculate_median::<T>(d);
+        let median = calculate_median::<T>(d, &self.data_type, self.fail_on_overflow)?;
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
@@ -592,24 +603,105 @@ where
         .unwrap()
 }
 
+/// Helper function for overflow checking in median calculation
+fn checked_add_and_div_for_median<T: ArrowNumericType>(
+    a: T::Native,
+    b: T::Native,
+    data_type: &DataType,
+) -> Result<T::Native> {
+    use arrow::datatypes::*;
+    match data_type {
+        DataType::Int64 => {
+            let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+            let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+            match a_i64.checked_add(b_i64) {
+                Some(sum) => {
+                    Ok(unsafe { std::mem::transmute_copy::<i64, T::Native>(&(sum / 2)) })
+                }
+                None => exec_err!("Median calculation overflowed"),
+            }
+        }
+        DataType::UInt64 => {
+            let a_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&a) };
+            let b_u64 = unsafe { std::mem::transmute_copy::<T::Native, u64>(&b) };
+            match a_u64.checked_add(b_u64) {
+                Some(sum) => {
+                    Ok(unsafe { std::mem::transmute_copy::<u64, T::Native>(&(sum / 2)) })
+                }
+                None => exec_err!("Median calculation overflowed"),
+            }
+        }
+        DataType::Float64 => {
+            // For floats, we don't check overflow - return the normal calculation
+            Ok(a.add_wrapping(b).div_wrapping(T::Native::usize_as(2)))
+        }
+        DataType::Decimal32(_, _) => {
+            let a_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&a) };
+            let b_i32 = unsafe { std::mem::transmute_copy::<T::Native, i32>(&b) };
+            match a_i32.checked_add(b_i32) {
+                Some(sum) => {
+                    Ok(unsafe { std::mem::transmute_copy::<i32, T::Native>(&(sum / 2)) })
+                }
+                None => exec_err!("Median calculation overflowed"),
+            }
+        }
+        DataType::Decimal64(_, _) => {
+            let a_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&a) };
+            let b_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&b) };
+            match a_i64.checked_add(b_i64) {
+                Some(sum) => {
+                    Ok(unsafe { std::mem::transmute_copy::<i64, T::Native>(&(sum / 2)) })
+                }
+                None => exec_err!("Median calculation overflowed"),
+            }
+        }
+        DataType::Decimal128(_, _) => {
+            let a_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&a) };
+            let b_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&b) };
+            match a_i128.checked_add(b_i128) {
+                Some(sum) => {
+                    Ok(
+                        unsafe {
+                            std::mem::transmute_copy::<i128, T::Native>(&(sum / 2))
+                        },
+                    )
+                }
+                None => exec_err!("Median calculation overflowed"),
+            }
+        }
+        _ => {
+            // For other types, fallback to wrapping arithmetic
+            Ok(a.add_wrapping(b).div_wrapping(T::Native::usize_as(2)))
+        }
+    }
+}
+
 fn calculate_median<T: ArrowNumericType>(
     mut values: Vec<T::Native>,
-) -> Option<T::Native> {
+    data_type: &DataType,
+    fail_on_overflow: bool,
+) -> Result<Option<T::Native>> {
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
     let len = values.len();
     if len == 0 {
-        None
+        Ok(None)
     } else if len % 2 == 0 {
         let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
         // Get the maximum of the low (left side after bi-partitioning)
         let left_max = slice_max::<T>(low);
-        let median = left_max
-            .add_wrapping(*high)
-            .div_wrapping(T::Native::usize_as(2));
-        Some(median)
+
+        // Calculate median with overflow checking if enabled
+        let median = if fail_on_overflow {
+            checked_add_and_div_for_median::<T>(left_max, *high, data_type)?
+        } else {
+            left_max
+                .add_wrapping(*high)
+                .div_wrapping(T::Native::usize_as(2))
+        };
+        Ok(Some(median))
     } else {
         let (_, median, _) = values.select_nth_unstable_by(len / 2, cmp);
-        Some(*median)
+        Ok(Some(*median))
     }
 }

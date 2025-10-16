@@ -615,9 +615,21 @@ mod tests {
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+
+    /// Helper function for tests that creates a binary expression with default ExecutionProps
+    fn binary_expr(
+        lhs: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        rhs: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let exec_props = ExecutionProps::new();
+        binary(lhs, op, rhs, schema, &exec_props)
+    }
 
     #[test]
     fn case_with_expr() -> Result<()> {
@@ -689,7 +701,7 @@ mod tests {
         // CASE a when 0 THEN float64(null) ELSE 25.0 / cast(a, float64)  END
         let when1 = lit(0i32);
         let then1 = lit(ScalarValue::Float64(None));
-        let else_value = binary(
+        let else_value = binary_expr(
             lit(25.0f64),
             Operator::Divide,
             cast(col("a", &schema)?, &batch.schema(), Float64)?,
@@ -722,14 +734,14 @@ mod tests {
         let schema = batch.schema();
 
         // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN 456 END
-        let when1 = binary(
+        let when1 = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("foo"),
             &batch.schema(),
         )?;
         let then1 = lit(123i32);
-        let when2 = binary(
+        let when2 = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("bar"),
@@ -794,8 +806,9 @@ mod tests {
         let schema = batch.schema();
 
         // CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE float64(null) END
-        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
-        let then1 = binary(
+        let when1 =
+            binary_expr(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
+        let then1 = binary_expr(
             lit(25.0f64),
             Operator::Divide,
             cast(col("a", &schema)?, &batch.schema(), Float64)?,
@@ -845,14 +858,14 @@ mod tests {
         let schema = batch.schema();
 
         // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN 456 ELSE 999 END
-        let when1 = binary(
+        let when1 = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("foo"),
             &batch.schema(),
         )?;
         let then1 = lit(123i32);
-        let when2 = binary(
+        let when2 = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("bar"),
@@ -887,7 +900,7 @@ mod tests {
         let schema = batch.schema();
 
         // CASE WHEN a = 'foo' THEN 123.3 ELSE 999 END
-        let when = binary(
+        let when = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("foo"),
@@ -923,7 +936,7 @@ mod tests {
         let schema = batch.schema();
 
         // SELECT CASE WHEN load4 = 1.77 THEN load4 END
-        let when = binary(
+        let when = binary_expr(
             col("load4", &schema)?,
             Operator::Eq,
             lit(1.77f64),
@@ -1035,10 +1048,10 @@ mod tests {
         let batch = case_test_batch()?;
         let schema = batch.schema();
 
-        let when = binary(
+        let when = binary_expr(
             Arc::new(Literal::new(ScalarValue::Boolean(None))),
             Operator::And,
-            binary(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?,
+            binary_expr(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?,
             &schema,
         )?;
         let then = col("a", &schema)?;
@@ -1099,14 +1112,14 @@ mod tests {
         let schema = batch.schema();
 
         // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN true END
-        let when1 = binary(
+        let when1 = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("foo"),
             &batch.schema(),
         )?;
         let then1 = lit(123i32);
-        let when2 = binary(
+        let when2 = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("bar"),
@@ -1126,14 +1139,14 @@ mod tests {
         // then 2 is int64
         // else is float
         // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN 456 ELSE 1.23 END
-        let when1 = binary(
+        let when1 = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("foo"),
             &batch.schema(),
         )?;
         let then1 = lit(123i32);
-        let when2 = binary(
+        let when2 = binary_expr(
             col("a", &schema)?,
             Operator::Eq,
             lit("bar"),
@@ -1298,7 +1311,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![c1, c2]).unwrap();
 
         // CaseWhenExprOrNull should produce same results as CaseExpr
-        let predicate = Arc::new(BinaryExpr::new(
+        let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
             make_col("c1", 0),
             Operator::LtEq,
             make_lit_i32(250),
@@ -1319,7 +1332,7 @@ mod tests {
     fn test_expr_or_expr_specialization() -> Result<()> {
         let batch = case_test_batch1()?;
         let schema = batch.schema();
-        let when = binary(
+        let when = binary_expr(
             col("a", &schema)?,
             Operator::LtEq,
             lit(2i32),
@@ -1417,7 +1430,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
 
         // CASE WHEN a = 'foo' THEN 123.3 ELSE 999 END
-        let when = binary(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?;
+        let when = binary_expr(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?;
         let then = lit(123.3f64);
         let else_value = lit(999i32);
 

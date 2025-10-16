@@ -105,6 +105,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, DataFusionError, NullEquality,
     Result, UnnestOptions,
 };
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound, WindowUDF,
@@ -210,8 +211,14 @@ fn roundtrip_date_time_interval() -> Result<()> {
     let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
     let date_expr = col("some_date", &schema)?;
     let literal_expr = col("some_interval", &schema)?;
-    let date_time_interval_expr =
-        binary(date_expr, Operator::Plus, literal_expr, &schema)?;
+    let execution_props = ExecutionProps::default();
+    let date_time_interval_expr = binary(
+        date_expr,
+        Operator::Plus,
+        literal_expr,
+        &schema,
+        &execution_props,
+    )?;
     let plan = Arc::new(ProjectionExec::try_new(
         vec![ProjectionExpr {
             expr: date_time_interval_expr,
@@ -766,7 +773,8 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
         &false,
         schema.as_ref(),
     )?;
-    let and = binary(not, Operator::And, in_list, &schema)?;
+    let execution_props = ExecutionProps::default();
+    let and = binary(not, Operator::And, in_list, &schema, &execution_props)?;
     roundtrip_test(Arc::new(FilterExec::try_new(
         and,
         Arc::new(EmptyExec::new(schema.clone())),
@@ -873,7 +881,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let predicate = Arc::new(BinaryExpr::new(
+    let predicate = Arc::new(BinaryExpr::new_with_overflow_check(
         Arc::new(Column::new("col", 1)),
         Operator::Eq,
         lit("1"),
@@ -1244,10 +1252,14 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     ));
 
     let filter = Arc::new(FilterExec::try_new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("published", &schema)?,
             Operator::And,
-            Arc::new(BinaryExpr::new(udf_expr.clone(), Operator::Gt, lit(0))),
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                udf_expr.clone(),
+                Operator::Gt,
+                lit(0),
+            )),
         )),
         input,
     )?);
@@ -1360,10 +1372,14 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         .map(Arc::new)?;
 
     let filter = Arc::new(FilterExec::try_new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("published", &schema)?,
             Operator::And,
-            Arc::new(BinaryExpr::new(udf_expr, Operator::Gt, lit(0))),
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                udf_expr,
+                Operator::Gt,
+                lit(0),
+            )),
         )),
         input,
     )?);
@@ -1817,7 +1833,11 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let filter = Arc::new(
         FilterExec::try_new(
-            Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
+            Arc::new(BinaryExpr::new_with_overflow_check(
+                col("c", &schema)?,
+                Operator::Eq,
+                lit(1),
+            )),
             DataSourceExec::from_data_source(scan_config),
         )?
         .with_projection(Some(vec![0, 1]))?,
@@ -2143,7 +2163,7 @@ fn roundtrip_sort_merge_join() -> Result<()> {
     )];
 
     let filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             Arc::new(Column::new("col_a", 1)),
             Operator::Gt,
             Arc::new(Column::new("col_b", 0)),

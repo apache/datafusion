@@ -1168,6 +1168,7 @@ mod tests {
                 name: "",
                 is_distinct: self.distinct,
                 exprs: &[Arc::new(Column::new("col", 0))],
+                fail_on_overflow: false,
             })
         }
 

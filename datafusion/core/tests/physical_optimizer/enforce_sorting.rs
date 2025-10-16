@@ -700,7 +700,7 @@ async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns(
     .into();
     let sort = sort_exec(ordering, source.clone());
     let proj_exprs = vec![(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("nullable_col", &schema)?,
             Operator::Plus,
             col("non_nullable_col", &schema)?,
@@ -744,7 +744,7 @@ async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns(
     .into();
     let sort = sort_exec(ordering, source);
     let proj_exprs = vec![(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("nullable_col", &schema)?,
             Operator::Plus,
             col("non_nullable_col", &schema)?,
@@ -799,7 +799,7 @@ async fn test_soft_hard_requirements_multiple_soft_requirements() -> Result<()> 
     .into();
     let sort = sort_exec(ordering, source.clone());
     let proj_exprs = vec![(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("nullable_col", &schema)?,
             Operator::Plus,
             col("non_nullable_col", &schema)?,
@@ -857,7 +857,7 @@ async fn test_soft_hard_requirements_multiple_soft_requirements() -> Result<()> 
     .into();
     let sort = sort_exec(ordering, source);
     let proj_exprs = vec![(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("nullable_col", &schema)?,
             Operator::Plus,
             col("non_nullable_col", &schema)?,
@@ -930,7 +930,7 @@ async fn test_soft_hard_requirements_multiple_sorts() -> Result<()> {
     .into();
     let sort = sort_exec(ordering, source);
     let proj_exprs = vec![(
-        Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new_with_overflow_check(
             col("nullable_col", &schema)?,
             Operator::Plus,
             col("non_nullable_col", &schema)?,
