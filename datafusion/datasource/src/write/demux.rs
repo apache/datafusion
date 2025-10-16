@@ -172,7 +172,8 @@ async fn row_count_demuxer(
     };
 
     // Single-file output requires creating at least one file stream in advance.
-    // If no record batches are present in the input stream (zero-row scenario),
+    // If no record batches are present in the input stream,
+    // the file stream must still be created to produce a valid output file.
     if single_file_output {
         open_file_streams.push(create_new_file_stream(
             &base_output_path,
