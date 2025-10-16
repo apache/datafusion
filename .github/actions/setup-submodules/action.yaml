@@ -1,0 +1,15 @@
+name: 'Setup Submodules'
+description: 'Initialize and update git submodules for testing'
+runs:
+  using: 'composite'
+  steps:
+    - name: Initialize and update submodules
+      shell: bash
+      run: |
+        git config --global --add safe.directory $GITHUB_WORKSPACE
+        git submodule init
+        # Override update=none setting for CI
+        git config submodule.testing.update checkout
+        git config submodule.parquet-testing.update checkout
+        git config submodule.datafusion-testing.update checkout
+        git submodule update --depth 1

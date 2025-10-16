@@ -63,8 +63,9 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -87,8 +88,9 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
       - name: Install Rust
@@ -131,8 +133,9 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -152,8 +155,9 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
-          submodules: true
           fetch-depth: 1
+      - name: Setup Submodules
+        uses: ./.github/actions/setup-submodules
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
