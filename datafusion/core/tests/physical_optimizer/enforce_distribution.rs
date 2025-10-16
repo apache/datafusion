@@ -937,26 +937,29 @@ fn multi_joins_after_multi_alias() -> Result<()> {
 
     // The Column 'a' has different meaning now after the two Projections
     // The original Output partition can not satisfy the Join requirements and need to add an additional RepartitionExec
-    let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, c@2)]",
-        "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-        "    ProjectionExec: expr=[c1@0 as a]",
-        "      ProjectionExec: expr=[c@2 as c1]",
-        "        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]",
-        "          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-        "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "          RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=10",
-        "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-
     let test_config = TestConfig::default();
-    test_config.run(expected, top_join.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected, top_join, &SORT_DISTRIB_DISTRIB)?;
+    let plan_distrib = test_config.run2(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_distrib,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, c@2)]
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
+        ProjectionExec: expr=[c1@0 as a]
+          ProjectionExec: expr=[c@2 as c1]
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]
+              RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
+                RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+              RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=10
+                RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    "
+    );
+    let plan_sort = test_config.run2(top_join, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
 }
