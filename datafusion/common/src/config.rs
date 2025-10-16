@@ -26,14 +26,15 @@ use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
+#[cfg(feature = "parquet_encryption")]
+use hex;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
-
 #[cfg(feature = "parquet_encryption")]
-use hex;
+use std::sync::Arc;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -2404,13 +2405,13 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
                 hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
             fep = fep.with_aad_prefix(aad_prefix);
         }
-        fep.build().unwrap()
+        Arc::unwrap_or_clone(fep.build().unwrap())
     }
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
-    fn from(f: &FileEncryptionProperties) -> Self {
+impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
+    fn from(f: &Arc<FileEncryptionProperties>) -> Self {
         let (column_names_vec, column_keys_vec, column_metas_vec) = f.column_keys();
 
         let mut column_encryption_properties: HashMap<
@@ -2552,13 +2553,13 @@ impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
             fep = fep.with_aad_prefix(aad_prefix);
         }
 
-        fep.build().unwrap()
+        Arc::unwrap_or_clone(fep.build().unwrap())
     }
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<&FileDecryptionProperties> for ConfigFileDecryptionProperties {
-    fn from(f: &FileDecryptionProperties) -> Self {
+impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
+    fn from(f: &Arc<FileDecryptionProperties>) -> Self {
         let (column_names_vec, column_keys_vec) = f.column_keys();
         let mut column_decryption_properties: HashMap<
             String,
@@ -2965,6 +2966,7 @@ mod tests {
         };
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
+        use std::sync::Arc;
 
         let footer_key = b"0123456789012345".to_vec(); // 128bit/16
         let column_names = vec!["double_field", "float_field"];
@@ -2985,16 +2987,15 @@ mod tests {
             .unwrap();
 
         // Test round-trip
-        let config_encrypt: ConfigFileEncryptionProperties =
-            (&file_encryption_properties).into();
-        let encryption_properties_built: FileEncryptionProperties =
-            config_encrypt.clone().into();
+        let config_encrypt =
+            ConfigFileEncryptionProperties::from(&file_encryption_properties);
+        let encryption_properties_built =
+            Arc::new(FileEncryptionProperties::from(config_encrypt.clone()));
         assert_eq!(file_encryption_properties, encryption_properties_built);
 
-        let config_decrypt: ConfigFileDecryptionProperties =
-            (&decryption_properties).into();
-        let decryption_properties_built: FileDecryptionProperties =
-            config_decrypt.clone().into();
+        let config_decrypt = ConfigFileDecryptionProperties::from(&decryption_properties);
+        let decryption_properties_built =
+            Arc::new(FileDecryptionProperties::from(config_decrypt.clone()));
         assert_eq!(decryption_properties, decryption_properties_built);
 
         ///////////////////////////////////////////////////////////////////////////////////

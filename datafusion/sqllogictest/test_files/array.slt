@@ -710,13 +710,13 @@ select
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from arrays;
 ----
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
+List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
+List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
+List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
+List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
+List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
+List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
 
 # arrays table
 query ???
@@ -1182,7 +1182,7 @@ select make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)'))
 query T
 select arrow_typeof(make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)')));
 ----
-List(Field { name: "item", data_type: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable LargeList(nullable Int64))
 
 
 query ???
@@ -3292,7 +3292,7 @@ select
     array_concat([arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')], [arrow_cast('3', 'Utf8View')]),
     arrow_typeof(array_concat([arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')], [arrow_cast('3', 'Utf8View')]));
 ----
-[1, 2, 3] List(Field { name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+[1, 2, 3] List(nullable Utf8View)
 
 # array_concat error
 query error DataFusion error: Error during planning: Execution error: Function 'array_concat' user-defined coercion failed with "Error during planning: array_concat does not support type Int64"
@@ -4585,7 +4585,7 @@ NULL [baz] baz
 query T
 SELECT arrow_typeof(make_array(arrow_cast('a', 'Utf8View'), 'b', 'c', 'd'));
 ----
-List(Field { name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable Utf8View)
 
 # expect a,b,c,d. make_array forces all types to be of a common type (see above)
 query T
@@ -7653,8 +7653,8 @@ CREATE EXTERNAL TABLE fixed_size_list_array STORED AS PARQUET LOCATION '../core/
 query T
 select arrow_typeof(f0) from fixed_size_list_array;
 ----
-FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
-FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+FixedSizeList(2 x nullable Int64)
+FixedSizeList(2 x nullable Int64)
 
 query ?
 select * from fixed_size_list_array;
@@ -7683,8 +7683,8 @@ select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
 query T
 select arrow_typeof(make_array(arrow_cast(f0, 'List(Int64)'))) from fixed_size_list_array
 ----
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable List(nullable Int64))
+List(nullable List(nullable Int64))
 
 query ?
 select make_array(f0) from fixed_size_list_array
@@ -7695,8 +7695,8 @@ select make_array(f0) from fixed_size_list_array
 query T
 select arrow_typeof(make_array(f0)) from fixed_size_list_array
 ----
-List(Field { name: "item", data_type: FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable FixedSizeList(2 x nullable Int64))
+List(nullable FixedSizeList(2 x nullable Int64))
 
 query ?
 select array_concat(column1, [7]) from arrays_values_v2;
@@ -8275,19 +8275,19 @@ select * from test_create_array_table;
 query T
 select arrow_typeof(a) from test_create_array_table;
 ----
-List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable Int32)
 
 query T
 select arrow_typeof(c) from test_create_array_table;
 ----
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(nullable List(nullable Int32))
 
 # Test casting to array types
 # issue: https://github.com/apache/datafusion/issues/9440
 query ??T
 select [1,2,3]::int[], [['1']]::int[][], arrow_typeof([]::text[]);
 ----
-[1, 2, 3] [[1]] List(Field { name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+[1, 2, 3] [[1]] List(nullable Utf8View)
 
 # test empty arrays return length
 # issue: https://github.com/apache/datafusion/pull/12459
@@ -8307,8 +8307,8 @@ create table fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5,6]);
 query T
 select arrow_typeof(a) from fixed_size_col_table;
 ----
-FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
-FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
+FixedSizeList(3 x nullable Int32)
+FixedSizeList(3 x nullable Int32)
 
 query ? rowsort
 SELECT DISTINCT a FROM fixed_size_col_table

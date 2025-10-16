@@ -867,7 +867,7 @@ query TTTTTT
 show columns FROM table_with_pk;
 ----
 datafusion public table_with_pk sn Int32 NO
-datafusion public table_with_pk ts Timestamp(Nanosecond, Some("+00:00")) NO
+datafusion public table_with_pk ts Timestamp(ns, "+00:00") NO
 datafusion public table_with_pk currency Utf8View NO
 datafusion public table_with_pk amount Float32 YES
 
