@@ -8,6 +8,95 @@ use crate::reorder_join::{
     query_graph::{NodeId, QueryGraph},
 };
 
+/// Generates an optimized left-deep join plan from a logical plan using the Ibaraki-Kameda algorithm.
+///
+/// This function is the main entry point for join reordering optimization. It takes a logical plan
+/// that may contain joins along with wrapper operators (filters, sorts, aggregations, etc.) and
+/// produces an optimized plan with reordered joins while preserving the wrapper operators.
+///
+/// # Algorithm Overview
+///
+/// The optimization process consists of several steps:
+///
+/// 1. **Extraction**: Separates the join subtree from wrapper operators (filters, sorts, limits, etc.)
+/// 2. **Graph Conversion**: Converts the join subtree into a query graph representation where:
+///    - Nodes represent base relations (table scans, subqueries, etc.)
+///    - Edges represent join conditions between relations
+/// 3. **Optimization**: Uses the Ibaraki-Kameda algorithm to find the optimal left-deep join ordering
+///    by trying each node as a potential root and selecting the plan with the lowest estimated cost
+/// 4. **Reconstruction**: Rebuilds the complete logical plan by applying the wrapper operators
+///    to the optimized join plan
+///
+/// # Left-Deep Join Plans
+///
+/// A left-deep join plan is a join tree where:
+/// - Each join has a relation or previous join result on the left side
+/// - Each join has a single relation on the right side
+/// - This creates a linear "chain" of joins processed left-to-right
+///
+/// Example: `((A ⋈ B) ⋈ C) ⋈ D` is left-deep, while `(A ⋈ B) ⋈ (C ⋈ D)` is not.
+///
+/// Left-deep plans are preferred because they:
+/// - Allow pipelining of intermediate results
+/// - Work well with hash join implementations
+/// - Have predictable memory usage patterns
+///
+/// # Arguments
+///
+/// * `plan` - The logical plan to optimize. Must contain at least one join node.
+/// * `cost_estimator` - Cost estimator for calculating join costs, cardinality, and selectivity.
+///   Used to compare different join orderings and select the optimal one.
+///
+/// # Returns
+///
+/// Returns a `LogicalPlan` with optimized join ordering. The plan structure is:
+/// - Wrapper operators (filters, sorts, etc.) in their original positions
+/// - Joins reordered to minimize estimated execution cost
+/// - Join semantics preserved (same result set as input plan)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The plan does not contain any join nodes
+/// - Join extraction fails (e.g., joins are not consecutive in the plan tree)
+/// - The query graph cannot be constructed from the join subtree
+/// - Join reordering optimization fails (no valid join ordering found)
+/// - Plan reconstruction fails
+///
+/// # Example
+///
+/// ```ignore
+/// use datafusion_optimizer::reorder_join::{optimal_left_deep_join_plan, cost::JoinCostEstimator};
+/// use std::rc::Rc;
+///
+/// // Assume we have a plan with joins: customer ⋈ orders ⋈ lineitem
+/// let plan = ...; // Your logical plan
+/// let cost_estimator: Rc<dyn JoinCostEstimator> = Rc::new(MyCostEstimator::new());
+///
+/// // Optimize join ordering
+/// let optimized = optimal_left_deep_join_plan(plan, cost_estimator)?;
+/// // Result might reorder to: lineitem ⋈ orders ⋈ customer (if this is cheaper)
+/// ```
+pub fn optimal_left_deep_join_plan(
+    plan: LogicalPlan,
+    cost_estimator: Rc<dyn JoinCostEstimator>,
+) -> Result<LogicalPlan> {
+    // Extract the join subtree and wrappers
+    let (join_subtree, wrappers) =
+        crate::reorder_join::query_graph::extract_join_subtree(plan)?;
+
+    // Convert join subtree to query graph
+    let query_graph = QueryGraph::try_from(join_subtree)?;
+
+    // Optimize the joins
+    let optimized_joins =
+        query_graph_to_optimal_left_deep_join_plan(query_graph, cost_estimator)?;
+
+    // Reconstruct the full plan with wrappers
+
+    crate::reorder_join::query_graph::reconstruct_plan(optimized_joins, wrappers)
+}
+
 /// Generates an optimized linear join plan from a query graph using the Ibaraki-Kameda algorithm.
 ///
 /// This function finds the optimal join ordering for a query by:
@@ -41,7 +130,7 @@ use crate::reorder_join::{
 /// - The query graph is empty or invalid
 /// - Tree construction, normalization, or denormalization fails
 /// - No valid precedence graph can be generated
-pub fn optimal_left_deep_join_plan(
+pub fn query_graph_to_optimal_left_deep_join_plan(
     query_graph: QueryGraph,
     cost_estimator: Rc<dyn JoinCostEstimator>,
 ) -> Result<LogicalPlan> {
@@ -484,7 +573,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         query_graph: &QueryGraph,
     ) -> Result<LogicalPlan> {
         // Get the first node's logical plan
-        let mut current_node_id = self.query_nodes[0].node_id;
+        let current_node_id = self.query_nodes[0].node_id;
         let mut current_plan = query_graph
             .get_node(current_node_id)
             .ok_or_else(|| plan_datafusion_err!("Node {:?} not found", current_node_id))?
@@ -492,9 +581,8 @@ impl<'graph> PrecedenceTreeNode<'graph> {
             .as_ref()
             .clone();
 
-        // Track all processed nodes
-        let mut processed_nodes = HashSet::new();
-        processed_nodes.insert(current_node_id);
+        // Track all processed nodes in order
+        let mut processed_nodes = vec![current_node_id];
 
         // Walk down the chain, joining each subsequent node
         let mut current_chain = &self;
@@ -518,6 +606,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
 
             let edge = processed_nodes
                 .iter()
+                .rev()
                 .find_map(|&processed_id| {
                     next_node.connection_with(processed_id, query_graph)
                 })
@@ -542,8 +631,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
             });
 
             // Move to the next node in the chain
-            current_node_id = next_node_id;
-            processed_nodes.insert(next_node_id);
+            processed_nodes.push(next_node_id);
             current_chain = child;
         }
 
@@ -704,21 +792,8 @@ mod tests {
         println!("After standard optimization:");
         println!("{}", plan.display_indent());
 
-        // Extract the join subtree and wrappers
-        let (join_subtree, wrappers) =
-            crate::reorder_join::query_graph::extract_join_subtree(plan).unwrap();
-
-        // Convert join subtree to query graph
-        let query_graph = QueryGraph::try_from(join_subtree).unwrap();
-
-        // Optimize the joins
-        let optimized_joins =
-            optimal_left_deep_join_plan(query_graph, Rc::new(TestCostEstimator)).unwrap();
-
-        // Reconstruct the full plan with wrappers
         let optimized_plan =
-            crate::reorder_join::query_graph::reconstruct_plan(optimized_joins, wrappers)
-                .unwrap();
+            optimal_left_deep_join_plan(plan, Rc::new(TestCostEstimator)).unwrap();
 
         println!("Optimized Plan:");
         println!("{}", optimized_plan.display_indent());
