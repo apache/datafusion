@@ -66,9 +66,18 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    get_plan_string, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
+    displayable, get_plan_string, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
     PlanProperties, Statistics,
 };
+
+macro_rules! assert_plan {
+    ($plan: expr, @ $expected:literal) => {
+        insta::assert_snapshot!(
+            displayable($plan.as_ref()).indent(true).to_string(),
+            @ $expected
+        )
+    };
+}
 
 /// Models operators like BoundedWindowExec that require an input
 /// ordering but is easy to construct
@@ -3023,12 +3032,15 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
     .into();
     let plan_parquet =
         sort_preserving_merge_exec(sort_key_after_projection, proj_parquet);
-    let expected = &[
-        "SortPreservingMergeExec: [c2@1 ASC]",
-        "  ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
-    plans_matches_expected!(expected, &plan_parquet);
+
+    assert_plan!(
+        plan_parquet,
+        @r"
+    SortPreservingMergeExec: [c2@1 ASC]
+      ProjectionExec: expr=[a@0 as a2, c@2 as c2]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+    "
+    );
 
     // Expected Outcome:
     // data should not be repartitioned / resorted
