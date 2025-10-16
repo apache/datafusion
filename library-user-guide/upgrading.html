@@ -613,6 +613,33 @@
      in physical plan serde methods
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sessionstate-s-sql-to-statement-method-takes-dialect-rather-than-a-str">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SessionState
+      </span>
+     </code>
+     ’s
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       sql_to_statement
+      </span>
+     </code>
+     method takes
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Dialect
+      </span>
+     </code>
+     rather than a
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       str
+      </span>
+     </code>
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1418,6 +1445,14 @@
 </pre></div>
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/17601">issue #17601</a> for more details.</p>
+</section>
+<section id="sessionstate-s-sql-to-statement-method-takes-dialect-rather-than-a-str">
+<h3><code class="docutils literal notranslate"><span class="pre">SessionState</span></code>’s <code class="docutils literal notranslate"><span class="pre">sql_to_statement</span></code> method takes <code class="docutils literal notranslate"><span class="pre">Dialect</span></code> rather than a <code class="docutils literal notranslate"><span class="pre">str</span></code><a class="headerlink" href="#sessionstate-s-sql-to-statement-method-takes-dialect-rather-than-a-str" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">dialect</span></code> parameter of <code class="docutils literal notranslate"><span class="pre">sql_to_statement</span></code> method defined in <code class="docutils literal notranslate"><span class="pre">datafusion::execution::session_state::SessionState</span></code>
+has changed from <code class="docutils literal notranslate"><span class="pre">&amp;str</span></code> to <code class="docutils literal notranslate"><span class="pre">&amp;Dialect</span></code>.
+<code class="docutils literal notranslate"><span class="pre">Dialect</span></code> is an enum defined in the <code class="docutils literal notranslate"><span class="pre">datafusion-common</span></code>
+crate under the <code class="docutils literal notranslate"><span class="pre">config</span></code> module that provides type safety
+and better validation for SQL dialect selection</p>
 </section>
 </section>
 <section id="datafusion-50-0-0">

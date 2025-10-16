@@ -5961,7 +5961,7 @@ This can be used to perform the inverse operation of <a class="reference interna
 </section>
 <section id="nvl">
 <h3><code class="docutils literal notranslate"><span class="pre">nvl</span></code><a class="headerlink" href="#nvl" title="Link to this heading">¶</a></h3>
-<p>Returns <em>expression2</em> if <em>expression1</em> is NULL otherwise it returns <em>expression1</em>.</p>
+<p>Returns <em>expression2</em> if <em>expression1</em> is NULL otherwise it returns <em>expression1</em> and <em>expression2</em> is not evaluated. This function can be used to substitute a default value for NULL values.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nvl</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
