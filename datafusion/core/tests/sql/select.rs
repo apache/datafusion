@@ -351,7 +351,7 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
     assert_eq!(schema.field(1).metadata(), &metadata2);
 
     assert_batches_eq!(
-        vec![
+        [
             "+----+-----+",
             "| $1 | $2  |",
             "+----+-----+",
