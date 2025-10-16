@@ -36,6 +36,11 @@ on:
       # it is not expected to have many changes in these branches,
       # so running extended tests is not a burden
       - 'branch-*'
+  pull_request:
+    branches: [ '**' ]
+    paths:
+      - 'datafusion/physical*/**/*.rs'
+      - 'datafusion/expr*/**/*.rs'
   workflow_dispatch:
     inputs:
       pr_number:
