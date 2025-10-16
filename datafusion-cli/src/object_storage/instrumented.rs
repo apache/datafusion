@@ -273,8 +273,15 @@ pub struct RequestSummaries {
 /// Display the summary as a table
 impl fmt::Display for RequestSummaries {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let batch = self.to_batch();
-        write!(f, "{}", pretty_format_batches(&[batch]).unwrap())
+        // Don't expect an error, but avoid panicking if it happens
+        match pretty_format_batches(&[self.to_batch()]) {
+            Err(e) => {
+                write!(f, "Error formatting summary: {e}")
+            }
+            Ok(displayable) => {
+                write!(f, "{displayable}")
+            }
+        }
     }
 }
 
