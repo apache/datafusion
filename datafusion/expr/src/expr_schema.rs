@@ -931,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn test_expr_placeholder_metadata() {
+    fn test_expr_placeholder() {
         let schema = MockExprSchema::new();
 
         let mut placeholder_meta = HashMap::new();
