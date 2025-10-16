@@ -163,6 +163,28 @@ impl InstrumentedObjectStore {
 
         ret
     }
+
+    async fn instrumented_list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<ListResult> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        let ret = self.inner.list_with_delimiter(prefix).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::List,
+            path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
+            extra_display: None,
+        });
+
+        Ok(ret)
+    }
 }
 
 impl fmt::Display for InstrumentedObjectStore {
@@ -217,6 +239,10 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        if self.enabled() {
+            return self.instrumented_list_with_delimiter(prefix).await;
+        }
+
         self.inner.list_with_delimiter(prefix).await
     }
 
@@ -564,6 +590,29 @@ mod tests {
         assert_eq!(request.op, Operation::List);
         assert_eq!(request.path, path);
         assert!(request.duration.is_none());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_list_with_delimiter() {
+        let (instrumented, path) = setup_test_store().await;
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.list_with_delimiter(Some(&path)).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.list_with_delimiter(Some(&path)).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let request = instrumented.take_requests().pop().unwrap();
+        assert_eq!(request.op, Operation::List);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
         assert!(request.size.is_none());
         assert!(request.range.is_none());
         assert!(request.extra_display.is_none());
