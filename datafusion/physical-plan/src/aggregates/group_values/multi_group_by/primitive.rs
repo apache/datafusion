@@ -56,6 +56,85 @@ where
             nulls: MaybeNullBufferBuilder::new(),
         }
     }
+
+    fn vectorized_equal_to_non_nullable(
+        &self,
+        lhs_rows: &[usize],
+        array: &ArrayRef,
+        rhs_rows: &[usize],
+        equal_to_results: &mut [bool],
+    ) {
+        assert!(
+            !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()),
+            "called with nullable input"
+        );
+        let array_values = array.as_primitive::<T>().values();
+
+        let iter = izip!(
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
+        );
+
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+            let result = {
+                // Getting unchecked not only for bound checks but because the bound checks are
+                // what prevents auto-vectorization
+                let left = if cfg!(debug_assertions) {
+                    self.group_values[lhs_row]
+                } else {
+                    // SAFETY: indices are guaranteed to be in bounds
+                    unsafe { *self.group_values.get_unchecked(lhs_row) }
+                };
+                let right = if cfg!(debug_assertions) {
+                    array_values[rhs_row]
+                } else {
+                    // SAFETY: indices are guaranteed to be in bounds
+                    unsafe { *array_values.get_unchecked(rhs_row) }
+                };
+
+                // Always evaluate, to allow for auto-vectorization
+                left.is_eq(right)
+            };
+
+            *equal_to_result = result && *equal_to_result;
+        }
+    }
+
+    pub fn vectorized_equal_nullable(
+        &self,
+        lhs_rows: &[usize],
+        array: &ArrayRef,
+        rhs_rows: &[usize],
+        equal_to_results: &mut [bool],
+    ) {
+        assert!(NULLABLE, "called with non-nullable input");
+        let array = array.as_primitive::<T>();
+
+        let iter = izip!(
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
+        );
+
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+            // Has found not equal to in previous column, don't need to check
+            if !*equal_to_result {
+                continue;
+            }
+
+            // Perf: skip null check (by short circuit) if input is not nullable
+            let exist_null = self.nulls.is_null(lhs_row);
+            let input_null = array.is_null(rhs_row);
+            if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                *equal_to_result = result;
+                continue;
+            }
+
+            // Otherwise, we need to check their values
+            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
+        }
+    }
 }
 
 impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
@@ -99,32 +178,15 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     ) {
-        let array = array.as_primitive::<T>();
-
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
-
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to in previous column, don't need to check
-            if !*equal_to_result {
-                continue;
-            }
-
-            // Perf: skip null check (by short circuit) if input is not nullable
-            if NULLABLE {
-                let exist_null = self.nulls.is_null(lhs_row);
-                let input_null = array.is_null(rhs_row);
-                if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                    *equal_to_result = result;
-                    continue;
-                }
-                // Otherwise, we need to check their values
-            }
-
-            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
+        if !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()) {
+            self.vectorized_equal_to_non_nullable(
+                lhs_rows,
+                array,
+                rhs_rows,
+                equal_to_results,
+            );
+        } else {
+            self.vectorized_equal_nullable(lhs_rows, array, rhs_rows, equal_to_results);
         }
     }
 
