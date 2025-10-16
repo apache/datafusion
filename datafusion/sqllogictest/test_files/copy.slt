@@ -437,7 +437,7 @@ CREATE EXTERNAL TABLE validate_parquet_single_no_rows STORED AS PARQUET LOCATION
 
 # validate the parquet file contains 0 rows.
 query I
-SELECT COUNT(*) FROM validate_parquet_single_no_rows;
+SELECT count(id) FROM validate_parquet_single_no_rows;
 ----
 0
 
