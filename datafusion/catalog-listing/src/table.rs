@@ -129,7 +129,8 @@ use std::sync::Arc;
 /// # use datafusion_common::Result;
 /// # use std::sync::Arc;
 /// # use datafusion_catalog::TableProvider;
-/// # use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
+/// # use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
+/// # use datafusion_datasource::ListingTableUrl;
 /// # use datafusion_datasource_parquet::file_format::ParquetFormat;/// #
 /// # use datafusion_catalog::Session;
 /// async fn get_listing_table(session: &dyn Session) -> Result<Arc<dyn TableProvider>> {
@@ -290,7 +291,8 @@ impl ListingTable {
     /// # Example: Adding Schema Evolution Support
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion_catalog_listing::{ListingTable, ListingTableConfig, ListingOptions, ListingTableUrl};
+    /// # use datafusion_catalog_listing::{ListingTable, ListingTableConfig, ListingOptions};
+    /// # use datafusion_datasource::ListingTableUrl;
     /// # use datafusion_datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter};
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     /// # use arrow::datatypes::{SchemaRef, Schema, Field, DataType};

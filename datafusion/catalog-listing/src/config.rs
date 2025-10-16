@@ -113,7 +113,7 @@ impl ListingTableConfig {
     /// ```rust
     /// # use std::sync::Arc;
     /// # use datafusion_catalog_listing::{ListingTableConfig, ListingOptions};
-    /// # use use datafusion_datasource::ListingTableUrl;
+    /// # use datafusion_datasource::ListingTableUrl;
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     /// # use arrow::datatypes::{Schema, Field, DataType};
     /// # let table_paths = ListingTableUrl::parse("file:///path/to/data").unwrap();

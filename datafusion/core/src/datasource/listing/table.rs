@@ -23,7 +23,7 @@ use datafusion_session::Session;
 use futures::StreamExt;
 use std::collections::HashMap;
 
-/// Extension trait for [`ListingTable`] that supports inferring schemas
+/// Extension trait for [`ListingTableConfig`] that supports inferring schemas
 ///
 /// This trait exists because the following inference methods only
 /// work for [`SessionState`] implementations of [`Session`].
