@@ -512,10 +512,9 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                 .clone();
 
             // Find the edge connecting next_node to any processed node
-            let next_node =
-                query_graph.get_node(next_node_id).ok_or_else(|| {
-                    plan_datafusion_err!("Node {:?} not found", next_node_id)
-                })?;
+            let next_node = query_graph.get_node(next_node_id).ok_or_else(|| {
+                plan_datafusion_err!("Node {:?} not found", next_node_id)
+            })?;
 
             let edge = processed_nodes
                 .iter()

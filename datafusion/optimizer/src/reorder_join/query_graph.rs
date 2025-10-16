@@ -5,9 +5,7 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
     DataFusionError, Result,
 };
-use datafusion_expr::{
-    utils::check_all_columns_from_schema, Join, LogicalPlan,
-};
+use datafusion_expr::{utils::check_all_columns_from_schema, Join, LogicalPlan};
 
 pub type NodeId = usize;
 
@@ -290,10 +288,14 @@ fn flatten_joins_recursive(
                     .filter_map(|(node_id, node)| {
                         let schema = node.plan.schema();
                         // Check if this node's schema contains columns from either left or right key
-                        let has_left = check_all_columns_from_schema(&left_columns, schema.as_ref())
-                            .unwrap_or(false);
-                        let has_right = check_all_columns_from_schema(&right_columns, schema.as_ref())
-                            .unwrap_or(false);
+                        let has_left =
+                            check_all_columns_from_schema(&left_columns, schema.as_ref())
+                                .unwrap_or(false);
+                        let has_right = check_all_columns_from_schema(
+                            &right_columns,
+                            schema.as_ref(),
+                        )
+                        .unwrap_or(false);
 
                         // Include node if it contains columns from either key (but not both, as that would be invalid)
                         if (has_left && !has_right) || (!has_left && has_right) {
@@ -480,7 +482,10 @@ mod tests {
                 s.contains("o_orderkey") && s.contains("l_orderkey")
             }) && e.join.filter.is_some()
         });
-        assert!(has_orders_lineitem, "Missing orders-lineitem join with filter");
+        assert!(
+            has_orders_lineitem,
+            "Missing orders-lineitem join with filter"
+        );
 
         Ok(())
     }
