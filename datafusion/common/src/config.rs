@@ -258,7 +258,7 @@ config_namespace! {
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
-        pub dialect: String, default = "generic".to_string()
+        pub dialect: Dialect, default = Dialect::Generic
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
         /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
@@ -289,6 +289,94 @@ config_namespace! {
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
         pub default_null_ordering: String, default = "nulls_max".to_string()
+    }
+}
+
+/// This is the SQL dialect used by DataFusion's parser.
+/// This mirrors [sqlparser::dialect::Dialect](https://docs.rs/sqlparser/latest/sqlparser/dialect/trait.Dialect.html)
+/// trait in order to offer an easier API and avoid adding the `sqlparser` dependency
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    #[default]
+    Generic,
+    MySQL,
+    PostgreSQL,
+    Hive,
+    SQLite,
+    Snowflake,
+    Redshift,
+    MsSQL,
+    ClickHouse,
+    BigQuery,
+    Ansi,
+    DuckDB,
+    Databricks,
+}
+
+impl AsRef<str> for Dialect {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Generic => "generic",
+            Self::MySQL => "mysql",
+            Self::PostgreSQL => "postgresql",
+            Self::Hive => "hive",
+            Self::SQLite => "sqlite",
+            Self::Snowflake => "snowflake",
+            Self::Redshift => "redshift",
+            Self::MsSQL => "mssql",
+            Self::ClickHouse => "clickhouse",
+            Self::BigQuery => "bigquery",
+            Self::Ansi => "ansi",
+            Self::DuckDB => "duckdb",
+            Self::Databricks => "databricks",
+        }
+    }
+}
+
+impl FromStr for Dialect {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value = match s.to_ascii_lowercase().as_str() {
+            "generic" => Self::Generic,
+            "mysql" => Self::MySQL,
+            "postgresql" | "postgres" => Self::PostgreSQL,
+            "hive" => Self::Hive,
+            "sqlite" => Self::SQLite,
+            "snowflake" => Self::Snowflake,
+            "redshift" => Self::Redshift,
+            "mssql" => Self::MsSQL,
+            "clickhouse" => Self::ClickHouse,
+            "bigquery" => Self::BigQuery,
+            "ansi" => Self::Ansi,
+            "duckdb" => Self::DuckDB,
+            "databricks" => Self::Databricks,
+            other => {
+                let error_message = format!(
+                    "Invalid Dialect: {other}. Expected one of: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks"
+                );
+                return Err(DataFusionError::Configuration(error_message));
+            }
+        };
+        Ok(value)
+    }
+}
+
+impl ConfigField for Dialect {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = Self::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for Dialect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = self.as_ref();
+        write!(f, "{str}")
     }
 }
 
