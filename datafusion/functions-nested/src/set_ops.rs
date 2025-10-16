@@ -290,10 +290,14 @@ impl ScalarUDFImpl for ArrayDistinct {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) => Ok(DataType::new_list(field.data_type().clone(), true)),
-            LargeList(field) => {
-                Ok(DataType::new_large_list(field.data_type().clone(), true))
-            }
+            List(field) => Ok(DataType::new_list(
+                field.data_type().clone(),
+                field.is_nullable(),
+            )),
+            LargeList(field) => Ok(DataType::new_large_list(
+                field.data_type().clone(),
+                field.is_nullable(),
+            )),
             arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
         }
     }
