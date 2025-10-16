@@ -711,7 +711,7 @@ fn test_update_infer_with_metadata() {
 
 #[test]
 fn test_insert_infer_with_metadata() {
-    // TOOD
+    // TODO
 }
 
 #[test]
