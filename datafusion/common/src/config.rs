@@ -758,6 +758,8 @@ config_namespace! {
         /// will attempt to push down the current top 10 timestamps that the TopK operator references into the file scans.
         /// This means that if we already have 10 timestamps in the year 2025
         /// any files that only have timestamps in the year 2024 can be skipped / pruned at various stages in the scan.
+        /// The config will supress `enable_join_dynamic_filter_pushdown` & `enable_topk_dynamic_filter_pushdown`
+        /// So if you disable `enable_topk_dynamic_filter_pushdown`, then enable `enable_dynamic_filter_pushdown`, the `enable_topk_dynamic_filter_pushdown` will be overridden.
         pub enable_dynamic_filter_pushdown: bool, default = true
 
         /// When set to true, the optimizer will insert filters before a join between
