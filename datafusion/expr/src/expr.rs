@@ -2666,7 +2666,8 @@ impl HashNode for Expr {
     }
 }
 
-// Modifies expr if it is a placeholder with datatype of right
+// Modifies expr to match the DataType, metadata, and nullability of other if it is
+// a placeholder with previously unspecified type information (i.e., most placeholders)
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
     if let Expr::Placeholder(Placeholder { id: _, field }) = expr {
         if field.is_none() {
@@ -2678,7 +2679,10 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                     )))?;
                 }
                 Ok((_, other_field)) => {
-                    *field = Some(other_field);
+                    // We can't infer the nullability of the future parameter that might
+                    // be bound, so ensure this is set to true
+                    *field =
+                        Some(other_field.as_ref().clone().with_nullable(true).into());
                 }
             }
         };
@@ -3495,8 +3499,8 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 mod test {
     use crate::expr_fn::col;
     use crate::{
-        case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
+        case, lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
     };
     use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
@@ -3606,6 +3610,37 @@ mod test {
                 _ => panic!("Expected Placeholder expression"),
             },
             _ => panic!("Expected SimilarTo expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_with_metadata() {
+        // name == $1
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)
+                .with_metadata(
+                    [("some_key".to_string(), "some_value".to_string())].into(),
+                )]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let expr = binary_expr(col("name"), Operator::Eq, placeholder("$1"));
+
+        let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
+        match inferred_expr {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => match *right {
+                Expr::Placeholder(placeholder) => {
+                    assert_eq!(
+                        placeholder.field.as_ref().unwrap().data_type(),
+                        &DataType::Utf8
+                    );
+                    assert_eq!(
+                        placeholder.field.unwrap().metadata(),
+                        df_schema.field(0).metadata()
+                    );
+                }
+                _ => panic!("Expected Placeholder"),
+            },
+            _ => panic!("Expected BinaryExpr"),
         }
     }
 
