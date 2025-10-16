@@ -1261,8 +1261,6 @@ impl SessionContext {
                 .into_iter()
                 .zip(prepared.fields.iter())
                 .map(|(e, dt)| -> Result<_> {
-                    // This is fishy...we're casting storage without checking if an
-                    // extension type supports the destination
                     e.cast_storage_to(dt.data_type())
                 })
                 .collect::<Result<_>>()?;
