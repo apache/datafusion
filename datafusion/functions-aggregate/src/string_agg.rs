@@ -590,6 +590,10 @@ mod tests {
             StringAgg::new().accumulator(AccumulatorArgs {
                 return_field: Field::new("f", DataType::LargeUtf8, true).into(),
                 schema: &self.schema,
+                expr_fields: &[
+                    Field::new("col", DataType::LargeUtf8, true).into(),
+                    Field::new("lit", DataType::Utf8, false).into(),
+                ],
                 ignore_nulls: false,
                 order_bys: &self.order_bys,
                 is_reversed: false,
