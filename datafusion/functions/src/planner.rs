@@ -25,7 +25,7 @@ use datafusion_expr::{
 };
 
 #[deprecated(
-    since = "0.50.0",
+    since = "50.0.0",
     note = "Use UnicodeFunctionPlanner and DateTimeFunctionPlanner instead"
 )]
 #[derive(Default, Debug)]
