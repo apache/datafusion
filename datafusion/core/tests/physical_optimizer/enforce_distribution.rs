@@ -1042,23 +1042,27 @@ fn hash_join_key_ordering() -> Result<()> {
     let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
 
     // Only two RepartitionExecs added
-    let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)]",
-        "  ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-        "    AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
-        "      RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
-        "        AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
-        "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
-        "    RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
-        "      AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
-        "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
     let test_config = TestConfig::default();
-    test_config.run(expected, join.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected, join, &SORT_DISTRIB_DISTRIB)?;
+    let plan_distrib = test_config.run2(join.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_distrib,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)]
+      ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
+        AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
+          RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
+            AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
+              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
+        RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
+          AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    "
+    );
+    let plan_sort = test_config.run2(join, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
 }
