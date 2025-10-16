@@ -310,10 +310,12 @@ impl ExprSchemable for Expr {
                     window_function,
                 )
                 .map(|(_, nullable)| nullable),
-            Expr::ScalarVariable(_, _)
-            | Expr::TryCast { .. }
-            | Expr::Unnest(_)
-            | Expr::Placeholder(_) => Ok(true),
+            Expr::Placeholder(Placeholder { id: _, field }) => {
+                Ok(field.as_ref().map(|f| f.is_nullable()).unwrap_or(true))
+            }
+            Expr::ScalarVariable(_, _) | Expr::TryCast { .. } | Expr::Unnest(_) => {
+                Ok(true)
+            }
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -435,9 +437,11 @@ impl ExprSchemable for Expr {
             }) => {
                 let field = match &**expr {
                     Expr::Placeholder(Placeholder { field, .. }) => match &field {
+                        // TODO: This seems to be pulling metadata/types from the schema
+                        // based on the Alias destination. name? Is this correct?
                         None => schema
-                            .data_type_and_nullable(&Column::from_name(name))
-                            .map(|(d, n)| Field::new(&schema_name, d.clone(), n)),
+                            .field_from_column(&Column::from_name(name))
+                            .map(|f| f.clone().with_name(&schema_name)),
                         Some(field) => Ok(field
                             .as_ref()
                             .clone()
@@ -593,6 +597,10 @@ impl ExprSchemable for Expr {
                 .to_field(schema)
                 .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone()))
                 .map(Arc::new),
+            Expr::Placeholder(Placeholder {
+                id: _,
+                field: Some(field),
+            }) => Ok(field.as_ref().clone().with_name(&schema_name).into()),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -775,10 +783,12 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::{col, lit, out_ref_col_with_metadata};
 
-    use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
+    use datafusion_common::{internal_err, DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -904,7 +914,7 @@ mod tests {
 
         let schema = DFSchema::from_unqualified_fields(
             vec![meta.add_to_field(Field::new("foo", DataType::Int32, true))].into(),
-            std::collections::HashMap::new(),
+            HashMap::new(),
         )
         .unwrap();
 
@@ -918,6 +928,53 @@ mod tests {
             Column::from_name("foo"),
         );
         assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_expr_placeholder_metadata() {
+        let schema = MockExprSchema::new();
+
+        let mut placeholder_meta = HashMap::new();
+        placeholder_meta.insert("bar".to_string(), "buzz".to_string());
+        let placeholder_meta = FieldMetadata::from(placeholder_meta);
+
+        let expr = Expr::Placeholder(Placeholder::new_with_metadata(
+            "".to_string(),
+            Some(
+                Field::new("", DataType::Utf8, true)
+                    .with_metadata(placeholder_meta.to_hashmap())
+                    .into(),
+            ),
+        ));
+
+        assert!(expr.nullable(&schema).unwrap());
+        assert_eq!(
+            expr.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, true)
+        );
+        assert_eq!(placeholder_meta, expr.metadata(&schema).unwrap());
+
+        let expr_alias = expr.alias("a placeholder by any other name");
+        assert_eq!(
+            expr_alias.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, true)
+        );
+        assert_eq!(placeholder_meta, expr_alias.metadata(&schema).unwrap());
+
+        // Non-nullable placeholder field should remain non-nullable
+        let expr = Expr::Placeholder(Placeholder::new_with_metadata(
+            "".to_string(),
+            Some(Field::new("", DataType::Utf8, false).into()),
+        ));
+        assert_eq!(
+            expr.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, false)
+        );
+        let expr_alias = expr.alias("a placeholder by any other name");
+        assert_eq!(
+            expr_alias.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, false)
+        );
     }
 
     #[derive(Debug)]
