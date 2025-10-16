@@ -162,8 +162,8 @@ parquet = { version = "56.2.0", default-features = false, features = [
     "async",
     "object_store",
 ] }
-pbjson = { version = "0.7.0" }
-pbjson-types = "0.7"
+pbjson = { version = "0.8.0" }
+pbjson-types = "0.8"
 # Should match arrow-flight's version of prost.
 insta = { version = "1.43.2", features = ["glob", "filters"] }
 prost = "0.13.1"
@@ -258,3 +258,7 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+[patch.crates-io]
+pbjson = { git = "http://github.com/adamgs/pbjson", branch = "adamg/serde-core" }
+pbjson-build = { git = "http://github.com/adamgs/pbjson", branch = "adamg/serde-core" }
