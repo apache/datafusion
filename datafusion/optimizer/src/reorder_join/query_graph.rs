@@ -5,7 +5,9 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
     DataFusionError, Result,
 };
-use datafusion_expr::{utils::find_valid_equijoin_key_pair, Join, LogicalPlan};
+use datafusion_expr::{
+    utils::check_all_columns_from_schema, Join, LogicalPlan,
+};
 
 pub type NodeId = usize;
 
@@ -278,63 +280,49 @@ fn flatten_joins_recursive(
 
             // Process each equijoin predicate to find which nodes it connects
             for (left_key, right_key) in &join.on {
-                // Try to find which two nodes this predicate connects
-                let mut found_edge = false;
+                // Extract column references from both join keys
+                let left_columns = left_key.column_refs();
+                let right_columns = right_key.column_refs();
 
-                // Collect all node IDs and their schemas for iteration
-                let nodes: Vec<(NodeId, Arc<LogicalPlan>)> = query_graph
+                // Filter nodes by checking which ones contain the columns from each expression
+                let matching_nodes: Vec<NodeId> = query_graph
                     .nodes()
-                    .map(|(id, node)| (id, Arc::clone(&node.plan)))
+                    .filter_map(|(node_id, node)| {
+                        let schema = node.plan.schema();
+                        // Check if this node's schema contains columns from either left or right key
+                        let has_left = check_all_columns_from_schema(&left_columns, schema.as_ref())
+                            .unwrap_or(false);
+                        let has_right = check_all_columns_from_schema(&right_columns, schema.as_ref())
+                            .unwrap_or(false);
+
+                        // Include node if it contains columns from either key (but not both, as that would be invalid)
+                        if (has_left && !has_right) || (!has_left && has_right) {
+                            Some(node_id)
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
 
-                // Try all pairs of nodes to find which ones this predicate connects
-                for i in 0..nodes.len() {
-                    if found_edge {
-                        break;
-                    }
-                    for j in (i + 1)..nodes.len() {
-                        let (node_id_a, plan_a) = &nodes[i];
-                        let (node_id_b, plan_b) = &nodes[j];
-
-                        let schema_a = plan_a.schema();
-                        let schema_b = plan_b.schema();
-
-                        // Check if this predicate connects these two nodes
-                        if (find_valid_equijoin_key_pair(
-                            left_key,
-                            right_key,
-                            schema_a.as_ref(),
-                            schema_b.as_ref(),
-                        )?)
-                        .is_some()
-                        {
-                            // Found a valid connection between node_a and node_b
-                            // Add an edge if one doesn't exist yet
-                            if let Some(node_a) = query_graph.get_node(*node_id_a) {
-                                if node_a
-                                    .connection_with(*node_id_b, query_graph)
-                                    .is_none()
-                                {
-                                    // No edge exists yet, create one with this join
-                                    query_graph.add_edge(
-                                        *node_id_a,
-                                        *node_id_b,
-                                        join.clone(),
-                                    );
-                                }
-                            }
-                            found_edge = true;
-                            break;
-                        }
-                    }
+                // We should have exactly two nodes: one with left_key columns, one with right_key columns
+                if matching_nodes.len() != 2 {
+                    return plan_err!(
+                        "Could not find exactly two nodes for join predicate: {} = {} (found {} nodes)",
+                        left_key,
+                        right_key,
+                        matching_nodes.len()
+                    );
                 }
 
-                if !found_edge {
-                    return plan_err!(
-                        "Could not find nodes for join predicate: {} = {}",
-                        left_key,
-                        right_key
-                    );
+                let node_id_a = matching_nodes[0];
+                let node_id_b = matching_nodes[1];
+
+                // Add an edge if one doesn't exist yet
+                if let Some(node_a) = query_graph.get_node(node_id_a) {
+                    if node_a.connection_with(node_id_b, query_graph).is_none() {
+                        // No edge exists yet, create one with this join
+                        query_graph.add_edge(node_id_a, node_id_b, join.clone());
+                    }
                 }
             }
 
