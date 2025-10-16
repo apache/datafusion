@@ -1050,8 +1050,7 @@ impl ConfigOptions {
             if key == "optimizer.enable_dynamic_filter_pushdown" {
                 let bool_value = value.parse::<bool>().map_err(|e| {
                     DataFusionError::Configuration(format!(
-                        "Failed to parse '{}' as bool: {}",
-                        value, e
+                        "Failed to parse '{value}' as bool: {e}",
                     ))
                 })?;
 
