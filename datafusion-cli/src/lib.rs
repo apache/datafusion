@@ -34,3 +34,4 @@ pub mod object_storage;
 pub mod pool_type;
 pub mod print_format;
 pub mod print_options;
+pub mod progress;

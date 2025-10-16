@@ -25,6 +25,7 @@ use crate::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry, RequestSummary,
 };
 use crate::print_format::PrintFormat;
+use crate::progress::ProgressConfig;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -79,6 +80,7 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
+    pub progress: ProgressConfig,
     pub instrumented_registry: Arc<InstrumentedObjectStoreRegistry>,
 }
 
@@ -233,6 +235,7 @@ mod tests {
             quiet: true,
             maxrows: MaxRows::Unlimited,
             color: true,
+            progress: ProgressConfig::default(),
             instrumented_registry: Arc::clone(&instrumented_registry),
         };
 

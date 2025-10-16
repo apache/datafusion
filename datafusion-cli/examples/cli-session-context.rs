@@ -91,6 +91,7 @@ pub async fn main() {
         quiet: false,
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
         color: true,
+        progress: datafusion_cli::progress::ProgressConfig::default(),
         instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
     };
 

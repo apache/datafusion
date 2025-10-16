@@ -40,6 +40,7 @@ use datafusion_cli::{
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
+    progress::{ProgressConfig, ProgressEstimator, ProgressMode, ProgressStyle},
     DATAFUSION_CLI_VERSION,
 };
 
@@ -149,6 +150,22 @@ struct Args {
     )]
     disk_limit: Option<usize>,
 
+    #[clap(long, value_enum, default_value_t = ProgressMode::Auto, help = "Progress bar mode")]
+    progress: ProgressMode,
+
+    #[clap(long, value_enum, default_value_t = ProgressStyle::Bar, help = "Progress bar style")]
+    progress_style: ProgressStyle,
+
+    #[clap(
+        long,
+        default_value = "200",
+        help = "Progress update interval in milliseconds"
+    )]
+    progress_interval: u64,
+
+    #[clap(long, value_enum, default_value_t = ProgressEstimator::Alpha, help = "ETA estimation algorithm")]
+    progress_estimator: ProgressEstimator,
+
     #[clap(
         long,
         help = "Specify the default object_store_profiling mode, defaults to 'disabled'.\n[possible values: disabled, summary, trace]",
@@ -244,11 +261,19 @@ async fn main_inner() -> Result<()> {
         )),
     );
 
+    let progress_config = ProgressConfig {
+        mode: args.progress,
+        style: args.progress_style,
+        interval_ms: args.progress_interval,
+        estimator: args.progress_estimator,
+    };
+
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
+        progress: progress_config,
         instrumented_registry: Arc::clone(&instrumented_registry),
     };
 

@@ -55,9 +55,12 @@ datafusion = { workspace = true, features = [
     "sql",
     "unicode_expressions",
 ] }
+datafusion-common = { workspace = true }
+datafusion-common-runtime = { workspace = true }
 dirs = "6.0.0"
 env_logger = { workspace = true }
 futures = { workspace = true }
+is-terminal = "0.4"
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "gcp", "http"] }
