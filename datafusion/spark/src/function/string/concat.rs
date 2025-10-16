@@ -85,6 +85,16 @@ impl ScalarUDFImpl for SparkConcat {
     }
 }
 
+/// Represents the null state for Spark concat
+enum NullMaskResolution {
+    /// Return NULL as the result (e.g., scalar inputs with at least one NULL)
+    ReturnNull,
+    /// No null mask needed (e.g., all scalar inputs are non-NULL)
+    NoMask,
+    /// Null mask to apply for arrays
+    Apply(NullBuffer),
+}
+
 /// Concatenates strings, returning NULL if any input is NULL
 /// This is a Spark-specific wrapper around DataFusion's concat that returns NULL
 /// if any argument is NULL (Spark behavior), whereas DataFusion's concat ignores NULLs.
@@ -108,7 +118,7 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
     let null_mask = compute_null_mask(&arg_values, number_rows)?;
 
     // If all scalars and any is NULL, return NULL immediately
-    if null_mask.is_none() {
+    if matches!(null_mask, NullMaskResolution::ReturnNull) {
         return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
     }
 
@@ -128,12 +138,10 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
 }
 
 /// Compute NULL mask for the arguments using NullBuffer::union
-/// Returns None if all scalars and any is NULL, or an Option of NullBuffer
-/// representing the combined null mask for incoming arrays
 fn compute_null_mask(
     args: &[ColumnarValue],
     number_rows: usize,
-) -> Result<Option<Option<NullBuffer>>> {
+) -> Result<NullMaskResolution> {
     // Check if all arguments are scalars
     let all_scalars = args
         .iter()
@@ -144,13 +152,12 @@ fn compute_null_mask(
         for arg in args {
             if let ColumnarValue::Scalar(scalar) = arg {
                 if scalar.is_null() {
-                    // Return None to indicate all values should be NULL
-                    return Ok(None);
+                    return Ok(NullMaskResolution::ReturnNull);
                 }
             }
         }
         // No NULLs in scalars
-        Ok(Some(None))
+        Ok(NullMaskResolution::NoMask)
     } else {
         // For arrays, compute NULL mask for each row using NullBuffer::union
         let array_len = args
@@ -177,24 +184,27 @@ fn compute_null_mask(
             .map(|arr| arr.nulls())
             .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls));
 
-        Ok(Some(combined_nulls))
+        match combined_nulls {
+            Some(nulls) => Ok(NullMaskResolution::Apply(nulls)),
+            None => Ok(NullMaskResolution::NoMask),
+        }
     }
 }
 
 /// Apply NULL mask to the result using NullBuffer::union
 fn apply_null_mask(
     result: ColumnarValue,
-    null_mask: Option<Option<NullBuffer>>,
+    null_mask: NullMaskResolution,
 ) -> Result<ColumnarValue> {
     match (result, null_mask) {
-        // Scalar with NULL mask means return NULL
-        (ColumnarValue::Scalar(_), None) => {
+        // Scalar with ReturnNull mask means return NULL
+        (ColumnarValue::Scalar(_), NullMaskResolution::ReturnNull) => {
             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
         }
-        // Scalar without NULL mask, return as-is
-        (scalar @ ColumnarValue::Scalar(_), Some(None)) => Ok(scalar),
+        // Scalar without mask, return as-is
+        (scalar @ ColumnarValue::Scalar(_), NullMaskResolution::NoMask) => Ok(scalar),
         // Array with NULL mask - use NullBuffer::union to combine nulls
-        (ColumnarValue::Array(array), Some(Some(null_mask))) => {
+        (ColumnarValue::Array(array), NullMaskResolution::Apply(null_mask)) => {
             // Combine the result's existing nulls with our computed null mask
             let combined_nulls = NullBuffer::union(array.nulls(), Some(&null_mask));
 
@@ -210,8 +220,8 @@ fn apply_null_mask(
             ))))
         }
         // Array without NULL mask, return as-is
-        (array @ ColumnarValue::Array(_), _) => Ok(array),
-        // Shouldn't happen
+        (array @ ColumnarValue::Array(_), NullMaskResolution::NoMask) => Ok(array),
+        // Edge cases that shouldn't happen in practice
         (scalar, _) => Ok(scalar),
     }
 }
