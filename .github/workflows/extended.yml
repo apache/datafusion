@@ -41,6 +41,7 @@ on:
     paths:
       - 'datafusion/physical*/**/*.rs'
       - 'datafusion/expr*/**/*.rs'
+      - 'datafusion/optimizer/**/*.rs'
   workflow_dispatch:
     inputs:
       pr_number:
