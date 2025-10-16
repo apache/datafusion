@@ -26,7 +26,7 @@ pub struct ProgressEstimator {
     estimator_type: EstimatorType,
     start_time: Instant,
     linear_estimator: LinearEstimator,
-    kalman_estimator: KalmanEstimator,
+    alpha_estimator: AlphaFilterEstimator,
 }
 
 impl ProgressEstimator {
@@ -35,7 +35,7 @@ impl ProgressEstimator {
             estimator_type,
             start_time: Instant::now(),
             linear_estimator: LinearEstimator::new(),
-            kalman_estimator: KalmanEstimator::new(),
+            alpha_estimator: AlphaFilterEstimator::new(),
         }
     }
 
@@ -51,7 +51,7 @@ impl ProgressEstimator {
 
         match self.estimator_type {
             EstimatorType::Linear => self.linear_estimator.update(percent, elapsed),
-            EstimatorType::Kalman => self.kalman_estimator.update(percent, elapsed),
+            EstimatorType::Alpha => self.alpha_estimator.update(percent, elapsed),
         }
     }
 }
@@ -88,57 +88,37 @@ impl LinearEstimator {
     }
 }
 
-/// Kalman filter ETA estimation for smoother predictions
+/// Alpha filter (exponential moving average) for smoother ETA predictions
 ///
-/// This implementation uses a 2D state vector [progress_rate, acceleration] to model
-/// the progress dynamics over time. The Kalman filter provides optimal estimates
-/// in the presence of noise by maintaining:
+/// This implementation uses a simple exponential moving average to smooth
+/// progress rate measurements. The alpha filter provides a good balance between
+/// responsiveness and smoothness for ETA estimation in a TUI environment.
 ///
-/// 1. **State Vector**: [rate, acceleration] where:
-///    - `rate`: progress percentage per second
-///    - `acceleration`: change in rate per second
+/// The smoothed rate is calculated as:
+/// smoothed_rate = alpha * new_rate + (1 - alpha) * previous_smoothed_rate
 ///
-/// 2. **State Transition Model**:
-///    - rate(k+1) = rate(k) + acceleration(k) * dt
-///    - acceleration(k+1) = acceleration(k) + process_noise
-///
-/// 3. **Measurement Model**: We directly observe the progress rate
-///
-/// 4. **Noise Models**:
-///    - Process noise: Models uncertainty in how progress rate changes
-///    - Measurement noise: Models uncertainty in our rate observations
-///
-/// The filter continuously updates its estimates as new progress measurements
-/// arrive, providing smoother and more accurate ETA predictions than simple
-/// linear extrapolation.
-struct KalmanEstimator {
-    // State: [progress_rate, acceleration]
-    state: [f64; 2],
-    // Covariance matrix (2x2, stored as [P00, P01, P10, P11])
-    covariance: [f64; 4],
-    // Process noise - models uncertainty in progress dynamics
-    // Higher values = more responsive to changes, but less smooth
-    // Tuning: 0.01-1.0 range, 0.1 provides good balance
-    process_noise: f64,
-    // Measurement noise - models uncertainty in rate measurements
-    // Higher values = less trust in new measurements, smoother estimates
-    // Tuning: 0.1-10.0 range, 1.0 provides good balance
-    measurement_noise: f64,
-    // Previous time for calculating dt
+/// Where alpha is the smoothing factor:
+/// - Higher alpha (closer to 1.0): More responsive to changes, less smooth
+/// - Lower alpha (closer to 0.0): Less responsive, more smooth
+/// - Typical range: 0.1-0.5, with 0.3 providing good balance
+struct AlphaFilterEstimator {
+    // Smoothing factor (0.0 to 1.0)
+    alpha: f64,
+    // Smoothed progress rate (percent per second)
+    smoothed_rate: Option<f64>,
+    // Previous time for calculating rate
     last_time: Option<Duration>,
-    // Previous progress
+    // Previous progress percentage
     last_progress: Option<f64>,
     // Number of observations
     observations: usize,
 }
 
-impl KalmanEstimator {
+impl AlphaFilterEstimator {
     fn new() -> Self {
         Self {
-            state: [0.0, 0.0],                // Initial rate = 0, acceleration = 0
-            covariance: [1.0, 0.0, 0.0, 1.0], // Identity matrix
-            process_noise: 0.1,
-            measurement_noise: 1.0,
+            alpha: 0.3, // Good balance between responsiveness and smoothness
+            smoothed_rate: None,
             last_time: None,
             last_progress: None,
             observations: 0,
@@ -155,7 +135,19 @@ impl KalmanEstimator {
             let dt = (elapsed - last_time).as_secs_f64();
             if dt > 0.0 {
                 let measured_rate = (percent - last_progress) / dt;
-                self.kalman_update(measured_rate, dt);
+
+                // Apply exponential moving average
+                match self.smoothed_rate {
+                    Some(prev_rate) => {
+                        self.smoothed_rate = Some(
+                            self.alpha * measured_rate + (1.0 - self.alpha) * prev_rate,
+                        );
+                    }
+                    None => {
+                        // First rate measurement, use it directly
+                        self.smoothed_rate = Some(measured_rate);
+                    }
+                }
             }
         }
 
@@ -163,107 +155,19 @@ impl KalmanEstimator {
         self.last_progress = Some(percent);
 
         // Don't provide estimate until we have enough observations and progress
-        if self.observations < 3 || percent <= 5.0 {
+        if self.observations < 2 || percent <= 5.0 {
             return None;
         }
 
         self.calculate_eta(percent)
     }
 
-    /// Kalman filter prediction step
-    ///
-    /// Predicts the next state based on the current state and time elapsed.
-    /// This implements the linear state transition model:
-    /// - rate(k+1) = rate(k) + acceleration(k) * dt
-    /// - acceleration(k+1) = acceleration(k) + process_noise
-    ///
-    /// The covariance matrix is updated to reflect increased uncertainty
-    /// due to process noise and time progression.
-    fn predict(&mut self, dt: f64) {
-        // State transition: progress_rate(k+1) = progress_rate(k) + acceleration(k) * dt
-        //                  acceleration(k+1) = acceleration(k)
-
-        // Update state vector using linear dynamics
-        self.state[0] += self.state[1] * dt; // rate += acceleration * dt
-                                             // acceleration stays the same (constant acceleration model)
-
-        // Update covariance with process noise
-        // F = [[1, dt], [0, 1]] (state transition matrix)
-        // P = F * P * F^T + Q (covariance prediction)
-        //
-        // This expands to:
-        // P00_new = P00 + 2*dt*P01 + dt²*P11 + Q
-        // P01_new = P01 + dt*P11
-        // P10_new = P10 + dt*P11
-        // P11_new = P11 + Q
-
-        let p00 = self.covariance[0];
-        let p01 = self.covariance[1];
-        let p10 = self.covariance[2];
-        let p11 = self.covariance[3];
-
-        self.covariance[0] = p00 + 2.0 * dt * p01 + dt * dt * p11 + self.process_noise;
-        self.covariance[1] = p01 + dt * p11;
-        self.covariance[2] = p10 + dt * p11;
-        self.covariance[3] = p11 + self.process_noise;
-    }
-
-    /// Kalman filter update step
-    ///
-    /// Updates the state estimate based on a new measurement of progress rate.
-    /// This implements the standard Kalman filter measurement update equations:
-    ///
-    /// 1. **Innovation**: Difference between measured and predicted rate
-    /// 2. **Kalman Gain**: Optimal weighting between prediction and measurement
-    /// 3. **State Update**: Corrects state estimate using weighted innovation
-    /// 4. **Covariance Update**: Reduces uncertainty after incorporating measurement
-    ///
-    /// The measurement model assumes we directly observe the progress rate with
-    /// some noise (measurement_noise).
-    fn kalman_update(&mut self, measured_rate: f64, dt: f64) {
-        // First predict the state forward in time
-        self.predict(dt);
-
-        // Measurement update equations
-        // H = [1, 0] (we measure the rate directly, not acceleration)
-        // y = z - H*x (innovation: difference between measurement and prediction)
-        let innovation = measured_rate - self.state[0];
-
-        // S = H * P * H^T + R (innovation covariance)
-        // Since H = [1, 0], this simplifies to P[0,0] + R
-        let innovation_covariance = self.covariance[0] + self.measurement_noise;
-
-        // Avoid division by zero or very small numbers
-        if innovation_covariance > 1e-9 {
-            // K = P * H^T * S^-1 (Kalman gain vector)
-            // Since H = [1, 0], this simplifies to:
-            let kalman_gain = [
-                self.covariance[0] / innovation_covariance, // Gain for rate
-                self.covariance[2] / innovation_covariance, // Gain for acceleration
-            ];
-
-            // Update state estimate: x = x + K * y
-            self.state[0] += kalman_gain[0] * innovation;
-            self.state[1] += kalman_gain[1] * innovation;
-
-            // Update covariance matrix: P = (I - K * H) * P
-            // Since H = [1, 0], K*H = [K[0], 0] and (I - K*H) = [[1-K[0], 0], [-K[1], 1]]
-            let p00 = self.covariance[0];
-            let p01 = self.covariance[1];
-            let p10 = self.covariance[2];
-            let p11 = self.covariance[3];
-
-            self.covariance[0] = (1.0 - kalman_gain[0]) * p00;
-            self.covariance[1] = (1.0 - kalman_gain[0]) * p01;
-            self.covariance[2] = p10 - kalman_gain[1] * p00;
-            self.covariance[3] = p11 - kalman_gain[1] * p01;
-        }
-    }
-
-    /// Calculate ETA based on current state
+    /// Calculate ETA based on smoothed rate
     fn calculate_eta(&self, current_percent: f64) -> Option<Duration> {
         let remaining_percent = 100.0 - current_percent;
-        let current_rate = self.state[0];
+
+        // Use smoothed rate if available
+        let current_rate = self.smoothed_rate?;
 
         if current_rate <= 0.0 {
             return None; // No progress or going backwards
@@ -303,15 +207,14 @@ mod tests {
     }
 
     #[test]
-    fn test_kalman_estimator() {
-        let mut estimator = KalmanEstimator::new();
+    fn test_alpha_filter_estimator() {
+        let mut estimator = AlphaFilterEstimator::new();
 
-        // First few updates should return None
+        // First update should return None (need at least 2 observations)
         assert!(estimator.update(5.0, Duration::from_secs(10)).is_none());
-        assert!(estimator.update(10.0, Duration::from_secs(20)).is_none());
 
-        // After enough observations, should provide estimate
-        let eta = estimator.update(15.0, Duration::from_secs(30));
+        // After second observation, should provide estimate
+        let eta = estimator.update(10.0, Duration::from_secs(20));
         assert!(eta.is_some());
     }
 

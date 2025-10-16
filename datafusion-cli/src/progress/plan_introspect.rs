@@ -85,7 +85,7 @@ impl ExecutionPlanVisitor for TotalsVisitor {
 
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         // Focus on leaf nodes that actually read data
-        if self.is_data_source(plan) {
+        if self.is_leaf_node(plan) {
             if let Ok(stats) = plan.partition_statistics(None) {
                 self.accumulate_statistics(&stats);
             }
@@ -97,16 +97,10 @@ impl ExecutionPlanVisitor for TotalsVisitor {
 }
 
 impl TotalsVisitor {
-    /// Check if this plan node is a data source (leaf node that reads data)
-    fn is_data_source(&self, plan: &dyn ExecutionPlan) -> bool {
-        let name = plan.name();
-
-        // Common data source execution plans
-        name.contains("ParquetExec")
-            || name.contains("CsvExec")
-            || name.contains("JsonExec")
-            || name.contains("AvroExec")
-            || name.contains("DataSourceExec")
+    /// Check if this plan node is a leaf node (no children)
+    /// Leaf nodes are typically data sources that actually read data
+    fn is_leaf_node(&self, plan: &dyn ExecutionPlan) -> bool {
+        plan.children().is_empty()
     }
 
     /// Accumulate statistics from a plan node

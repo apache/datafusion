@@ -163,7 +163,7 @@ struct Args {
     )]
     progress_interval: u64,
 
-    #[clap(long, value_enum, default_value_t = ProgressEstimator::Kalman, help = "ETA estimation algorithm")]
+    #[clap(long, value_enum, default_value_t = ProgressEstimator::Alpha, help = "ETA estimation algorithm")]
     progress_estimator: ProgressEstimator,
 
     #[clap(

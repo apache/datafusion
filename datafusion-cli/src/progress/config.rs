@@ -52,7 +52,7 @@ impl Default for ProgressConfig {
             mode: ProgressMode::Auto,
             style: ProgressStyle::Bar,
             interval_ms: 200,
-            estimator: ProgressEstimator::Kalman,
+            estimator: ProgressEstimator::Alpha,
         }
     }
 }
@@ -94,12 +94,12 @@ impl Default for ProgressStyle {
 pub enum ProgressEstimator {
     /// Simple linear estimation
     Linear,
-    /// Kalman filter smoothed estimation
-    Kalman,
+    /// Alpha filter (exponential moving average) smoothed estimation
+    Alpha,
 }
 
 impl Default for ProgressEstimator {
     fn default() -> Self {
-        Self::Kalman
+        Self::Alpha
     }
 }
