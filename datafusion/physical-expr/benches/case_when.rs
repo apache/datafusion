@@ -33,12 +33,20 @@ fn make_x_cmp_y(
     Arc::new(BinaryExpr::new(Arc::clone(x), op, lit(y)))
 }
 
+/// Create a record batch with the given number of rows and columns.
+/// Columns are named `c<i>` where `i` is the column index.
+///
+/// The minimum value for `column_count` is `3`.
+/// `c0` contains incrementing int32 values
+/// `c1` contains strings with one null inserted every 7 rows
+/// `c2` contains strings with one null inserted every 9 rows
+/// `c3` to `cn`, is present, contain unspecified int32 values
 fn make_batch(row_count: usize, column_count: usize) -> RecordBatch {
-    let mut c1 = Int32Builder::new();
+    assert!(column_count >= 3);
+
     let mut c2 = StringBuilder::new();
     let mut c3 = StringBuilder::new();
     for i in 0..row_count {
-        c1.append_value(i as i32);
         if i % 7 == 0 {
             c2.append_null();
         } else {
@@ -50,7 +58,7 @@ fn make_batch(row_count: usize, column_count: usize) -> RecordBatch {
             c3.append_value(format!("other string {i}"));
         }
     }
-    let c1 = Arc::new(c1.finish());
+    let c1 = Arc::new(Int32Array::from_iter_values(0..row_count as i32));
     let c2 = Arc::new(c2.finish());
     let c3 = Arc::new(c3.finish());
     let mut columns: Vec<ArrayRef> = vec![c1, c2, c3];
