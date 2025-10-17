@@ -272,6 +272,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
         }
+
+        // Special handling for concat: if arguments are lists, use array_concat instead
+        let name = if name.eq("concat") {
+            let args_exprs =
+                self.function_args_to_expr(args.clone(), schema, planner_context)?;
+            // Check if any argument is a list type
+            let has_list_arg = args_exprs.iter().any(|arg| {
+                matches!(
+                    arg.get_type(schema),
+                    Ok(DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _))
+                )
+            });
+            if has_list_arg {
+                "array_concat".to_string()
+            } else {
+                name
+            }
+        } else {
+            name
+        };
+
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;

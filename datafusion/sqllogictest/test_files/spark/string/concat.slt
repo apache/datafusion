@@ -46,3 +46,47 @@ SELECT concat(a, b, c) from (select 'a' a, 'b' b, 'c' c union all select null a,
 ----
 abc
 NULL
+
+# Test array concatenation using concat function
+# concat should automatically use array_concat when arguments are arrays
+
+query ?
+SELECT concat([1, 2], [3, 4]);
+----
+[1, 2, 3, 4]
+
+query ?
+SELECT concat([1, 2], [3, 4], [5, 6]);
+----
+[1, 2, 3, 4, 5, 6]
+
+query ?
+SELECT concat(['a', 'b'], ['c', 'd']);
+----
+[a, b, c, d]
+
+query ?
+SELECT concat([1, 2], []);
+----
+[1, 2]
+
+query ?
+SELECT concat([], [1, 2]);
+----
+[1, 2]
+
+query ?
+SELECT concat([[1, 2]], [[3, 4]]);
+----
+[[1, 2], [3, 4]]
+
+# Test with NULL arrays
+query ?
+SELECT concat([1, 2], NULL::int[]);
+----
+NULL
+
+query ?
+SELECT concat(NULL::int[], [1, 2]);
+----
+NULL

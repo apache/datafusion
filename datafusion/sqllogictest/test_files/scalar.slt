@@ -1817,6 +1817,47 @@ SELECT CONCAT('Hello', 'World')
 ----
 HelloWorld
 
+query ?
+SELECT concat([1, 2], [3, 4]);
+----
+[1, 2, 3, 4]
+
+query ?
+SELECT concat([1, 2], [3, 4], [5, 6]);
+----
+[1, 2, 3, 4, 5, 6]
+
+query ?
+SELECT concat(['a', 'b'], ['c', 'd']);
+----
+[a, b, c, d]
+
+query ?
+SELECT concat([1, 2], []);
+----
+[1, 2]
+
+query ?
+SELECT concat([], [1, 2]);
+----
+[1, 2]
+
+query ?
+SELECT concat([[1, 2]], [[3, 4]]);
+----
+[[1, 2], [3, 4]]
+
+# Test with NULL arrays
+query ?
+SELECT concat([1, 2], NULL::int[]);
+----
+[1, 2]
+
+query ?
+SELECT concat(NULL::int[], [1, 2]);
+----
+[1, 2]
+
 statement ok
 CREATE TABLE simple_string(
   letter STRING,
