@@ -25,8 +25,7 @@ use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::{
-    Documentation, Expr, LimitEffect, PartitionEvaluator, Signature, Volatility,
-    WindowUDFImpl,
+    Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -37,15 +36,12 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-get_or_init_udwf!(
+define_udwf_and_expr!(
     Ntile,
     ntile,
-    "integer ranging from 1 to the argument value, dividing the partition as equally as possible"
+    [arg],
+    "Integer ranging from 1 to the argument value, dividing the partition as equally as possible."
 );
-
-pub fn ntile(arg: Expr) -> Expr {
-    ntile_udwf().call(vec![arg])
-}
 
 #[user_doc(
     doc_section(label = "Ranking Functions"),
