@@ -61,8 +61,9 @@ jobs:
           shared-key: "amd-ci-linux-test-example"
       - name: Remove unnecessary files
         run: |
-          echo "Disk space before cleanup:"
+          echo "Disk space before cleanup:"          
           df -h
+          du -s -d 3 /
           sudo rm -rf /tmp/*
           sudo rm -rf /opt/hostedtoolcache
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
