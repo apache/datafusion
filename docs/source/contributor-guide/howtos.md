@@ -38,7 +38,8 @@ Make a PR to update the [rust-toolchain] file in the root of the repository.
 | Table         | [functions-table]         | [`TableFunctionImpl`] and a [`TableProvider`]  | `create_udtf_function!()`                        | [`simple_udtf.rs`]   |
 
 - The macros are to simplify some boilerplate such as ensuring a DataFrame API compatible function is also created
-- Ensure new functions are properly exported through the appropriate `mod`s/`lib`s
+- Ensure new functions are properly exported through the subproject 
+ `mod.rs` or `lib.rs`. 
 - Functions should preferably provide documentation via the `#[user_doc(...)]` attribute so their documentation
   can be included in the SQL reference documentation (see below section)
 - Scalar functions are further grouped into modules for families of functions (e.g. string, math, datetime).
