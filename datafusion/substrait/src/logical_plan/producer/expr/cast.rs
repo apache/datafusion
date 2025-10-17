@@ -69,7 +69,7 @@ pub fn from_try_cast(
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type(&field.data_type(), true)?),
+                r#type: Some(to_substrait_type(field.data_type(), true)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ReturnNull.into(),
             },
