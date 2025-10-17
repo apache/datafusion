@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::builder::{Int32Builder, StringBuilder};
+use arrow::array::builder::StringBuilder;
 use arrow::array::{Array, ArrayRef, Int32Array};
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -63,7 +63,7 @@ fn make_batch(row_count: usize, column_count: usize) -> RecordBatch {
     let c3 = Arc::new(c3.finish());
     let mut columns: Vec<ArrayRef> = vec![c1, c2, c3];
     for _ in 3..column_count {
-        columns.push(Arc::new(Int32Array::from_value(0, row_count)));
+        columns.push(Arc::new(Int32Array::from_iter_values(0..row_count as i32)));
     }
 
     let fields = columns
