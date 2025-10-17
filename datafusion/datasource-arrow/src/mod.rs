@@ -15,5 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Re-exports the [`datafusion_datasource_arrow::file_format`] module, and contains tests for it.
-pub use datafusion_datasource_arrow::file_format::*;
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
+#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+
+pub mod file_format;
+pub mod source;
+
+pub use file_format::*;

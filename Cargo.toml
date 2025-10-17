@@ -22,6 +22,7 @@ members = [
     "datafusion/catalog",
     "datafusion/catalog-listing",
     "datafusion/datasource",
+    "datafusion/datasource-arrow",
     "datafusion/datasource-avro",
     "datafusion/datasource-csv",
     "datafusion/datasource-json",
@@ -116,6 +117,7 @@ datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "5
 datafusion-common = { path = "datafusion/common", version = "50.2.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "50.2.0" }
 datafusion-datasource = { path = "datafusion/datasource", version = "50.2.0", default-features = false }
+datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "50.2.0", default-features = false }
 datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "50.2.0", default-features = false }
 datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "50.2.0", default-features = false }
 datafusion-datasource-json = { path = "datafusion/datasource-json", version = "50.2.0", default-features = false }
