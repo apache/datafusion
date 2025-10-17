@@ -6,7 +6,7 @@ info:
   env:
     AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
     AWS_ALLOW_HTTP: "true"
-    AWS_ENDPOINT: "http://localhost:55031"
+    AWS_ENDPOINT: "http://localhost:55057"
     AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
   stdin: "\n    CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION 's3://data/cars.csv';\n\n-- Initial query should not show any profiling as the object store is not instrumented yet\nSELECT * from CARS LIMIT 1;\n\\object_store_profiling trace\n-- Query again to see the full profiling output\nSELECT * from CARS LIMIT 1;\n\\object_store_profiling summary\n-- Query again to see the summarized profiling output\nSELECT * from CARS LIMIT 1;\n\\object_store_profiling disabled\n-- Final query should not show any profiling as we disabled it again\nSELECT * from CARS LIMIT 1;\n"
 snapshot_kind: text
@@ -40,16 +40,12 @@ Instrumented Object Store: instrument_mode: Trace, inner: AmazonS3(data)
 <TIMESTAMP> operation=Get duration=[DURATION] size=1006 path=cars.csv
 
 Summaries:
-Get
-count: 1
-[SUMMARY_DURATION]
-[SUMMARY_DURATION]
-[SUMMARY_DURATION]
-size min: 1006 B
-size max: 1006 B
-size avg: 1006 B
-size sum: 1006 B
-
++-----------+----------+-----------+-----------+-----------+-----------+-------+
+| Operation | Metric   | min       | max       | avg       | sum       | count |
++-----------+----------+-----------+-----------+-----------+-----------+-------+
+| Get        | duration | ...NORMALIZED...| 1     |
+| Get       | size     | 1006 B    | 1006 B    | 1006 B    | 1006 B    | 1     |
++-----------+----------+-----------+-----------+-----------+-----------+-------+
 ObjectStore Profile mode set to Summary
 +-----+-------+---------------------+
 | car | speed | time                |
@@ -62,16 +58,12 @@ ObjectStore Profile mode set to Summary
 Object Store Profiling
 Instrumented Object Store: instrument_mode: Summary, inner: AmazonS3(data)
 Summaries:
-Get
-count: 1
-[SUMMARY_DURATION]
-[SUMMARY_DURATION]
-[SUMMARY_DURATION]
-size min: 1006 B
-size max: 1006 B
-size avg: 1006 B
-size sum: 1006 B
-
++-----------+----------+-----------+-----------+-----------+-----------+-------+
+| Operation | Metric   | min       | max       | avg       | sum       | count |
++-----------+----------+-----------+-----------+-----------+-----------+-------+
+| Get        | duration | ...NORMALIZED...| 1     |
+| Get       | size     | 1006 B    | 1006 B    | 1006 B    | 1006 B    | 1     |
++-----------+----------+-----------+-----------+-----------+-----------+-------+
 ObjectStore Profile mode set to Disabled
 +-----+-------+---------------------+
 | car | speed | time                |
