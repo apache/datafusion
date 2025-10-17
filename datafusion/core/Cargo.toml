@@ -47,7 +47,7 @@ compression = [
     "bzip2",
     "flate2",
     "zstd",
-    "arrow-ipc/zstd",
+    "datafusion-datasource-arrow/compression",
     "datafusion-datasource/compression",
 ]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
@@ -109,7 +109,6 @@ extended_tests = []
 
 [dependencies]
 arrow = { workspace = true }
-arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
@@ -120,6 +119,7 @@ datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
+datafusion-datasource-arrow = { workspace = true }
 datafusion-datasource-avro = { workspace = true, optional = true }
 datafusion-datasource-csv = { workspace = true }
 datafusion-datasource-json = { workspace = true }

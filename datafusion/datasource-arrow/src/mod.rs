@@ -15,27 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod shuffle;
-pub mod spark_array;
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
+#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
-use datafusion_expr::ScalarUDF;
-use datafusion_functions::make_udf_function;
-use std::sync::Arc;
+pub mod file_format;
+pub mod source;
 
-make_udf_function!(spark_array::SparkArray, array);
-make_udf_function!(shuffle::SparkShuffle, shuffle);
-
-pub mod expr_fn {
-    use datafusion_functions::export_functions;
-
-    export_functions!((array, "Returns an array with the given elements.", args));
-    export_functions!((
-        shuffle,
-        "Returns a random permutation of the given array.",
-        args
-    ));
-}
-
-pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![array(), shuffle()]
-}
+pub use file_format::*;

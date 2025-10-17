@@ -15,27 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod shuffle;
-pub mod spark_array;
+//! Reexports the [`datafusion_datasource_arrow::source`] module, containing [Arrow] based [`FileSource`].
+//!
+//! [Arrow]: https://arrow.apache.org/docs/python/ipc.html
+//! [`FileSource`]: datafusion_datasource::file::FileSource
 
-use datafusion_expr::ScalarUDF;
-use datafusion_functions::make_udf_function;
-use std::sync::Arc;
-
-make_udf_function!(spark_array::SparkArray, array);
-make_udf_function!(shuffle::SparkShuffle, shuffle);
-
-pub mod expr_fn {
-    use datafusion_functions::export_functions;
-
-    export_functions!((array, "Returns an array with the given elements.", args));
-    export_functions!((
-        shuffle,
-        "Returns a random permutation of the given array.",
-        args
-    ));
-}
-
-pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![array(), shuffle()]
-}
+pub use datafusion_datasource_arrow::source::*;

@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-catalog-listing"
-description = "datafusion-catalog-listing"
+name = "datafusion-datasource-arrow"
+description = "datafusion-datasource-arrow"
 readme = "README.md"
 authors.workspace = true
 edition.workspace = true
@@ -32,31 +32,33 @@ all-features = true
 
 [dependencies]
 arrow = { workspace = true }
+arrow-ipc = { workspace = true }
 async-trait = { workspace = true }
-datafusion-catalog = { workspace = true }
+bytes = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
+datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-physical-expr = { workspace = true }
-datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-session = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
-log = { workspace = true }
 object_store = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-datafusion-datasource-parquet = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true
 
 [lib]
-name = "datafusion_catalog_listing"
+name = "datafusion_datasource_arrow"
 path = "src/mod.rs"
 
-[package.metadata.cargo-machete]
-ignored = ["datafusion-datasource-parquet"]
+[features]
+compression = [
+    "arrow-ipc/zstd",
+]
