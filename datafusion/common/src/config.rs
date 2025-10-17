@@ -518,6 +518,11 @@ config_namespace! {
         /// rows decoded.
         pub enable_page_index: bool, default = true
 
+        /// (reading) If true, eagerly loads the Parquet data page level metadata (the
+        /// Page Index), this is mostly used by object stores where multiple loading
+        /// I/O calls are expensive.
+        pub eager_load_page_index: bool, default = false
+
         /// (reading) If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
         /// the parquet file

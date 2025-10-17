@@ -89,6 +89,10 @@ pub(super) struct ParquetOpener {
     /// Should the page index be read from parquet files, if present, to skip
     /// data pages
     pub enable_page_index: bool,
+    /// Should the page index be eagerly loaded when reading parquet metadata.
+    /// If false, the page index will be loaded later which means we will have 2 loading
+    /// phases instead of 1 when the page index is needed.
+    pub eager_load_page_index: bool,
     /// Should the bloom filter be read from parquet, if present, to skip row
     /// groups
     pub enable_bloom_filter: bool,
@@ -156,6 +160,7 @@ impl FileOpener for ParquetOpener {
         let mut predicate_file_schema = Arc::clone(&self.logical_file_schema);
 
         let enable_page_index = self.enable_page_index;
+        let eager_load_page_index = self.eager_load_page_index;
         #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
@@ -205,7 +210,9 @@ impl FileOpener for ParquetOpener {
             // unnecessary I/O. We decide later if it is needed to evaluate the
             // pruning predicates. Thus default to not requesting if from the
             // underlying reader.
-            let mut options = ArrowReaderOptions::new().with_page_index(false);
+            // But if eager loading is requested, we do request it now.
+            let request_page_index = eager_load_page_index && enable_page_index;
+            let mut options = ArrowReaderOptions::new().with_page_index(request_page_index);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties((*fd_val).clone());
@@ -291,10 +298,12 @@ impl FileOpener for ParquetOpener {
                 &predicate_creation_errors,
             );
 
+            let needs_lazy_load = !eager_load_page_index
+                && should_enable_page_index(enable_page_index, &page_pruning_predicate);
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
             // need them for reading and they aren't yet loaded, we need to load them now.
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
+            if needs_lazy_load {
                 reader_metadata = load_page_index(
                     reader_metadata,
                     &mut async_file_reader,
@@ -863,6 +872,7 @@ mod test {
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
                 enable_page_index: false,
+                eager_load_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
@@ -953,6 +963,7 @@ mod test {
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
                 enable_page_index: false,
+                eager_load_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
@@ -1059,6 +1070,7 @@ mod test {
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
                 enable_page_index: false,
+                eager_load_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
@@ -1175,6 +1187,7 @@ mod test {
                 pushdown_filters: true, // note that this is true!
                 reorder_filters: true,
                 enable_page_index: false,
+                eager_load_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: false, // note that this is false!
@@ -1292,6 +1305,7 @@ mod test {
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
                 enable_page_index: false,
+                eager_load_page_index: false,
                 enable_bloom_filter: false,
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
@@ -1476,6 +1490,7 @@ mod test {
             pushdown_filters: true,
             reorder_filters: false,
             enable_page_index: false,
+            eager_load_page_index: false,
             enable_bloom_filter: false,
             schema_adapter_factory: Arc::new(CustomSchemaAdapterFactory),
             enable_row_group_stats_pruning: false,
@@ -1509,5 +1524,55 @@ mod test {
         let metrics = opener.metrics.clone_inner();
         assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 2);
+    }
+
+    #[test]
+    fn test_should_enable_page_index_and_eager_lazy_logic() {
+        use std::sync::Arc;
+        use arrow::datatypes::{Field, Schema};
+        use datafusion_expr::col;
+        use datafusion_expr::lit;
+        use datafusion_common::ScalarValue;
+        use datafusion_physical_expr::planner::logical2physical;
+
+        // 1) Construct a minimal file schema (only needed to produce a predicate)
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        // Build a simple predicate: a = 1
+        let expr = col("a").eq(lit(ScalarValue::Int32(Some(1))));
+        let predicate = logical2physical(&expr, &schema);
+
+        // 2) Test that build_page_pruning_predicate -> page pruning predicate is not empty
+        let page_pruning_pred = crate::opener::build_page_pruning_predicate(&predicate, &schema);
+        // page_pruning_pred.filter_number() should be greater than 0 (i.e. at least one page-level filter)
+        assert!(page_pruning_pred.filter_number() > 0);
+
+        // 3) Test basic behavior of should_enable_page_index
+        // enable_page_index = true and page_pruning_pred present -> returns true
+        assert!(crate::opener::should_enable_page_index(true, &Some(Arc::clone(&page_pruning_pred))));
+        // enable_page_index = false -> always false
+        assert!(!crate::opener::should_enable_page_index(false, &Some(Arc::clone(&page_pruning_pred))));
+        // no page_pruning_pred -> always false
+        assert!(!crate::opener::should_enable_page_index(true, &None));
+
+        // 4) Test eager vs lazy decision logic (corresponds to logic in ParquetOpener)
+        let enable_page_index = true;
+        // eager = true => request_page_index = true; needs_lazy_load = false
+        let eager_load_page_index = true;
+        let request_page_index = eager_load_page_index && enable_page_index;
+        assert!(request_page_index);
+        let needs_lazy_load = !eager_load_page_index
+            && crate::opener::should_enable_page_index(enable_page_index, &Some(Arc::clone(&page_pruning_pred)));
+        assert!(!needs_lazy_load);
+
+        // eager = false => request_page_index = false; needs_lazy_load should be true
+        let eager_load_page_index = false;
+        let request_page_index = eager_load_page_index && enable_page_index;
+        assert!(!request_page_index);
+        let needs_lazy_load = !eager_load_page_index
+            && crate::opener::should_enable_page_index(enable_page_index, &Some(Arc::clone(&page_pruning_pred)));
+        assert!(needs_lazy_load);
     }
 }

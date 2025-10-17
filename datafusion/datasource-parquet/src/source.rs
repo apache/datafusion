@@ -406,6 +406,10 @@ impl ParquetSource {
         self.table_parquet_options.global.enable_page_index
     }
 
+    fn enable_eager_load_page_index(&self) -> bool {
+        self.table_parquet_options.global.eager_load_page_index
+    }
+
     /// If enabled, the reader will read by the bloom filter
     pub fn with_bloom_filter_on_read(mut self, bloom_filter_on_read: bool) -> Self {
         self.table_parquet_options.global.bloom_filter_on_read = bloom_filter_on_read;
@@ -580,6 +584,7 @@ impl FileSource for ParquetSource {
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
             enable_page_index: self.enable_page_index(),
+            eager_load_page_index: self.enable_eager_load_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             schema_adapter_factory,
