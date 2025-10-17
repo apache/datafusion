@@ -372,6 +372,7 @@ mod parquet {
         TableParquetOptionsProto {
             global: Some(ParquetOptionsProto {
                 enable_page_index: global_options.global.enable_page_index,
+                eager_load_page_index: global_options.global.eager_load_page_index,
                 pruning: global_options.global.pruning,
                 skip_metadata: global_options.global.skip_metadata,
                 metadata_size_hint_opt: global_options.global.metadata_size_hint.map(|size| {
