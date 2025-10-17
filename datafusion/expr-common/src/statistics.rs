@@ -189,7 +189,7 @@ impl Distribution {
     pub fn target_type(args: &[&ScalarValue]) -> Result<DataType> {
         let mut arg_types = args
             .iter()
-            .filter(|&&arg| (arg != &ScalarValue::Null))
+            .filter(|&&arg| arg != &ScalarValue::Null)
             .map(|&arg| arg.data_type());
 
         let Some(dt) = arg_types.next().map_or_else(

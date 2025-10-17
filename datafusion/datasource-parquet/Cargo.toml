@@ -18,11 +18,11 @@
 [package]
 name = "datafusion-datasource-parquet"
 description = "datafusion-datasource-parquet"
+readme = "README.md"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
-readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true

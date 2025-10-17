@@ -50,7 +50,6 @@ mod tests {
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{assert_contains, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
@@ -2018,14 +2017,14 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         fs::create_dir(&out_dir).unwrap();
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        let schema: Schema = df.schema().into();
+        let schema = Arc::clone(df.schema().inner());
         // Register a listing table - this will use all files in the directory as data sources
         // for the query
         ctx.register_listing_table(
             "my_table",
             &out_dir,
             listing_options,
-            Some(Arc::new(schema)),
+            Some(schema),
             None,
         )
         .await
@@ -2207,7 +2206,7 @@ mod tests {
         fn create_reader(
             &self,
             partition_index: usize,
-            file_meta: FileMeta,
+            partitioned_file: PartitionedFile,
             metadata_size_hint: Option<usize>,
             metrics: &ExecutionPlanMetricsSet,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
@@ -2218,7 +2217,7 @@ mod tests {
                 .push(metadata_size_hint);
             self.inner.create_reader(
                 partition_index,
-                file_meta,
+                partitioned_file,
                 metadata_size_hint,
                 metrics,
             )

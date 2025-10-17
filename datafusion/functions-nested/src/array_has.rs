@@ -25,10 +25,10 @@ use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    in_list, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -131,40 +131,45 @@ impl ScalarUDFImpl for ArrayHas {
 
         // if the haystack is a constant list, we can use an inlist expression which is more
         // efficient because the haystack is not varying per-row
-        if let Expr::Literal(ScalarValue::List(array), _) = haystack {
-            // TODO: support LargeList
-            // (not supported by `convert_array_to_scalar_vec`)
-            // (FixedSizeList not supported either, but seems to have worked fine when attempting to
-            // build a reproducer)
+        match haystack {
+            Expr::Literal(
+                // FixedSizeList gets coerced to List
+                scalar @ ScalarValue::List(_) | scalar @ ScalarValue::LargeList(_),
+                _,
+            ) => {
+                let array = scalar.to_array().unwrap(); // guarantee of ScalarValue
+                if let Ok(scalar_values) =
+                    ScalarValue::convert_array_to_scalar_vec(&array)
+                {
+                    assert_eq!(scalar_values.len(), 1);
+                    let list = scalar_values
+                        .into_iter()
+                        // If the vec is a singular null, `list` will be empty due to this flatten().
+                        // It would be more clear if we handled the None separately, but this is more performant.
+                        .flatten()
+                        .flatten()
+                        .map(|v| Expr::Literal(v.clone(), None))
+                        .collect();
 
-            assert_eq!(array.len(), 1); // guarantee of ScalarValue
-            if let Ok(scalar_values) =
-                ScalarValue::convert_array_to_scalar_vec(array.as_ref())
+                    return Ok(ExprSimplifyResult::Simplified(in_list(
+                        std::mem::take(needle),
+                        list,
+                        false,
+                    )));
+                }
+            }
+            Expr::ScalarFunction(ScalarFunction { func, args })
+                if func == &make_array_udf() =>
             {
-                assert_eq!(scalar_values.len(), 1);
-                let list = scalar_values
-                    .into_iter()
-                    .flatten()
-                    .map(|v| Expr::Literal(v, None))
-                    .collect();
-
-                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
-                    expr: Box::new(std::mem::take(needle)),
-                    list,
-                    negated: false,
-                })));
+                // make_array has a static set of arguments, so we can pull the arguments out from it
+                return Ok(ExprSimplifyResult::Simplified(in_list(
+                    std::mem::take(needle),
+                    std::mem::take(args),
+                    false,
+                )));
             }
-        } else if let Expr::ScalarFunction(ScalarFunction { func, args }) = haystack {
-            // make_array has a static set of arguments, so we can pull the arguments out from it
-            if func == &make_array_udf() {
-                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
-                    expr: Box::new(std::mem::take(needle)),
-                    list: std::mem::take(args),
-                    negated: false,
-                })));
-            }
-        }
-
+            _ => {}
+        };
         Ok(ExprSimplifyResult::Original(args))
     }
 
@@ -331,7 +336,7 @@ fn array_has_dispatch_for_scalar(
     let is_nested = values.data_type().is_nested();
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
-    if values.is_empty() {
+    if haystack.len() == 0 {
         return Ok(Arc::new(BooleanArray::new(
             BooleanBuffer::new_unset(haystack.len()),
             None,
@@ -656,11 +661,20 @@ fn general_array_has_all_and_any_kernel(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::create_array;
-    use datafusion_common::utils::SingleRowListArrayBuilder;
+    use std::sync::Arc;
+
+    use arrow::{
+        array::{create_array, Array, ArrayRef, AsArray, Int32Array, ListArray},
+        buffer::OffsetBuffer,
+        datatypes::{DataType, Field},
+    };
+    use datafusion_common::{
+        config::ConfigOptions, utils::SingleRowListArrayBuilder, DataFusionError,
+        ScalarValue,
+    };
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult, Expr,
-        ScalarUDFImpl,
+        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult,
+        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl,
     };
 
     use crate::expr_fn::make_array;
@@ -734,5 +748,45 @@ mod tests {
         };
 
         assert_eq!(args, vec![col("c1"), col("c2")],);
+    }
+
+    #[test]
+    fn test_array_has_list_empty_child() -> Result<(), DataFusionError> {
+        let haystack_field = Arc::new(Field::new_list(
+            "haystack",
+            Field::new_list("", Field::new("", DataType::Int32, true), true),
+            true,
+        ));
+        let needle_field = Arc::new(Field::new("needle", DataType::Int32, true));
+        let return_field = Arc::new(Field::new_list(
+            "return",
+            Field::new("", DataType::Boolean, true),
+            true,
+        ));
+
+        let haystack = ListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::new(vec![0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef,
+            Some(vec![false].into()),
+        );
+
+        let haystack = ColumnarValue::Array(Arc::new(haystack));
+        let needle = ColumnarValue::Scalar(ScalarValue::Int32(Some(1)));
+
+        let result = ArrayHas::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![haystack, needle],
+            arg_fields: vec![haystack_field, needle_field],
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(1)?;
+        let output = output.as_boolean();
+        assert_eq!(output.len(), 1);
+        assert!(output.is_null(0));
+
+        Ok(())
     }
 }

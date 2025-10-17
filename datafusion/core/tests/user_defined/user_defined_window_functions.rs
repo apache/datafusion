@@ -30,7 +30,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::exec_datafusion_err;
 use datafusion_expr::ptr_eq::PtrEq;
 use datafusion_expr::{
-    PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF, WindowUDFImpl,
+    LimitEffect, PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_functions_window_common::{
@@ -128,10 +129,12 @@ async fn test_deregister_udwf() -> Result<()> {
     OddCounter::register(&mut ctx, Arc::clone(&test_state));
 
     assert!(ctx.state().window_functions().contains_key("odd_counter"));
+    assert!(datafusion_execution::FunctionRegistry::udwfs(&ctx).contains("odd_counter"));
 
     ctx.deregister_udwf("odd_counter");
 
     assert!(!ctx.state().window_functions().contains_key("odd_counter"));
+    assert!(!datafusion_execution::FunctionRegistry::udwfs(&ctx).contains("odd_counter"));
 
     Ok(())
 }
@@ -145,22 +148,22 @@ async fn test_udwf_with_alias() {
         .await
         .unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 1                                                                                                                     |
-         | 1 | b | 1   | 1                                                                                                                     |
-         | 1 | c | 2   | 1                                                                                                                     |
-         | 2 | d | 3   | 2                                                                                                                     |
-         | 2 | e | 4   | 2                                                                                                                     |
-         | 2 | f | 5   | 2                                                                                                                     |
-         | 2 | g | 6   | 2                                                                                                                     |
-         | 2 | h | 6   | 2                                                                                                                     |
-         | 2 | i | 6   | 2                                                                                                                     |
-         | 2 | j | 6   | 2                                                                                                                     |
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+--------------------------+
+    | x | y | val | odd_counter_alias(t.val) |
+    +---+---+-----+--------------------------+
+    | 1 | a | 0   | 1                        |
+    | 1 | b | 1   | 1                        |
+    | 1 | c | 2   | 1                        |
+    | 2 | d | 3   | 2                        |
+    | 2 | e | 4   | 2                        |
+    | 2 | f | 5   | 2                        |
+    | 2 | g | 6   | 2                        |
+    | 2 | h | 6   | 2                        |
+    | 2 | i | 6   | 2                        |
+    | 2 | j | 6   | 2                        |
+    +---+---+-----+--------------------------+
+    ");
 }
 
 /// Basic user defined window function with bounded window
@@ -570,6 +573,10 @@ impl OddCounter {
             fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
                 Ok(Field::new(field_args.name(), DataType::Int64, true).into())
             }
+
+            fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+                LimitEffect::Unknown
+            }
         }
 
         ctx.register_udwf(WindowUDF::from(SimpleWindowUDF::new(test_state)))
@@ -688,6 +695,10 @@ impl WindowUDFImpl for VariadicWindowUDF {
 
     fn field(&self, _: WindowUDFFieldArgs) -> Result<FieldRef> {
         unimplemented!("unnecessary for testing");
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 
@@ -841,6 +852,10 @@ impl WindowUDFImpl for MetadataBasedWindowUdf {
         Ok(Field::new(field_args.name(), DataType::UInt64, true)
             .with_metadata(self.metadata.clone())
             .into())
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 

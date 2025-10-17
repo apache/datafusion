@@ -53,6 +53,7 @@ use datafusion::{
 };
 use datafusion_common::{assert_contains, exec_datafusion_err};
 use datafusion_common::{cast::as_primitive_array, exec_err};
+
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
     col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, Expr,
@@ -297,10 +298,12 @@ async fn deregister_udaf() -> Result<()> {
     ctx.register_udaf(my_avg);
 
     assert!(ctx.state().aggregate_functions().contains_key("my_avg"));
+    assert!(datafusion_execution::FunctionRegistry::udafs(&ctx).contains("my_avg"));
 
     ctx.deregister_udaf("my_avg");
 
     assert!(!ctx.state().aggregate_functions().contains_key("my_avg"));
+    assert!(!datafusion_execution::FunctionRegistry::udafs(&ctx).contains("my_avg"));
 
     Ok(())
 }
@@ -379,13 +382,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
 
-    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
-    +------------+
-    | dummy(t.i) |
-    +------------+
-    | 1.0        |
-    +------------+
-    "###);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r"
+    +------------------+
+    | dummy_alias(t.i) |
+    +------------------+
+    | 1.0              |
+    +------------------+
+    ");
 
     Ok(())
 }

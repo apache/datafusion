@@ -37,7 +37,7 @@ impl<'a> ExpressionArgs<'a> {
     ///
     /// * `input_exprs` - The expressions passed as arguments
     ///   to the user-defined window function.
-    /// * `input_types` - The data types corresponding to the
+    /// * `input_fields` - The fields corresponding to the
     ///   arguments to the user-defined window function.
     ///
     pub fn new(

@@ -313,16 +313,9 @@ impl ParquetSource {
         self
     }
 
-    fn with_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
-        self.metrics = metrics;
-        self
-    }
-
     /// Set predicate information
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
-        let metrics = ExecutionPlanMetricsSet::new();
-        conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
         conf
     }
@@ -343,6 +336,7 @@ impl ParquetSource {
     }
 
     /// Optional predicate.
+    #[deprecated(since = "50.2.0", note = "use `filter` instead")]
     pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.predicate.as_ref()
     }
@@ -643,7 +637,7 @@ impl FileSource for ParquetSource {
         // (bloom filters use `pruning_predicate` too).
         // Because filter pushdown may happen dynamically as long as there is a predicate
         // if we have *any* predicate applied, we can't guarantee the statistics are exact.
-        if self.predicate().is_some() {
+        if self.filter().is_some() {
             Ok(statistics.to_inexact())
         } else {
             Ok(statistics)
@@ -658,7 +652,7 @@ impl FileSource for ParquetSource {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let predicate_string = self
-                    .predicate()
+                    .filter()
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
 
@@ -698,7 +692,7 @@ impl FileSource for ParquetSource {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                if let Some(predicate) = self.predicate() {
+                if let Some(predicate) = self.filter() {
                     writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
                 }
                 Ok(())
@@ -790,5 +784,21 @@ impl FileSource for ParquetSource {
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_physical_expr::expressions::lit;
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_parquet_source_predicate_same_as_filter() {
+        let predicate = lit(true);
+
+        let parquet_source = ParquetSource::default().with_predicate(predicate);
+        // same value. but filter() call Arc::clone internally
+        assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
     }
 }
