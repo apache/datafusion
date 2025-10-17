@@ -65,7 +65,7 @@ OPTIONS:
 
       --object-store-profiling <OBJECT_STORE_PROFILING>
           Specify the default object_store_profiling mode, defaults to 'disabled'.
-          [possible values: disabled, enabled] [default: Disabled]
+          [possible values: disabled, summary, trace] [default: Disabled]
 
     -p, --data-path <DATA_PATH>
             Path to your data, default to current directory
@@ -129,7 +129,7 @@ Available commands inside DataFusion CLI are:
 - Object Store Profiling Mode
 
 ```bash
-> \object_store_profiling [disabled|enabled]
+> \object_store_profiling [disabled|summary|trace]
 ```
 
 ## Supported SQL
