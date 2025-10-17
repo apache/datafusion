@@ -193,7 +193,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
 
     // Many when/then branches where all but the first few are effectively unreachable
     c.bench_function(format!("case_when {}x{}: CASE WHEN c1 < 0 THEN 0 WHEN c1 < 1000 THEN 1 ... WHEN c1 < n * 1000 THEN n ELSE n + 1 END", batch.num_rows(), batch.num_columns()).as_str(), |b| {
-        let when_thens = (0..batch.num_rows() as i32).map(|i| (make_x_cmp_y(&c1, Operator::Eq, i * 1000), lit(i))).collect();
+        let when_thens = (0..batch.num_rows() as i32).map(|i| (make_x_cmp_y(&c1, Operator::Lt, i * 1000), lit(i))).collect();
         let expr = Arc::new(
             case(
                 None,
