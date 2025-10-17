@@ -618,23 +618,75 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                     )
                 })?;
 
-            // Determine if the join order was swapped compared to the original edge
-            // by checking if the left expressions' columns come from the current_plan's schema.
-            // If the left expressions belong to current_plan, no swap needed.
-            // If they belong to next_plan, the join is swapped.
+            // Determine if the join order was swapped compared to the original edge.
+            // We use a two-tier approach:
+            // 1. Check if left/right expressions belong to current/next schemas (handles most cases)
+            // 2. If ambiguous (e.g., self-joins), use relation qualifiers as a tiebreaker
             let current_schema = current_plan.schema();
-            let join_order_swapped = if !edge.join.on.is_empty() {
-                // Check the first join condition's left expression
-                let (left_expr, _) = &edge.join.on[0];
-                let left_columns = left_expr.column_refs();
+            let next_schema = next_plan.schema();
 
-                // If the left expression's columns are NOT in current_plan's schema,
-                // then the join order is swapped
-                !datafusion_expr::utils::check_all_columns_from_schema(
+            let join_order_swapped = if !edge.join.on.is_empty() {
+                // Extract columns from the first join condition
+                let (left_expr, right_expr) = &edge.join.on[0];
+                let left_columns = left_expr.column_refs();
+                let right_columns = right_expr.column_refs();
+
+                // Tier 1: Check which schema each expression belongs to
+                let left_in_current = datafusion_expr::utils::check_all_columns_from_schema(
                     &left_columns,
                     current_schema.as_ref(),
                 )
-                .unwrap_or(false)
+                .unwrap_or(false);
+
+                let right_in_next = datafusion_expr::utils::check_all_columns_from_schema(
+                    &right_columns,
+                    next_schema.as_ref(),
+                )
+                .unwrap_or(false);
+
+                let left_in_next = datafusion_expr::utils::check_all_columns_from_schema(
+                    &left_columns,
+                    next_schema.as_ref(),
+                )
+                .unwrap_or(false);
+
+                let right_in_current = datafusion_expr::utils::check_all_columns_from_schema(
+                    &right_columns,
+                    current_schema.as_ref(),
+                )
+                .unwrap_or(false);
+
+                // Determine swap based on where columns are found
+                if left_in_current && right_in_next && !left_in_next {
+                    // Clear case: left belongs to current, right belongs to next → no swap
+                    false
+                } else if left_in_next && right_in_current && !left_in_current {
+                    // Clear case: left belongs to next, right belongs to current → swap
+                    true
+                } else {
+                    // Tier 2: Ambiguous case (columns exist in both schemas, e.g., self-joins)
+                    // Use relation qualifiers as a tiebreaker if available
+                    let left_has_relation = left_columns.iter().any(|c| c.relation.is_some());
+                    let right_has_relation = right_columns.iter().any(|c| c.relation.is_some());
+
+                    if left_has_relation || right_has_relation {
+                        // Check if qualified left columns match the next_plan's schema
+                        // If they do, it means the join is swapped
+                        left_columns.iter().any(|col| {
+                            if let Some(relation) = &col.relation {
+                                // Simple heuristic: check if any field in next_schema has this qualifier
+                                next_schema.iter().any(|(qualifier, _field)| {
+                                    qualifier.map(|q| q == relation).unwrap_or(false)
+                                })
+                            } else {
+                                false
+                            }
+                        })
+                    } else {
+                        // No qualifiers available, default to no swap (preserve original order)
+                        false
+                    }
+                }
             } else {
                 // If there are no join conditions, we can't determine swap status
                 // This shouldn't happen in practice for equi-joins
