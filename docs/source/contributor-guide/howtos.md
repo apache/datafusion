@@ -47,7 +47,7 @@ Make a PR to update the [rust-toolchain] file in the root of the repository.
   should also be added to allow DataFusion users to conditionally compile the modules as needed
 - Aggregate functions can optionally implement a [`GroupsAccumulator`] for better performance
 
-Spark compatible functions are [located separately][df-spark] but otherwise follow the same steps, though all
+Spark compatible functions are [located in separate crate][df-spark] but otherwise follow the same steps, though all
 function types (e.g. scalar, nested, aggregate) are grouped together in the single location.
 
 [df-functions]: https://github.com/apache/datafusion/tree/main/datafusion/functions
