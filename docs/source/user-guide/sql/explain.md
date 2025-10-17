@@ -258,8 +258,9 @@ EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
 |                   |               DataSourceExec: file_groups={1 group: [[/tmp/table.csv]]}, has_header=false, metrics=[]                                                        |
 +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+
 ```
-By default `EXPLAIN ANALYZE` shows the aggregated metrics from all partitions for each operator. If you need to display per-partition metrics, use `EXPLAIN ANALYZE VERBOSE`. 
 
-You can also set `datafusion.explain.analyze_level` from the [configuration value] to control the detail level for the metrics displayed. 
+By default `EXPLAIN ANALYZE` shows the aggregated metrics from all partitions for each operator. If you need to display per-partition metrics, use `EXPLAIN ANALYZE VERBOSE`.
+
+You can also set `datafusion.explain.analyze_level` from the [configuration value] to control the detail level for the metrics displayed.
 
 [configuration value]: ../configs.md
