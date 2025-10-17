@@ -1260,9 +1260,7 @@ impl SessionContext {
             params = params
                 .into_iter()
                 .zip(prepared.fields.iter())
-                .map(|(e, dt)| -> Result<_> {
-                    e.cast_storage_to(dt.data_type())
-                })
+                .map(|(e, dt)| -> Result<_> { e.cast_storage_to(dt.data_type()) })
                 .collect::<Result<_>>()?;
         }
 
