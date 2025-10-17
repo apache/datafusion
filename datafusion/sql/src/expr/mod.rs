@@ -577,7 +577,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         value: Value::SingleQuotedString(s),
                         span: _,
                     }) => Arc::new(Field::new(
-                        &s.clone(),
+                        s.clone(),
                         DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
                         true,
                     )),
