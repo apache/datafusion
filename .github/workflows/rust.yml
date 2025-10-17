@@ -351,10 +351,10 @@ jobs:
         run: |
           echo "Disk space before cleanup:"
           df -h
-          sudo rm -rf /tmp/*
-          sudo rm -rf /opt/hostedtoolcache
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
+          rm -rf /tmp/*
+          rm -rf /opt/hostedtoolcache
+          rm -rf "$AGENT_TOOLSDIRECTORY"
+          apt-get clean
           echo "Disk space after cleanup:"
           df -h
       - name: Run examples
