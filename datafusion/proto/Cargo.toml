@@ -43,6 +43,10 @@ json = ["pbjson", "serde", "serde_json", "datafusion-proto-common/json"]
 parquet = ["datafusion-datasource-parquet", "datafusion-common/parquet", "datafusion/parquet"]
 avro = ["datafusion-datasource-avro", "datafusion-common/avro"]
 
+# Note to developers: do *not* add `datafusion` as a dependency in
+# this crate. See https://github.com/apache/datafusion/issues/17713
+# for additional information.
+
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
