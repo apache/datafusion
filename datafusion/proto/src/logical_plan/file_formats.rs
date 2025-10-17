@@ -469,6 +469,7 @@ mod parquet {
             #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             enable_page_index: proto.enable_page_index,
+            eager_load_page_index: proto.eager_load_page_index,
             pruning: proto.pruning,
             skip_metadata: proto.skip_metadata,
             metadata_size_hint: proto.metadata_size_hint_opt.as_ref().map(|opt| match opt {
