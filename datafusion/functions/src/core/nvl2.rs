@@ -15,17 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Array;
 use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, utils::take_function_args, Result};
+use datafusion_common::{plan_err, utils::take_function_args, Result};
 use datafusion_expr::{
     type_coercion::binary::comparison_coercion, ColumnarValue, Documentation,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::sync::Arc;
 
 #[user_doc(
     doc_section(label = "Conditional Functions"),
@@ -96,27 +94,21 @@ impl ScalarUDFImpl for NVL2Func {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        nvl2_func(&args.args)
+        nvl2_func(&args.args, args.number_rows)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [tested, if_non_null, if_null] = take_function_args(self.name(), arg_types)?;
-        let new_type =
-            [if_non_null, if_null]
-                .iter()
-                .try_fold(tested.clone(), |acc, x| {
-                    // The coerced types found by `comparison_coercion` are not guaranteed to be
-                    // coercible for the arguments. `comparison_coercion` returns more loose
-                    // types that can be coerced to both `acc` and `x` for comparison purpose.
-                    // See `maybe_data_types` for the actual coercion.
-                    let coerced_type = comparison_coercion(&acc, x);
-                    if let Some(coerced_type) = coerced_type {
-                        Ok(coerced_type)
-                    } else {
-                        internal_err!("Coercion from {acc} to {x} failed.")
-                    }
-                })?;
-        Ok(vec![new_type; arg_types.len()])
+        // The coerced types found by `comparison_coercion` are not guaranteed to be
+        // coercible for the arguments. `comparison_coercion` returns more loose
+        // types that can be coerced to both `acc` and `x` for comparison purpose.
+        // See `maybe_data_types` for the actual coercion.
+        let coerced = if let Some(coerced) = comparison_coercion(if_non_null, if_null) {
+            coerced
+        } else {
+            return plan_err!("Coercion from {if_non_null} to {if_null} failed.");
+        };
+        Ok(vec![tested.clone(), coerced.clone(), coerced])
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -124,41 +116,29 @@ impl ScalarUDFImpl for NVL2Func {
     }
 }
 
-fn nvl2_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let mut len = 1;
-    let mut is_array = false;
-    for arg in args {
-        if let ColumnarValue::Array(array) = arg {
-            len = array.len();
-            is_array = true;
-            break;
-        }
-    }
-    if is_array {
-        let args = args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len),
-                ColumnarValue::Array(array) => Ok(Arc::clone(array)),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let [tested, if_non_null, if_null] = take_function_args("nvl2", args)?;
-        let to_apply = is_not_null(&tested)?;
-        let value = zip(&to_apply, &if_non_null, &if_null)?;
-        Ok(ColumnarValue::Array(value))
-    } else {
-        let [tested, if_non_null, if_null] = take_function_args("nvl2", args)?;
-        match &tested {
-            ColumnarValue::Array(_) => {
-                internal_err!("except Scalar value, but got Array")
-            }
-            ColumnarValue::Scalar(scalar) => {
-                if scalar.is_null() {
-                    Ok(if_null.clone())
-                } else {
-                    Ok(if_non_null.clone())
-                }
-            }
+fn nvl2_func(args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
+    let [tested, if_non_null, if_null] = take_function_args("nvl2", args)?;
+    match (tested, if_non_null, if_null) {
+        // Fast paths if all scalars
+        (
+            ColumnarValue::Scalar(tested),
+            ColumnarValue::Scalar(_),
+            ColumnarValue::Scalar(_),
+        ) if tested.is_null() => Ok(if_null.clone()),
+        (
+            ColumnarValue::Scalar(_),
+            ColumnarValue::Scalar(_),
+            ColumnarValue::Scalar(_),
+        ) => Ok(if_non_null.clone()),
+        // Otherwise regular path
+        (tested, if_non_null, if_null) => {
+            let tested = tested.to_array(number_rows)?;
+            let if_non_null = if_non_null.to_array(number_rows)?;
+            let if_null = if_null.to_array(number_rows)?;
+
+            let mask = is_not_null(&tested)?;
+            let array = zip(&mask, &if_non_null, &if_null)?;
+            Ok(ColumnarValue::Array(array))
         }
     }
 }
