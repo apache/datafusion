@@ -63,11 +63,23 @@ jobs:
         run: |
           echo "Disk space before cleanup:"          
           df -h
-          du -h -d 3 /
-          sudo rm -rf /tmp/*
-          sudo rm -rf /opt/hostedtoolcache
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
+          du -h -d 2 /          
+          apt-get clean    
+          # remove unneeded packages to free up space
+          # list from https://github.com/AdityaGarg8/remove-unwanted-software/blob/90e01b21170618765a73370fcc3abbd1684a7793/action.yml#L114
+          apt-get remove -y '^aspnetcore-.*'
+          apt-get remove -y '^dotnet-.*'
+          apt-get remove -y '^llvm-.*'
+          apt-get remove -y 'php.*'
+          apt-get remove -y '^mongodb-.*'
+          apt-get remove -y '^mysql-.*'
+          if [[ "$(uname -m)" == "x86_64" ]]; then
+                sudo apt-get remove -y google-chrome-stable microsoft-edge-stable
+                sudo apt-get remove -y google-cloud-cli --fix-missing
+                sudo apt-get remove -y powershell --fix-missing
+          fi
+          sudo apt-get remove -y azure-cli firefox mono-devel libgl1-mesa-dri --fix-missing
+          sudo apt-get autoremove -y
           echo "Disk space after cleanup:"
           df -h
       - name: Run examples
