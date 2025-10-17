@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::type_coercion::binary::{
     binary_to_string_coercion, string_coercion,
@@ -158,13 +158,27 @@ impl ScalarUDFImpl for StartsWithFunc {
                 let expr = if expr_data_type == coercion_data_type {
                     args[0].clone()
                 } else {
-                    cast(args[0].clone(), coercion_data_type.clone())
+                    cast(
+                        args[0].clone(),
+                        Arc::new(Field::new(
+                            "",
+                            coercion_data_type.clone(),
+                            info.nullable(&args[0])?,
+                        )),
+                    )
                 };
 
                 let pattern = if pattern_data_type == coercion_data_type {
                     like_expr
                 } else {
-                    cast(like_expr, coercion_data_type)
+                    cast(
+                        like_expr.clone(),
+                        Arc::new(Field::new(
+                            "",
+                            coercion_data_type,
+                            info.nullable(&like_expr)?,
+                        )),
+                    )
                 };
 
                 return Ok(ExprSimplifyResult::Simplified(Expr::Like(Like {

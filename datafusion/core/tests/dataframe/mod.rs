@@ -2072,7 +2072,13 @@ async fn cast_expr_test() -> Result<()> {
         .await?
         .select_columns(&["c2", "c3"])?
         .limit(0, Some(1))?
-        .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
+        .with_column(
+            "sum",
+            cast(
+                col("c2") + col("c3"),
+                Arc::new(Field::new("sum", DataType::Int64, false)),
+            ),
+        )?;
 
     let df_results = df.clone().collect().await?;
     df.clone().show().await?;
@@ -2174,7 +2180,13 @@ async fn cache_test() -> Result<()> {
         .await?
         .select_columns(&["c2", "c3"])?
         .limit(0, Some(1))?
-        .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
+        .with_column(
+            "sum",
+            cast(
+                col("c2") + col("c3"),
+                Arc::new(Field::new("sum", DataType::Int64, false)),
+            ),
+        )?;
 
     let cached_df = df.clone().cache().await?;
 
@@ -2672,8 +2684,13 @@ async fn write_table_with_order() -> Result<()> {
         .unwrap();
 
     // Ensure the column type matches the target table
-    write_df =
-        write_df.with_column("tablecol1", cast(col("tablecol1"), DataType::Utf8View))?;
+    write_df = write_df.with_column(
+        "tablecol1",
+        cast(
+            col("tablecol1"),
+            Arc::new(Field::new("tablecol1", DataType::Utf8, false)),
+        ),
+    )?;
 
     let sql_str =
         "create external table data(tablecol1 varchar) stored as parquet location '"
@@ -4688,7 +4705,10 @@ async fn consecutive_projection_same_schema() -> Result<()> {
     let df = df
         .with_column(
             "t",
-            cast(Expr::Literal(ScalarValue::Null, None), DataType::Int32),
+            cast(
+                Expr::Literal(ScalarValue::Null, None),
+                Arc::new(Field::new("t", DataType::Int32, true)),
+            ),
         )
         .unwrap();
     df.clone().show().await.unwrap();

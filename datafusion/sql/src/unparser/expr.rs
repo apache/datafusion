@@ -189,8 +189,8 @@ impl Unparser<'_> {
                     end_token: AttachedToken::empty(),
                 })
             }
-            Expr::Cast(Cast { expr, data_type }) => {
-                Ok(self.cast_to_sql(expr, data_type)?)
+            Expr::Cast(Cast { expr, field }) => {
+                Ok(self.cast_to_sql(expr, field.data_type())?)
             }
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
@@ -464,12 +464,12 @@ impl Unparser<'_> {
                     )
                 })
             }
-            Expr::TryCast(TryCast { expr, data_type }) => {
+            Expr::TryCast(TryCast { expr, field }) => {
                 let inner_expr = self.expr_to_sql_inner(expr)?;
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
-                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    data_type: self.arrow_dtype_to_ast_dtype(field.data_type())?,
                     format: None,
                 })
             }
@@ -1887,31 +1887,36 @@ mod tests {
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: DataType::Date64,
+                    field: Arc::new(Field::new("a", DataType::Date64, true)),
                 }),
                 r#"CAST(a AS DATETIME)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: DataType::Timestamp(
-                        TimeUnit::Nanosecond,
-                        Some("+08:00".into()),
-                    ),
+                    field: Arc::new(Field::new(
+                        "a",
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some("+08:00".into())),
+                        true,
+                    )),
                 }),
                 r#"CAST(a AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: DataType::Timestamp(TimeUnit::Millisecond, None),
+                    field: Arc::new(Field::new(
+                        "a",
+                        DataType::Timestamp(TimeUnit::Second, None),
+                        true,
+                    )),
                 }),
                 r#"CAST(a AS TIMESTAMP)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: DataType::UInt32,
+                    field: Arc::new(Field::new("a", DataType::UInt32, true)),
                 }),
                 r#"CAST(a AS INTEGER UNSIGNED)"#,
             ),
@@ -2229,7 +2234,7 @@ mod tests {
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: DataType::Decimal128(10, -2),
+                    field: Arc::new(Field::new("a", DataType::Decimal128(10, -2), true)),
                 }),
                 r#"CAST(a AS DECIMAL(12,0))"#,
             ),
@@ -2369,7 +2374,7 @@ mod tests {
 
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
-                data_type: DataType::Date64,
+                field: Arc::new(Field::new("a", DataType::Date64, true)),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2394,7 +2399,7 @@ mod tests {
 
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
-                data_type: DataType::Float64,
+                field: Arc::new(Field::new("a", DataType::Float64, true)),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2630,7 +2635,7 @@ mod tests {
                         ScalarValue::Utf8(Some("blah".to_string())),
                         None,
                     )),
-                    data_type: DataType::Binary,
+                    field: Arc::new(Field::new("blah", DataType::Binary, true)),
                 }),
                 "'blah'",
             ),
@@ -2640,7 +2645,7 @@ mod tests {
                         ScalarValue::Utf8(Some("blah".to_string())),
                         None,
                     )),
-                    data_type: DataType::BinaryView,
+                    field: Arc::new(Field::new("blah", DataType::BinaryView, true)),
                 }),
                 "'blah'",
             ),
@@ -2674,7 +2679,7 @@ mod tests {
 
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
-                data_type,
+                field: Arc::new(Field::new("a", data_type, true)),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2760,7 +2765,7 @@ mod tests {
             let unparser = Unparser::new(&dialect);
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
-                data_type: DataType::Int64,
+                field: Arc::new(Field::new("a", DataType::Int64, true)),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2788,7 +2793,7 @@ mod tests {
             let unparser = Unparser::new(&dialect);
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
-                data_type: DataType::Int32,
+                field: Arc::new(Field::new("a", DataType::Int32, true)),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2827,7 +2832,7 @@ mod tests {
             let unparser = Unparser::new(dialect);
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
-                data_type: data_type.clone(),
+                field: Arc::new(Field::new("a", data_type.clone(), true)),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2883,7 +2888,7 @@ mod tests {
 
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
-                data_type,
+                field: Arc::new(Field::new("a", data_type, true)),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2929,7 +2934,14 @@ mod tests {
                     ScalarValue::Utf8(Some("variation".to_string())),
                     None,
                 )),
-                data_type: DataType::Dictionary(Box::new(Int8), Box::new(DataType::Utf8)),
+                field: Arc::new(Field::new(
+                    "dict_col",
+                    DataType::Dictionary(
+                        Box::new(DataType::Int32),
+                        Box::new(DataType::Utf8),
+                    ),
+                    false,
+                )),
             }),
             "'variation'",
         )];
@@ -2964,7 +2976,7 @@ mod tests {
                 args: vec![
                     Expr::Cast(Cast {
                         expr: Box::new(col("a")),
-                        data_type: DataType::Float64,
+                        field: Arc::new(Field::new("a", DataType::Float64, false)),
                     }),
                     Expr::Literal(ScalarValue::Int64(Some(2)), None),
                 ],
@@ -3214,7 +3226,11 @@ mod tests {
         let unparser = Unparser::new(dialect.as_ref());
         let expr = Expr::Cast(Cast {
             expr: Box::new(col("a")),
-            data_type: DataType::Timestamp(TimeUnit::Nanosecond, None),
+            field: Arc::new(Field::new(
+                "a",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            )),
         });
 
         let ast = unparser.expr_to_sql(&expr)?;

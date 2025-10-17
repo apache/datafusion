@@ -1686,11 +1686,17 @@ mod tests {
     fn test_collect_expr() -> Result<()> {
         let mut accum: HashSet<Column> = HashSet::new();
         expr_to_columns(
-            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
+            &Expr::Cast(Cast::new(
+                Box::new(col("a")),
+                Arc::new(Field::new("cast", DataType::Float64, false)),
+            )),
             &mut accum,
         )?;
         expr_to_columns(
-            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
+            &Expr::Cast(Cast::new(
+                Box::new(col("a")),
+                Arc::new(Field::new("cast", DataType::Float64, false)),
+            )),
             &mut accum,
         )?;
         assert_eq!(1, accum.len());

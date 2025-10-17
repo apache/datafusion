@@ -327,13 +327,13 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
 }
 
 /// Create a cast expression
-pub fn cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::Cast(Cast::new(Box::new(expr), data_type))
+pub fn cast(expr: Expr, field: Arc<Field>) -> Expr {
+    Expr::Cast(Cast::new(Box::new(expr), field))
 }
 
 /// Create a try cast expression
-pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::TryCast(TryCast::new(Box::new(expr), data_type))
+pub fn try_cast(expr: Expr, field: Arc<Field>) -> Expr {
+    Expr::TryCast(TryCast::new(Box::new(expr), field))
 }
 
 /// Create is null expression
