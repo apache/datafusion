@@ -303,7 +303,7 @@ pub(crate) fn to_substrait_type_from_field(
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
-                .map(|field| to_substrait_type_from_field(field))
+                .map(to_substrait_type_from_field)
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Struct(r#type::Struct {
