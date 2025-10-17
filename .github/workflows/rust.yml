@@ -347,6 +347,17 @@ jobs:
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
+      - name: Remove unnecessary files
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          docker system prune -af
+          sudo rm -rf /tmp/*
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          echo "Disk space after cleanup:"
+          df -h
       - name: Run examples
         run: |
           # test datafusion-sql examples
