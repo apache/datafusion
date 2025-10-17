@@ -1757,6 +1757,7 @@ impl LogicalPlan {
                         ref projection,
                         ref filters,
                         ref fetch,
+                        ref ordering,
                         ..
                     }) => {
                         let projected_fields = match projection {
@@ -1822,6 +1823,20 @@ impl LogicalPlan {
 
                         if let Some(n) = fetch {
                             write!(f, ", fetch={n}")?;
+                        }
+
+                        if let Some(ordering) = ordering {
+                            if let Some(preferred_ordering) = &ordering.preferred_ordering {
+                                write!(
+                                    f,
+                                    " preferred_ordering=[{}]",
+                                    preferred_ordering
+                                        .iter()
+                                        .map(|e| e.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )?;
+                            }
                         }
 
                         Ok(())
@@ -2593,6 +2608,68 @@ impl PartialOrd for Window {
     }
 }
 
+/// Communicates the desired ordering of the output of a scan operation.
+///
+/// Preferred orderings can potentially help DataFusion optimize queries, even in cases
+/// when the output does not completely follow that order. This is information passed
+/// to the scan about what might help.
+///
+/// For example, a query with `ORDER BY time DESC LIMIT 10`, DataFusion's dynamic
+/// predicates and TopK operator will work better if the data is roughly ordered by descending
+/// time (more recent data first).
+///
+/// Implementers of [`TableProvider`] should use this information to optimize the order in which data is output from the scan.
+///
+/// It is a hint and not a requirement:
+/// - If this information is completely ignored, e.g. data is scanned randomly, the query will still be correct because a sort will be applied to the data.
+/// - Partially ordered data will also be re-sorted but this may result in optimizations like early stopping, additional data pruning, reduced memory usage during the sort, etc.
+/// - If the scan produces exactly the requested ordering, and sets it's properties to reflect this, upstream sorts may be optimized away.
+///
+/// Actually removing unnecessary sorts is done at the physical plan level: logical operators like a join may or may not preserve ordering
+/// depending on what physical operator is chosen (e.g. HashJoin vs. SortMergeJoin).
+/// If you as a [`TableProvider`] implementer would like to eliminiate unnecessary sorts you should make sure the [`ExecutionPlan`]
+/// you produce reflects the ordering in it's properties.
+///
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+/// [`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Default)]
+pub struct ScanOrdering {
+    /// Optional preferred ordering for the scan that matches the output order of upstream query nodes.
+    /// It is optional / best effort for the scan to produce this ordering.
+    /// If the scan produces this exact ordering and sets it's properties to reflect this upstream sorts may be optimized away.
+    /// Otherwise the sorts may remain in place but partial ordering may be exploited e.g. to do early stopping or reduce complexity of the sort.
+    /// Thus it is recommended for the scan to also do a best effort to produce partially sorted data if possible.
+    pub preferred_ordering: Option<Vec<SortExpr>>,
+}
+
+impl ScanOrdering {
+    /// Attach a preferred ordering to the scan ordering.
+    /// See [`ScanOrdering`] for details on how this is used.
+    pub fn with_preferred_ordering(mut self, preferred_ordering: Vec<SortExpr>) -> Self {
+        self.preferred_ordering = Some(preferred_ordering);
+        self
+    }
+}
+
+impl Debug for ScanOrdering {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let ordering_display = self
+            .preferred_ordering
+            .as_ref()
+            .map(|ordering| {
+                ordering
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|| "None".to_string());
+        f.debug_struct("ScanOrdering")
+            .field("preferred_ordering", &ordering_display)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Produces rows from a table provider by reference or from the context
 #[derive(Clone)]
 pub struct TableScan {
@@ -2608,6 +2685,8 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Ordering for the scan
+    pub ordering: Option<ScanOrdering>,
 }
 
 impl Debug for TableScan {
@@ -2619,6 +2698,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
+            .field("ordering", &self.ordering)
             .finish_non_exhaustive()
     }
 }
@@ -2630,6 +2710,7 @@ impl PartialEq for TableScan {
             && self.projected_schema == other.projected_schema
             && self.filters == other.filters
             && self.fetch == other.fetch
+            && self.ordering == other.ordering
     }
 }
 
@@ -2649,18 +2730,22 @@ impl PartialOrd for TableScan {
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
+            /// Ordering information passed from the query to the scan.
+            pub ordering: &'a Option<ScanOrdering>,
         }
         let comparable_self = ComparableTableScan {
             table_name: &self.table_name,
             projection: &self.projection,
             filters: &self.filters,
             fetch: &self.fetch,
+            ordering: &self.ordering,
         };
         let comparable_other = ComparableTableScan {
             table_name: &other.table_name,
             projection: &other.projection,
             filters: &other.filters,
             fetch: &other.fetch,
+            ordering: &other.ordering,
         };
         comparable_self
             .partial_cmp(&comparable_other)
@@ -2676,6 +2761,7 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+        self.ordering.hash(state);
     }
 }
 
@@ -2729,7 +2815,15 @@ impl TableScan {
             projected_schema,
             filters,
             fetch,
+            ordering: None,
         })
+    }
+
+    /// Sets the ordering information for the scan.
+    /// See [`ScanOrdering`] for details on how this is used.
+    pub fn with_ordering(mut self, ordering: ScanOrdering) -> Self {
+        self.ordering = Some(ordering);
+        self
     }
 }
 
@@ -4824,6 +4918,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
+            ordering: None,
         }));
         let col = schema.field_names()[0].clone();
 
@@ -4854,6 +4949,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
+            ordering: None,
         }));
         let col = schema.field_names()[0].clone();
 

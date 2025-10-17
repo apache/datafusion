@@ -608,7 +608,7 @@ logical_plan
 03)----Sort: outer_ref(t1.t1_id) ASC NULLS LAST
 04)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
 05)--------Filter: t2.t2_id >= outer_ref(t1.t1_id)
-06)----------TableScan: t2
+06)----------TableScan: t2 preferred_ordering=[outer_ref(t1.t1_id) ASC NULLS LAST]
 07)--TableScan: t1 projection=[t1_id, t1_name]
 
 #exists_subquery_with_select_null
