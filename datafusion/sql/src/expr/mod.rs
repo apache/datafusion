@@ -22,7 +22,7 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
     DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
-    StructField, Subscript, TrimWhereField, Value, ValueWithSpan,
+    StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -291,7 +291,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )))
             }
 
-            SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
+            SQLExpr::TypedString(TypedString {
+                data_type,
+                value,
+                uses_odbc_syntax: _,
+            }) => Ok(Expr::Cast(Cast::new(
                 Box::new(lit(value.into_string().unwrap())),
                 self.convert_data_type(&data_type)?,
             ))),

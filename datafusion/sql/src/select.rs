@@ -585,7 +585,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok((intermediate_plan, intermediate_select_exprs))
     }
 
-    fn plan_selection(
+    pub(crate) fn plan_selection(
         &self,
         selection: Option<SQLExpr>,
         plan: LogicalPlan,
@@ -666,7 +666,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
-    fn prepare_select_exprs(
+    pub(crate) fn prepare_select_exprs(
         &self,
         plan: &LogicalPlan,
         projection: Vec<SelectItem>,
@@ -826,7 +826,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Wrap a plan in a projection
-    fn project(&self, input: LogicalPlan, expr: Vec<SelectExpr>) -> Result<LogicalPlan> {
+    pub(crate) fn project(
+        &self,
+        input: LogicalPlan,
+        expr: Vec<SelectExpr>,
+    ) -> Result<LogicalPlan> {
         // convert to Expr for validate_schema_satisfies_exprs
         let exprs = expr
             .iter()

@@ -1,6 +1,7 @@
 [package]
 name = "datafusion-pruning"
 description = "DataFusion Pruning Logic"
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }

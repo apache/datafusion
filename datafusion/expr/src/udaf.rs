@@ -671,6 +671,13 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// closure returns simplified [Expr] or an error.
     ///
+    /// # Notes
+    ///
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
     }
@@ -740,7 +747,20 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     }
 
     /// If this function is ordered-set aggregate function, return true
-    /// If the function is not, return false
+    /// otherwise, return false
+    ///
+    /// Ordered-set aggregate functions require an explicit `ORDER BY` clause
+    /// because the calculation performed by these functions is dependent on the
+    /// specific sequence of the input rows, unlike other aggregate functions
+    /// like `SUM`, `AVG`, or `COUNT`.
+    ///
+    /// An example of an ordered-set aggregate function is `percentile_cont`
+    /// which computes a specific percentile value from a sorted list of values, and
+    /// is only meaningful when the input data is ordered.
+    ///
+    /// In SQL syntax, ordered-set aggregate functions are used with the
+    /// `WITHIN GROUP (ORDER BY ...)` clause to specify the ordering of the input
+    /// data.
     fn is_ordered_set_aggregate(&self) -> bool {
         false
     }
@@ -792,7 +812,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
 
     // exclude the first function argument(= column) in ordered set aggregate function,
     // because it is duplicated with the WITHIN GROUP clause in schema name.
-    let args = if func.is_ordered_set_aggregate() {
+    let args = if func.is_ordered_set_aggregate() && !order_by.is_empty() {
         &args[1..]
     } else {
         &args[..]
@@ -1219,37 +1239,6 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
-}
-
-// Aggregate UDF doc sections for use in public documentation
-pub mod aggregate_doc_sections {
-    use crate::DocSection;
-
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_GENERAL,
-            DOC_SECTION_STATISTICAL,
-            DOC_SECTION_APPROXIMATE,
-        ]
-    }
-
-    pub const DOC_SECTION_GENERAL: DocSection = DocSection {
-        include: true,
-        label: "General Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_STATISTICAL: DocSection = DocSection {
-        include: true,
-        label: "Statistical Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_APPROXIMATE: DocSection = DocSection {
-        include: true,
-        label: "Approximate Functions",
-        description: None,
-    };
 }
 
 /// Indicates whether an aggregation function is monotonic as a set

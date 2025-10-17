@@ -935,7 +935,7 @@ impl TreeRenderVisitor<'_, '_> {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces % 2 == 0 { 0 } else { 1 };
+            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),
@@ -1087,7 +1087,7 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{DataFusionError, Result, Statistics};
+    use datafusion_common::{internal_datafusion_err, Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
@@ -1153,9 +1153,7 @@ mod tests {
             }
             match self {
                 Self::Panic => panic!("expected panic"),
-                Self::Error => {
-                    Err(DataFusionError::Internal("expected error".to_string()))
-                }
+                Self::Error => Err(internal_datafusion_err!("expected error")),
                 Self::Ok => Ok(Statistics::new_unknown(self.schema().as_ref())),
             }
         }

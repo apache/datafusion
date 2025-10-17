@@ -75,8 +75,8 @@ async fn main() -> Result<()> {
     let state = ctx.state();
 
     // First, parse the SQL (but don't plan it / resolve any table references)
-    let dialect = state.config().options().sql_parser.dialect.as_str();
-    let statement = state.sql_to_statement(sql, dialect)?;
+    let dialect = state.config().options().sql_parser.dialect;
+    let statement = state.sql_to_statement(sql, &dialect)?;
 
     // Find all `TableReferences` in the parsed queries. These correspond to the
     // tables referred to by the query (in this case

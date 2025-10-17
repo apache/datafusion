@@ -858,6 +858,27 @@ impl ExecutionPlan for RepartitionExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        _config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        use Partitioning::*;
+        let mut new_properties = self.cache.clone();
+        new_properties.partitioning = match new_properties.partitioning {
+            RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
+            Hash(hash, _) => Hash(hash, target_partitions),
+            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
+        };
+        Ok(Some(Arc::new(Self {
+            input: Arc::clone(&self.input),
+            state: Arc::clone(&self.state),
+            metrics: self.metrics.clone(),
+            preserve_order: self.preserve_order,
+            cache: new_properties,
+        })))
+    }
 }
 
 impl RepartitionExec {
@@ -1761,17 +1782,12 @@ mod test {
     /// `$PLAN`: the plan to optimized
     ///
     macro_rules! assert_plan {
-        ($EXPECTED_PLAN_LINES: expr,  $PLAN: expr) => {
-            let physical_plan = $PLAN;
-            let formatted = crate::displayable(&physical_plan).indent(true).to_string();
-            let actual: Vec<&str> = formatted.trim().lines().collect();
+        ($PLAN: expr,  @ $EXPECTED: expr) => {
+            let formatted = crate::displayable($PLAN).indent(true).to_string();
 
-            let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
-                .iter().map(|s| *s).collect();
-
-            assert_eq!(
-                expected_plan_lines, actual,
-                "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+            insta::assert_snapshot!(
+                formatted,
+                @$EXPECTED
             );
         };
     }
@@ -1788,13 +1804,12 @@ mod test {
             .with_preserve_order();
 
         // Repartition should preserve order
-        let expected_plan = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
-            "  UnionExec",
-            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-        ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(&exec, @r"
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC
+          UnionExec
+            DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
+            DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
+        ");
         Ok(())
     }
 
@@ -1804,16 +1819,15 @@ mod test {
         let sort_exprs = sort_exprs(&schema);
         let source = sorted_memory_exec(&schema, sort_exprs);
         // output is sorted, but has only a single partition, so no need to sort
-        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))
-            .unwrap()
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))?
             .with_preserve_order();
 
         // Repartition should not preserve order
-        let expected_plan = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "  DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-        ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(&exec, @r"
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
+        ");
+
         Ok(())
     }
 
@@ -1828,13 +1842,30 @@ mod test {
             .with_preserve_order();
 
         // Repartition should not preserve order, as there is no order to preserve
-        let expected_plan = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-            "  UnionExec",
-            "    DataSourceExec: partitions=1, partition_sizes=[0]",
-            "    DataSourceExec: partitions=1, partition_sizes=[0]",
-        ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(&exec, @r"
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
+          UnionExec
+            DataSourceExec: partitions=1, partition_sizes=[0]
+            DataSourceExec: partitions=1, partition_sizes=[0]
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repartition() -> Result<()> {
+        let schema = test_schema();
+        let sort_exprs = sort_exprs(&schema);
+        let source = sorted_memory_exec(&schema, sort_exprs);
+        // output is sorted, but has only a single partition, so no need to sort
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))?
+            .repartitioned(20, &Default::default())?
+            .unwrap();
+
+        // Repartition should not preserve order
+        assert_plan!(exec.as_ref(), @r"
+        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
+        ");
         Ok(())
     }
 

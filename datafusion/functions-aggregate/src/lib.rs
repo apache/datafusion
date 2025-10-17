@@ -19,7 +19,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
@@ -81,6 +81,7 @@ pub mod hyperloglog;
 pub mod median;
 pub mod min_max;
 pub mod nth_value;
+pub mod percentile_cont;
 pub mod regr;
 pub mod stddev;
 pub mod string_agg;
@@ -88,6 +89,7 @@ pub mod sum;
 pub mod variance;
 
 pub mod planner;
+mod utils;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
@@ -105,6 +107,7 @@ pub mod expr_fn {
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
     pub use super::array_agg::array_agg;
     pub use super::average::avg;
+    pub use super::average::avg_distinct;
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
     pub use super::bit_and_or_xor::bit_xor;
@@ -122,6 +125,7 @@ pub mod expr_fn {
     pub use super::min_max::max;
     pub use super::min_max::min;
     pub use super::nth_value::nth_value;
+    pub use super::percentile_cont::percentile_cont;
     pub use super::regr::regr_avgx;
     pub use super::regr::regr_avgy;
     pub use super::regr::regr_count;
@@ -134,6 +138,7 @@ pub mod expr_fn {
     pub use super::stddev::stddev;
     pub use super::stddev::stddev_pop;
     pub use super::sum::sum;
+    pub use super::sum::sum_distinct;
     pub use super::variance::var_pop;
     pub use super::variance::var_sample;
 }
@@ -169,6 +174,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         approx_distinct::approx_distinct_udaf(),
         approx_percentile_cont_udaf(),
         approx_percentile_cont_with_weight_udaf(),
+        percentile_cont::percentile_cont_udaf(),
         string_agg::string_agg_udaf(),
         bit_and_or_xor::bit_and_udaf(),
         bit_and_or_xor::bit_or_udaf(),
