@@ -515,6 +515,7 @@ message ParquetColumnOptions {
 message ParquetOptions {
   // Regular fields
   bool enable_page_index = 1; // default = true
+  bool eager_load_page_index = 34; // default = false
   bool pruning = 2; // default = true
   bool skip_metadata = 3; // default = true
   bool pushdown_filters = 5; // default = false

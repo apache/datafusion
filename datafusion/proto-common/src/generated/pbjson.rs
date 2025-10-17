@@ -5545,6 +5545,9 @@ impl serde::Serialize for ParquetOptions {
         if self.enable_page_index {
             len += 1;
         }
+        if self.eager_load_page_index {
+            len += 1;
+        }
         if self.pruning {
             len += 1;
         }
@@ -5638,6 +5641,9 @@ impl serde::Serialize for ParquetOptions {
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
         if self.enable_page_index {
             struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
+        }
+        if self.eager_load_page_index {
+            struct_ser.serialize_field("eagerLoadPageIndex", &self.eager_load_page_index)?;
         }
         if self.pruning {
             struct_ser.serialize_field("pruning", &self.pruning)?;
@@ -5809,6 +5815,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
         const FIELDS: &[&str] = &[
             "enable_page_index",
             "enablePageIndex",
+            "eager_load_page_index",
+            "eagerLoadPageIndex",
             "pruning",
             "skip_metadata",
             "skipMetadata",
@@ -5871,6 +5879,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             EnablePageIndex,
+            EagerLoadPageIndex,
             Pruning,
             SkipMetadata,
             PushdownFilters,
@@ -5923,6 +5932,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     {
                         match value {
                             "enablePageIndex" | "enable_page_index" => Ok(GeneratedField::EnablePageIndex),
+                            "eagerLoadPageIndex" | "eager_load_page_index" => Ok(GeneratedField::EagerLoadPageIndex),
                             "pruning" => Ok(GeneratedField::Pruning),
                             "skipMetadata" | "skip_metadata" => Ok(GeneratedField::SkipMetadata),
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
@@ -5973,6 +5983,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut enable_page_index__ = None;
+                let mut eager_load_page_index__ = None;
                 let mut pruning__ = None;
                 let mut skip_metadata__ = None;
                 let mut pushdown_filters__ = None;
@@ -6010,6 +6021,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("enablePageIndex"));
                             }
                             enable_page_index__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::EagerLoadPageIndex => {
+                            if eager_load_page_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("eagerLoadPageIndex"));
+                            }
+                            eager_load_page_index__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Pruning => {
                             if pruning__.is_some() {
@@ -6209,6 +6226,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 }
                 Ok(ParquetOptions {
                     enable_page_index: enable_page_index__.unwrap_or_default(),
+                    eager_load_page_index: eager_load_page_index__.unwrap_or_default(),
                     pruning: pruning__.unwrap_or_default(),
                     skip_metadata: skip_metadata__.unwrap_or_default(),
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),

@@ -212,7 +212,8 @@ impl FileOpener for ParquetOpener {
             // underlying reader.
             // But if eager loading is requested, we do request it now.
             let request_page_index = eager_load_page_index && enable_page_index;
-            let mut options = ArrowReaderOptions::new().with_page_index(request_page_index);
+            let mut options =
+                ArrowReaderOptions::new().with_page_index(request_page_index);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties((*fd_val).clone());
@@ -1405,32 +1406,37 @@ mod test {
 
     #[test]
     fn test_should_enable_page_index_and_eager_lazy_logic() {
-        use std::sync::Arc;
         use arrow::datatypes::{Field, Schema};
+        use datafusion_common::ScalarValue;
         use datafusion_expr::col;
         use datafusion_expr::lit;
-        use datafusion_common::ScalarValue;
         use datafusion_physical_expr::planner::logical2physical;
+        use std::sync::Arc;
 
         // 1) Construct a minimal file schema (only needed to produce a predicate)
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
         // Build a simple predicate: a = 1
         let expr = col("a").eq(lit(ScalarValue::Int32(Some(1))));
         let predicate = logical2physical(&expr, &schema);
 
         // 2) Test that build_page_pruning_predicate -> page pruning predicate is not empty
-        let page_pruning_pred = crate::opener::build_page_pruning_predicate(&predicate, &schema);
+        let page_pruning_pred =
+            crate::opener::build_page_pruning_predicate(&predicate, &schema);
         // page_pruning_pred.filter_number() should be greater than 0 (i.e. at least one page-level filter)
         assert!(page_pruning_pred.filter_number() > 0);
 
         // 3) Test basic behavior of should_enable_page_index
         // enable_page_index = true and page_pruning_pred present -> returns true
-        assert!(crate::opener::should_enable_page_index(true, &Some(Arc::clone(&page_pruning_pred))));
+        assert!(crate::opener::should_enable_page_index(
+            true,
+            &Some(Arc::clone(&page_pruning_pred))
+        ));
         // enable_page_index = false -> always false
-        assert!(!crate::opener::should_enable_page_index(false, &Some(Arc::clone(&page_pruning_pred))));
+        assert!(!crate::opener::should_enable_page_index(
+            false,
+            &Some(Arc::clone(&page_pruning_pred))
+        ));
         // no page_pruning_pred -> always false
         assert!(!crate::opener::should_enable_page_index(true, &None));
 
@@ -1441,7 +1447,10 @@ mod test {
         let request_page_index = eager_load_page_index && enable_page_index;
         assert!(request_page_index);
         let needs_lazy_load = !eager_load_page_index
-            && crate::opener::should_enable_page_index(enable_page_index, &Some(Arc::clone(&page_pruning_pred)));
+            && crate::opener::should_enable_page_index(
+                enable_page_index,
+                &Some(Arc::clone(&page_pruning_pred)),
+            );
         assert!(!needs_lazy_load);
 
         // eager = false => request_page_index = false; needs_lazy_load should be true
@@ -1449,7 +1458,10 @@ mod test {
         let request_page_index = eager_load_page_index && enable_page_index;
         assert!(!request_page_index);
         let needs_lazy_load = !eager_load_page_index
-            && crate::opener::should_enable_page_index(enable_page_index, &Some(Arc::clone(&page_pruning_pred)));
+            && crate::opener::should_enable_page_index(
+                enable_page_index,
+                &Some(Arc::clone(&page_pruning_pred)),
+            );
         assert!(needs_lazy_load);
     }
 }
