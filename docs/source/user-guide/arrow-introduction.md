@@ -24,7 +24,7 @@
 :depth: 2
 ```
 
-This guide helps DataFusion users understand Arrow and its RecordBatch format. While you may never need to work with Arrow directly, this knowledge becomes valuable when using DataFusion's extension points or debugging performance issues.
+This guide helps DataFusion users understand [Arrow] and its RecordBatch format. While you may never need to work with Arrow directly, this knowledge becomes valuable when using DataFusion's extension points or debugging performance issues.
 
 **Why Arrow is central to DataFusion**: Arrow provides the unified type system that makes DataFusion possible. When you query a CSV file, join it with a Parquet file, and aggregate results from JSON—it all works seamlessly because every data source is converted to Arrow's common representation. This unified type system, combined with Arrow's columnar format, enables DataFusion to execute efficient vectorized operations across any combination of data sources while benefiting from zero-copy data sharing between query operators.
 
@@ -66,38 +66,27 @@ Traditional Row Storage:          Arrow Columnar Storage:
 
 ### Why This Matters
 
+- **Unified Type System**: All data sources (CSV, Parquet, JSON) convert to the same Arrow types, enabling seamless cross-format queries
 - **Vectorized Execution**: Process entire columns at once using SIMD instructions
-- **Better Compression**: Similar values stored together compress more efficiently
-- **Cache Efficiency**: Scanning specific columns doesn't load unnecessary data
+- **Cache Efficiency**: Scanning specific columns doesn't load unnecessary data into CPU cache
 - **Zero-Copy Data Sharing**: Systems can share Arrow data without conversion overhead
 
-DataFusion, DuckDB, Polars, and Pandas all speak Arrow natively—they can exchange data without expensive serialization/deserialization steps.
+Arrow has become the universal standard for in-memory analytics precisely because of its **columnar format**—systems that natively store or process data in Arrow (DataFusion, Polars, InfluxDB 3.0), and runtimes that convert to Arrow for interchange (DuckDB, Spark, pandas), all organize data by column rather than by row. This cross-language, cross-platform adoption of the columnar model enables seamless data flow between systems with minimal conversion overhead.
+
+Within this columnar design, Arrow's standard unit for packaging data is the **RecordBatch**—the key to making columnar format practical for real-world query engines.
 
 ## What is a RecordBatch? (And Why Batch?)
 
-A **[`RecordBatch`]** represents a horizontal slice of a table—a collection of equal-length columnar arrays sharing the same schema.
+A **[`RecordBatch`]** cleverly combines the benefits of columnar storage with the practical need to process data in chunks. It represents a horizontal slice of a table, but critically, each column _within_ that slice remains a contiguous array.
 
-### Why Not Process Entire Tables?
+Think of it as having two perspectives:
 
-- **Memory Constraints**: A billion-row table might not fit in RAM
-- **Pipeline Processing**: Start producing results before reading all data
-- **Parallel Execution**: Different threads can process different batches
+- **Columnar inside**: Each column (`id`, `name`, `age`) is a contiguous array optimized for vectorized operations
+- **Row-oriented outside**: The batch represents a chunk of rows (e.g., rows 1-1000), making it a manageable unit for streaming
 
-### Why Not Process Single Rows?
+RecordBatches are **immutable snapshots**—once created, they cannot be modified. Any transformation produces a _new_ RecordBatch, enabling safe parallel processing without locks or coordination overhead.
 
-- **Lost Vectorization**: Can't use SIMD instructions on single values
-- **Poor Cache Utilization**: Jumping between rows defeats CPU cache optimization
-- **High Overhead**: Managing individual rows has significant bookkeeping costs
-
-### RecordBatches: The Sweet Spot
-
-RecordBatches typically contain thousands of rows—enough to benefit from vectorization but small enough to fit in memory. DataFusion streams these batches through operators, achieving both efficiency and scalability.
-
-**Key Properties**:
-
-- Arrays are immutable (create new batches to modify data)
-- NULL values tracked via efficient validity bitmaps
-- Variable-length data (strings, lists) use offset arrays for efficient access
+This design allows DataFusion to process streams of row-based chunks while gaining maximum performance from the columnar layout. Let's see how this works in practice.
 
 ## From files to Arrow
 
@@ -115,7 +104,7 @@ async fn main() -> datafusion::error::Result<()> {
     // Pick ONE of these per run (each returns a new DataFrame):
     let df = ctx.read_csv("data.csv", CsvReadOptions::new()).await?;
     // let df = ctx.read_parquet("data.parquet", ParquetReadOptions::default()).await?;
-    // let df = ctx.read_json("data.ndjson", NdJsonReadOptions::default()).await?; // requires "json" feature
+    // let df = ctx.read_json("data.ndjson", NdJsonReadOptions::default()).await?; // requires "json" feature; expects newline-delimited JSON
     // let df = ctx.read_avro("data.avro", AvroReadOptions::default()).await?;     // requires "avro" feature
 
     let batches = df
@@ -150,9 +139,7 @@ In this pipeline, [`RecordBatch`]es are the "packages" of columnar data that flo
 
 Sometimes you need to create Arrow data programmatically rather than reading from files. This example shows the core building blocks: creating typed arrays (like [`Int32Array`] for numbers), defining a [`Schema`] that describes your columns, and assembling them into a [`RecordBatch`].
 
-You'll notice [`Arc`] ([Atomically Reference Counted](https://doc.rust-lang.org/std/sync/struct.Arc.html)) is used frequently—this is how Arrow enables efficient, zero-copy data sharing. Instead of copying data, different parts of the query engine can safely share read-only references to the same underlying memory. [`ArrayRef`] is simply a type alias for `Arc<dyn Array>`, representing a reference to any Arrow array type.
-
-Notice how nullable columns can contain `None` values, tracked efficiently by Arrow's internal validity bitmap.
+Note: You'll see [`Arc`] used frequently in the code—DataFusion's async architecture requires wrapping Arrow arrays in `Arc` (atomically reference-counted pointers) to safely share data across tasks. [`ArrayRef`] is simply a type alias for `Arc<dyn Array>`.
 
 ```rust
 use std::sync::Arc;
@@ -250,52 +237,48 @@ The DataFrame API handles all the Arrow details under the hood - reading files i
 
 ## Further reading
 
-- [Arrow introduction](https://arrow.apache.org/docs/format/Intro.html)
-- [Arrow columnar format (overview)](https://arrow.apache.org/docs/format/Columnar.html)
-- [Arrow IPC format (files and streams)](https://arrow.apache.org/docs/format/IPC.html)
-- [arrow_array::RecordBatch (docs.rs)](https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html)
-- [Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine (Paper)](https://dl.acm.org/doi/10.1145/3626246.3653368)
+**Arrow Documentation:**
 
-- DataFusion + Arrow integration (docs.rs):
-  - [datafusion::common::arrow](https://docs.rs/datafusion/latest/datafusion/common/arrow/index.html)
-  - [datafusion::common::arrow::array](https://docs.rs/datafusion/latest/datafusion/common/arrow/array/index.html)
-  - [datafusion::common::arrow::compute](https://docs.rs/datafusion/latest/datafusion/common/arrow/compute/index.html)
-  - [SessionContext::read_csv](https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_csv)
-  - [read_parquet](https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_parquet)
-  - [read_json](https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_json)
-  - [DataFrame::collect](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.collect)
-  - [SendableRecordBatchStream](https://docs.rs/datafusion/latest/datafusion/physical_plan/type.SendableRecordBatchStream.html)
-  - [TableProvider](https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html)
-  - [MemTable](https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html)
-- Deep dive (memory layout internals): [ArrayData on docs.rs](https://docs.rs/datafusion/latest/datafusion/common/arrow/array/struct.ArrayData.html)
-- Parquet format and pushdown: [Parquet format](https://parquet.apache.org/docs/file-format/), [Row group filtering / predicate pushdown](https://arrow.apache.org/docs/cpp/parquet.html#row-group-filtering)
-- For DataFusion contributors: [DataFusion Invariants](../contributor-guide/specification/invariants.md) - How DataFusion maintains type safety and consistency with Arrow's dynamic type system
+- [Arrow Format Introduction](https://arrow.apache.org/docs/format/Intro.html) - Official Arrow specification
+- [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html) - In-depth look at the memory layout
 
-[`arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
-[`arrayref`]: https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html
-[`field`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Field.html
-[`schema`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html
-[`datatype`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html
-[`int32array`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.Int32Array.html
-[`stringarray`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.StringArray.html
-[`int32`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int32
-[`int64`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int64
-[ extension points]: ../library-user-guide/extensions.md
-[`tableprovider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
-[custom table providers guide]: ../library-user-guide/custom-table-providers.md
-[user-defined functions (udfs)]: ../library-user-guide/functions/adding-udfs.md
-[custom optimizer rules and operators]: ../library-user-guide/extending-operators.md
+**DataFusion API References:**
+
+- [RecordBatch](https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html) - Core Arrow data structure
+- [DataFrame](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html) - High-level query interface
+- [TableProvider](https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html) - Custom data source trait
+- [MemTable](https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html) - In-memory table implementation
+
+**Academic Paper:**
+
+- [Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine](https://dl.acm.org/doi/10.1145/3626246.3653368) - Published at SIGMOD 2024
+
+[arrow]: https://arrow.apache.org/docs/index.html
+[`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
+[`ArrayRef`]: https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html
+[`Field`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Field.html
+[`Schema`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html
+[`DataType`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html
+[`Int32Array`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.Int32Array.html
+[`StringArray`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.StringArray.html
+[`Int32`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int32
+[`Int64`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int64
+[extension points]: ../library-user-guide/extensions.md
+[`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
+[Custom Table Providers guide]: ../library-user-guide/custom-table-providers.md
+[User-Defined Functions (UDFs)]: ../library-user-guide/functions/adding-udfs.md
+[Custom Optimizer Rules and Operators]: ../library-user-guide/extending-operators.md
 [`.register_table()`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.register_table
 [`.sql()`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql
 [`.show()`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.show
-[`memtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html
-[`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
-[`csvreadoptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.CsvReadOptions.html
-[`parquetreadoptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.ParquetReadOptions.html
-[`recordbatch`]: https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html
+[`MemTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html
+[`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
+[`CsvReadOptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.CsvReadOptions.html
+[`ParquetReadOptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.ParquetReadOptions.html
+[`RecordBatch`]: https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html
 [`read_csv`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_csv
 [`read_parquet`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_parquet
 [`read_json`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_json
 [`read_avro`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_avro
-[`dataframe`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
+[`DataFrame`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
 [`.collect()`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.collect

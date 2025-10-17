@@ -111,10 +111,6 @@ async fn main() -> Result<()> {
 }
 ```
 
----
-
-# REFERENCES
-
 [pandas dataframe]: https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html
 [spark dataframe]: https://spark.apache.org/docs/latest/sql-programming-guide.html
 [`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
