@@ -18,6 +18,7 @@
 use crate::logical_plan::consumer::types::from_substrait_type;
 use crate::logical_plan::consumer::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::variation_const::FLOAT_16_TYPE_NAME;
 #[allow(deprecated)]
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
@@ -38,6 +39,7 @@ use datafusion::common::{
     not_impl_err, plan_err, substrait_datafusion_err, substrait_err, ScalarValue,
 };
 use datafusion::logical_expr::Expr;
+use prost::Message;
 use std::sync::Arc;
 use substrait::proto;
 use substrait::proto::expression::literal::user_defined::Val;
@@ -440,8 +442,6 @@ pub(crate) fn from_substrait_literal(
                 return Ok(value);
             }
 
-            // TODO: remove the code below once the producer has been updated
-
             // Helper function to prevent duplicating this code - can be inlined once the non-extension path is removed
             let interval_month_day_nano =
                 |user_defined: &proto::expression::literal::UserDefined| -> datafusion::common::Result<ScalarValue> {
@@ -474,6 +474,36 @@ pub(crate) fn from_substrait_literal(
                 .get(&user_defined.type_reference)
             {
                 match name.as_ref() {
+                    FLOAT_16_TYPE_NAME => {
+                        // Rules for encoding fp16 Substrait literals are defined as part of Arrow here:
+                        //
+                        // https://github.com/apache/arrow/blame/bab558061696ddc1841148d6210424b12923d48e/format/substrait/extension_types.yaml#L112
+
+                        let Some(value) = user_defined.val.as_ref() else {
+                            return substrait_err!("Float16 value is empty");
+                        };
+                        let Val::Value(value_any) = value else {
+                            return substrait_err!(
+                                "Float16 value is not a value type literal"
+                            );
+                        };
+                        if value_any.type_url != "google.protobuf.UInt32Value" {
+                            return substrait_err!(
+                                "Float16 value is not a google.protobuf.UInt32Value"
+                            );
+                        }
+                        let decoded_value =
+                            pbjson_types::UInt32Value::decode(value_any.value.clone())
+                                .map_err(|err| {
+                                    substrait_datafusion_err!(
+                                        "Failed to decode float16 value: {err}"
+                                    )
+                                })?;
+                        let u32_bytes = decoded_value.value.to_le_bytes();
+                        let f16_val =
+                            half::f16::from_le_bytes(u32_bytes[0..2].try_into().unwrap());
+                        return Ok(ScalarValue::Float16(Some(f16_val)));
+                    }
                     // Kept for backwards compatibility - producers should use IntervalCompound instead
                     #[allow(deprecated)]
                     INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
