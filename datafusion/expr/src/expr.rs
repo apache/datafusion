@@ -796,13 +796,23 @@ pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `DataType` the expression will yield
-    pub data_type: DataType,
+    pub data_type: FieldRef,
 }
 
 impl Cast {
     /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
-        Self { expr, data_type }
+        Self {
+            expr,
+            data_type: Field::new("", data_type, true).into(),
+        }
+    }
+
+    pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
+        Self {
+            expr,
+            data_type: field,
+        }
     }
 }
 
@@ -812,13 +822,23 @@ pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `DataType` the expression will yield
-    pub data_type: DataType,
+    pub data_type: FieldRef,
 }
 
 impl TryCast {
     /// Create a new TryCast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
-        Self { expr, data_type }
+        Self {
+            expr,
+            data_type: Field::new("", data_type, true).into(),
+        }
+    }
+
+    pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
+        Self {
+            expr,
+            data_type: field,
+        }
     }
 }
 
@@ -3284,10 +3304,28 @@ impl Display for Expr {
                 write!(f, "END")
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                write!(f, "CAST({expr} AS {data_type})")
+                if data_type.metadata().is_empty() {
+                    write!(f, "CAST({expr} AS {})", data_type.data_type())
+                } else {
+                    write!(
+                        f,
+                        "CAST({expr} AS {}<{:?}>)",
+                        data_type.data_type(),
+                        data_type.metadata()
+                    )
+                }
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
-                write!(f, "TRY_CAST({expr} AS {data_type})")
+                if data_type.metadata().is_empty() {
+                    write!(f, "TRY_CAST({expr} AS {})", data_type.data_type())
+                } else {
+                    write!(
+                        f,
+                        "TRY_CAST({expr} AS {}<{:?}>)",
+                        data_type.data_type(),
+                        data_type.metadata()
+                    )
+                }
             }
             Expr::Not(expr) => write!(f, "NOT {expr}"),
             Expr::Negative(expr) => write!(f, "(- {expr})"),
@@ -3673,7 +3711,7 @@ mod test {
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
-            data_type: DataType::Utf8,
+            data_type: Field::new("", DataType::Utf8, true).into(),
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, format!("{expr}"));

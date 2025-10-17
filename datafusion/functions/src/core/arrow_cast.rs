@@ -171,7 +171,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
-                data_type: target_type,
+                data_type: Field::new("", target_type, true).into(),
             })
         };
         // return the newly written argument to DataFusion

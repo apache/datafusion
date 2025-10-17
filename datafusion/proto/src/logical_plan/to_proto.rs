@@ -525,7 +525,7 @@ pub fn serialize_expr(
         Expr::Cast(Cast { expr, data_type }) => {
             let expr = Box::new(protobuf::CastNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                arrow_type: Some(data_type.try_into()?),
+                arrow_type: Some(data_type.data_type().try_into()?),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Cast(expr)),
@@ -534,7 +534,7 @@ pub fn serialize_expr(
         Expr::TryCast(TryCast { expr, data_type }) => {
             let expr = Box::new(protobuf::TryCastNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                arrow_type: Some(data_type.try_into()?),
+                arrow_type: Some(data_type.data_type().try_into()?),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::TryCast(expr)),

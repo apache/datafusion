@@ -27,7 +27,7 @@ use crate::variation_const::{
     TIME_32_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF,
     UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use datafusion::arrow::datatypes::{DataType, IntervalUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchemaRef};
 use substrait::proto::{r#type, NamedStruct};
 
@@ -36,12 +36,19 @@ pub(crate) fn to_substrait_type(
     dt: &DataType,
     nullable: bool,
 ) -> datafusion::common::Result<substrait::proto::Type> {
-    let nullability = if nullable {
+    to_substrait_type_from_field(producer, &Field::new("", dt.clone(), nullable).into())
+}
+
+pub(crate) fn to_substrait_type_from_field(
+    producer: &mut impl SubstraitProducer,
+    dt: &FieldRef,
+) -> datafusion::common::Result<substrait::proto::Type> {
+    let nullability = if dt.is_nullable() {
         r#type::Nullability::Nullable as i32
     } else {
         r#type::Nullability::Required as i32
     };
-    match dt {
+    match dt.data_type() {
         DataType::Null => {
             let type_anchor = producer.register_type(NULL_TYPE_NAME.to_string());
             Ok(substrait::proto::Type {
@@ -310,8 +317,8 @@ pub(crate) fn to_substrait_type(
             _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
         },
         DataType::Dictionary(key_type, value_type) => {
-            let key_type = to_substrait_type(producer, key_type, nullable)?;
-            let value_type = to_substrait_type(producer, value_type, nullable)?;
+            let key_type = to_substrait_type(producer, key_type, dt.is_nullable())?;
+            let value_type = to_substrait_type(producer, value_type, dt.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
                     key: Some(Box::new(key_type)),

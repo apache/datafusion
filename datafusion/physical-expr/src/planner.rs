@@ -290,12 +290,14 @@ pub fn create_physical_expr(
         Expr::Cast(Cast { expr, data_type }) => expressions::cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            data_type.clone(),
+            // TODO: this drops extension metadata associated with the cast
+            data_type.data_type().clone(),
         ),
         Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            data_type.clone(),
+            // TODO: this drops extension metadata associated with the cast
+            data_type.data_type().clone(),
         ),
         Expr::Not(expr) => {
             expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)

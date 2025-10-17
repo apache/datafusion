@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{to_substrait_type, SubstraitProducer};
+use crate::logical_plan::producer::{to_substrait_type_from_field, SubstraitProducer};
 use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::common::{DFSchemaRef, ScalarValue};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
@@ -39,8 +39,8 @@ pub fn from_cast(
             let lit = Literal {
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                literal_type: Some(LiteralType::Null(to_substrait_type(
-                    producer, data_type, true,
+                literal_type: Some(LiteralType::Null(to_substrait_type_from_field(
+                    producer, data_type,
                 )?)),
             };
             return Ok(Expression {
@@ -51,7 +51,7 @@ pub fn from_cast(
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type(producer, data_type, true)?),
+                r#type: Some(to_substrait_type_from_field(producer, data_type)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ThrowException.into(),
             },
@@ -68,7 +68,7 @@ pub fn from_try_cast(
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type(producer, data_type, true)?),
+                r#type: Some(to_substrait_type_from_field(producer, data_type)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ReturnNull.into(),
             },
@@ -80,7 +80,7 @@ pub fn from_try_cast(
 mod tests {
     use super::*;
     use crate::logical_plan::producer::{
-        to_substrait_extended_expr, DefaultSubstraitProducer,
+        to_substrait_extended_expr, to_substrait_type, DefaultSubstraitProducer,
     };
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;
