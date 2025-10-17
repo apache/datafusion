@@ -2166,11 +2166,11 @@ mod tests {
                 r#"NOT EXISTS (SELECT * FROM t WHERE (t.a = 1))"#,
             ),
             (
-                try_cast(col("a"), DataType::Date64),
+                try_cast(col("a"), Arc::new(Field::new("a", DataType::Date64, false))),
                 r#"TRY_CAST(a AS DATETIME)"#,
             ),
             (
-                try_cast(col("a"), DataType::UInt32),
+                try_cast(col("a"), Arc::new(Field::new("a", DataType::UInt32, false))),
                 r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
@@ -3160,7 +3160,10 @@ mod tests {
 
         assert_eq!(ast_dtype, ast::DataType::Char(None));
 
-        let expr = cast(col("a"), DataType::Utf8View);
+        let expr = cast(
+            col("a"),
+            Arc::new(Field::new("a", DataType::Utf8View, false)),
+        );
         let ast = unparser.expr_to_sql(&expr)?;
 
         let actual = format!("{ast}");
