@@ -222,10 +222,10 @@ impl TreeNode for Expr {
                 }),
             Expr::Cast(Cast { expr, data_type }) => expr
                 .map_elements(f)?
-                .update_data(|be| Expr::Cast(Cast::new(be, data_type))),
+                .update_data(|be| Expr::Cast(Cast::new_from_field(be, data_type))),
             Expr::TryCast(TryCast { expr, data_type }) => expr
                 .map_elements(f)?
-                .update_data(|be| Expr::TryCast(TryCast::new(be, data_type))),
+                .update_data(|be| Expr::TryCast(TryCast::new_from_field(be, data_type))),
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 args.map_elements(f)?.map_data(|new_args| {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
