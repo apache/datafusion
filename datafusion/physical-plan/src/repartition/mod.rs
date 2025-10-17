@@ -1819,8 +1819,7 @@ mod test {
         let sort_exprs = sort_exprs(&schema);
         let source = sorted_memory_exec(&schema, sort_exprs);
         // output is sorted, but has only a single partition, so no need to sort
-        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))
-            ?
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))?
             .with_preserve_order();
 
         // Repartition should not preserve order
