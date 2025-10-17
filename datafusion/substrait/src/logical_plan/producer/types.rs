@@ -376,7 +376,7 @@ pub(crate) fn to_substrait_named_struct(
         types: schema
             .fields()
             .iter()
-            .map(|f| to_substrait_type(producer, f.data_type(), f.is_nullable()))
+            .map(|f| to_substrait_type_from_field(producer, f))
             .collect::<datafusion::common::Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
         nullability: r#type::Nullability::Required as i32,
