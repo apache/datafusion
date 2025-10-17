@@ -641,15 +641,20 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                 false
             };
 
-            let on = if join_order_swapped {
-                // Swap each (left, right) pair to (right, left)
-                edge.join
+            // When the join order is swapped, we need to adjust the on conditions and join type
+            // to maintain correct semantics. For example:
+            // - Original: A LeftSemi B ON A.x = B.y
+            // - After swap: B RightSemi A ON B.y = A.x
+            let (on, join_type) = if join_order_swapped {
+                let swapped_on = edge
+                    .join
                     .on
                     .iter()
                     .map(|(left, right)| (right.clone(), left.clone()))
-                    .collect()
+                    .collect();
+                (swapped_on, edge.join.join_type.swap())
             } else {
-                edge.join.on.clone()
+                (edge.join.on.clone(), edge.join.join_type)
             };
 
             // Create the join plan
@@ -658,7 +663,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                 right: Arc::new(next_plan),
                 on,
                 filter: edge.join.filter.clone(),
-                join_type: edge.join.join_type,
+                join_type,
                 join_constraint: edge.join.join_constraint,
                 schema: Arc::clone(&edge.join.schema),
                 null_equality: edge.join.null_equality,
