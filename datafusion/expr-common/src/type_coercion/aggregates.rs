@@ -21,6 +21,7 @@ use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{internal_err, plan_err, Result};
 
 // TODO: remove usage of these (INTEGERS and NUMERICS) in favour of signatures
+//       see https://github.com/apache/datafusion/issues/18092
 pub static INTEGERS: &[DataType] = &[
     DataType::Int8,
     DataType::Int16,

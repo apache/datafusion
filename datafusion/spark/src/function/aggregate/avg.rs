@@ -40,6 +40,7 @@ use std::{any::Any, sync::Arc};
 /// support planned in the future for Spark version.
 
 // TODO: see if can deduplicate with DF version
+//       https://github.com/apache/datafusion/issues/17964
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparkAvg {
     signature: Signature,
