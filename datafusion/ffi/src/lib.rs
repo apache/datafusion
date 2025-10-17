@@ -34,7 +34,7 @@ pub mod physical_expr;
 pub mod plan_properties;
 pub mod record_batch_stream;
 pub mod schema_provider;
-pub mod session_config;
+pub mod session;
 pub mod table_provider;
 pub mod table_source;
 pub mod udaf;
