@@ -1355,7 +1355,7 @@ impl ExecutionPlan for SortExec {
             ChildFilterDescription::from_child(&parent_filters, self.input())?;
 
         if let Some(filter) = &self.filter {
-            if config.optimizer.enable_dynamic_filter_pushdown {
+            if config.optimizer.enable_topk_dynamic_filter_pushdown {
                 child = child.with_self_filter(filter.read().expr());
             }
         }
