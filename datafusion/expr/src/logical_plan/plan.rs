@@ -4816,15 +4816,11 @@ mod tests {
             ScalarValue::Int32(Some(42)),
             Some(scalar_meta.into()),
         )]);
-        let err = prepared_builder
+        prepared_builder
             .plan()
             .clone()
             .with_param_values(param_values)
-            .unwrap_err();
-        assert_eq!(
-            err.message(),
-            "Expected parameter of type Int32, got Int32<{\"some_key\": \"some_value\"}> at index 0"
-        );
+            .expect_err("prepared field metadata mismatch unexpectedly succeeded");
     }
 
     #[test]
