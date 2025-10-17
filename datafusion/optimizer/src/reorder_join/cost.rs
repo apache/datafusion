@@ -2,7 +2,7 @@ use datafusion_common::{plan_datafusion_err, plan_err, stats::Precision, Result}
 use datafusion_expr::{Join, JoinType, LogicalPlan};
 
 pub trait JoinCostEstimator: std::fmt::Debug {
-    fn cardinality(&self, plan: &LogicalPlan) -> Option<usize> {
+    fn cardinality(&self, plan: &LogicalPlan) -> Option<f64> {
         estimate_cardinality(plan).ok()
     }
 
@@ -13,8 +13,8 @@ pub trait JoinCostEstimator: std::fmt::Debug {
         }
     }
 
-    fn cost(&self, selectivity: f64, cardinality: usize) -> f64 {
-        selectivity * cardinality as f64
+    fn cost(&self, selectivity: f64, cardinality: f64) -> f64 {
+        selectivity * cardinality
     }
 }
 
@@ -24,15 +24,15 @@ pub struct DefaultCostEstimator;
 
 impl JoinCostEstimator for DefaultCostEstimator {}
 
-fn estimate_cardinality(plan: &LogicalPlan) -> Result<usize> {
+fn estimate_cardinality(plan: &LogicalPlan) -> Result<f64> {
     match plan {
         LogicalPlan::Filter(filter) => {
             let input_cardinality = estimate_cardinality(&filter.input)?;
-            Ok((0.1 * input_cardinality as f64) as usize)
+            Ok(0.1 * input_cardinality)
         }
         LogicalPlan::Aggregate(agg) => {
             let input_cardinality = estimate_cardinality(&agg.input)?;
-            Ok((0.1 * input_cardinality as f64) as usize)
+            Ok(0.1 * input_cardinality)
         }
         LogicalPlan::TableScan(scan) => {
             let statistics = scan
@@ -42,7 +42,7 @@ fn estimate_cardinality(plan: &LogicalPlan) -> Result<usize> {
             if let Precision::Exact(num_rows) | Precision::Inexact(num_rows) =
                 statistics.num_rows
             {
-                Ok(num_rows)
+                Ok(num_rows as f64)
             } else {
                 plan_err!("Number of rows not available")
             }

@@ -167,14 +167,14 @@ pub fn query_graph_to_optimal_left_deep_join_plan(
 struct QueryNode {
     node_id: NodeId,
     // T in [IbarakiKameda84]
-    selectivity: usize,
+    selectivity: f64,
     // C in [IbarakiKameda84]
     cost: f64,
 }
 
 impl QueryNode {
     fn rank(&self) -> f64 {
-        (self.selectivity - 1) as f64 / self.cost
+        (self.selectivity - 1.0) / self.cost
     }
 }
 
@@ -303,7 +303,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         let node = query_graph
             .get_node(node_id)
             .ok_or_else(|| plan_datafusion_err!("Root node not found"))?;
-        let input_cardinality = cost_estimator.cardinality(&node.plan).unwrap_or(1);
+        let input_cardinality = cost_estimator.cardinality(&node.plan).unwrap_or(1.0);
 
         let children = node
             .connections()
@@ -331,7 +331,7 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         Ok(PrecedenceTreeNode {
             query_nodes: vec![QueryNode {
                 node_id,
-                selectivity: (selectivity * input_cardinality as f64) as usize,
+                selectivity: (selectivity * input_cardinality),
                 cost: if is_root {
                     0.0
                 } else {
@@ -348,15 +348,15 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         let (cardinality, cost) =
             self.query_nodes
                 .iter()
-                .fold((1, 0.0), |(cardinality, cost), node| {
-                    let cost = cost + cardinality as f64 * node.cost;
+                .fold((1.0, 0.0), |(cardinality, cost), node| {
+                    let cost = cost + cardinality * node.cost;
                     let cardinality = cardinality * node.selectivity;
                     (cardinality, cost)
                 });
         if cost == 0.0 {
             0.0
         } else {
-            (cardinality.saturating_sub(1)) as f64 / cost
+            (cardinality - 1.0) as f64 / cost
         }
     }
 
@@ -642,12 +642,12 @@ impl<'graph> PrecedenceTreeNode<'graph> {
         self.cost_recursive(self.query_nodes[0].selectivity, 0.0)
     }
 
-    fn cost_recursive(&self, cardinality: usize, cost: f64) -> Result<f64> {
+    fn cost_recursive(&self, cardinality: f64, cost: f64) -> Result<f64> {
         let cost = match self.children.len() {
-            0 => cost + cardinality as f64 * self.query_nodes[0].cost,
+            0 => cost + cardinality * self.query_nodes[0].cost,
             1 => self.children[0].cost_recursive(
                 cardinality * self.query_nodes[0].selectivity,
-                cost + cardinality as f64 * self.query_nodes[0].cost,
+                cost + cardinality * self.query_nodes[0].cost,
             )?,
             _ => {
                 return plan_err!(
