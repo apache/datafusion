@@ -116,6 +116,11 @@ impl InstrumentedObjectStore {
         req.drain(..).collect()
     }
 
+    fn enabled(&self) -> bool {
+        self.instrument_mode.load(Ordering::Relaxed)
+            != InstrumentedObjectStoreMode::Disabled as u8
+    }
+
     async fn instrumented_get_opts(
         &self,
         location: &Path,
@@ -135,6 +140,48 @@ impl InstrumentedObjectStore {
             duration: Some(elapsed),
             size: Some((ret.range.end - ret.range.start) as usize),
             range,
+            extra_display: None,
+        });
+
+        Ok(ret)
+    }
+
+    fn instrumented_list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
+        let timestamp = Utc::now();
+        let ret = self.inner.list(prefix);
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::List,
+            path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+            timestamp,
+            duration: None, // list returns a stream, so the duration isn't meaningful
+            size: None,
+            range: None,
+            extra_display: None,
+        });
+
+        ret
+    }
+
+    async fn instrumented_list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<ListResult> {
+        let timestamp = Utc::now();
+        let start = Instant::now();
+        let ret = self.inner.list_with_delimiter(prefix).await?;
+        let elapsed = start.elapsed();
+
+        self.requests.lock().push(RequestDetails {
+            op: Operation::List,
+            path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+            timestamp,
+            duration: Some(elapsed),
+            size: None,
+            range: None,
             extra_display: None,
         });
 
@@ -174,9 +221,7 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        if self.instrument_mode.load(Ordering::Relaxed)
-            != InstrumentedObjectStoreMode::Disabled as u8
-        {
+        if self.enabled() {
             return self.instrumented_get_opts(location, options).await;
         }
 
@@ -188,10 +233,18 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        if self.enabled() {
+            return self.instrumented_list(prefix);
+        }
+
         self.inner.list(prefix)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        if self.enabled() {
+            return self.instrumented_list_with_delimiter(prefix).await;
+        }
+
         self.inner.list_with_delimiter(prefix).await
     }
 
@@ -215,7 +268,7 @@ pub enum Operation {
     _Delete,
     Get,
     _Head,
-    _List,
+    List,
     _Put,
 }
 
@@ -600,8 +653,9 @@ mod tests {
         assert_eq!(reg.stores().len(), 1);
     }
 
-    #[tokio::test]
-    async fn instrumented_store() {
+    // Returns an `InstrumentedObjectStore` with some data loaded for testing and the path to
+    // access the data
+    async fn setup_test_store() -> (InstrumentedObjectStore, Path) {
         let store = Arc::new(object_store::memory::InMemory::new());
         let mode = AtomicU8::new(InstrumentedObjectStoreMode::default() as u8);
         let instrumented = InstrumentedObjectStore::new(store, mode);
@@ -610,6 +664,13 @@ mod tests {
         let path = Path::from("test/data");
         let payload = PutPayload::from_static(b"test_data");
         instrumented.put(&path, payload).await.unwrap();
+
+        (instrumented, path)
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_get() {
+        let (instrumented, path) = setup_test_store().await;
 
         // By default no requests should be instrumented/stored
         assert!(instrumented.requests.lock().is_empty());
@@ -631,6 +692,52 @@ mod tests {
         assert!(request.duration.is_some());
         assert_eq!(request.size, Some(9));
         assert_eq!(request.range, None);
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_list() {
+        let (instrumented, path) = setup_test_store().await;
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.list(Some(&path));
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.list(Some(&path));
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let request = instrumented.take_requests().pop().unwrap();
+        assert_eq!(request.op, Operation::List);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_none());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
+        assert!(request.extra_display.is_none());
+    }
+
+    #[tokio::test]
+    async fn instrumented_store_list_with_delimiter() {
+        let (instrumented, path) = setup_test_store().await;
+
+        // By default no requests should be instrumented/stored
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.list_with_delimiter(Some(&path)).await.unwrap();
+        assert!(instrumented.requests.lock().is_empty());
+
+        instrumented.set_instrument_mode(InstrumentedObjectStoreMode::Trace);
+        assert!(instrumented.requests.lock().is_empty());
+        let _ = instrumented.list_with_delimiter(Some(&path)).await.unwrap();
+        assert_eq!(instrumented.requests.lock().len(), 1);
+
+        let request = instrumented.take_requests().pop().unwrap();
+        assert_eq!(request.op, Operation::List);
+        assert_eq!(request.path, path);
+        assert!(request.duration.is_some());
+        assert!(request.size.is_none());
+        assert!(request.range.is_none());
         assert!(request.extra_display.is_none());
     }
 

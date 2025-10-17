@@ -62,9 +62,15 @@ impl BaselineMetrics {
         start_time.record();
 
         Self {
-            end_time: MetricBuilder::new(metrics).end_timestamp(partition),
-            elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
-            output_rows: MetricBuilder::new(metrics).output_rows(partition),
+            end_time: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .end_timestamp(partition),
+            elapsed_compute: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .elapsed_compute(partition),
+            output_rows: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .output_rows(partition),
         }
     }
 
