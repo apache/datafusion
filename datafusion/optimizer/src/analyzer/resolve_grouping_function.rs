@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::analyzer::AnalyzerRule;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -214,7 +214,10 @@ fn grouping_function_on_id(
             .enumerate()
             .all(|(idx, expr)| group_by_expr.get(expr) == Some(&idx))
     {
-        return Ok(cast(grouping_id_column, DataType::Int32));
+        return Ok(cast(
+            grouping_id_column,
+            Arc::new(Field::new("", DataType::Int32, true)),
+        ));
     }
 
     args.iter()
@@ -240,7 +243,7 @@ fn grouping_function_on_id(
             bit_exprs
                 .into_iter()
                 .reduce(bitwise_or)
-                .map(|expr| cast(expr, DataType::Int32))
+                .map(|expr| cast(expr, Arc::new(Field::new("", DataType::Int32, true))))
         })
         .ok_or_else(|| {
             internal_datafusion_err!("Grouping sets should contains at least one element")

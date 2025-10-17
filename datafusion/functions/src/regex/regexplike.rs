@@ -19,8 +19,8 @@
 
 use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::types::logical_string;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result,
@@ -184,13 +184,27 @@ impl ScalarUDFImpl for RegexpLikeFunc {
 
         Ok(ExprSimplifyResult::Simplified(binary_expr(
             if string_type != coerced_string_type {
-                cast(string, coerced_string_type)
+                cast(
+                    string.clone(),
+                    Arc::new(Field::new(
+                        "",
+                        coerced_string_type,
+                        info.nullable(&string)?,
+                    )),
+                )
             } else {
                 string
             },
             op,
             if regexp_type != coerced_regexp_type {
-                cast(regexp, coerced_regexp_type)
+                cast(
+                    regexp.clone(),
+                    Arc::new(Field::new(
+                        "",
+                        coerced_regexp_type,
+                        info.nullable(&regexp)?,
+                    )),
+                )
             } else {
                 regexp
             },

@@ -2154,7 +2154,10 @@ fn simplify_right_is_one_case<S: SimplifyInfo>(
         Ok(result_type) => {
             // Only cast if the types differ
             if left_type != result_type {
-                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
+                Ok(Transformed::yes(Expr::Cast(Cast::new(
+                    left.clone(),
+                    Arc::new(Field::new("", result_type, info.nullable(&left)?)),
+                ))))
             } else {
                 Ok(Transformed::yes(*left))
             }

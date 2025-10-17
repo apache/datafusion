@@ -2990,13 +2990,20 @@ mod tests {
 
         // test cast(c1 as int64) = 1
         // test column on the left
-        let expr = cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(1))));
+        let expr = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Int64, false)),
+        )
+        .eq(lit(ScalarValue::Int64(Some(1))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr = lit(ScalarValue::Int64(Some(1))).eq(cast(col("c1"), DataType::Int64));
+        let expr = lit(ScalarValue::Int64(Some(1))).eq(cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Int64, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3005,15 +3012,20 @@ mod tests {
             "c1_null_count@1 != row_count@2 AND TRY_CAST(c1_max@0 AS Int64) > 1";
 
         // test column on the left
-        let expr =
-            try_cast(col("c1"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(1))));
+        let expr = try_cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Int64, false)),
+        )
+        .gt(lit(ScalarValue::Int64(Some(1))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr =
-            lit(ScalarValue::Int64(Some(1))).lt(try_cast(col("c1"), DataType::Int64));
+        let expr = lit(ScalarValue::Int64(Some(1))).lt(try_cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Int64, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3027,15 +3039,17 @@ mod tests {
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8)";
 
         // test column on the left
-        let expr = cast(col("c1"), DataType::Utf8)
+        let expr = cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, false)))
             .eq(lit(ScalarValue::Utf8(Some("1".to_string()))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr = lit(ScalarValue::Utf8(Some("1".to_string())))
-            .eq(cast(col("c1"), DataType::Utf8));
+        let expr = lit(ScalarValue::Utf8(Some("1".to_string()))).eq(cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Utf8, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3049,13 +3063,20 @@ mod tests {
         let expected_expr = "true";
 
         // test column on the left
-        let expr = cast(col("c1"), DataType::Int32).eq(lit(ScalarValue::Int32(Some(1))));
+        let expr = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Int32, false)),
+        )
+        .eq(lit(ScalarValue::Int32(Some(1))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr = lit(ScalarValue::Int32(Some(1))).eq(cast(col("c1"), DataType::Int32));
+        let expr = lit(ScalarValue::Int32(Some(1))).eq(cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Int32, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3069,15 +3090,17 @@ mod tests {
         let expected_expr = "true";
 
         // test column on the left
-        let expr = cast(col("c1"), DataType::Utf8)
+        let expr = cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, false)))
             .eq(lit(ScalarValue::Utf8(Some("1".to_string()))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr = lit(ScalarValue::Utf8(Some("1".to_string())))
-            .eq(cast(col("c1"), DataType::Utf8));
+        let expr = lit(ScalarValue::Utf8(Some("1".to_string()))).eq(cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Utf8, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3091,15 +3114,20 @@ mod tests {
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64)";
 
         // test column on the left
-        let expr =
-            cast(col("c1"), DataType::Date64).eq(lit(ScalarValue::Date64(Some(123))));
+        let expr = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Date64, false)),
+        )
+        .eq(lit(ScalarValue::Date64(Some(123))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr =
-            lit(ScalarValue::Date64(Some(123))).eq(cast(col("c1"), DataType::Date64));
+        let expr = lit(ScalarValue::Date64(Some(123))).eq(cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Date64, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3116,7 +3144,11 @@ mod tests {
         // test column on the left
         let expr = cast(
             col("c1"),
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            Arc::new(Field::new(
+                "c1",
+                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+                false,
+            )),
         )
         .eq(lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))));
         let predicate_expr =
@@ -3126,7 +3158,11 @@ mod tests {
         // test column on the right
         let expr = lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))).eq(cast(
             col("c1"),
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            Arc::new(Field::new(
+                "c1",
+                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+                false,
+            )),
         ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
@@ -3146,15 +3182,20 @@ mod tests {
         let expected_expr = "true";
 
         // test column on the left
-        let expr =
-            cast(col("c1"), DataType::Date32).eq(lit(ScalarValue::Date32(Some(123))));
+        let expr = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Date32, false)),
+        )
+        .eq(lit(ScalarValue::Date32(Some(123))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr =
-            lit(ScalarValue::Date32(Some(123))).eq(cast(col("c1"), DataType::Date32));
+        let expr = lit(ScalarValue::Date32(Some(123))).eq(cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Date32, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3182,7 +3223,14 @@ mod tests {
         // Test with column cast to a dictionary with different key type
         let expr = cast(
             col("c1"),
-            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+            Arc::new(Field::new(
+                "c1",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Utf8),
+                ),
+                false,
+            )),
         )
         .eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
         let predicate_expr =
@@ -3204,8 +3252,11 @@ mod tests {
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 123 AND 123 <= CAST(c1_max@1 AS Int64)";
 
         // Test with literal of a different type
-        let expr =
-            cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(123))));
+        let expr = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Int64, false)),
+        )
+        .eq(lit(ScalarValue::Int64(Some(123))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3252,7 +3303,14 @@ mod tests {
         // Test with a cast to a different date type
         let expr = cast(
             col("c1"),
-            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Date64)),
+            Arc::new(Field::new(
+                "c1",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Date64),
+                ),
+                false,
+            )),
         )
         .eq(lit(ScalarValue::Date64(Some(123))));
         let predicate_expr =
@@ -3268,15 +3326,20 @@ mod tests {
         let expected_expr = "true";
 
         // test column on the left
-        let expr =
-            cast(col("c1"), DataType::Date32).eq(lit(ScalarValue::Date32(Some(123))));
+        let expr = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Date32, false)),
+        )
+        .eq(lit(ScalarValue::Date32(Some(123))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr =
-            lit(ScalarValue::Date32(Some(123))).eq(cast(col("c1"), DataType::Date32));
+        let expr = lit(ScalarValue::Date32(Some(123))).eq(cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Date32, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3290,15 +3353,17 @@ mod tests {
         let expected_expr = "true";
 
         // test column on the left
-        let expr = cast(col("c1"), DataType::Utf8)
+        let expr = cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, false)))
             .eq(lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr = lit(ScalarValue::Utf8(Some("2024-01-01".to_string())))
-            .eq(cast(col("c1"), DataType::Utf8));
+        let expr = lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))).eq(cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Utf8, false)),
+        ));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3311,7 +3376,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         // test cast(c1 as int64) in int64(1, 2, 3)
         let expr = Expr::InList(InList::new(
-            Box::new(cast(col("c1"), DataType::Int64)),
+            Box::new(cast(
+                col("c1"),
+                Arc::new(Field::new("c1", DataType::Int64, false)),
+            )),
             vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
@@ -3325,7 +3393,10 @@ mod tests {
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         let expr = Expr::InList(InList::new(
-            Box::new(cast(col("c1"), DataType::Int64)),
+            Box::new(cast(
+                col("c1"),
+                Arc::new(Field::new("c1", DataType::Int64, false)),
+            )),
             vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
@@ -3368,8 +3439,11 @@ mod tests {
 
         prune_with_expr(
             // with cast column to other type
-            cast(col("s1"), DataType::Decimal128(14, 3))
-                .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3))),
+            cast(
+                col("s1"),
+                Arc::new(Field::new("s1", DataType::Decimal128(14, 3), false)),
+            )
+            .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3))),
             &schema,
             &TestStatistics::new().with(
                 "s1",
@@ -3383,8 +3457,11 @@ mod tests {
 
         prune_with_expr(
             // with try cast column to other type
-            try_cast(col("s1"), DataType::Decimal128(14, 3))
-                .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3))),
+            try_cast(
+                col("s1"),
+                Arc::new(Field::new("s1", DataType::Decimal128(14, 3), false)),
+            )
+            .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3))),
             &schema,
             &TestStatistics::new().with(
                 "s1",
@@ -3470,7 +3547,11 @@ mod tests {
 
         prune_with_expr(
             // filter with cast
-            cast(col("s2"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(5)))),
+            cast(
+                col("s2"),
+                Arc::new(Field::new("s2", DataType::Int64, false)),
+            )
+            .gt(lit(ScalarValue::Int64(Some(5)))),
             &schema,
             &statistics,
             &[false, true, true, true],
@@ -3696,7 +3777,8 @@ mod tests {
 
         prune_with_expr(
             // cast(i as utf8) <= 0
-            cast(col("i"), DataType::Utf8).lt_eq(lit("0")),
+            cast(col("i"), Arc::new(Field::new("i", DataType::Utf8, false)))
+                .lt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3704,7 +3786,8 @@ mod tests {
 
         prune_with_expr(
             // try_cast(i as utf8) <= 0
-            try_cast(col("i"), DataType::Utf8).lt_eq(lit("0")),
+            try_cast(col("i"), Arc::new(Field::new("i", DataType::Utf8, false)))
+                .lt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3712,7 +3795,11 @@ mod tests {
 
         prune_with_expr(
             // cast(-i as utf8) >= 0
-            cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
+            cast(
+                Expr::Negative(Box::new(col("i"))),
+                Arc::new(Field::new("i", DataType::Utf8, false)),
+            )
+            .gt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3720,7 +3807,11 @@ mod tests {
 
         prune_with_expr(
             // try_cast(-i as utf8) >= 0
-            try_cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
+            try_cast(
+                Expr::Negative(Box::new(col("i"))),
+                Arc::new(Field::new("i", DataType::Utf8, false)),
+            )
+            .gt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3761,14 +3852,16 @@ mod tests {
         let expected_ret = &[true, false, false, true, false];
 
         prune_with_expr(
-            cast(col("i"), DataType::Int64).eq(lit(0i64)),
+            cast(col("i"), Arc::new(Field::new("i", DataType::Int64, false)))
+                .eq(lit(0i64)),
             &schema,
             &statistics,
             expected_ret,
         );
 
         prune_with_expr(
-            try_cast(col("i"), DataType::Int64).eq(lit(0i64)),
+            try_cast(col("i"), Arc::new(Field::new("i", DataType::Int64, false)))
+                .eq(lit(0i64)),
             &schema,
             &statistics,
             expected_ret,
@@ -3791,7 +3884,7 @@ mod tests {
         let expected_ret = &[true, true, true, true, true];
 
         prune_with_expr(
-            cast(col("i"), DataType::Utf8).eq(lit("0")),
+            cast(col("i"), Arc::new(Field::new("i", DataType::Utf8, false))).eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3946,7 +4039,10 @@ mod tests {
 
         prune_with_expr(
             // i > int64(0)
-            col("i").gt(cast(lit(ScalarValue::Int64(Some(0))), DataType::Int32)),
+            col("i").gt(cast(
+                lit(ScalarValue::Int64(Some(0))),
+                Arc::new(Field::new("i", DataType::Int32, false)),
+            )),
             &schema,
             &statistics,
             expected_ret,
@@ -3954,7 +4050,8 @@ mod tests {
 
         prune_with_expr(
             // cast(i as int64) > int64(0)
-            cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0)))),
+            cast(col("i"), Arc::new(Field::new("i", DataType::Int64, false)))
+                .gt(lit(ScalarValue::Int64(Some(0)))),
             &schema,
             &statistics,
             expected_ret,
@@ -3962,7 +4059,8 @@ mod tests {
 
         prune_with_expr(
             // try_cast(i as int64) > int64(0)
-            try_cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0)))),
+            try_cast(col("i"), Arc::new(Field::new("i", DataType::Int64, false)))
+                .gt(lit(ScalarValue::Int64(Some(0)))),
             &schema,
             &statistics,
             expected_ret,
@@ -3970,8 +4068,11 @@ mod tests {
 
         prune_with_expr(
             // `-cast(i as int64) < 0` convert to `cast(i as int64) > -0`
-            Expr::Negative(Box::new(cast(col("i"), DataType::Int64)))
-                .lt(lit(ScalarValue::Int64(Some(0)))),
+            Expr::Negative(Box::new(cast(
+                col("i"),
+                Arc::new(Field::new("i", DataType::Int64, false)),
+            )))
+            .lt(lit(ScalarValue::Int64(Some(0)))),
             &schema,
             &statistics,
             expected_ret,
@@ -4544,7 +4645,10 @@ mod tests {
         assert_eq!(result_right.to_string(), right_input.to_string());
 
         // cast op lit
-        let left_input = cast(col("a"), DataType::Decimal128(20, 3));
+        let left_input = cast(
+            col("a"),
+            Arc::new(Field::new("a", DataType::Decimal128(20, 3), true)),
+        );
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Decimal128(Some(12), 20, 3));
         let right_input = logical2physical(&right_input, &schema);
@@ -4559,7 +4663,8 @@ mod tests {
         assert_eq!(result_right.to_string(), right_input.to_string());
 
         // try_cast op lit
-        let left_input = try_cast(col("a"), DataType::Int64);
+        let left_input =
+            try_cast(col("a"), Arc::new(Field::new("a", DataType::Int64, true)));
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
@@ -4646,7 +4751,7 @@ mod tests {
         // this cast is not supported
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let df_schema = DFSchema::try_from(schema.clone()).unwrap();
-        let left_input = cast(col("a"), DataType::Int64);
+        let left_input = cast(col("a"), Arc::new(Field::new("a", DataType::Int64, true)));
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);

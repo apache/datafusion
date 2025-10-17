@@ -26,6 +26,7 @@ use datafusion_common::{
     exec_datafusion_err, utils::take_function_args, DataFusionError,
 };
 use std::any::Any;
+use std::sync::Arc;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -160,8 +161,12 @@ impl ScalarUDFImpl for ArrowCastFunc {
         } else {
             // Use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
-                data_type: target_type,
+                expr: Box::new(arg.clone()),
+                field: Arc::new(Field::new(
+                    "arrow_cast",
+                    target_type,
+                    info.nullable(&arg.clone())?,
+                )),
             })
         };
         // return the newly written argument to DataFusion
