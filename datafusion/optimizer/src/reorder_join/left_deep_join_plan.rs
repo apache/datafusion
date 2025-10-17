@@ -618,11 +618,45 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                     )
                 })?;
 
+            // Determine if the join order was swapped compared to the original edge
+            // by checking if the left expressions' columns come from the current_plan's schema.
+            // If the left expressions belong to current_plan, no swap needed.
+            // If they belong to next_plan, the join is swapped.
+            let current_schema = current_plan.schema();
+            let join_order_swapped = if !edge.join.on.is_empty() {
+                // Check the first join condition's left expression
+                let (left_expr, _) = &edge.join.on[0];
+                let left_columns = left_expr.column_refs();
+
+                // If the left expression's columns are NOT in current_plan's schema,
+                // then the join order is swapped
+                !datafusion_expr::utils::check_all_columns_from_schema(
+                    &left_columns,
+                    current_schema.as_ref(),
+                )
+                .unwrap_or(false)
+            } else {
+                // If there are no join conditions, we can't determine swap status
+                // This shouldn't happen in practice for equi-joins
+                false
+            };
+
+            let on = if join_order_swapped {
+                // Swap each (left, right) pair to (right, left)
+                edge.join
+                    .on
+                    .iter()
+                    .map(|(left, right)| (right.clone(), left.clone()))
+                    .collect()
+            } else {
+                edge.join.on.clone()
+            };
+
             // Create the join plan
             current_plan = LogicalPlan::Join(datafusion_expr::Join {
                 left: Arc::new(current_plan),
                 right: Arc::new(next_plan),
-                on: edge.join.on.clone(),
+                on,
                 filter: edge.join.filter.clone(),
                 join_type: edge.join.join_type,
                 join_constraint: edge.join.join_constraint,
