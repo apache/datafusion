@@ -1,0 +1,354 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+statement ok
+CREATE TABLE join_t1 (t1_id INT);
+
+statement ok
+CREATE TABLE join_t2 (t2_id INT, t2_name TEXT, t2_int INT);
+
+statement ok
+INSERT INTO join_t1 VALUES (11), (22), (33), (44);
+
+statement ok
+INSERT INTO join_t2 VALUES
+  (11, 'z', 3),
+  (22, 'y', 1),
+  (44, 'x', 3),
+  (55, 'w', 3);
+
+query II
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id > t2.t2_id          
+WHERE t1.t1_id > 10              
+  AND t2.t2_int > 1               
+ORDER BY 1;
+----
+22 11
+33 11
+44 11
+
+# Checking `SELECT *`
+query IITI
+SELECT *
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id > t2.t2_id          
+WHERE t1.t1_id > 10              
+  AND t2.t2_int > 1               
+ORDER BY 1;
+----
+22 11 z 3
+33 11 z 3
+44 11 z 3
+
+query TT
+EXPLAIN
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id > t2.t2_id          
+WHERE t1.t1_id > 10              
+  AND t2.t2_int > 1               
+ORDER BY 1;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST
+02)--Inner Join:  Filter: t1.t1_id > t2.t2_id
+03)----SubqueryAlias: t1
+04)------Filter: join_t1.t1_id > Int32(10)
+05)--------TableScan: join_t1 projection=[t1_id]
+06)----SubqueryAlias: t2
+07)------Projection: join_t2.t2_id
+08)--------Filter: join_t2.t2_int > Int32(1)
+09)----------TableScan: join_t2 projection=[t2_id, t2_int]
+physical_plan
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(t1_id > t2_id)
+04)------SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: t1_id@0 > 10
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------CoalesceBatchesExec: target_batch_size=8192
+10)----------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id >= t2.t2_id
+WHERE t1.t1_id >= 22
+  AND t2.t2_int = 3
+ORDER BY 1,2;
+----
+22 11
+33 11
+44 11
+44 44
+
+query TT
+EXPLAIN
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id >= t2.t2_id
+WHERE t1.t1_id >= 22
+  AND t2.t2_int = 3
+ORDER BY 1,2;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST, t2.t2_id ASC NULLS LAST
+02)--Inner Join:  Filter: t1.t1_id >= t2.t2_id
+03)----SubqueryAlias: t1
+04)------Filter: join_t1.t1_id >= Int32(22)
+05)--------TableScan: join_t1 projection=[t1_id]
+06)----SubqueryAlias: t2
+07)------Projection: join_t2.t2_id
+08)--------Filter: join_t2.t2_int = Int32(3)
+09)----------TableScan: join_t2 projection=[t2_id, t2_int]
+physical_plan
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=GtEq, join_type=Inner, on=(t1_id >= t2_id)
+04)------SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: t1_id@0 >= 22
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------CoalesceBatchesExec: target_batch_size=8192
+10)----------FilterExec: t2_int@1 = 3, projection=[t2_id@0]
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id < t2.t2_id
+WHERE t2.t2_int >= 3
+ORDER BY 1,2;
+----
+11 55
+11 44
+22 55
+22 44
+33 55
+33 44
+44 55
+
+query TT 
+EXPLAIN
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id < t2.t2_id
+WHERE t2.t2_int >= 3
+ORDER BY 1,2;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST, t2.t2_id ASC NULLS LAST
+02)--Inner Join:  Filter: t1.t1_id < t2.t2_id
+03)----SubqueryAlias: t1
+04)------TableScan: join_t1 projection=[t1_id]
+05)----SubqueryAlias: t2
+06)------Projection: join_t2.t2_id
+07)--------Filter: join_t2.t2_int >= Int32(3)
+08)----------TableScan: join_t2 projection=[t2_id, t2_int]
+physical_plan
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(t1_id < t2_id)
+04)------SortExec: expr=[t1_id@0 DESC], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)--------CoalesceBatchesExec: target_batch_size=8192
+08)----------FilterExec: t2_int@1 >= 3, projection=[t2_id@0]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+query II
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id < (t2.t2_id + 1)
+WHERE t2.t2_int >= 3
+ORDER BY 1,2;
+----
+11 11
+11 44
+11 55
+22 44
+22 55
+33 44
+33 55
+44 44
+44 55
+
+query TT
+EXPLAIN
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id < (t2.t2_id + 1)
+WHERE t2.t2_int >= 3
+ORDER BY 1,2;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST, t2.t2_id ASC NULLS LAST
+02)--Inner Join:  Filter: CAST(t1.t1_id AS Int64) < CAST(t2.t2_id AS Int64) + Int64(1)
+03)----SubqueryAlias: t1
+04)------TableScan: join_t1 projection=[t1_id]
+05)----SubqueryAlias: t2
+06)------Projection: join_t2.t2_id
+07)--------Filter: join_t2.t2_int >= Int32(3)
+08)----------TableScan: join_t2 projection=[t2_id, t2_int]
+physical_plan
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(CAST(t1_id AS Int64) < CAST(t2_id AS Int64) + 1)
+04)------SortExec: expr=[CAST(t1_id@0 AS Int64) DESC], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)--------CoalesceBatchesExec: target_batch_size=8192
+08)----------FilterExec: t2_int@1 >= 3, projection=[t2_id@0]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id <= t2.t2_id
+WHERE t1.t1_id IN (11, 44)
+  AND t2.t2_name <> 'y'
+ORDER BY 1,2;
+----
+11 55
+11 44
+11 11
+44 55
+44 44
+
+query TT
+EXPLAIN
+SELECT t1.t1_id, t2.t2_id
+FROM join_t1 t1
+JOIN join_t2 t2
+  ON t1.t1_id <= t2.t2_id
+WHERE t1.t1_id IN (11, 44)
+  AND t2.t2_name <> 'y'
+ORDER BY 1,2;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST, t2.t2_id ASC NULLS LAST
+02)--Inner Join:  Filter: t1.t1_id <= t2.t2_id
+03)----SubqueryAlias: t1
+04)------Filter: join_t1.t1_id = Int32(11) OR join_t1.t1_id = Int32(44)
+05)--------TableScan: join_t1 projection=[t1_id]
+06)----SubqueryAlias: t2
+07)------Projection: join_t2.t2_id
+08)--------Filter: join_t2.t2_name != Utf8View("y")
+09)----------TableScan: join_t2 projection=[t2_id, t2_name]
+physical_plan
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----PiecewiseMergeJoin: operator=LtEq, join_type=Inner, on=(t1_id <= t2_id)
+04)------SortExec: expr=[t1_id@0 DESC], preserve_partitioning=[false]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: t1_id@0 = 11 OR t1_id@0 = 44
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------CoalesceBatchesExec: target_batch_size=8192
+10)----------FilterExec: t2_name@1 != y, projection=[t2_id@0]
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+CREATE TABLE null_join_t1 (id INT);
+
+statement ok
+CREATE TABLE null_join_t2 (id INT);
+
+statement ok
+INSERT INTO null_join_t1 VALUES (1), (2), (NULL);
+
+statement ok
+INSERT INTO null_join_t2 VALUES (1), (NULL), (3);
+
+query II
+SELECT t1.id AS left_id, t2.id AS right_id
+FROM null_join_t1 t1
+JOIN null_join_t2 t2
+  ON t1.id > t2.id
+ORDER BY 1,2;
+----
+2 1
+
+# Verify this will offload this query to Nested Loop Join
+query II
+SELECT t1.id AS left_id, t2.id AS right_id
+FROM null_join_t1 t1
+JOIN null_join_t2 t2
+  ON t1.id < (t1.id + t2.id)
+ORDER BY 1,2;
+----
+1 1
+1 3
+2 1
+2 3
+
+query TT
+EXPLAIN
+SELECT t1.id AS left_id, t2.id AS right_id
+FROM null_join_t1 t1
+JOIN null_join_t2 t2
+  ON t1.id < (t1.id + t2.id)
+ORDER BY 1,2;
+----
+logical_plan
+01)Sort: left_id ASC NULLS LAST, right_id ASC NULLS LAST
+02)--Projection: t1.id AS left_id, t2.id AS right_id
+03)----Inner Join:  Filter: t1.id < t1.id + t2.id
+04)------SubqueryAlias: t1
+05)--------TableScan: null_join_t1 projection=[id]
+06)------SubqueryAlias: t2
+07)--------TableScan: null_join_t2 projection=[id]
+physical_plan
+01)SortExec: expr=[left_id@0 ASC NULLS LAST, right_id@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as left_id, id@1 as right_id]
+03)----NestedLoopJoinExec: join_type=Inner, filter=id@0 < id@0 + id@1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT t1.id AS left_id, t2.id AS right_id
+FROM null_join_t1 t1
+JOIN null_join_t2 t2
+  ON t1.id < t2.id
+ORDER BY 1,2;
+----
+1 3 
+2 3 
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
