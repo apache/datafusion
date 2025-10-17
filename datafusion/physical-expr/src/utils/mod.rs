@@ -238,6 +238,19 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     columns
 }
 
+pub fn collect_column_indices(expr: &Arc<dyn PhysicalExpr>) -> HashSet<usize> {
+    let mut columns = HashSet::<usize>::new();
+    expr.apply(|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            columns.insert(column.index());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    // pre_visit always returns OK, so this will always too
+    .expect("no way to return error during recursion");
+    columns
+}
+
 /// Re-assign indices of [`Column`]s within the given [`PhysicalExpr`] according to
 /// the provided [`Schema`].
 ///
