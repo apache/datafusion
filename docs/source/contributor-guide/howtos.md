@@ -179,7 +179,11 @@ This is necessary after modifying the protobuf definitions or altering the depen
 valid installation of [protoc] (see [installation instructions] for details).
 
 ```bash
-./regen.sh
+# From repository root
+# proto-common
+./datafusion/proto-common/regen.sh
+# proto
+./datafusion/proto/regen.sh
 ```
 
 [protoc]: https://github.com/protocolbuffers/protobuf#protocol-compiler-installation
