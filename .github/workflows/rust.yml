@@ -66,6 +66,7 @@ jobs:
           du -h -d 1 /__t          
           du -h -d 1 /__e          
           du -h -d 1 /__w          
+          rm -rf /__t/Python /__t/CodeQL /__t/node /__t/go
           echo "Disk space after cleanup:"
           df -h
       - name: Run examples
