@@ -27,9 +27,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 ///
 /// This is used to extract constant values from expressions (like percentile parameters)
 /// by evaluating them against an empty record batch.
-pub(crate) fn get_scalar_value(
-    expr: &Arc<dyn PhysicalExpr>,
-) -> Result<ScalarValue> {
+pub(crate) fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
     let empty_schema = Arc::new(Schema::empty());
     let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
     if let ColumnarValue::Scalar(s) = expr.evaluate(&batch)? {
