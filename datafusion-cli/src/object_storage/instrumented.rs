@@ -964,7 +964,6 @@ mod tests {
         ");
     }
 
-    
     #[test]
     fn request_summary_only_duration() {
         // Test request with only duration (no size)
