@@ -760,20 +760,18 @@ fn calculate_percentile<T: ArrowNumericType>(
     } else if percentile == 0.0 {
         // Get minimum value
         Some(
-            values
+            *values
                 .iter()
                 .min_by(|a, b| cmp(a, b))
-                .expect("we checked for len > 0 a few lines above")
-                .clone(),
+                .expect("we checked for len > 0 a few lines above"),
         )
     } else if percentile == 1.0 {
         // Get maximum value
         Some(
-            values
+            *values
                 .iter()
                 .max_by(|a, b| cmp(a, b))
-                .expect("we checked for len > 0 a few lines above")
-                .clone(),
+                .expect("we checked for len > 0 a few lines above"),
         )
     } else {
         // Calculate the index using the formula: p * (n - 1)
