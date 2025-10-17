@@ -1205,9 +1205,12 @@ mod test {
         let plan = table_scan(Some("table"), &schema, None)
             .unwrap()
             .filter(
-                cast(col("a"), DataType::Int64)
+                cast(col("a"), Arc::new(Field::new("a", DataType::Int64, false)))
                     .lt(lit(1_i64))
-                    .and(cast(col("a"), DataType::Int64).not_eq(lit(1_i64))),
+                    .and(
+                        cast(col("a"), Arc::new(Field::new("a", DataType::Int64, false)))
+                            .not_eq(lit(1_i64)),
+                    ),
             )
             .unwrap()
             .build()

@@ -868,9 +868,13 @@ mod tests {
             .with_scale(0)
             .with_precision(9);
         let schema_descr = get_test_schema_descr(vec![field]);
-        let expr = cast(col("c1"), Decimal128(11, 2)).gt(cast(
+        let expr = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", Decimal128(11, 2), true)),
+        )
+        .gt(cast(
             lit(ScalarValue::Decimal128(Some(500), 5, 2)),
-            Decimal128(11, 2),
+            Arc::new(Field::new("c1", Decimal128(11, 2), true)),
         ));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -1023,7 +1027,10 @@ mod tests {
             .with_byte_len(16);
         let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), Decimal128(28, 3));
+        let left = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", Decimal128(28, 3), true)),
+        );
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -1101,7 +1108,10 @@ mod tests {
             .with_byte_len(16);
         let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), Decimal128(28, 3));
+        let left = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", Decimal128(28, 3), true)),
+        );
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();

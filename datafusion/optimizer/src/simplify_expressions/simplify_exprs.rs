@@ -467,7 +467,10 @@ mod tests {
     #[test]
     fn cast_expr() -> Result<()> {
         let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
+        let proj = vec![Expr::Cast(Cast::new(
+            Box::new(lit("0")),
+            Arc::new(Field::new("c1", DataType::Int32, true)),
+        ))];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)?
             .build()?;

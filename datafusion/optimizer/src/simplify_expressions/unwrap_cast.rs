@@ -250,7 +250,8 @@ mod tests {
     fn test_not_unwrap_cast_comparison() {
         let schema = expr_test_schema();
         // cast(INT32(c1), INT64) > INT64(c2)
-        let c1_gt_c2 = cast(col("c1"), DataType::Int64).gt(col("c2"));
+        let c1_gt_c2 = cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+            .gt(col("c2"));
         assert_eq!(optimize_test(c1_gt_c2.clone(), &schema), c1_gt_c2);
 
         // INT32(c1) < INT32(16), the type is same
@@ -258,25 +259,32 @@ mod tests {
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // the 99999999999 is not within the range of MAX(int32) and MIN(int32), we don't cast the lit(99999999999) to int32 type
-        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(99999999999i64));
+        let expr_lt = cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+            .lt(lit(99999999999i64));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // cast(c1, UTF8) < '123', only eq/not_eq should be optimized
-        let expr_lt = cast(col("c1"), DataType::Utf8).lt(lit("123"));
+        let expr_lt = cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, true)))
+            .lt(lit("123"));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // cast(c1, UTF8) = '0123', cast(cast('0123', Int32), UTF8) != '0123', so '0123' should not
         // be casted
-        let expr_lt = cast(col("c1"), DataType::Utf8).lt(lit("0123"));
+        let expr_lt = cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, true)))
+            .lt(lit("0123"));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // cast(c1, UTF8) = 'not a number', should not be able to cast to column type
-        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("not a number"));
+        let expr_input =
+            cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, true)))
+                .eq(lit("not a number"));
         assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
 
         // cast(c1, UTF8) = '99999999999', where '99999999999' does not fit into int32, so it will
         // not be optimized to integer comparison
-        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("99999999999"));
+        let expr_input =
+            cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, true)))
+                .eq(lit("99999999999"));
         assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
     }
 
@@ -285,40 +293,55 @@ mod tests {
         let schema = expr_test_schema();
         // cast(c1, INT64) < INT64(16) -> INT32(c1) < cast(INT32(16))
         // the 16 is within the range of MAX(int32) and MIN(int32), we can cast the 16 to int32(16)
-        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64));
+        let expr_lt = cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+            .lt(lit(16i64));
         let expected = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
-        let expr_lt = try_cast(col("c1"), DataType::Int64).lt(lit(16i64));
+        let expr_lt =
+            try_cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+                .lt(lit(16i64));
         let expected = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // cast(c2, INT32) = INT32(16) => INT64(c2) = INT64(16)
-        let c2_eq_lit = cast(col("c2"), DataType::Int32).eq(lit(16i32));
+        let c2_eq_lit =
+            cast(col("c2"), Arc::new(Field::new("c2", DataType::Int32, true)))
+                .eq(lit(16i32));
         let expected = col("c2").eq(lit(16i64));
         assert_eq!(optimize_test(c2_eq_lit, &schema), expected);
 
         // cast(c1, INT64) < INT64(NULL) => NULL
-        let c1_lt_lit_null = cast(col("c1"), DataType::Int64).lt(null_i64());
+        let c1_lt_lit_null =
+            cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+                .lt(null_i64());
         let expected = null_bool();
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
         // cast(INT8(NULL), INT32) < INT32(12) => INT8(NULL) < INT8(12) => BOOL(NULL)
-        let lit_lt_lit = cast(null_i8(), DataType::Int32).lt(lit(12i32));
+        let lit_lt_lit =
+            cast(null_i8(), Arc::new(Field::new("c1", DataType::Int32, true)))
+                .lt(lit(12i32));
         let expected = null_bool();
         assert_eq!(optimize_test(lit_lt_lit, &schema), expected);
 
         // cast(c1, UTF8) = '123' => c1 = 123
-        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("123"));
+        let expr_input =
+            cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, true)))
+                .eq(lit("123"));
         let expected = col("c1").eq(lit(123i32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // cast(c1, UTF8) != '123' => c1 != 123
-        let expr_input = cast(col("c1"), DataType::Utf8).not_eq(lit("123"));
+        let expr_input =
+            cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, true)))
+                .not_eq(lit("123"));
         let expected = col("c1").not_eq(lit(123i32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // cast(c1, UTF8) = NULL => NULL
-        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit(ScalarValue::Utf8(None)));
+        let expr_input =
+            cast(col("c1"), Arc::new(Field::new("c1", DataType::Utf8, true)))
+                .eq(lit(ScalarValue::Utf8(None)));
         let expected = null_bool();
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
@@ -327,17 +350,25 @@ mod tests {
     fn test_unwrap_cast_comparison_unsigned() {
         // "cast(c6, UINT64) = 0u64 => c6 = 0u32
         let schema = expr_test_schema();
-        let expr_input = cast(col("c6"), DataType::UInt64).eq(lit(0u64));
+        let expr_input = cast(
+            col("c6"),
+            Arc::new(Field::new("c6", DataType::UInt64, true)),
+        )
+        .eq(lit(0u64));
         let expected = col("c6").eq(lit(0u32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // cast(c6, UTF8) = "123" => c6 = 123
-        let expr_input = cast(col("c6"), DataType::Utf8).eq(lit("123"));
+        let expr_input =
+            cast(col("c6"), Arc::new(Field::new("c6", DataType::Utf8, true)))
+                .eq(lit("123"));
         let expected = col("c6").eq(lit(123u32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // cast(c6, UTF8) != "123" => c6 != 123
-        let expr_input = cast(col("c6"), DataType::Utf8).not_eq(lit("123"));
+        let expr_input =
+            cast(col("c6"), Arc::new(Field::new("c6", DataType::Utf8, true)))
+                .not_eq(lit("123"));
         let expected = col("c6").not_eq(lit(123u32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
@@ -351,18 +382,29 @@ mod tests {
         );
 
         // cast(str1 as Dictionary<Int32, Utf8>) = arrow_cast('value', 'Dictionary<Int32, Utf8>') => str1 = Utf8('value1')
-        let expr_input = cast(col("str1"), dict.data_type()).eq(lit(dict.clone()));
+        let expr_input = cast(
+            col("str1"),
+            Arc::new(Field::new("str1", dict.data_type(), true)),
+        )
+        .eq(lit(dict.clone()));
         let expected = col("str1").eq(lit("value"));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // cast(tag as Utf8) = Utf8('value') => tag = arrow_cast('value', 'Dictionary<Int32, Utf8>')
-        let expr_input = cast(col("tag"), DataType::Utf8).eq(lit("value"));
+        let expr_input = cast(
+            col("tag"),
+            Arc::new(Field::new("tag", DataType::Utf8, true)),
+        )
+        .eq(lit("value"));
         let expected = col("tag").eq(lit(dict.clone()));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
         // Verify reversed argument order
         // arrow_cast('value', 'Dictionary<Int32, Utf8>') = cast(str1 as Dictionary<Int32, Utf8>) => Utf8('value1') = str1
-        let expr_input = lit(dict.clone()).eq(cast(col("str1"), dict.data_type()));
+        let expr_input = lit(dict.clone()).eq(cast(
+            col("str1"),
+            Arc::new(Field::new("str1", dict.data_type(), true)),
+        ));
         let expected = col("str1").eq(lit("value"));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
@@ -375,7 +417,11 @@ mod tests {
             Box::new(DataType::Int32),
             Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
         );
-        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict));
+        let expr_input = cast(
+            col("largestr"),
+            Arc::new(Field::new("largestr", dict.data_type(), true)),
+        )
+        .eq(lit(dict));
         let expected =
             col("largestr").eq(lit(ScalarValue::LargeUtf8(Some("value".to_owned()))));
         assert_eq!(optimize_test(expr_input, &schema), expected);
@@ -386,28 +432,39 @@ mod tests {
         let schema = expr_test_schema();
         // integer to decimal: value is out of the bounds of the decimal
         // cast(c3, INT64) = INT64(100000000000000000)
-        let expr_eq = cast(col("c3"), DataType::Int64).eq(lit(100000000000000000i64));
+        let expr_eq = cast(col("c3"), Arc::new(Field::new("c3", DataType::Int64, true)))
+            .eq(lit(100000000000000000i64));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // cast(c4, INT64) = INT64(1000) will overflow the i128
-        let expr_eq = cast(col("c4"), DataType::Int64).eq(lit(1000i64));
+        let expr_eq = cast(col("c4"), Arc::new(Field::new("c4", DataType::Int64, true)))
+            .eq(lit(1000i64));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // decimal to decimal: value will lose the scale when convert to the target data type
         // c3 = DECIMAL(12340,20,4)
-        let expr_eq =
-            cast(col("c3"), DataType::Decimal128(20, 4)).eq(lit_decimal(12340, 20, 4));
+        let expr_eq = cast(
+            col("c3"),
+            Arc::new(Field::new("c3", DataType::Decimal128(20, 4), true)),
+        )
+        .eq(lit_decimal(12340, 20, 4));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // decimal to integer
         // c1 = DECIMAL(123, 10, 1): value will lose the scale when convert to the target data type
-        let expr_eq =
-            cast(col("c1"), DataType::Decimal128(10, 1)).eq(lit_decimal(123, 10, 1));
+        let expr_eq = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Decimal128(10, 1), true)),
+        )
+        .eq(lit_decimal(123, 10, 1));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // c1 = DECIMAL(1230, 10, 2): value will lose the scale when convert to the target data type
-        let expr_eq =
-            cast(col("c1"), DataType::Decimal128(10, 2)).eq(lit_decimal(1230, 10, 2));
+        let expr_eq = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Decimal128(10, 2), true)),
+        )
+        .eq(lit_decimal(1230, 10, 2));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
     }
 
@@ -416,32 +473,45 @@ mod tests {
         let schema = expr_test_schema();
         // integer to decimal
         // c3 < INT64(16) -> c3 < (CAST(INT64(16) AS DECIMAL(18,2));
-        let expr_lt = try_cast(col("c3"), DataType::Int64).lt(lit(16i64));
+        let expr_lt =
+            try_cast(col("c3"), Arc::new(Field::new("c3", DataType::Int64, true)))
+                .lt(lit(16i64));
         let expected = col("c3").lt(lit_decimal(1600, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // c3 < INT64(NULL)
-        let c1_lt_lit_null = cast(col("c3"), DataType::Int64).lt(null_i64());
+        let c1_lt_lit_null =
+            cast(col("c3"), Arc::new(Field::new("c3", DataType::Int64, true)))
+                .lt(null_i64());
         let expected = null_bool();
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
         // decimal to decimal
         // c3 < Decimal(123,10,0) -> c3 < CAST(DECIMAL(123,10,0) AS DECIMAL(18,2)) -> c3 < DECIMAL(12300,18,2)
-        let expr_lt =
-            cast(col("c3"), DataType::Decimal128(10, 0)).lt(lit_decimal(123, 10, 0));
+        let expr_lt = cast(
+            col("c3"),
+            Arc::new(Field::new("c3", DataType::Decimal128(10, 0), true)),
+        )
+        .lt(lit_decimal(123, 10, 0));
         let expected = col("c3").lt(lit_decimal(12300, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // c3 < Decimal(1230,10,3) -> c3 < CAST(DECIMAL(1230,10,3) AS DECIMAL(18,2)) -> c3 < DECIMAL(123,18,2)
-        let expr_lt =
-            cast(col("c3"), DataType::Decimal128(10, 3)).lt(lit_decimal(1230, 10, 3));
+        let expr_lt = cast(
+            col("c3"),
+            Arc::new(Field::new("c3", DataType::Decimal128(10, 3), true)),
+        )
+        .lt(lit_decimal(1230, 10, 3));
         let expected = col("c3").lt(lit_decimal(123, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // decimal to integer
         // c1 < Decimal(12300, 10, 2) -> c1 < CAST(DECIMAL(12300,10,2) AS INT32) -> c1 < INT32(123)
-        let expr_lt =
-            cast(col("c1"), DataType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
+        let expr_lt = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Decimal128(10, 2), true)),
+        )
+        .lt(lit_decimal(12300, 10, 2));
         let expected = col("c1").lt(lit(123i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
@@ -451,22 +521,29 @@ mod tests {
         let schema = expr_test_schema();
         // internal left type is not supported
         // FLOAT32(C5) in ...
-        let expr_lt =
-            cast(col("c5"), DataType::Int64).in_list(vec![lit(12i64), lit(12i64)], false);
+        let expr_lt = cast(col("c5"), Arc::new(Field::new("c5", DataType::Int64, true)))
+            .in_list(vec![lit(12i64), lit(12i64)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // cast(INT32(C1), Float32) in (FLOAT32(1.23), Float32(12), Float32(12))
-        let expr_lt = cast(col("c1"), DataType::Float32)
-            .in_list(vec![lit(12.0f32), lit(12.0f32), lit(1.23f32)], false);
+        let expr_lt = cast(
+            col("c1"),
+            Arc::new(Field::new("c1", DataType::Float32, true)),
+        )
+        .in_list(vec![lit(12.0f32), lit(12.0f32), lit(1.23f32)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // INT32(C1) in (INT64(99999999999), INT64(12))
-        let expr_lt = cast(col("c1"), DataType::Int64)
+        let expr_lt = cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
             .in_list(vec![lit(12i32), lit(99999999999i64)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // DECIMAL(C3) in (INT64(12), INT32(12), DECIMAL(128,12,3))
-        let expr_lt = cast(col("c3"), DataType::Decimal128(12, 3)).in_list(
+        let expr_lt = cast(
+            col("c3"),
+            Arc::new(Field::new("c3", DataType::Decimal128(12, 3), true)),
+        )
+        .in_list(
             vec![
                 lit_decimal(12, 12, 3),
                 lit_decimal(12, 12, 3),
@@ -482,10 +559,11 @@ mod tests {
         let schema = expr_test_schema();
         // INT32(C1) IN (INT32(12),INT64(23),INT64(34),INT64(56),INT64(78)) ->
         // INT32(C1) IN (INT32(12),INT32(23),INT32(34),INT32(56),INT32(78))
-        let expr_lt = cast(col("c1"), DataType::Int64).in_list(
-            vec![lit(12i64), lit(23i64), lit(34i64), lit(56i64), lit(78i64)],
-            false,
-        );
+        let expr_lt = cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+            .in_list(
+                vec![lit(12i64), lit(23i64), lit(34i64), lit(56i64), lit(78i64)],
+                false,
+            );
         let expected = col("c1").in_list(
             vec![lit(12i32), lit(23i32), lit(34i32), lit(56i32), lit(78i32)],
             false,
@@ -493,10 +571,11 @@ mod tests {
         assert_eq!(optimize_test(expr_lt, &schema), expected);
         // INT32(C2) IN (INT64(NULL),INT64(24),INT64(34),INT64(56),INT64(78)) ->
         // INT32(C2) IN (INT32(NULL),INT32(24),INT32(34),INT32(56),INT32(78))
-        let expr_lt = cast(col("c2"), DataType::Int32).in_list(
-            vec![null_i32(), lit(24i32), lit(34i64), lit(56i64), lit(78i64)],
-            false,
-        );
+        let expr_lt = cast(col("c2"), Arc::new(Field::new("c2", DataType::Int32, true)))
+            .in_list(
+                vec![null_i32(), lit(24i32), lit(34i64), lit(56i64), lit(78i64)],
+                false,
+            );
         let expected = col("c2").in_list(
             vec![null_i64(), lit(24i64), lit(34i64), lit(56i64), lit(78i64)],
             false,
@@ -506,7 +585,11 @@ mod tests {
 
         // decimal test case
         // c3 is decimal(18,2)
-        let expr_lt = cast(col("c3"), DataType::Decimal128(19, 3)).in_list(
+        let expr_lt = cast(
+            col("c3"),
+            Arc::new(Field::new("c3", DataType::Decimal128(19, 3), true)),
+        )
+        .in_list(
             vec![
                 lit_decimal(12000, 19, 3),
                 lit_decimal(24000, 19, 3),
@@ -529,7 +612,11 @@ mod tests {
         // cast(INT32(12), INT64) IN (.....) =>
         // INT64(12) IN (INT64(12),INT64(13),INT64(14),INT64(15),INT64(16))
         // => true
-        let expr_lt = cast(lit(12i32), DataType::Int64).in_list(
+        let expr_lt = cast(
+            lit(12i32),
+            Arc::new(Field::new("c1", DataType::Int64, true)),
+        )
+        .in_list(
             vec![lit(12i64), lit(13i64), lit(14i64), lit(15i64), lit(16i64)],
             false,
         );
@@ -542,7 +629,9 @@ mod tests {
         let schema = expr_test_schema();
         // c1 < INT64(16) -> c1 < cast(INT32(16))
         // the 16 is within the range of MAX(int32) and MIN(int32), we can cast the 16 to int32(16)
-        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64)).alias("x");
+        let expr_lt = cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+            .lt(lit(16i64))
+            .alias("x");
         let expected = col("c1").lt(lit(16i32)).alias("x");
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
@@ -552,11 +641,12 @@ mod tests {
         let schema = expr_test_schema();
         // c1 < INT64(16) OR c1 > INT64(32) -> c1 < INT32(16) OR c1 > INT32(32)
         // the 16 and 32 are within the range of MAX(int32) and MIN(int32), we can cast them to int32
-        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64)).or(cast(
-            col("c1"),
-            DataType::Int64,
-        )
-        .gt(lit(32i64)));
+        let expr_lt = cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+            .lt(lit(16i64))
+            .or(
+                cast(col("c1"), Arc::new(Field::new("c1", DataType::Int64, true)))
+                    .gt(lit(32i64)),
+            );
         let expected = col("c1").lt(lit(16i32)).or(col("c1").gt(lit(32i32)));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
@@ -567,12 +657,19 @@ mod tests {
         // but the type of c6 is uint32
         // the rewriter will not throw error and just return the original expr
         let schema = expr_test_schema();
-        let expr_input = cast(col("c6"), DataType::Float64).eq(lit(0f64));
+        let expr_input = cast(
+            col("c6"),
+            Arc::new(Field::new("c6", DataType::Float64, true)),
+        )
+        .eq(lit(0f64));
         assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
 
         // inlist for unsupported data type
         let expr_input = in_list(
-            cast(col("c6"), DataType::Float64),
+            cast(
+                col("c6"),
+                Arc::new(Field::new("c6", DataType::Float64, true)),
+            ),
             // need more literals to avoid rewriting to binary expr
             vec![lit(0f64), lit(1f64), lit(2f64), lit(3f64), lit(4f64)],
             false,
@@ -585,8 +682,11 @@ mod tests {
     fn test_unwrap_cast_with_timestamp_nanos() {
         let schema = expr_test_schema();
         // cast(ts_nano as Timestamp(Nanosecond, UTC)) < 1666612093000000000::Timestamp(Nanosecond, Utc))
-        let expr_lt = try_cast(col("ts_nano_none"), timestamp_nano_utc_type())
-            .lt(lit_timestamp_nano_utc(1666612093000000000));
+        let expr_lt = try_cast(
+            col("ts_nano_none"),
+            Arc::new(Field::new("ts_nano_none", timestamp_nano_utc_type(), false)),
+        )
+        .lt(lit_timestamp_nano_utc(1666612093000000000));
         let expected =
             col("ts_nano_none").lt(lit_timestamp_nano_none(1666612093000000000));
         assert_eq!(optimize_test(expr_lt, &schema), expected);

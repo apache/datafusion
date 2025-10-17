@@ -1425,7 +1425,10 @@ mod tests {
     fn test_try_cast() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![try_cast(col("a"), DataType::Float64)])?
+            .project(vec![try_cast(
+                col("a"),
+                Arc::new(Field::new("a", DataType::Float64, true)),
+            )])?
             .build()?;
 
         assert_optimized_plan_equal!(
@@ -1996,7 +1999,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![Expr::Cast(Cast::new(
                 Box::new(col("c")),
-                DataType::Float64,
+                Arc::new(Field::new("c", DataType::Float64, true)),
             ))])?
             .build()?;
 

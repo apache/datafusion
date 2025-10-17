@@ -249,8 +249,10 @@ fn extract_column_from_expr(expr: &Expr) -> Option<Column> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_expr::{cast, col, lit};
 
     #[test]
@@ -262,7 +264,8 @@ mod tests {
 
         let predicates = vec![
             col("a").lt(lit(5i32)),
-            cast(col("a"), DataType::Utf8).lt(lit("abc")),
+            cast(col("a"), Arc::new(Field::new("a", DataType::Utf8, true)))
+                .lt(lit("abc")),
             col("a").lt(lit(6i32)),
         ];
 
@@ -295,7 +298,7 @@ mod tests {
     #[test]
     fn test_extract_column_ignores_cast() {
         // Test that extract_column_from_expr does not extract columns from cast expressions
-        let cast_expr = cast(col("a"), DataType::Utf8);
+        let cast_expr = cast(col("a"), Arc::new(Field::new("a", DataType::Utf8, true)));
         assert_eq!(extract_column_from_expr(&cast_expr), None);
 
         // Test that it still extracts from direct column references
