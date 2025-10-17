@@ -475,6 +475,10 @@ pub(crate) fn from_substrait_literal(
             {
                 match name.as_ref() {
                     FLOAT_16_TYPE_NAME => {
+                        // Rules for encoding fp16 Substrait literals are defined as part of Arrow here:
+                        //
+                        // https://github.com/apache/arrow/blame/bab558061696ddc1841148d6210424b12923d48e/format/substrait/extension_types.yaml#L112
+
                         let Some(value) = user_defined.val.as_ref() else {
                             return substrait_err!("Float16 value is empty");
                         };

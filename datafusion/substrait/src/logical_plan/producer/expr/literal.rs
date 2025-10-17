@@ -96,14 +96,19 @@ pub(crate) fn to_substrait_literal(
             UNSIGNED_INTEGER_TYPE_VARIATION_REF,
         ),
         ScalarValue::Float16(Some(f)) => {
-            // Following rules from https://github.com/apache/arrow/blame/main/format/substrait/extension_types.yaml
+            // Rules for encoding fp16 Substrait literals are defined as part of Arrow here:
+            //
+            // https://github.com/apache/arrow/blame/bab558061696ddc1841148d6210424b12923d48e/format/substrait/extension_types.yaml#L112
+            //
             // fp16 literals are encoded as user defined literals with
             // a google.protobuf.UInt32Value message where the lower 16 bits are
             // the fp16 value.
             let type_anchor = producer.register_type(FLOAT_16_TYPE_NAME.to_string());
 
-            // Hmm, the spec says "lower 16 bits" but neglects to mention the endianness.
-            // Let's just use little-endian for now and update the spec.
+            // The spec says "lower 16 bits" but neglects to mention the endianness.
+            // Let's just use little-endian for now.
+            //
+            // See https://github.com/apache/arrow/issues/47846
             let f_bytes = f.to_le_bytes();
             let value = u32::from_le_bytes([f_bytes[0], f_bytes[1], 0, 0]);
 
