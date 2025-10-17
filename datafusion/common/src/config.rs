@@ -895,10 +895,8 @@ config_namespace! {
         pub tree_maximum_render_width: usize, default = 240
 
         /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
-        /// When setting to "summary", it displays common metrics for high-level
-        /// insights.
-        /// When setting to "dev", it includes deep operator-level introspection for
-        /// developers
+        /// "summary" shows common metrics for high-level insights.
+        /// "dev" provides deep operator-level introspection for developers.
         pub analyze_level: ExplainAnalyzeLevel, default = ExplainAnalyzeLevel::Dev
     }
 }
