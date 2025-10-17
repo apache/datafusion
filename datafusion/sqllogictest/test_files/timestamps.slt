@@ -643,11 +643,7 @@ select date '1994-01-01' - interval '1' day as date;
 ----
 1993-12-31
 
-
 # cast_string_to_time()
-statement ok
-set datafusion.optimizer.skip_failed_rules = false
-
 query DDDD
 select
         time '08:09:10.123456789' as time_nano,
@@ -667,10 +663,6 @@ SELECT TIME '24:01:02' as time;
 # invalid timezone
 query error Arrow error: Parser error: Invalid timezone "ZZ": failed to parse timezone
 SELECT TIMESTAMP '2023-12-05T21:58:10.45ZZ';
-
-statement ok
-set datafusion.optimizer.skip_failed_rules = true
-
 
 # cast_to_timestamp_twice
 query P
