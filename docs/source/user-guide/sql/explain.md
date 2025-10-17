@@ -37,8 +37,6 @@ The optional `[FORMAT format]` clause controls how the plan is displayed as
 explained below. If this clause is not specified, the plan is displayed using
 the format from the [configuration value] `datafusion.explain.format`.
 
-[configuration value]: ../configs.md
-
 ### `tree` format (default)
 
 The `tree` format is modeled after [DuckDB plans] and is designed to be easier
