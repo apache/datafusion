@@ -27,7 +27,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 ///
 /// This is used to extract constant values from expressions (like percentile parameters)
 /// by evaluating them against an empty record batch.
-pub(crate) fn get_percentile_scalar_value(
+pub(crate) fn get_scalar_value(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<ScalarValue> {
     let empty_schema = Arc::new(Schema::empty());
@@ -47,7 +47,7 @@ pub(crate) fn validate_percentile_expr(
     expr: &Arc<dyn PhysicalExpr>,
     fn_name: &str,
 ) -> Result<f64> {
-    let scalar_value = get_percentile_scalar_value(expr).map_err(|_e| {
+    let scalar_value = get_scalar_value(expr).map_err(|_e| {
         DataFusionError::Plan(format!(
             "Percentile value for '{fn_name}' must be a literal"
         ))

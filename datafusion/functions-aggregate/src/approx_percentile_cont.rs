@@ -48,7 +48,7 @@ use datafusion_functions_aggregate_common::tdigest::{
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-use crate::utils::{get_percentile_scalar_value, validate_percentile_expr};
+use crate::utils::{get_scalar_value, validate_percentile_expr};
 
 create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
@@ -218,7 +218,7 @@ impl ApproxPercentileCont {
 }
 
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
-    let scalar_value = get_percentile_scalar_value(expr).map_err(|_e| {
+    let scalar_value = get_scalar_value(expr).map_err(|_e| {
         DataFusionError::Plan(
             "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal"
                 .to_string(),
