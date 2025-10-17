@@ -164,7 +164,7 @@ impl Metric {
         }
     }
 
-    /// Set the type for this metric
+    /// Set the type for this metric. Defaults to [`MetricType::DEV`]
     pub fn with_type(mut self, metric_type: MetricType) -> Self {
         self.metric_type = metric_type;
         self
