@@ -1817,6 +1817,37 @@ SELECT CONCAT('Hello', 'World')
 ----
 HelloWorld
 
+# Test array concatenation with concat function
+query ?
+SELECT concat([1, 2], [3, 4]);
+----
+[1, 2, 3, 4]
+
+query ?
+SELECT concat([1, 2], [3, 4], [5, 6]);
+----
+[1, 2, 3, 4, 5, 6]
+
+query ?
+SELECT concat(['a', 'b'], ['c', 'd']);
+----
+[a, b, c, d]
+
+query ?
+SELECT concat([1, 2], []);
+----
+[1, 2]
+
+query ?
+SELECT concat([], [1, 2]);
+----
+[1, 2]
+
+query ?
+SELECT concat([[1, 2]], [[3, 4]]);
+----
+[[1, 2], [3, 4]]
+
 statement ok
 CREATE TABLE simple_string(
   letter STRING,
