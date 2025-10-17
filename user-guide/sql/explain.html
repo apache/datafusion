@@ -879,8 +879,7 @@ generate a visual representation of the plan.</p>
 </section>
 <section id="explain-analyze">
 <h2><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code><a class="headerlink" href="#explain-analyze" title="Link to this heading">¶</a></h2>
-<p>Shows the execution plan and metrics of a statement. If you need more
-information output, use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span> <span class="pre">VERBOSE</span></code>. Note that <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code>
+<p>Shows the execution plan and metrics of a statement. Note that <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code>
 only supports the <code class="docutils literal notranslate"><span class="pre">indent</span></code> format.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">EXPLAIN</span><span class="w"> </span><span class="k">ANALYZE</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
 
@@ -898,6 +897,8 @@ only supports the <code class="docutils literal notranslate"><span class="pre">i
 <span class="o">+</span><span class="c1">-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
+<p>By default <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> shows the aggregated metrics from all partitions for each operator. If you need to display per-partition metrics, use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span> <span class="pre">VERBOSE</span></code>.</p>
+<p>You can also set <code class="docutils literal notranslate"><span class="pre">datafusion.explain.analyze_level</span></code> from the <a class="reference internal" href="../configs.html"><span class="std std-doc">configuration value</span></a> to control the detail level for the metrics displayed.</p>
 </section>
 </section>
 
