@@ -17,16 +17,14 @@
 
 mod kernels;
 
-use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
-use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
+use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
 use arrow::compute::kernels::cmp::*;
-use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{
     cast, filter_record_batch, ilike, like, nilike, nlike, SlicesIterator,
@@ -50,6 +48,7 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
+    concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
 };
 
 /// Binary expression
@@ -164,177 +163,6 @@ fn boolean_op(
     let ll = as_boolean_array(left).expect("boolean_op failed to downcast left array");
     let rr = as_boolean_array(right).expect("boolean_op failed to downcast right array");
     op(ll, rr).map(|t| Arc::new(t) as _)
-}
-
-macro_rules! binary_string_array_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
-        match $LEFT.data_type() {
-            DataType::Utf8 => {
-                compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
-            },
-            DataType::Utf8View => {
-                compute_utf8view_flag_op!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
-            }
-            DataType::LargeUtf8 => {
-                compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
-            },
-            other => internal_err!(
-                "Data type {} not supported for binary_string_array_flag_op operation '{}' on string array",
-                other, stringify!($OP)
-            ),
-        }
-    }};
-}
-
-/// Invoke a compute kernel on a pair of binary data arrays with flags
-macro_rules! compute_utf8_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8_flag_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8_flag_op failed to downcast array");
-
-        let flag = if $FLAG {
-            Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
-        } else {
-            None
-        };
-        let mut array = $OP(ll, rr, flag.as_ref())?;
-        if $NOT {
-            array = not(&array).unwrap();
-        }
-        Ok(Arc::new(array))
-    }};
-}
-
-/// Invoke a compute kernel on a pair of binary data arrays with flags
-macro_rules! compute_utf8view_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8view_flag_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8view_flag_op failed to downcast array");
-
-        let flag = if $FLAG {
-            Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
-        } else {
-            None
-        };
-        let mut array = $OP(ll, rr, flag.as_ref())?;
-        if $NOT {
-            array = not(&array).unwrap();
-        }
-        Ok(Arc::new(array))
-    }};
-}
-
-macro_rules! binary_string_array_flag_op_scalar {
-    ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
-        // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
-        // the query can be optimized in such a way that operands will be dicts, so we need to support it here
-        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Utf8 => {
-                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
-            },
-            DataType::Utf8View => {
-                compute_utf8view_flag_op_scalar!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
-            }
-            DataType::LargeUtf8 => {
-                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
-            },
-            DataType::Dictionary(_, _) => {
-                let values = $LEFT.as_any_dictionary().values();
-
-                match values.data_type() {
-                    DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
-                    DataType::Utf8View => compute_utf8view_flag_op_scalar!(values, $RIGHT, $OP, StringViewArray, $NOT, $FLAG),
-                    DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
-                    other => internal_err!(
-                        "Data type {} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
-                        other, stringify!($OP)
-                    ),
-                }.map(
-                    // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
-                    |evaluated_values| downcast_dictionary_array! {
-                        $LEFT => {
-                            let unpacked_dict = evaluated_values.take_iter($LEFT.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
-                            Arc::new(unpacked_dict) as _
-                        },
-                        _ => unreachable!(),
-                    }
-                )
-            },
-            other => internal_err!(
-                "Data type {} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
-                other, stringify!($OP)
-            ),
-        };
-        Some(result)
-    }};
-}
-
-/// Invoke a compute kernel on a data array and a scalar value with flag
-macro_rules! compute_utf8_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8_flag_op_scalar failed to downcast array");
-
-        let string_value = match $RIGHT.try_as_str() {
-            Some(Some(string_value)) => string_value,
-            // null literal or non string
-            _ => return internal_err!(
-                        "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                        $RIGHT, stringify!($OP)
-                    )
-        };
-
-        let flag = $FLAG.then_some("i");
-        let mut array =
-            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
-        if $NOT {
-            array = not(&array).unwrap();
-        }
-
-        Ok(Arc::new(array))
-    }};
-}
-
-/// Invoke a compute kernel on a data array and a scalar value with flag
-macro_rules! compute_utf8view_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("compute_utf8view_flag_op_scalar failed to downcast array");
-
-        let string_value = match $RIGHT.try_as_str() {
-            Some(Some(string_value)) => string_value,
-            // null literal or non string
-            _ => return internal_err!(
-                        "compute_utf8view_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                        $RIGHT, stringify!($OP)
-                    )
-        };
-
-        let flag = $FLAG.then_some("i");
-        let mut array =
-            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
-        if $NOT {
-            array = not(&array).unwrap();
-        }
-
-        Ok(Arc::new(array))
-    }};
 }
 
 impl PhysicalExpr for BinaryExpr {
@@ -752,34 +580,10 @@ impl BinaryExpr {
     ) -> Result<Option<Result<ArrayRef>>> {
         use Operator::*;
         let scalar_result = match &self.op {
-            RegexMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                false,
-                false
-            ),
-            RegexIMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                false,
-                true
-            ),
-            RegexNotMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                true,
-                false
-            ),
-            RegexNotIMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                true,
-                true
-            ),
+            RegexMatch => regex_match_dyn_scalar(array, scalar, false, false),
+            RegexIMatch => regex_match_dyn_scalar(array, scalar, false, true),
+            RegexNotMatch => regex_match_dyn_scalar(array, scalar, true, false),
+            RegexNotIMatch => regex_match_dyn_scalar(array, scalar, true, true),
             BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
             BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
             BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
@@ -828,18 +632,10 @@ impl BinaryExpr {
                     )
                 }
             }
-            RegexMatch => {
-                binary_string_array_flag_op!(left, right, regexp_is_match, false, false)
-            }
-            RegexIMatch => {
-                binary_string_array_flag_op!(left, right, regexp_is_match, false, true)
-            }
-            RegexNotMatch => {
-                binary_string_array_flag_op!(left, right, regexp_is_match, true, false)
-            }
-            RegexNotIMatch => {
-                binary_string_array_flag_op!(left, right, regexp_is_match, true, true)
-            }
+            RegexMatch => regex_match_dyn(left, right, false, false),
+            RegexIMatch => regex_match_dyn(left, right, false, true),
+            RegexNotMatch => regex_match_dyn(left, right, true, false),
+            RegexNotIMatch => regex_match_dyn(left, right, true, true),
             BitwiseAnd => bitwise_and_dyn(left, right),
             BitwiseOr => bitwise_or_dyn(left, right),
             BitwiseXor => bitwise_xor_dyn(left, right),

@@ -671,6 +671,13 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// closure returns simplified [Expr] or an error.
     ///
+    /// # Notes
+    ///
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
     }

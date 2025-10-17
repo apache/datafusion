@@ -125,7 +125,9 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
+hj:                     Benchmark for simple hash joins, testing various join scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
+
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Supported Configuration (Environment Variables)
@@ -305,6 +307,10 @@ main() {
                     # nlj uses range() function, no data generation needed
                     echo "NLJ benchmark does not require data generation"
                     ;;
+                hj)
+                    # hj uses range() function, no data generation needed
+                    echo "HJ benchmark does not require data generation"
+                    ;;
                 compile_profile)
                     data_tpch "1"
                     ;;
@@ -377,6 +383,7 @@ main() {
                     run_imdb
                     run_external_aggr
                     run_nlj
+                    run_hj
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -483,6 +490,9 @@ main() {
                     ;;
                 nlj)
                     run_nlj
+                    ;;
+                hj)
+                    run_hj
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -1134,6 +1144,14 @@ run_nlj() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running nlj benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the hj benchmark
+run_hj() {
+    RESULTS_FILE="${RESULTS_DIR}/hj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running hj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 

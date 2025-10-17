@@ -144,8 +144,11 @@ impl ScalarUDFImpl for ArrayHas {
                     assert_eq!(scalar_values.len(), 1);
                     let list = scalar_values
                         .into_iter()
+                        // If the vec is a singular null, `list` will be empty due to this flatten().
+                        // It would be more clear if we handled the None separately, but this is more performant.
                         .flatten()
-                        .map(|v| Expr::Literal(v, None))
+                        .flatten()
+                        .map(|v| Expr::Literal(v.clone(), None))
                         .collect();
 
                     return Ok(ExprSimplifyResult::Simplified(in_list(
@@ -333,7 +336,7 @@ fn array_has_dispatch_for_scalar(
     let is_nested = values.data_type().is_nested();
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
-    if values.is_empty() {
+    if haystack.len() == 0 {
         return Ok(Arc::new(BooleanArray::new(
             BooleanBuffer::new_unset(haystack.len()),
             None,
@@ -658,11 +661,20 @@ fn general_array_has_all_and_any_kernel(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::create_array;
-    use datafusion_common::utils::SingleRowListArrayBuilder;
+    use std::sync::Arc;
+
+    use arrow::{
+        array::{create_array, Array, ArrayRef, AsArray, Int32Array, ListArray},
+        buffer::OffsetBuffer,
+        datatypes::{DataType, Field},
+    };
+    use datafusion_common::{
+        config::ConfigOptions, utils::SingleRowListArrayBuilder, DataFusionError,
+        ScalarValue,
+    };
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult, Expr,
-        ScalarUDFImpl,
+        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult,
+        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl,
     };
 
     use crate::expr_fn::make_array;
@@ -736,5 +748,45 @@ mod tests {
         };
 
         assert_eq!(args, vec![col("c1"), col("c2")],);
+    }
+
+    #[test]
+    fn test_array_has_list_empty_child() -> Result<(), DataFusionError> {
+        let haystack_field = Arc::new(Field::new_list(
+            "haystack",
+            Field::new_list("", Field::new("", DataType::Int32, true), true),
+            true,
+        ));
+        let needle_field = Arc::new(Field::new("needle", DataType::Int32, true));
+        let return_field = Arc::new(Field::new_list(
+            "return",
+            Field::new("", DataType::Boolean, true),
+            true,
+        ));
+
+        let haystack = ListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::new(vec![0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef,
+            Some(vec![false].into()),
+        );
+
+        let haystack = ColumnarValue::Array(Arc::new(haystack));
+        let needle = ColumnarValue::Scalar(ScalarValue::Int32(Some(1)));
+
+        let result = ArrayHas::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![haystack, needle],
+            arg_fields: vec![haystack_field, needle_field],
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(1)?;
+        let output = output.as_boolean();
+        assert_eq!(output.len(), 1);
+        assert!(output.is_null(0));
+
+        Ok(())
     }
 }

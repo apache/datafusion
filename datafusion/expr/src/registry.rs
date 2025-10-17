@@ -31,20 +31,10 @@ pub trait FunctionRegistry {
     fn udfs(&self) -> HashSet<String>;
 
     /// Returns names of all available aggregate user defined functions.
-    fn udafs(&self) -> HashSet<String> {
-        // This default implementation is provided temporarily
-        // to maintain backward compatibility for the 50.1 release.
-        // It will be reverted to a required method in future versions.
-        HashSet::default()
-    }
+    fn udafs(&self) -> HashSet<String>;
 
     /// Returns names of all available window user defined functions.
-    fn udwfs(&self) -> HashSet<String> {
-        // This default implementation is provided temporarily
-        // to maintain backward compatibility for the 50.1 release.
-        // It will be reverted to a required method in future versions.
-        HashSet::default()
-    }
+    fn udwfs(&self) -> HashSet<String>;
 
     /// Returns a reference to the user defined scalar function (udf) named
     /// `name`.
