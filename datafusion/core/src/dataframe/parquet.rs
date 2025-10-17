@@ -26,7 +26,8 @@ use super::{
 };
 
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::not_impl_err;
+use datafusion_common::file_options::file_type::SINGLE_FILE_EXTENSION;
+use datafusion_common::{not_impl_err, DEFAULT_PARQUET_EXTENSION};
 use datafusion_expr::dml::InsertOp;
 
 impl DataFrame {
@@ -82,9 +83,19 @@ impl DataFrame {
                 .build()?
         };
 
+        let path = if file_type.get_ext() != DEFAULT_PARQUET_EXTENSION
+            && options.single_file_output
+        {
+            let mut path = path.to_owned();
+            path.push_str(SINGLE_FILE_EXTENSION);
+            path
+        } else {
+            path.to_owned()
+        };
+
         let plan = LogicalPlanBuilder::copy_to(
             plan,
-            path.into(),
+            path,
             file_type,
             Default::default(),
             options.partition_by,
