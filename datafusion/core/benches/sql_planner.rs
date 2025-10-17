@@ -103,15 +103,28 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                 // the actual ops here are largely unimportant as they are just a sample
                 // of ops that could occur on a dataframe
                 df = df
-                    .with_column(&c_name, cast(c.clone(), DataType::Utf8))
+                    .with_column(
+                        &c_name,
+                        cast(
+                            c.clone(),
+                            Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                        ),
+                    )
                     .unwrap()
                     .with_column(
                         &c_name,
                         when(
-                            cast(c.clone(), DataType::Int32).gt(lit(135)),
                             cast(
-                                cast(c.clone(), DataType::Int32) - lit(i + 3),
-                                DataType::Utf8,
+                                c.clone(),
+                                Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                            )
+                            .gt(lit(135)),
+                            cast(
+                                cast(
+                                    c.clone(),
+                                    Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                                ) - lit(i + 3),
+                                Arc::new(Field::new(&c_name, DataType::Int32, true)),
                             ),
                         )
                         .otherwise(c.clone())
@@ -122,15 +135,25 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                         &c_name,
                         when(
                             c.clone().is_not_null().and(
-                                cast(c.clone(), DataType::Int32)
-                                    .between(lit(120), lit(130)),
+                                cast(
+                                    c.clone(),
+                                    Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                                )
+                                .between(lit(120), lit(130)),
                             ),
                             Literal(ScalarValue::Utf8(None), None),
                         )
                         .otherwise(
                             when(
                                 c.clone().is_not_null().and(regexp_like(
-                                    cast(c.clone(), DataType::Utf8View),
+                                    cast(
+                                        c.clone(),
+                                        Arc::new(Field::new(
+                                            &c_name,
+                                            DataType::Utf8View,
+                                            true,
+                                        )),
+                                    ),
                                     lit("[0-9]*"),
                                     None,
                                 )),
@@ -146,10 +169,16 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                         &c_name,
                         when(
                             c.clone().is_not_null().and(
-                                cast(c.clone(), DataType::Int32)
-                                    .between(lit(90), lit(100)),
+                                cast(
+                                    c.clone(),
+                                    Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                                )
+                                .between(lit(90), lit(100)),
                             ),
-                            cast(c.clone(), DataType::Utf8View),
+                            cast(
+                                c.clone(),
+                                Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                            ),
                         )
                         .otherwise(Literal(ScalarValue::Date32(None), None))
                         .unwrap(),
@@ -159,10 +188,22 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                         &c_name,
                         when(
                             c.clone().is_not_null().and(
-                                cast(c.clone(), DataType::Int32).rem(lit(10)).gt(lit(7)),
+                                cast(
+                                    c.clone(),
+                                    Arc::new(Field::new(&c_name, DataType::Int32, true)),
+                                )
+                                .rem(lit(10))
+                                .gt(lit(7)),
                             ),
                             regexp_replace(
-                                cast(c.clone(), DataType::Utf8View),
+                                cast(
+                                    c.clone(),
+                                    Arc::new(Field::new(
+                                        &c_name,
+                                        DataType::Utf8View,
+                                        true,
+                                    )),
+                                ),
                                 lit("1"),
                                 lit("a"),
                                 None,
@@ -179,11 +220,21 @@ fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
                         &c_name,
                         try_cast(
                             to_timestamp(vec![c.clone(), lit("%Y-%m-%d %H:%M:%S")]),
-                            DataType::Timestamp(Nanosecond, Some("UTC".into())),
+                            Arc::new(Field::new(
+                                &c_name,
+                                DataType::Timestamp(Nanosecond, None),
+                                true,
+                            )),
                         ),
                     )
                     .unwrap()
-                    .with_column(&c_name, try_cast(c.clone(), DataType::Date32))
+                    .with_column(
+                        &c_name,
+                        try_cast(
+                            c.clone(),
+                            Arc::new(Field::new(&c_name, DataType::Date32, true)),
+                        ),
+                    )
                     .unwrap()
             }
 

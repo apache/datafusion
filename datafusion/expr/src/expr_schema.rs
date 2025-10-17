@@ -127,8 +127,9 @@ impl ExprSchemable for Expr {
                     .as_ref()
                     .map_or(Ok(DataType::Null), |e| e.get_type(schema))
             }
-            Expr::Cast(Cast { data_type, .. })
-            | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
+            Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
+                Ok(field.data_type().clone())
+            }
             Expr::Unnest(Unnest { expr }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
@@ -579,9 +580,11 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, data_type }) => expr
+            Expr::Cast(Cast { expr, field }) => expr
                 .to_field(schema)
-                .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone()))
+                .map(|(_, f)| {
+                    f.as_ref().clone().with_data_type(field.data_type().clone())
+                })
                 .map(Arc::new),
             Expr::Placeholder(Placeholder {
                 id: _,
@@ -632,7 +635,14 @@ impl ExprSchemable for Expr {
                 Expr::ScalarSubquery(subquery) => {
                     Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
                 }
-                _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
+                _ => {
+                    let field = Arc::new(Field::new(
+                        "",
+                        cast_to_type.clone(),
+                        self.nullable(schema)?,
+                    ));
+                    Ok(Expr::Cast(Cast::new(Box::new(self), field)))
+                }
             }
         } else {
             plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")

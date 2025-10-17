@@ -116,13 +116,13 @@ fn rewrite_in_terms_of_projection(
 
         if let Some(found) = found {
             return Ok(Transformed::yes(match normalized_expr {
-                Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
+                Expr::Cast(Cast { expr: _, field }) => Expr::Cast(Cast {
                     expr: Box::new(found),
-                    data_type,
+                    field,
                 }),
-                Expr::TryCast(TryCast { expr: _, data_type }) => Expr::TryCast(TryCast {
+                Expr::TryCast(TryCast { expr: _, field }) => Expr::TryCast(TryCast {
                     expr: Box::new(found),
-                    data_type,
+                    field,
                 }),
                 _ => found,
             }));
@@ -268,13 +268,25 @@ mod test {
         let cases = vec![
             TestCase {
                 desc: "Cast is preserved by rewrite_sort_cols_by_aggs",
-                input: sort(cast(col("c2"), DataType::Int64)),
-                expected: sort(cast(col("c2").alias("c2"), DataType::Int64)),
+                input: sort(cast(
+                    col("c2"),
+                    Arc::new(Field::new("cast", DataType::Int64, false)),
+                )),
+                expected: sort(cast(
+                    col("c2").alias("c2"),
+                    Arc::new(Field::new("cast", DataType::Int64, false)),
+                )),
             },
             TestCase {
                 desc: "TryCast is preserved by rewrite_sort_cols_by_aggs",
-                input: sort(try_cast(col("c2"), DataType::Int64)),
-                expected: sort(try_cast(col("c2").alias("c2"), DataType::Int64)),
+                input: sort(try_cast(
+                    col("c2"),
+                    Arc::new(Field::new("try_cast", DataType::Int64, false)),
+                )),
+                expected: sort(try_cast(
+                    col("c2").alias("c2"),
+                    Arc::new(Field::new("try_cast", DataType::Int64, false)),
+                )),
             },
         ];
 

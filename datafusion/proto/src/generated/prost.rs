@@ -327,8 +327,9 @@ pub struct CreateViewNode {
     #[prost(string, tag = "4")]
     pub definition: ::prost::alloc::string::String,
 }
-/// a node containing data for defining values list. unlike in SQL where it's two dimensional, here
-/// the list is flattened, and with the field n_cols it can be parsed and partitioned into rows
+/// a node containing data for defining values list. unlike in SQL where it's two
+/// dimensional, here the list is flattened, and with the field n_cols it can be
+/// parsed and partitioned into rows
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValuesNode {
     #[prost(uint64, tag = "1")]
@@ -918,14 +919,14 @@ pub struct CastNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, optional, tag = "2")]
-    pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    pub field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TryCastNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, optional, tag = "2")]
-    pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    pub field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExprNode {
@@ -942,15 +943,21 @@ pub struct WindowFrame {
     pub window_frame_units: i32,
     #[prost(message, optional, tag = "2")]
     pub start_bound: ::core::option::Option<WindowFrameBound>,
-    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
-    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
+    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see
+    /// <https://github.com/tokio-rs/prost/issues/430> and
+    /// <https://github.com/tokio-rs/prost/pull/455>) this syntax is ugly but is
+    /// binary compatible with the "optional" keyword (see
+    /// <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
     #[prost(oneof = "window_frame::EndBound", tags = "3")]
     pub end_bound: ::core::option::Option<window_frame::EndBound>,
 }
 /// Nested message and enum types in `WindowFrame`.
 pub mod window_frame {
-    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
-    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
+    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see
+    /// <https://github.com/tokio-rs/prost/issues/430> and
+    /// <https://github.com/tokio-rs/prost/pull/455>) this syntax is ugly but is
+    /// binary compatible with the "optional" keyword (see
+    /// <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum EndBound {
         #[prost(message, tag = "3")]
@@ -1812,7 +1819,8 @@ pub struct AggregateExecNode {
     pub group_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, repeated, tag = "6")]
     pub aggr_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// we need the input schema to the partial aggregate to pass to the final aggregate
+    /// we need the input schema to the partial aggregate to pass to the final
+    /// aggregate
     #[prost(message, optional, tag = "7")]
     pub input_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "8")]

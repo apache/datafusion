@@ -713,8 +713,12 @@ impl ScalarUDFImpl for CastToI64UDF {
         } else {
             // need to use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Int64,
+                expr: Box::new(arg.clone()),
+                field: Arc::new(Field::new(
+                    "cast_to_i64",
+                    DataType::Int64,
+                    info.nullable(&arg)?,
+                )),
             })
         };
         // return the newly written argument to DataFusion

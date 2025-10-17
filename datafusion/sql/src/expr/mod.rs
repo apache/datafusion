@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, TimeUnit};
+use std::sync::Arc;
+
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
@@ -288,9 +290,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         schema,
                         planner_context,
                     )?),
-                    self.convert_data_type_to_field(&data_type)?
-                        .data_type()
-                        .clone(),
+                    self.convert_data_type_to_field(&data_type)?,
                 )))
             }
 
@@ -298,12 +298,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new(
-                Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?
-                    .data_type()
-                    .clone(),
-            ))),
+            }) => {
+                let literal = value.clone().into_string().unwrap();
+                let field_name = value.into_string().unwrap();
+                let field = Arc::new(
+                    self.convert_data_type_to_field(&data_type)?
+                        .as_ref()
+                        .clone()
+                        .with_name(field_name),
+                );
+                Ok(Expr::Cast(Cast::new(Box::new(lit(literal)), field)))
+            }
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
@@ -571,7 +576,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     SQLExpr::Value(ValueWithSpan {
                         value: Value::SingleQuotedString(s),
                         span: _,
-                    }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
+                    }) => Arc::new(Field::new(
+                        &s.clone(),
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
+                        true,
+                    )),
                     _ => {
                         return not_impl_err!(
                             "Unsupported ast node in sqltorel: {time_zone:?}"
@@ -999,18 +1008,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             {
                 Expr::Cast(Cast::new(
                     Box::new(expr),
-                    DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                    Arc::new(Field::new(
+                        "",
+                        DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                        true,
+                    )),
                 ))
             }
             _ => expr,
         };
 
-        // Currently drops metadata attached to the type
-        // https://github.com/apache/datafusion/issues/18060
-        Ok(Expr::Cast(Cast::new(
-            Box::new(expr),
-            dt.data_type().clone(),
-        )))
+        Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))
     }
 
     /// Extracts the root expression and access chain from a compound expression.

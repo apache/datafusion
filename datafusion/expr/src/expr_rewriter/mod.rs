@@ -510,7 +510,10 @@ mod test {
         // cast data types
         test_rewrite(
             col("a"),
-            Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32)),
+            Expr::Cast(Cast::new(
+                Box::new(col("a")),
+                Arc::new(Field::new("a", DataType::Int64, false)),
+            )),
         );
 
         // change literal type from i32 to i64

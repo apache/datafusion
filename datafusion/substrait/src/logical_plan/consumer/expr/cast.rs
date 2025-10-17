@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::logical_plan::consumer::types::from_substrait_type_without_names;
 use crate::logical_plan::consumer::SubstraitConsumer;
+use datafusion::arrow::datatypes::Field;
 use datafusion::common::{substrait_err, DFSchema};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
 use substrait::proto::expression as substrait_expression;
@@ -39,9 +42,15 @@ pub async fn from_cast(
             );
             let data_type = from_substrait_type_without_names(consumer, output_type)?;
             if cast.failure_behavior() == ReturnNull {
-                Ok(Expr::TryCast(TryCast::new(input_expr, data_type)))
+                Ok(Expr::TryCast(TryCast::new(
+                    input_expr,
+                    Arc::new(Field::new("", data_type, true)),
+                )))
             } else {
-                Ok(Expr::Cast(Cast::new(input_expr, data_type)))
+                Ok(Expr::Cast(Cast::new(
+                    input_expr,
+                    Arc::new(Field::new("", data_type, true)),
+                )))
             }
         }
         None => substrait_err!("Cast expression without output type is not allowed"),
