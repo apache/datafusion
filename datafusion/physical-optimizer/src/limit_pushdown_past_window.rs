@@ -28,6 +28,7 @@ use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::cmp;

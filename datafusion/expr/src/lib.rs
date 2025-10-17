@@ -111,9 +111,8 @@ pub use udaf::{
 pub use udf::{
     scalar_doc_sections, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
 };
-pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
-pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
-pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
+pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF};
+pub use udwf::{LimitEffect, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]
