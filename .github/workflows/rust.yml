@@ -332,7 +332,7 @@ jobs:
     needs: linux-build-lib
     runs-on: ubuntu-latest
     container:
-      image: rust:slim
+      image: amd64/rust
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
@@ -351,10 +351,13 @@ jobs:
         run: |
           echo "Disk space before cleanup:"
           df -h
-          rm -rf /tmp/*
-          rm -rf /opt/hostedtoolcache
-          rm -rf "$AGENT_TOOLSDIRECTORY"
           apt-get clean
+          rm -rf /__t/CodeQL
+          rm -rf /__t/PyPy
+          rm -rf /__t/Java_Temurin-Hotspot_jdk
+          rm -rf /__t/Python
+          rm -rf /__t/go
+          rm -rf /__t/Ruby
           echo "Disk space after cleanup:"
           df -h
       - name: Run examples
