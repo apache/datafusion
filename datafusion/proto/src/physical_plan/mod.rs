@@ -23,8 +23,7 @@ use self::to_proto::{serialize_partitioning, serialize_physical_expr};
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr, parse_protobuf_file_scan_config,
-    parse_protobuf_file_scan_schema, parse_record_batches,
+    parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
@@ -41,12 +40,12 @@ use crate::protobuf::{
 use crate::{convert_required, into_required};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
+use arrow::datatypes::{IntervalMonthDayNanoType, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
-use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
 };
+#[cfg(feature = "parquet")]
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -661,8 +660,9 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
-            let schema =
-                parse_protobuf_file_scan_schema(scan.base_conf.as_ref().unwrap())?;
+            let schema = from_proto::parse_protobuf_file_scan_schema(
+                scan.base_conf.as_ref().unwrap(),
+            )?;
 
             // Check if there's a projection and use projected schema for predicate parsing
             let base_conf = scan.base_conf.as_ref().unwrap();
@@ -673,7 +673,7 @@ impl protobuf::PhysicalPlanNode {
                     .iter()
                     .map(|&i| schema.field(i as usize).clone())
                     .collect();
-                Arc::new(Schema::new(projected_fields))
+                Arc::new(arrow::datatypes::Schema::new(projected_fields))
             } else {
                 schema
             };
@@ -690,7 +690,7 @@ impl protobuf::PhysicalPlanNode {
                     )
                 })
                 .transpose()?;
-            let mut options = TableParquetOptions::default();
+            let mut options = datafusion_common::config::TableParquetOptions::default();
 
             if let Some(table_options) = scan.parquet_options.as_ref() {
                 options = table_options.try_into()?;
@@ -1693,6 +1693,7 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
+    #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
     fn try_into_parquet_sink_physical_plan(
         &self,
         sink: &protobuf::ParquetSinkExecNode,
