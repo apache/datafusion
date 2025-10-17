@@ -619,9 +619,9 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                 })?;
 
             // Determine if the join order was swapped compared to the original edge.
-            // We use a two-tier approach:
-            // 1. Check if left/right expressions belong to current/next schemas (handles most cases)
-            // 2. If ambiguous (e.g., self-joins), use relation qualifiers as a tiebreaker
+            // We check if the qualified columns (relation + name) from the join expressions
+            // match the schemas. This handles all cases including when multiple tables
+            // have columns with the same name.
             let current_schema = current_plan.schema();
             let next_schema = next_plan.schema();
 
@@ -631,61 +631,42 @@ impl<'graph> PrecedenceTreeNode<'graph> {
                 let left_columns = left_expr.column_refs();
                 let right_columns = right_expr.column_refs();
 
-                // Tier 1: Check which schema each expression belongs to
-                let left_in_current = datafusion_expr::utils::check_all_columns_from_schema(
-                    &left_columns,
-                    current_schema.as_ref(),
-                )
-                .unwrap_or(false);
-
-                let right_in_next = datafusion_expr::utils::check_all_columns_from_schema(
-                    &right_columns,
-                    next_schema.as_ref(),
-                )
-                .unwrap_or(false);
-
-                let left_in_next = datafusion_expr::utils::check_all_columns_from_schema(
-                    &left_columns,
-                    next_schema.as_ref(),
-                )
-                .unwrap_or(false);
-
-                let right_in_current = datafusion_expr::utils::check_all_columns_from_schema(
-                    &right_columns,
-                    current_schema.as_ref(),
-                )
-                .unwrap_or(false);
-
-                // Determine swap based on where columns are found
-                if left_in_current && right_in_next && !left_in_next {
-                    // Clear case: left belongs to current, right belongs to next → no swap
-                    false
-                } else if left_in_next && right_in_current && !left_in_current {
-                    // Clear case: left belongs to next, right belongs to current → swap
-                    true
-                } else {
-                    // Tier 2: Ambiguous case (columns exist in both schemas, e.g., self-joins)
-                    // Use relation qualifiers as a tiebreaker if available
-                    let left_has_relation = left_columns.iter().any(|c| c.relation.is_some());
-                    let right_has_relation = right_columns.iter().any(|c| c.relation.is_some());
-
-                    if left_has_relation || right_has_relation {
-                        // Check if qualified left columns match the next_plan's schema
-                        // If they do, it means the join is swapped
-                        left_columns.iter().any(|col| {
-                            if let Some(relation) = &col.relation {
-                                // Simple heuristic: check if any field in next_schema has this qualifier
-                                next_schema.iter().any(|(qualifier, _field)| {
-                                    qualifier.map(|q| q == relation).unwrap_or(false)
-                                })
-                            } else {
-                                false
-                            }
+                // Helper to check if a qualified column exists in a schema
+                let column_in_schema = |col: &datafusion_common::Column,
+                                         schema: &datafusion_common::DFSchema|
+                 -> bool {
+                    if let Some(relation) = &col.relation {
+                        // Column has a table qualifier - must match exactly (relation + name)
+                        schema.iter().any(|(qualifier, field)| {
+                            qualifier == Some(relation) && field.name() == col.name()
                         })
                     } else {
-                        // No qualifiers available, default to no swap (preserve original order)
-                        false
+                        // Unqualified column - check if the name exists anywhere in schema
+                        schema.field_with_unqualified_name(&col.name).is_ok()
                     }
+                };
+
+                // Check which schema each expression's columns belong to
+                let left_in_current =
+                    left_columns.iter().all(|c| column_in_schema(c, current_schema.as_ref()));
+                let right_in_next =
+                    right_columns.iter().all(|c| column_in_schema(c, next_schema.as_ref()));
+                let left_in_next =
+                    left_columns.iter().all(|c| column_in_schema(c, next_schema.as_ref()));
+                let right_in_current =
+                    right_columns.iter().all(|c| column_in_schema(c, current_schema.as_ref()));
+
+                // Determine swap based on where the qualified columns are found
+                if left_in_current && right_in_next {
+                    // Left expression belongs to current, right to next → no swap
+                    false
+                } else if left_in_next && right_in_current {
+                    // Left expression belongs to next, right to current → swap
+                    true
+                } else {
+                    // Ambiguous or error case - default to no swap to preserve original order
+                    // This shouldn't happen with properly qualified columns
+                    false
                 }
             } else {
                 // If there are no join conditions, we can't determine swap status
