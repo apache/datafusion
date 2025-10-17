@@ -4855,7 +4855,7 @@ h,-,-,-,o nil-2-nil-4-5 1|0|3
 query T
 select array_to_string(arrow_cast([arrow_cast([NULL, 'a'], 'FixedSizeList(2, Utf8)'), NULL], 'FixedSizeList(2, FixedSizeList(2, Utf8))'), ',', '-');
 ----
--,a,-,-
+-,a,-
 
 # array_to_string with columns #1
 
