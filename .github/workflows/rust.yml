@@ -351,7 +351,6 @@ jobs:
         run: |
           echo "Disk space before cleanup:"
           df -h
-          docker system prune -af
           sudo rm -rf /tmp/*
           sudo rm -rf /opt/hostedtoolcache
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
