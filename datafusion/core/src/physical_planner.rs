@@ -62,6 +62,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::format::ExplainAnalyzeLevel;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::TableReference;
 use datafusion_common::{
@@ -90,6 +91,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
+use datafusion_physical_plan::metrics::MetricType;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
@@ -2073,9 +2075,15 @@ impl DefaultPhysicalPlanner {
         let input = self.create_physical_plan(&a.input, session_state).await?;
         let schema = Arc::clone(a.schema.inner());
         let show_statistics = session_state.config_options().explain.show_statistics;
+        let analyze_level = session_state.config_options().explain.analyze_level;
+        let metric_types = match analyze_level {
+            ExplainAnalyzeLevel::Summary => vec![MetricType::SUMMARY],
+            ExplainAnalyzeLevel::Dev => vec![MetricType::SUMMARY, MetricType::DEV],
+        };
         Ok(Arc::new(AnalyzeExec::new(
             a.verbose,
             show_statistics,
+            metric_types,
             input,
             schema,
         )))

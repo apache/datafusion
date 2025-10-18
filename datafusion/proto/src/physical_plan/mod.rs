@@ -82,6 +82,7 @@ use datafusion::physical_plan::joins::{
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::memory::LazyMemoryExec;
+use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -1611,6 +1612,7 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(AnalyzeExec::new(
             analyze.verbose,
             analyze.show_statistics,
+            vec![MetricType::SUMMARY, MetricType::DEV],
             input,
             Arc::new(convert_required!(analyze.schema)?),
         )))

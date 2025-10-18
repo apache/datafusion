@@ -23,7 +23,9 @@ use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
-use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
+use datafusion::datasource::listing::{
+    ListingTable, ListingTableConfig, ListingTableConfigExt,
+};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;

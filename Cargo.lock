@@ -1789,7 +1789,6 @@ name = "datafusion"
 version = "50.2.0"
 dependencies = [
  "arrow",
- "arrow-ipc",
  "arrow-schema",
  "async-trait",
  "bytes",
@@ -1803,6 +1802,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
+ "datafusion-datasource-arrow",
  "datafusion-datasource-avro",
  "datafusion-datasource-csv",
  "datafusion-datasource-json",
@@ -1913,12 +1913,15 @@ dependencies = [
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-datasource",
+ "datafusion-datasource-parquet",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-expr",
+ "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "futures",
+ "itertools 0.14.0",
  "log",
  "object_store",
  "tokio",
@@ -2025,6 +2028,29 @@ dependencies = [
  "url",
  "xz2",
  "zstd",
+]
+
+[[package]]
+name = "datafusion-datasource-arrow"
+version = "50.2.0"
+dependencies = [
+ "arrow",
+ "arrow-ipc",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "datafusion-common",
+ "datafusion-common-runtime",
+ "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "datafusion-session",
+ "futures",
+ "itertools 0.14.0",
+ "object_store",
+ "tokio",
 ]
 
 [[package]]
@@ -2654,6 +2680,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-functions-aggregate",
+ "half",
  "insta",
  "itertools 0.14.0",
  "object_store",
