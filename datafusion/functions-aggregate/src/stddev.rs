@@ -443,26 +443,31 @@ mod tests {
         agg2: Arc<AggregateUDF>,
         schema: &Schema,
     ) -> Result<ScalarValue> {
+        let expr = col("a", schema)?;
+        let expr_field = expr.return_field(schema)?;
+
         let args1 = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
+            expr_fields: &[Arc::clone(&expr_field)],
             ignore_nulls: false,
             order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            exprs: &[col("a", schema)?],
+            exprs: &[Arc::clone(&expr)],
         };
 
         let args2 = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
+            expr_fields: &[expr_field],
             ignore_nulls: false,
             order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            exprs: &[col("a", schema)?],
+            exprs: &[expr],
         };
 
         let mut accum1 = agg1.accumulator(args1)?;

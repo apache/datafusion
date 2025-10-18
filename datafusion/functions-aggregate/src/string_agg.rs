@@ -199,7 +199,16 @@ impl AggregateUDFImpl for StringAgg {
                 )
                 .into(),
                 exprs: &filter_index(acc_args.exprs, 1),
-                ..acc_args
+                expr_fields: &filter_index(acc_args.expr_fields, 1),
+                // Unchanged below; we list each field explicitly in case we ever add more
+                // fields to AccumulatorArgs making it easier to see if changes are also
+                // needed here.
+                schema: acc_args.schema,
+                ignore_nulls: acc_args.ignore_nulls,
+                order_bys: acc_args.order_bys,
+                is_reversed: acc_args.is_reversed,
+                name: acc_args.name,
+                is_distinct: acc_args.is_distinct,
             })?;
 
             Ok(Box::new(StringAggAccumulator::new(
@@ -590,6 +599,10 @@ mod tests {
             StringAgg::new().accumulator(AccumulatorArgs {
                 return_field: Field::new("f", DataType::LargeUtf8, true).into(),
                 schema: &self.schema,
+                expr_fields: &[
+                    Field::new("col", DataType::LargeUtf8, true).into(),
+                    Field::new("lit", DataType::Utf8, false).into(),
+                ],
                 ignore_nulls: false,
                 order_bys: &self.order_bys,
                 is_reversed: false,

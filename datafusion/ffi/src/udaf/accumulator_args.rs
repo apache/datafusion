@@ -97,6 +97,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
 pub struct ForeignAccumulatorArgs {
     pub return_field: FieldRef,
     pub schema: Schema,
+    pub expr_fields: Vec<FieldRef>,
     pub ignore_nulls: bool,
     pub order_bys: Vec<PhysicalSortExpr>,
     pub is_reversed: bool,
@@ -132,9 +133,15 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
 
         let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
 
+        let expr_fields = exprs
+            .iter()
+            .map(|e| e.return_field(&schema))
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             return_field,
             schema,
+            expr_fields,
             ignore_nulls: proto_def.ignore_nulls,
             order_bys,
             is_reversed: value.is_reversed,
@@ -150,6 +157,7 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
         Self {
             return_field: Arc::clone(&value.return_field),
             schema: &value.schema,
+            expr_fields: &value.expr_fields,
             ignore_nulls: value.ignore_nulls,
             order_bys: &value.order_bys,
             is_reversed: value.is_reversed,
@@ -175,6 +183,7 @@ mod tests {
         let orig_args = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
+            expr_fields: &[Field::new("a", DataType::Int32, true).into()],
             ignore_nulls: false,
             order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,

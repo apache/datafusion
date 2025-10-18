@@ -160,8 +160,8 @@ impl AggregateUDFImpl for NthValueAgg {
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
-        NthValueAccumulator::try_new(n, &data_type, &ordering_dtypes, ordering)
+        let data_type = acc_args.expr_fields[0].data_type();
+        NthValueAccumulator::try_new(n, data_type, &ordering_dtypes, ordering)
             .map(|acc| Box::new(acc) as _)
     }
 

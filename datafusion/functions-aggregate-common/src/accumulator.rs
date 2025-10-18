@@ -30,7 +30,8 @@ pub struct AccumulatorArgs<'a> {
     /// The return field of the aggregate function.
     pub return_field: FieldRef,
 
-    /// The schema of the input arguments
+    /// Input schema to the aggregate function. If you need to check data type, nullability
+    /// or metadata of input arguments then you should use `expr_fields` below instead.
     pub schema: &'a Schema,
 
     /// Whether to ignore nulls.
@@ -67,6 +68,9 @@ pub struct AccumulatorArgs<'a> {
 
     /// The physical expression of arguments the aggregate function takes.
     pub exprs: &'a [Arc<dyn PhysicalExpr>],
+
+    /// Fields corresponding to each expr (same order & length).
+    pub expr_fields: &'a [FieldRef],
 }
 
 impl AccumulatorArgs<'_> {
