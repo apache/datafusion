@@ -38,7 +38,6 @@ use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
     sum_distinct,
 };
-use datafusion_functions_nested::expr_fn::{array_distinct, make_array};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
@@ -6526,11 +6525,11 @@ async fn array_distinct_on_list_with_inner_nullability_causing_type_mismatch(
     let ctx = SessionContext::new();
 
     ctx.register_batch("array_batch", batch).unwrap();
-    let df = ctx.table("array_batch").await.unwrap();
+    let df = ctx.sql("select * from array_batch").await.unwrap();
 
     // view_all
     assert_snapshot!(
-       batches_to_string(&df.clone().collect().await.unwrap()),
+       batches_to_string(&df.collect().await.unwrap()),
         @r"
     +--------------+-------------+
     | nonnullable  | nullable    |
@@ -6540,30 +6539,19 @@ async fn array_distinct_on_list_with_inner_nullability_causing_type_mismatch(
     "
     );
 
-    // non-nullable filter
-    let filter_expr =
-        array_distinct(col("nonnullable")).eq(make_array(vec![lit(1), lit(2)]));
-    let result_df = df.clone().filter(filter_expr).unwrap();
+    let df = ctx
+        .sql(
+            r#"
+SELECT * FROM array_batch
+WHERE
+    array_distinct(nonnullable) = [1, 2]
+    AND array_distinct(nullable) = [NULL, 1, 2]
+"#,
+        )
+        .await
+        .unwrap();
     assert_snapshot!(
-       batches_to_string(&result_df.collect().await.unwrap()),
-        @r"
-    +--------------+-------------+
-    | nonnullable  | nullable    |
-    +--------------+-------------+
-    | [1, 1, 2, 2] | [1, 1, 2, ] |
-    +--------------+-------------+
-    "
-    );
-
-    // nullable filter
-    let filter_expr = array_distinct(col("nullable")).eq(make_array(vec![
-        lit(ScalarValue::Int32(None)),
-        lit(1),
-        lit(2),
-    ]));
-    let result_df = df.clone().filter(filter_expr).unwrap();
-    assert_snapshot!(
-       batches_to_string(&result_df.collect().await.unwrap()),
+       batches_to_string(&df.collect().await.unwrap()),
         @r"
     +--------------+-------------+
     | nonnullable  | nullable    |
