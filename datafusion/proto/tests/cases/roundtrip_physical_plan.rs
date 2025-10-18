@@ -1716,7 +1716,7 @@ fn roundtrip_unnest() -> Result<()> {
         vec![2, 4],
         output_schema,
         options,
-    );
+    )?;
     roundtrip_test(Arc::new(unnest))
 }
 
