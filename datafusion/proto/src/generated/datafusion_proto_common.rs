@@ -751,6 +751,9 @@ pub struct ParquetOptions {
     /// default = true
     #[prost(bool, tag = "1")]
     pub enable_page_index: bool,
+    /// default = false
+    #[prost(bool, tag = "34")]
+    pub eager_load_page_index: bool,
     /// default = true
     #[prost(bool, tag = "2")]
     pub pruning: bool,
