@@ -17,22 +17,25 @@
 
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
-use std::borrow::Cow;
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filter};
+use arrow::compute::{
+    and, and_not, filter_record_batch, is_null, not, nullif, or, prep_null_mask_filter,
+};
 use arrow::datatypes::{DataType, Schema};
+use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
+use std::borrow::Cow;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 use super::{Column, Literal};
 use datafusion_physical_expr_common::datum::compare_with_eq;
+use datafusion_physical_expr_common::utils::scatter;
 use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -120,6 +123,24 @@ impl std::fmt::Display for CaseExpr {
 /// expressions in the future
 fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any().is::<Column>()
+}
+
+fn merge_result(
+    current_value: &dyn Array,
+    then_value: ColumnarValue,
+    then_scatter: &BooleanArray,
+) -> std::result::Result<ArrayRef, ArrowError> {
+    match then_value {
+        ColumnarValue::Scalar(ScalarValue::Null) => nullif(current_value, then_scatter),
+        ColumnarValue::Scalar(then_value) => {
+            zip(then_scatter, &then_value.to_scalar()?, &current_value)
+        }
+        ColumnarValue::Array(then_value) => {
+            // TODO this operation should probably be feasible in one pass
+            let scattered_then = scatter(then_scatter, then_value.as_ref())?;
+            zip(then_scatter, &scattered_then, &current_value)
+        }
+    }
 }
 
 impl CaseExpr {
@@ -286,64 +307,72 @@ impl CaseExpr {
 
         // start with nulls as default output
         let mut current_value = new_null_array(&return_type, batch.num_rows());
-        let mut remainder = BooleanArray::from(vec![true; batch.num_rows()]);
-        let mut remainder_count = batch.num_rows();
-        for i in 0..self.when_then_expr.len() {
-            // If there are no rows left to process, break out of the loop early
-            if remainder_count == 0 {
-                break;
-            }
 
+        let mut remainder_scatter = BooleanArray::from(vec![true; batch.num_rows()]);
+        let mut remainder_batch = Cow::Borrowed(batch);
+
+        for i in 0..self.when_then_expr.len() {
+            // Evaluate the 'when' predicate for the remainder batch
+            // This results in a boolean array with the same length as the remaining number of rows
             let when_predicate = &self.when_then_expr[i].0;
-            let when_value = when_predicate.evaluate_selection(batch, &remainder)?;
-            let when_value = when_value.into_array(batch.num_rows())?;
+            let when_value = when_predicate.evaluate(&remainder_batch)?;
+            let when_value = when_value.to_array(remainder_batch.num_rows())?;
             let when_value = as_boolean_array(&when_value).map_err(|_| {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
-            // Treat 'NULL' as false value
-            let when_value = match when_value.null_count() {
-                0 => Cow::Borrowed(when_value),
-                _ => Cow::Owned(prep_null_mask_filter(when_value)),
-            };
-            // Make sure we only consider rows that have not been matched yet
-            let when_value = and(&when_value, &remainder)?;
 
-            // If the predicate did not match any rows, continue to the next branch immediately
+            // If the 'when' predicate did not match any rows, continue to the next branch immediately
             let when_match_count = when_value.true_count();
             if when_match_count == 0 {
                 continue;
             }
 
-            let then_expression = &self.when_then_expr[i].1;
-            let then_value = then_expression.evaluate_selection(batch, &when_value)?;
-
-            current_value = match then_value {
-                ColumnarValue::Scalar(ScalarValue::Null) => {
-                    nullif(current_value.as_ref(), &when_value)?
-                }
-                ColumnarValue::Scalar(then_value) => {
-                    zip(&when_value, &then_value.to_scalar()?, &current_value)?
-                }
-                ColumnarValue::Array(then_value) => {
-                    zip(&when_value, &then_value, &current_value)?
-                }
+            // Make sure 'NULL' is treated as false
+            let when_value = match when_value.null_count() {
+                0 => Cow::Borrowed(when_value),
+                _ => Cow::Owned(prep_null_mask_filter(when_value)),
             };
 
-            // Succeed tuples should be filtered out for short-circuit evaluation,
-            // null values for the current when expr should be kept
-            remainder = and_not(&remainder, &when_value)?;
-            remainder_count -= when_match_count;
+            // Filter the remainder batch based on the 'when' value
+            // This results in a batch containing only the rows that need to be evaluated
+            // for the current branch
+            let then_batch = filter_record_batch(&remainder_batch, &when_value)?;
+
+            // Evaluate the then expression for the matching rows
+            let then_expression = &self.when_then_expr[i].1;
+            let then_value = then_expression.evaluate(&then_batch)?;
+
+            // Expand the 'when' match array using the 'remainder scatter' array
+            // This results in a truthy boolean array than we can use to merge the
+            // 'then' values with the `current_value` array.
+            let then_merge = scatter(&remainder_scatter, when_value.as_ref())?;
+            let then_merge = then_merge.as_boolean();
+
+            // Merge the 'then' values with the `current_value` array
+            current_value = merge_result(&current_value, then_value, then_merge)?;
+
+            // If the 'when' predicate matched all remaining row, there's nothing left to do so
+            // we can return early
+            if remainder_batch.num_rows() == when_match_count {
+                return Ok(ColumnarValue::Array(current_value));
+            }
+
+            // Clear the positions in 'remainder scatter' for which we just evaluated a value
+            remainder_scatter = and_not(&remainder_scatter, then_merge)?;
+
+            // Finally, prepare the remainder batch for the next branch
+            let next_selection = not(&when_value)?;
+            remainder_batch =
+                Cow::Owned(filter_record_batch(&remainder_batch, &next_selection)?);
         }
 
+        // If we reached this point, some rows were left unmatched.
+        // Check if those need to be evaluated using the 'else' expression.
         if let Some(e) = self.else_expr() {
-            if remainder_count > 0 {
-                // keep `else_expr`'s data type and return type consistent
-                let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-                let else_ = expr
-                    .evaluate_selection(batch, &remainder)?
-                    .into_array(batch.num_rows())?;
-                current_value = zip(&remainder, &else_, &current_value)?;
-            }
+            // keep `else_expr`'s data type and return type consistent
+            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
+            let else_value = expr.evaluate(&remainder_batch)?;
+            current_value = merge_result(&current_value, else_value, &remainder_scatter)?;
         }
 
         Ok(ColumnarValue::Array(current_value))
