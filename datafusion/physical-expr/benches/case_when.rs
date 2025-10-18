@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::builder::StringBuilder;
-use arrow::array::{Array, ArrayRef, Int32Array};
+use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder};
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -37,25 +36,22 @@ fn make_x_cmp_y(
 /// Columns are named `c<i>` where `i` is the column index.
 ///
 /// The minimum value for `column_count` is `3`.
-/// `c0` contains incrementing int32 values
-/// `c1` contains strings with one null inserted every 7 rows
-/// `c2` contains strings with one null inserted every 9 rows
-/// `c3` to `cn`, is present, contain unspecified int32 values
+/// `c1` contains incrementing int32 values
+/// `c2` contains int32 values in blocks of 1000 that increment by 1000
+/// `c3` contains int32 values with one null inserted every 9 rows
+/// `c4` to `cn`, is present, contain unspecified int32 values
 fn make_batch(row_count: usize, column_count: usize) -> RecordBatch {
     assert!(column_count >= 3);
 
-    let mut c2 = StringBuilder::new();
-    let mut c3 = StringBuilder::new();
+    let mut c2 = Int32Builder::new();
+    let mut c3 = Int32Builder::new();
     for i in 0..row_count {
-        if i % 7 == 0 {
-            c2.append_null();
-        } else {
-            c2.append_value(format!("string {i}"));
-        }
+        c2.append_value(i as i32 / 1000 * 1000);
+
         if i % 9 == 0 {
             c3.append_null();
         } else {
-            c3.append_value(format!("other string {i}"));
+            c3.append_value(i as i32);
         }
     }
     let c1 = Arc::new(Int32Array::from_iter_values(0..row_count as i32));
@@ -193,10 +189,38 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
 
     // Many when/then branches where all but the first few are effectively unreachable
     c.bench_function(format!("case_when {}x{}: CASE WHEN c1 < 0 THEN 0 WHEN c1 < 1000 THEN 1 ... WHEN c1 < n * 1000 THEN n ELSE n + 1 END", batch.num_rows(), batch.num_columns()).as_str(), |b| {
-        let when_thens = (0..batch.num_rows() as i32).map(|i| (make_x_cmp_y(&c1, Operator::Eq, i * 1000), lit(i))).collect();
+        let when_thens = (0..batch.num_rows() as i32).map(|i| (make_x_cmp_y(&c1, Operator::Lt, i * 1000), lit(i))).collect();
         let expr = Arc::new(
             case(
                 None,
+                when_thens,
+                Some(lit(batch.num_rows() as i32))
+            )
+                .unwrap(),
+        );
+        b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
+    });
+
+    // Many when/then branches where all are effectively reachable
+    c.bench_function(format!("case_when {}x{}: CASE c1 WHEN 0 THEN 0 WHEN 1 THEN 1 ... WHEN n THEN n ELSE n + 1 END", batch.num_rows(), batch.num_columns()).as_str(), |b| {
+        let when_thens = (0..batch.num_rows() as i32).map(|i| (lit(i), lit(i))).collect();
+        let expr = Arc::new(
+            case(
+                Some(Arc::clone(&c1)),
+                when_thens,
+                Some(lit(batch.num_rows() as i32))
+            )
+                .unwrap(),
+        );
+        b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
+    });
+
+    // Many when/then branches where all but the first few are effectively unreachable
+    c.bench_function(format!("case_when {}x{}: CASE c2 WHEN 0 THEN 0 WHEN 1000 THEN 1 ... WHEN n * 1000 THEN n ELSE n + 1 END", batch.num_rows(), batch.num_columns()).as_str(), |b| {
+        let when_thens = (0..batch.num_rows() as i32).map(|i| (lit(i * 1000), lit(i))).collect();
+        let expr = Arc::new(
+            case(
+                Some(Arc::clone(&c2)),
                 when_thens,
                 Some(lit(batch.num_rows() as i32))
             )
