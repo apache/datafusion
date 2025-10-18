@@ -113,6 +113,7 @@ To get started, see
    user-guide/crate-configuration
    user-guide/cli/index
    user-guide/dataframe
+   user-guide/arrow-introduction
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
