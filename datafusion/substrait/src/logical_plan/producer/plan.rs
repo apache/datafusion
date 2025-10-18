@@ -36,7 +36,7 @@ pub fn to_substrait_plan(
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
             input: Some(*producer.handle_plan(plan)?),
-            names: to_substrait_named_struct(plan.schema())?.names,
+            names: to_substrait_named_struct(&mut producer, plan.schema())?.names,
         })),
     }];
 
