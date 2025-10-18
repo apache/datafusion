@@ -650,6 +650,8 @@ impl AggregateFunctionExpr {
         Some(AggregateFunctionExpr {
             fun: self.fun.clone(),
             args,
+            // TODO: need to align arg_fields here with new args
+            //       https://github.com/apache/datafusion/issues/18149
             arg_fields: self.arg_fields.clone(),
             return_field: Arc::clone(&self.return_field),
             name: self.name.clone(),
