@@ -69,7 +69,5 @@ SELECT substr(str => 'hello', str => 'world', start_pos => 1);
 
 # Error: wrong number of arguments
 # This query provides only 1 argument but substr requires 2 or 3
-# The error message should show parameter names like "substr(str, start_pos)"
-# instead of generic types like "substr(Any, Any)"
-query error DataFusion error: Error during planning: Internal error: Function 'substr' failed to match any signature
+query error DataFusion error: Error during planning: Execution error: Function 'substr' user-defined coercion failed with "Error during planning: The substr function requires 2 or 3 arguments, but got 1."
 SELECT substr(str => 'hello world');

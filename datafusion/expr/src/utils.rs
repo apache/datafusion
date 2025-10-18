@@ -1737,20 +1737,17 @@ mod tests {
         // Error message should contain parameter names
         assert!(
             error_msg.contains("str, start_pos"),
-            "Expected 'str, start_pos' in error message, got: {}",
-            error_msg
+            "Expected 'str, start_pos' in error message, got: {error_msg}"
         );
         assert!(
             error_msg.contains("str, start_pos, length"),
-            "Expected 'str, start_pos, length' in error message, got: {}",
-            error_msg
+            "Expected 'str, start_pos, length' in error message, got: {error_msg}"
         );
 
         // Should NOT contain generic "Any" types
         assert!(
             !error_msg.contains("Any, Any"),
-            "Should not contain 'Any, Any', got: {}",
-            error_msg
+            "Should not contain 'Any, Any', got: {error_msg}"
         );
     }
 
@@ -1770,8 +1767,7 @@ mod tests {
         // Should contain generic "Any" types when no parameter names
         assert!(
             error_msg.contains("Any, Any"),
-            "Expected 'Any, Any' without parameter names, got: {}",
-            error_msg
+            "Expected 'Any, Any' without parameter names, got: {error_msg}"
         );
     }
 }
