@@ -274,7 +274,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
-            let (args, arg_names) = self.function_args_to_expr_with_names(args, schema, planner_context)?;
+            let (args, arg_names) =
+                self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
             // Resolve named arguments if any are present
             let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
@@ -646,7 +647,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let (expr, _) = self.sql_fn_arg_to_logical_expr_with_name(sql, schema, planner_context)?;
+        let (expr, _) =
+            self.sql_fn_arg_to_logical_expr_with_name(sql, schema, planner_context)?;
         Ok(expr)
     }
 
@@ -729,7 +731,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<(Vec<Expr>, Vec<Option<String>>)> {
         let results: Result<Vec<(Expr, Option<String>)>> = args
             .into_iter()
-            .map(|a| self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context))
+            .map(|a| {
+                self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
+            })
             .collect();
 
         let pairs = results?;

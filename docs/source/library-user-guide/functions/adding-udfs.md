@@ -605,6 +605,14 @@ SELECT substr('hello', start_pos => 2, length => 3);  -- Valid
 To support named arguments in your UDF, add parameter names to your function's signature using `.with_parameter_names()`:
 
 ```rust
+# use arrow::datatypes::DataType;
+# use datafusion_expr::{Signature, Volatility};
+#
+# #[derive(Debug)]
+# struct MyFunction {
+#     signature: Signature,
+# }
+#
 impl MyFunction {
     fn new() -> Self {
         Self {
@@ -684,8 +692,8 @@ SELECT power(2.0, exponent => 3.0);
 
 When a function call fails due to incorrect arguments, DataFusion will show the parameter names in error messages to help users:
 
-```
-No function matches the given name and argument types 'substr(Utf8)'.
+```text
+No function matches the given name and argument types substr(Utf8).
     Candidate functions:
     substr(str, start_pos)
     substr(str, start_pos, length)

@@ -960,8 +960,8 @@ mod tests {
 
 /// Argument resolution logic for named function parameters
 pub mod arguments {
-    use datafusion_common::{plan_err, Result};
     use crate::Expr;
+    use datafusion_common::{plan_err, Result};
 
     /// Resolves function arguments, handling named and positional notation.
     ///
@@ -983,10 +983,10 @@ pub mod arguments {
     /// A vector of expressions in the correct order matching the parameter names
     ///
     /// # Examples
-    /// ```rust,ignore
-    /// // Given parameters ["a", "b", "c"]
-    /// // And call: func(10, c => 30, b => 20)
-    /// // Returns: [Expr(10), Expr(20), Expr(30)]
+    /// ```text
+    /// Given parameters ["a", "b", "c"]
+    /// And call: func(10, c => 30, b => 20)
+    /// Returns: [Expr(10), Expr(20), Expr(30)]
     /// ```
     pub fn resolve_function_arguments(
         param_names: &[String],
@@ -1056,10 +1056,8 @@ pub mod arguments {
         for (i, (arg, arg_name)) in args.into_iter().zip(arg_names).enumerate() {
             if let Some(name) = arg_name {
                 // Named argument - find its position in param_names
-                let param_index = param_names
-                    .iter()
-                    .position(|p| p == &name)
-                    .ok_or_else(|| {
+                let param_index =
+                    param_names.iter().position(|p| p == &name).ok_or_else(|| {
                         datafusion_common::plan_datafusion_err!(
                             "Unknown parameter name '{}'. Valid parameters are: [{}]",
                             name,
@@ -1069,10 +1067,7 @@ pub mod arguments {
 
                 // Check if this parameter was already assigned
                 if assigned[param_index] {
-                    return plan_err!(
-                        "Parameter '{}' specified multiple times",
-                        name
-                    );
+                    return plan_err!("Parameter '{}' specified multiple times", name);
                 }
 
                 result[param_index] = Some(arg);
@@ -1096,15 +1091,16 @@ pub mod arguments {
         let required_count = args_len;
         for i in 0..required_count {
             if !assigned[i] {
-                return plan_err!(
-                    "Missing required parameter '{}'",
-                    param_names[i]
-                );
+                return plan_err!("Missing required parameter '{}'", param_names[i]);
             }
         }
 
         // Return only the assigned parameters (handles optional trailing parameters)
-        Ok(result.into_iter().take(required_count).map(|e| e.unwrap()).collect())
+        Ok(result
+            .into_iter()
+            .take(required_count)
+            .map(|e| e.unwrap())
+            .collect())
     }
 
     #[cfg(test)]
@@ -1119,7 +1115,9 @@ pub mod arguments {
             let args = vec![lit(1), lit("hello")];
             let arg_names = vec![None, None];
 
-            let result = resolve_function_arguments(&param_names, args.clone(), arg_names).unwrap();
+            let result =
+                resolve_function_arguments(&param_names, args.clone(), arg_names)
+                    .unwrap();
             assert_eq!(result.len(), 2);
         }
 
@@ -1130,7 +1128,8 @@ pub mod arguments {
             let args = vec![lit(1), lit("hello")];
             let arg_names = vec![Some("a".to_string()), Some("b".to_string())];
 
-            let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+            let result =
+                resolve_function_arguments(&param_names, args, arg_names).unwrap();
             assert_eq!(result.len(), 2);
         }
 
@@ -1146,7 +1145,8 @@ pub mod arguments {
                 Some("b".to_string()),
             ];
 
-            let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+            let result =
+                resolve_function_arguments(&param_names, args, arg_names).unwrap();
 
             // Should be reordered to [a, b, c] = [1, "hello", 3.0]
             assert_eq!(result.len(), 3);
@@ -1163,7 +1163,8 @@ pub mod arguments {
             let args = vec![lit(1), lit(3.0), lit("hello")];
             let arg_names = vec![None, Some("c".to_string()), Some("b".to_string())];
 
-            let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+            let result =
+                resolve_function_arguments(&param_names, args, arg_names).unwrap();
 
             // Should be reordered to [a, b, c] = [1, "hello", 3.0]
             assert_eq!(result.len(), 3);
@@ -1198,7 +1199,10 @@ pub mod arguments {
 
             let result = resolve_function_arguments(&param_names, args, arg_names);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Unknown parameter"));
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown parameter"));
         }
 
         #[test]
@@ -1227,7 +1231,10 @@ pub mod arguments {
 
             let result = resolve_function_arguments(&param_names, args, arg_names);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Missing required parameter"));
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required parameter"));
         }
     }
 }
