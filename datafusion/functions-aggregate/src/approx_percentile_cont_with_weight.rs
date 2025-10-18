@@ -220,7 +220,28 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
                     Arc::clone(&acc_args.exprs[2]), // percentile
                 ]
             },
-            ..acc_args
+            expr_fields: if acc_args.exprs.len() == 4 {
+                &[
+                    Arc::clone(&acc_args.expr_fields[0]), // value
+                    Arc::clone(&acc_args.expr_fields[2]), // percentile
+                    Arc::clone(&acc_args.expr_fields[3]), // centroids
+                ]
+            } else {
+                &[
+                    Arc::clone(&acc_args.expr_fields[0]), // value
+                    Arc::clone(&acc_args.expr_fields[2]), // percentile
+                ]
+            },
+            // Unchanged below; we list each field explicitly in case we ever add more
+            // fields to AccumulatorArgs making it easier to see if changes are also
+            // needed here.
+            return_field: acc_args.return_field,
+            schema: acc_args.schema,
+            ignore_nulls: acc_args.ignore_nulls,
+            order_bys: acc_args.order_bys,
+            is_reversed: acc_args.is_reversed,
+            name: acc_args.name,
+            is_distinct: acc_args.is_distinct,
         };
         let approx_percentile_cont_accumulator =
             self.approx_percentile_cont.create_accumulator(sub_args)?;
