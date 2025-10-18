@@ -18,6 +18,7 @@
 //! This module provides a builder for creating LogicalPlans
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
@@ -1517,37 +1518,49 @@ impl ValuesFields {
     }
 }
 
-// `name_map` tracks a mapping between a field name and the number of appearances of that field.
-//
-// Some field names might already come to this function with the count (number of times it appeared)
-// as a suffix e.g. id:1, so there's still a chance of name collisions, for example,
-// if these three fields passed to this function: "col:1", "col" and "col", the function
-// would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
-// that's why we need the `seen` set, so the fields are always unique.
-//
-pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
-    let mut name_map = HashMap::new();
-    let mut seen: HashSet<String> = HashSet::new();
+/// Returns aliases to make field names unique.
+///
+/// Returns a vector of optional aliases, one per input field. `None` means keep the original name,
+/// `Some(alias)` means rename to the alias to ensure uniqueness.
+///
+/// Used when creating [`SubqueryAlias`] or similar operations that strip table qualifiers but need
+/// to maintain unique column names.
+///
+/// # Example
+/// Input fields: `[a, a, b, b, a, a:1]` ([`DFSchema`] valid when duplicate fields have different qualifiers)
+/// Returns: `[None, Some("a:1"), None, Some("b:1"), Some("a:2"), Some("a:1:1")]`
+pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
+    // Some field names might already come to this function with the count (number of times it appeared)
+    // as a suffix e.g. id:1, so there's still a chance of name collisions, for example,
+    // if these three fields passed to this function: "col:1", "col" and "col", the function
+    // would rename them to -> col:1, col, col:1 causing a posterior error when building the DFSchema.
+    // That's why we need the `seen` set, so the fields are always unique.
+
+    // Tracks a mapping between a field name and the number of appearances of that field.
+    let mut name_map = HashMap::<&str, usize>::new();
+    // Tracks all the fields and aliases that were previously seen.
+    let mut seen = HashSet::<Cow<String>>::new();
 
     fields
-        .into_iter()
+        .iter()
         .map(|field| {
-            let base_name = field.name();
-            let count = name_map.entry(base_name.clone()).or_insert(0);
-            let mut new_name = base_name.clone();
+            let original_name = field.name();
+            let mut name = Cow::Borrowed(original_name);
 
-            // Loop until we find a name that hasn't been used
-            while seen.contains(&new_name) {
+            let count = name_map.entry(original_name).or_insert(0);
+
+            // Loop until we find a name that hasn't been used.
+            while seen.contains(&name) {
                 *count += 1;
-                new_name = format!("{base_name}:{count}");
+                name = Cow::Owned(format!("{original_name}:{count}"));
             }
 
-            seen.insert(new_name.clone());
+            seen.insert(name.clone());
 
-            let mut modified_field =
-                Field::new(&new_name, field.data_type().clone(), field.is_nullable());
-            modified_field.set_metadata(field.metadata().clone());
-            modified_field
+            match name {
+                Cow::Borrowed(_) => None,
+                Cow::Owned(alias) => Some(alias),
+            }
         })
         .collect()
 }
@@ -2676,34 +2689,6 @@ mod tests {
     }
 
     #[test]
-    fn test_change_redundant_column() -> Result<()> {
-        let t1_field_1 = Field::new("a", DataType::Int32, false);
-        let t2_field_1 = Field::new("a", DataType::Int32, false);
-        let t2_field_3 = Field::new("a", DataType::Int32, false);
-        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
-        let t1_field_2 = Field::new("b", DataType::Int32, false);
-        let t2_field_2 = Field::new("b", DataType::Int32, false);
-
-        let field_vec = vec![
-            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
-        ];
-        let remove_redundant = change_redundant_column(&Fields::from(field_vec));
-
-        assert_eq!(
-            remove_redundant,
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("a:1", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("b:1", DataType::Int32, false),
-                Field::new("a:2", DataType::Int32, false),
-                Field::new("a:1:1", DataType::Int32, false),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn plan_builder_from_logical_plan() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
@@ -2786,5 +2771,40 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_unique_field_aliases() {
+        let t1_field_1 = Field::new("a", DataType::Int32, false);
+        let t2_field_1 = Field::new("a", DataType::Int32, false);
+        let t2_field_3 = Field::new("a", DataType::Int32, false);
+        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
+        let t1_field_2 = Field::new("b", DataType::Int32, false);
+        let t2_field_2 = Field::new("b", DataType::Int32, false);
+
+        let fields = vec![
+            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
+        ];
+        let fields = Fields::from(fields);
+
+        let remove_redundant = unique_field_aliases(&fields);
+
+        // Input [a, a, b, b, a, a:1] becomes [None, a:1, None, b:1, a:2, a:1:1]
+        // First occurrence of each field name keeps original name (None), duplicates get
+        // incremental suffixes (:1, :2, etc.).
+        // Crucially in this case the 2nd occurrence of `a` gets rewritten to `a:1` which later
+        // conflicts with the last column which is _actually_ called `a:1` so we need to rename it
+        // as well to `a:1:1`.
+        assert_eq!(
+            remove_redundant,
+            vec![
+                None,
+                Some("a:1".to_string()),
+                None,
+                Some("b:1".to_string()),
+                Some("a:2".to_string()),
+                Some("a:1:1".to_string()),
+            ]
+        );
     }
 }

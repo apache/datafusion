@@ -61,9 +61,8 @@ use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
-};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::TableReference;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
@@ -83,7 +82,7 @@ use datafusion_expr::{
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::{Column, Literal};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
@@ -93,7 +92,6 @@ use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_sql::TableReference;
 use sqlparser::ast::NullTreatment;
 
 use async_trait::async_trait;
@@ -2185,11 +2183,7 @@ impl DefaultPhysicalPlanner {
                 let physical_expr =
                     self.create_physical_expr(e, input_logical_schema, session_state);
 
-                // Check for possible column name mismatches
-                let final_physical_expr =
-                    maybe_fix_physical_column_name(physical_expr, &input_physical_schema);
-
-                tuple_err((final_physical_expr, physical_name))
+                tuple_err((physical_expr, physical_name))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -2295,47 +2289,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
-// Handle the case where the name of a physical column expression does not match the corresponding physical input fields names.
-// Physical column names are derived from the physical schema, whereas physical column expressions are derived from the logical column names.
-//
-// This is a special case that applies only to column expressions. Logical plans may slightly modify column names by appending a suffix (e.g., using ':'),
-// to avoid duplicates—since DFSchemas do not allow duplicate names. For example: `count(Int64(1)):1`.
-fn maybe_fix_physical_column_name(
-    expr: Result<Arc<dyn PhysicalExpr>>,
-    input_physical_schema: &SchemaRef,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let Ok(expr) = expr else { return expr };
-    expr.transform_down(|node| {
-        if let Some(column) = node.as_any().downcast_ref::<Column>() {
-            let idx = column.index();
-            let physical_field = input_physical_schema.field(idx);
-            let expr_col_name = column.name();
-            let physical_name = physical_field.name();
-
-            if expr_col_name != physical_name {
-                // handle edge cases where the physical_name contains ':'.
-                let colon_count = physical_name.matches(':').count();
-                let mut splits = expr_col_name.match_indices(':');
-                let split_pos = splits.nth(colon_count);
-
-                if let Some((i, _)) = split_pos {
-                    let base_name = &expr_col_name[..i];
-                    if base_name == physical_name {
-                        let updated_column = Column::new(physical_name, idx);
-                        return Ok(Transformed::yes(Arc::new(updated_column)));
-                    }
-                }
-            }
-
-            // If names already match or fix is not possible, just leave it as it is
-            Ok(Transformed::no(node))
-        } else {
-            Ok(Transformed::no(node))
-        }
-    })
-    .data()
-}
-
 struct OptimizationInvariantChecker<'a> {
     rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>,
 }
@@ -2439,12 +2392,10 @@ mod tests {
     };
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
-    use datafusion_expr::{
-        col, lit, LogicalPlanBuilder, Operator, UserDefinedLogicalNodeCore,
-    };
+    use datafusion_expr::builder::subquery_alias;
+    use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
     use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
-    use datafusion_physical_expr::expressions::{BinaryExpr, IsNotNullExpr};
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
@@ -3005,71 +2956,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_maybe_fix_colon_in_physical_name() {
-        // The physical schema has a field name with a colon
-        let schema = Schema::new(vec![Field::new("metric:avg", DataType::Int32, false)]);
-        let schema_ref: SchemaRef = Arc::new(schema);
-
-        // What might happen after deduplication
-        let logical_col_name = "metric:avg:1";
-        let expr_with_suffix =
-            Arc::new(Column::new(logical_col_name, 0)) as Arc<dyn PhysicalExpr>;
-        let expr_result = Ok(expr_with_suffix);
-
-        // Call function under test
-        let fixed_expr =
-            maybe_fix_physical_column_name(expr_result, &schema_ref).unwrap();
-
-        // Downcast back to Column so we can check the name
-        let col = fixed_expr
-            .as_any()
-            .downcast_ref::<Column>()
-            .expect("Column");
-
-        assert_eq!(col.name(), "metric:avg");
-    }
-
-    #[tokio::test]
-    async fn test_maybe_fix_nested_column_name_with_colon() {
-        let schema = Schema::new(vec![Field::new("column", DataType::Int32, false)]);
-        let schema_ref: SchemaRef = Arc::new(schema);
-
-        // Construct the nested expr
-        let col_expr = Arc::new(Column::new("column:1", 0)) as Arc<dyn PhysicalExpr>;
-        let is_not_null_expr = Arc::new(IsNotNullExpr::new(col_expr.clone()));
-
-        // Create a binary expression and put the column inside
-        let binary_expr = Arc::new(BinaryExpr::new(
-            is_not_null_expr.clone(),
-            Operator::Or,
-            is_not_null_expr.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let fixed_expr =
-            maybe_fix_physical_column_name(Ok(binary_expr), &schema_ref).unwrap();
-
-        let bin = fixed_expr
-            .as_any()
-            .downcast_ref::<BinaryExpr>()
-            .expect("Expected BinaryExpr");
-
-        // Check that both sides where renamed
-        for expr in &[bin.left(), bin.right()] {
-            let is_not_null = expr
-                .as_any()
-                .downcast_ref::<IsNotNullExpr>()
-                .expect("Expected IsNotNull");
-
-            let col = is_not_null
-                .arg()
-                .as_any()
-                .downcast_ref::<Column>()
-                .expect("Expected Column");
-
-            assert_eq!(col.name(), "column");
-        }
-    }
     struct ErrorExtensionPlanner {}
 
     #[async_trait]
@@ -3563,6 +3449,63 @@ digraph {
         assert!(expected_err.to_string().contains(
             "extension node failed it's user-defined executable-invariant check"
         ));
+
+        Ok(())
+    }
+
+    // Reproducer for DataFusion issue #17405:
+    //
+    // The following SQL is semantically invalid. Notably, the `SELECT left_table.a, right_table.a`
+    // clause is missing from the explicit logical plan:
+    //
+    // SELECT a FROM (
+    //       -- SELECT left_table.a, right_table.a
+    //       FROM left_table
+    //       FULL JOIN right_table ON left_table.a = right_table.a
+    // ) AS alias
+    // GROUP BY a;
+    //
+    // As a result, the variables within `alias` subquery are not properly distinguished, which
+    // leads to a bug for logical and physical planning.
+    //
+    // The fix is to implicitly insert a Projection node to represent the missing SELECT clause to
+    // ensure each field is correctly aliased to a unique name when the SubqueryAlias node is added.
+    #[tokio::test]
+    async fn subquery_alias_confusing_the_optimizer() -> Result<()> {
+        let state = make_session_state();
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Arc::new(schema);
+
+        let table = MemTable::try_new(schema.clone(), vec![vec![]])?;
+        let table = Arc::new(table);
+
+        let source = DefaultTableSource::new(table);
+        let source = Arc::new(source);
+
+        let left = LogicalPlanBuilder::scan("left", source.clone(), None)?;
+        let right = LogicalPlanBuilder::scan("right", source, None)?.build()?;
+
+        let join_keys = (
+            vec![datafusion_common::Column::new(Some("left"), "a")],
+            vec![datafusion_common::Column::new(Some("right"), "a")],
+        );
+
+        let join = left.join(right, JoinType::Full, join_keys, None)?.build()?;
+
+        let alias = subquery_alias(join, "alias")?;
+
+        let planner = DefaultPhysicalPlanner::default();
+
+        let logical_plan = LogicalPlanBuilder::new(alias)
+            .aggregate(vec![col("a:1")], Vec::<Expr>::new())?
+            .build()?;
+        let _physical_plan = planner.create_physical_plan(&logical_plan, &state).await?;
+
+        let optimized_logical_plan = state.optimize(&logical_plan)?;
+        let _optimized_physical_plan = planner
+            .create_physical_plan(&optimized_logical_plan, &state)
+            .await?;
 
         Ok(())
     }
