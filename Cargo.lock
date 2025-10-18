@@ -2754,6 +2754,7 @@ dependencies = [
  "substrait",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
