@@ -23,8 +23,7 @@ use self::to_proto::{serialize_partitioning, serialize_physical_expr};
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr, parse_protobuf_file_scan_config,
-    parse_protobuf_file_scan_schema, parse_record_batches,
+    parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
@@ -40,65 +39,64 @@ use crate::protobuf::{
 };
 use crate::{convert_required, into_required};
 
-use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
-use datafusion::catalog::memory::MemorySourceConfig;
-use datafusion::datasource::file_format::csv::CsvSink;
-use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-use datafusion::datasource::file_format::json::JsonSink;
-#[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::ParquetSink;
-#[cfg(feature = "avro")]
-use datafusion::datasource::physical_plan::AvroSource;
-#[cfg(feature = "parquet")]
-use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::physical_plan::{
-    CsvSource, FileScanConfig, FileScanConfigBuilder, FileSource, JsonSource,
-};
-use datafusion::datasource::sink::DataSinkExec;
-use datafusion::datasource::source::{DataSource, DataSourceExec};
-use datafusion::execution::{FunctionRegistry, TaskContext};
-use datafusion::functions_table::generate_series::{
-    Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
-};
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
-use datafusion::physical_plan::aggregates::AggregateMode;
-use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
-use datafusion::physical_plan::analyze::AnalyzeExec;
-use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::coop::CooperativeExec;
-use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::explain::ExplainExec;
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion::physical_plan::joins::{
-    CrossJoinExec, NestedLoopJoinExec, SortMergeJoinExec, StreamJoinPartitionMode,
-    SymmetricHashJoinExec,
-};
-use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
-use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::memory::LazyMemoryExec;
-use datafusion::physical_plan::metrics::MetricType;
-use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
-use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
-use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
-use datafusion::physical_plan::{
-    ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
-};
-use datafusion_common::config::TableParquetOptions;
+use arrow::compute::SortOptions;
+use arrow::datatypes::{IntervalMonthDayNanoType, SchemaRef};
+use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
 };
+#[cfg(feature = "parquet")]
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::sink::DataSinkExec;
+use datafusion_datasource::source::{DataSource, DataSourceExec};
+#[cfg(feature = "avro")]
+use datafusion_datasource_avro::source::AvroSource;
+use datafusion_datasource_csv::file_format::CsvSink;
+use datafusion_datasource_csv::source::CsvSource;
+use datafusion_datasource_json::file_format::JsonSink;
+use datafusion_datasource_json::source::JsonSource;
+#[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::file_format::ParquetSink;
+#[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::source::ParquetSource;
+use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_functions_table::generate_series::{
+    Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
+};
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
+use datafusion_physical_plan::aggregates::AggregateMode;
+use datafusion_physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+use datafusion_physical_plan::analyze::AnalyzeExec;
+use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::coop::CooperativeExec;
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::explain::ExplainExec;
+use datafusion_physical_plan::expressions::PhysicalSortExpr;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::joins::{
+    CrossJoinExec, NestedLoopJoinExec, SortMergeJoinExec, StreamJoinPartitionMode,
+    SymmetricHashJoinExec,
+};
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::memory::LazyMemoryExec;
+use datafusion_physical_plan::metrics::MetricType;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
+use datafusion_physical_plan::unnest::{ListUnnest, UnnestExec};
+use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
+use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr};
 
 use prost::bytes::BufMut;
 use prost::Message;
@@ -662,8 +660,9 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
-            let schema =
-                parse_protobuf_file_scan_schema(scan.base_conf.as_ref().unwrap())?;
+            let schema = from_proto::parse_protobuf_file_scan_schema(
+                scan.base_conf.as_ref().unwrap(),
+            )?;
 
             // Check if there's a projection and use projected schema for predicate parsing
             let base_conf = scan.base_conf.as_ref().unwrap();
@@ -674,7 +673,7 @@ impl protobuf::PhysicalPlanNode {
                     .iter()
                     .map(|&i| schema.field(i as usize).clone())
                     .collect();
-                Arc::new(Schema::new(projected_fields))
+                Arc::new(arrow::datatypes::Schema::new(projected_fields))
             } else {
                 schema
             };
@@ -691,7 +690,7 @@ impl protobuf::PhysicalPlanNode {
                     )
                 })
                 .transpose()?;
-            let mut options = TableParquetOptions::default();
+            let mut options = datafusion_common::config::TableParquetOptions::default();
 
             if let Some(table_options) = scan.parquet_options.as_ref() {
                 options = table_options.try_into()?;
@@ -1694,6 +1693,7 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
+    #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
     fn try_into_parquet_sink_physical_plan(
         &self,
         sink: &protobuf::ParquetSinkExecNode,

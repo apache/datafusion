@@ -71,6 +71,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue, TableReference,
 };
+use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, NullTreatment,
@@ -153,8 +154,11 @@ async fn roundtrip_logical_plan() -> Result<()> {
     });
     let extension_codec = TopKExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&topk_plan, &extension_codec)?;
-    let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)?;
+    let logical_round_trip = logical_plan_from_bytes_with_extension_codec(
+        &bytes,
+        &ctx.task_ctx(),
+        &extension_codec,
+    )?;
     assert_eq!(format!("{topk_plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }
@@ -177,7 +181,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Extension> {
         not_impl_err!("No extension codec provided")
     }
@@ -191,7 +195,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         buf: &[u8],
         table_ref: &TableReference,
         schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>> {
         let msg = TestTableProto::decode(buf)
             .map_err(|_| internal_datafusion_err!("Error decoding test table"))?;
@@ -240,7 +244,7 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let scan = ctx.table("t").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes_with_extension_codec(&scan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{scan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }
@@ -266,7 +270,7 @@ async fn roundtrip_custom_memory_tables() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     Ok(())
@@ -293,7 +297,7 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
     let plan = ctx.state().create_logical_plan(query).await?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     // Use exact matching to verify everything. Make sure during round-trip,
     // information like constraints, column defaults, and other aspects of the plan are preserved.
     assert_eq!(plan, logical_round_trip);
@@ -328,7 +332,7 @@ async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -354,7 +358,7 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -380,7 +384,7 @@ async fn roundtrip_logical_plan_sort() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -412,7 +416,7 @@ async fn roundtrip_logical_plan_dml() -> Result<()> {
     for query in queries {
         let plan = ctx.sql(query).await?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
-        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
         assert_eq!(
             format!("{plan}"),
             format!("{logical_round_trip}"),
@@ -442,7 +446,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -482,7 +486,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let codec = ParquetLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
@@ -514,7 +518,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
     let codec = ArrowLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
@@ -561,7 +565,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
@@ -628,7 +632,7 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
     let codec = JsonLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
@@ -700,7 +704,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
     let codec = ParquetLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
@@ -787,7 +791,7 @@ async fn roundtrip_logical_plan_distinct_on() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -813,7 +817,7 @@ async fn roundtrip_single_count_distinct() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -826,7 +830,7 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
         .await?;
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
@@ -851,7 +855,7 @@ async fn roundtrip_logical_plan_unnest() -> Result<()> {
     let query = "SELECT unnest(b) FROM t1";
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
@@ -1039,7 +1043,7 @@ async fn roundtrip_expr_api() -> Result<()> {
     // ensure expressions created with the expr api can be round tripped
     let plan = table.select(expr_list)?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
@@ -1059,13 +1063,13 @@ async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
         .into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     // DROP
     let plan = ctx.sql("DROP VIEW view_t1").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -1160,7 +1164,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         &self,
         buf: &[u8],
         inputs: &[LogicalPlan],
-        ctx: &SessionContext,
+        ctx: &TaskContext,
     ) -> Result<Extension> {
         if let Some((input, _)) = inputs.split_first() {
             let proto = proto::TopKPlanProto::decode(buf).map_err(|e| {
@@ -1207,7 +1211,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>> {
         internal_err!("unsupported plan type")
     }
@@ -1230,7 +1234,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Extension> {
         not_impl_err!("No extension codec provided")
     }
@@ -1244,7 +1248,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>> {
         internal_err!("unsupported plan type")
     }
@@ -2269,7 +2273,7 @@ fn roundtrip_scalar_udf() {
             &self,
             _buf: &[u8],
             _inputs: &[LogicalPlan],
-            _ctx: &SessionContext,
+            _ctx: &TaskContext,
         ) -> Result<Extension> {
             not_impl_err!("LogicalExtensionCodec is not provided")
         }
@@ -2283,7 +2287,7 @@ fn roundtrip_scalar_udf() {
             _buf: &[u8],
             _table_ref: &TableReference,
             _schema: SchemaRef,
-            _ctx: &SessionContext,
+            _ctx: &TaskContext,
         ) -> Result<Arc<dyn TableProvider>> {
             not_impl_err!("LogicalExtensionCodec is not provided")
         }
@@ -2677,7 +2681,7 @@ async fn roundtrip_recursive_query() {
     let bytes = logical_plan_to_bytes(&plan).unwrap();
 
     let ctx = SessionContext::new();
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx()).unwrap();
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     let dataframe = ctx.execute_logical_plan(logical_round_trip).await.unwrap();
     let output_round_trip = dataframe.collect().await.unwrap();
@@ -2708,7 +2712,7 @@ async fn roundtrip_union_query() -> Result<()> {
         .await?;
     ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     // proto deserialization only supports 2-way union, hence this plan has nested unions
     // apply the flatten unions optimizer rule to be able to compare
     let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
@@ -2745,7 +2749,7 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
         .clone();
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
+    let new_plan = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(plan, new_plan);
     Ok(())
 }
@@ -2782,7 +2786,7 @@ async fn roundtrip_custom_listing_tables_schema_table_scan_projection() -> Resul
     .build()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
+    let new_plan = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
 
     assert_eq!(plan, new_plan);
     Ok(())
@@ -2796,7 +2800,7 @@ async fn roundtrip_arrow_scan() -> Result<()> {
         .await?
         .into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }

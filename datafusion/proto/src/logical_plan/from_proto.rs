@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, NullEquality,
     RecursionUnnestOption, Result, ScalarValue, TableReference, UnnestOptions,
 };
+use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};

@@ -61,7 +61,7 @@ fn json_to_plan() {
 
     let input = r#"{"emptyRelation":{}}"#.to_string();
     let ctx = SessionContext::new();
-    let actual = logical_plan_from_json(&input, &ctx).unwrap();
+    let actual = logical_plan_from_json(&input, &ctx.task_ctx()).unwrap();
     let result = matches!(actual, LogicalPlan::EmptyRelation(_));
     assert!(result, "Should parse empty relation");
 }
