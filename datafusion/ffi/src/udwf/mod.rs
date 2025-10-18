@@ -204,6 +204,12 @@ impl Clone for FFI_WindowUDF {
     }
 }
 
+impl From<&Arc<WindowUDF>> for FFI_WindowUDF {
+    fn from(udwf: &Arc<WindowUDF>) -> Self {
+        Arc::clone(udwf).into()
+    }
+}
+
 impl From<Arc<WindowUDF>> for FFI_WindowUDF {
     fn from(udf: Arc<WindowUDF>) -> Self {
         let name = udf.name().into();

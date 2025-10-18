@@ -37,15 +37,12 @@ use tokio::runtime::Handle;
 
 use crate::{
     arrow_wrappers::WrappedSchema,
-    df_result, rresult_return,
-    session_config::ForeignSessionConfig,
-    table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
-};
-
-use super::{
+    df_result,
     execution_plan::{FFI_ExecutionPlan, ForeignExecutionPlan},
     insert_op::FFI_InsertOp,
-    session_config::FFI_SessionConfig,
+    rresult_return,
+    session::config::{FFI_SessionConfig, ForeignSessionConfig},
+    table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;

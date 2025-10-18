@@ -15,63 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::session::config::FFI_SessionConfig;
-use crate::udaf::FFI_AggregateUDF;
-use crate::udf::FFI_ScalarUDF;
-use crate::udwf::FFI_WindowUDF;
-use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
+use crate::session::config::{FFI_SessionConfig, ForeignSessionConfig};
+use crate::udaf::{FFI_AggregateUDF, ForeignAggregateUDF};
+use crate::udf::{FFI_ScalarUDF, ForeignScalarUDF};
+use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 use abi_stable::pmr::ROption;
-use abi_stable::std_types::{RHashMap, RStr};
-use abi_stable::{
-    std_types::{
-        RResult::{self, ROk},
-        RString, RVec,
-    },
-    StableAbi,
-};
-use arrow::datatypes::SchemaRef;
+use abi_stable::std_types::RHashMap;
+use abi_stable::{std_types::RString, StableAbi};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::TaskContext;
-use datafusion::prelude::SessionConfig;
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_expr::EquivalenceProperties,
-    physical_plan::execution_plan::{Boundedness, EmissionType},
-    prelude::SessionContext,
-};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
-use datafusion_proto::{
-    physical_plan::{
-        from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
-        to_proto::{serialize_partitioning, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
-    },
-    protobuf::{Partitioning, PhysicalSortExprNodeCollection},
-};
-use prost::Message;
-use std::collections::HashMap;
 use std::{ffi::c_void, sync::Arc};
-use datafusion::catalog::SchemaProvider;
 
 /// A stable struct for sharing [`TaskContext`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_TaskContext {
-    pub session_id: unsafe extern "C" fn(&Self) -> RStr,
+    pub session_id: unsafe extern "C" fn(&Self) -> RString,
 
-    pub task_id: unsafe extern "C" fn(&Self) -> ROption<RStr>,
+    pub task_id: unsafe extern "C" fn(&Self) -> ROption<RString>,
 
     pub session_config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
 
-    pub scalar_functions:
-        unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_ScalarUDF>,
+    pub scalar_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_ScalarUDF>,
 
     pub aggregate_functions:
         unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_AggregateUDF>,
 
-    pub window_functions:
-        unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
+    pub window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
@@ -82,7 +54,7 @@ pub struct FFI_TaskContext {
 }
 
 struct TaskContextPrivateData {
-    ctx: TaskContext,
+    ctx: Arc<TaskContext>,
 }
 
 impl FFI_TaskContext {
@@ -92,42 +64,50 @@ impl FFI_TaskContext {
     }
 }
 
-unsafe extern "C" fn session_id_fn_wrapper(ctx: &FFI_TaskContext) -> RStr {
+unsafe extern "C" fn session_id_fn_wrapper(ctx: &FFI_TaskContext) -> RString {
     let ctx = ctx.inner();
-    ctx.session_id().as_str().into()
+    ctx.session_id().into()
 }
 
-unsafe extern "C" fn task_id_fn_wrapper(ctx: &FFI_TaskContext) -> ROption<RStr> {
+unsafe extern "C" fn task_id_fn_wrapper(ctx: &FFI_TaskContext) -> ROption<RString> {
     let ctx = ctx.inner();
-    ctx.session_id().map(|s| s.as_str().into()).into()
+    ctx.task_id().map(|s| s.as_str().into()).into()
 }
 
-unsafe extern "C" fn session_config_fn_wrapper(ctx: &FFI_TaskContext) -> FFI_SessionConfig {
+unsafe extern "C" fn session_config_fn_wrapper(
+    ctx: &FFI_TaskContext,
+) -> FFI_SessionConfig {
     let ctx = ctx.inner();
     ctx.session_config().into()
 }
 
-unsafe extern "C" fn scalar_functions_fn_wrapper(ctx: &FFI_TaskContext) -> RHashMap<RString, FFI_ScalarUDF> {
+unsafe extern "C" fn scalar_functions_fn_wrapper(
+    ctx: &FFI_TaskContext,
+) -> RHashMap<RString, FFI_ScalarUDF> {
     let ctx = ctx.inner();
     ctx.scalar_functions()
-        .into_iter()
-        .map(|(name, udf)| (name.into(), udf.into()))
+        .iter()
+        .map(|(name, udf)| (name.to_owned().into(), udf.into()))
         .collect()
 }
 
-unsafe extern "C" fn aggregate_functions_fn_wrapper(ctx: &FFI_TaskContext) -> RHashMap<RString, FFI_AggregateUDF> {
+unsafe extern "C" fn aggregate_functions_fn_wrapper(
+    ctx: &FFI_TaskContext,
+) -> RHashMap<RString, FFI_AggregateUDF> {
     let ctx = ctx.inner();
     ctx.aggregate_functions()
-        .into_iter()
-        .map(|(name, udf)| (name.into(), udf.into()))
+        .iter()
+        .map(|(name, udf)| (name.to_owned().into(), udf.into()))
         .collect()
 }
 
-unsafe extern "C" fn window_functions_fn_wrapper(ctx: &FFI_TaskContext) -> RHashMap<RString, FFI_WindowUDF> {
+unsafe extern "C" fn window_functions_fn_wrapper(
+    ctx: &FFI_TaskContext,
+) -> RHashMap<RString, FFI_WindowUDF> {
     let ctx = ctx.inner();
     ctx.window_functions()
-        .into_iter()
-        .map(|(name, udf)| (name.into(), udf.into()))
+        .iter()
+        .map(|(name, udf)| (name.to_owned().into(), udf.into()))
         .collect()
 }
 
@@ -142,8 +122,8 @@ impl Drop for FFI_TaskContext {
     }
 }
 
-impl From<&TaskContext> for FFI_TaskContext {
-    fn from(ctx: TaskContext) -> Self {
+impl From<Arc<TaskContext>> for FFI_TaskContext {
+    fn from(ctx: Arc<TaskContext>) -> Self {
         let private_data = Box::new(TaskContextPrivateData { ctx });
 
         FFI_TaskContext {
@@ -159,22 +139,71 @@ impl From<&TaskContext> for FFI_TaskContext {
     }
 }
 
-impl TryFrom<FFI_TaskContext> for TaskContext {
-    type Error = DataFusionError;
-
-    fn try_from(ffi_ctx: FFI_TaskContext) -> Result<Self, Self::Error> {
+impl From<FFI_TaskContext> for TaskContext {
+    fn from(ffi_ctx: FFI_TaskContext) -> Self {
         unsafe {
             let task_id = (ffi_ctx.task_id)(&ffi_ctx).map(|s| s.to_string()).into();
             let sesion_id = (ffi_ctx.session_id)(&ffi_ctx).into();
-            let session_config = (ffi_ctx.session_config)(&ffi_ctx).into();
+            let session_config = (ffi_ctx.session_config)(&ffi_ctx);
+            let session_config = ForeignSessionConfig::try_from(&session_config)
+                .map(|v| v.0)
+                .unwrap_or_default();
 
-            let scalar_functions = (ffi_ctx.scalar_functions)(&ffi_ctx).into();
-            let aggregate_functions = (ffi_ctx.aggregate_functions)(&ffi_ctx).into();
-            let window_functions = (ffi_ctx.window_functions)(&ffi_ctx).into();
+            let scalar_functions = (ffi_ctx.scalar_functions)(&ffi_ctx)
+                .into_iter()
+                .filter_map(|kv_pair| {
+                    let udf = ForeignScalarUDF::try_from(&kv_pair.1);
+
+                    if let Err(err) = &udf {
+                        log::error!("Unable to create WindowUDF in FFI: {err}")
+                    }
+
+                    udf.ok().map(|udf| {
+                        (
+                            kv_pair.0.into_string(),
+                            Arc::new(ScalarUDF::new_from_impl(udf)),
+                        )
+                    })
+                })
+                .collect();
+            let aggregate_functions = (ffi_ctx.aggregate_functions)(&ffi_ctx)
+                .into_iter()
+                .filter_map(|kv_pair| {
+                    let udaf = ForeignAggregateUDF::try_from(&kv_pair.1);
+
+                    if let Err(err) = &udaf {
+                        log::error!("Unable to create AggregateUDF in FFI: {err}")
+                    }
+
+                    udaf.ok().map(|udaf| {
+                        (
+                            kv_pair.0.into_string(),
+                            Arc::new(AggregateUDF::new_from_impl(udaf)),
+                        )
+                    })
+                })
+                .collect();
+            let window_functions = (ffi_ctx.window_functions)(&ffi_ctx)
+                .into_iter()
+                .filter_map(|kv_pair| {
+                    let udwf = ForeignWindowUDF::try_from(&kv_pair.1);
+
+                    if let Err(err) = &udwf {
+                        log::error!("Unable to create WindowUDF in FFI: {err}")
+                    }
+
+                    udwf.ok().map(|udwf| {
+                        (
+                            kv_pair.0.into_string(),
+                            Arc::new(WindowUDF::new_from_impl(udwf)),
+                        )
+                    })
+                })
+                .collect();
 
             let runtime = Arc::new(RuntimeEnv::default());
 
-            Ok(TaskContext::new(
+            TaskContext::new(
                 task_id,
                 sesion_id,
                 session_config,
@@ -182,7 +211,7 @@ impl TryFrom<FFI_TaskContext> for TaskContext {
                 aggregate_functions,
                 window_functions,
                 runtime,
-            ))
+            )
         }
     }
 }

@@ -236,6 +236,12 @@ impl Clone for FFI_ScalarUDF {
     }
 }
 
+impl From<&Arc<ScalarUDF>> for FFI_ScalarUDF {
+    fn from(udf: &Arc<ScalarUDF>) -> Self {
+        Arc::clone(udf).into()
+    }
+}
+
 impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
     fn from(udf: Arc<ScalarUDF>) -> Self {
         let name = udf.name().into();

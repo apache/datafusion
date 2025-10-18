@@ -332,6 +332,12 @@ impl Clone for FFI_AggregateUDF {
     }
 }
 
+impl From<&Arc<AggregateUDF>> for FFI_AggregateUDF {
+    fn from(udf: &Arc<AggregateUDF>) -> Self {
+        Arc::clone(udf).into()
+    }
+}
+
 impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
     fn from(udaf: Arc<AggregateUDF>) -> Self {
         let name = udaf.name().into();
