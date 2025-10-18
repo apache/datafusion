@@ -205,3 +205,48 @@ impl ConfigField for ExplainFormat {
         Ok(())
     }
 }
+
+/// Verbosity levels controlling how `EXPLAIN ANALYZE` renders metrics
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExplainAnalyzeLevel {
+    /// Show a compact view containing high-level metrics
+    Summary,
+    /// Show a developer-focused view with per-operator details
+    Dev,
+    // When adding new enum, update the error message in `from_str()` accordingly.
+}
+
+impl FromStr for ExplainAnalyzeLevel {
+    type Err = DataFusionError;
+
+    fn from_str(level: &str) -> Result<Self, Self::Err> {
+        match level.to_lowercase().as_str() {
+            "summary" => Ok(ExplainAnalyzeLevel::Summary),
+            "dev" => Ok(ExplainAnalyzeLevel::Dev),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid explain analyze level. Expected 'summary' or 'dev'. Got '{other}'"
+            ))),
+        }
+    }
+}
+
+impl Display for ExplainAnalyzeLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            ExplainAnalyzeLevel::Summary => "summary",
+            ExplainAnalyzeLevel::Dev => "dev",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl ConfigField for ExplainAnalyzeLevel {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ExplainAnalyzeLevel::from_str(value)?;
+        Ok(())
+    }
+}

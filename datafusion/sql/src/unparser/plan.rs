@@ -32,11 +32,11 @@ use super::{
     },
     Unparser,
 };
-use crate::unparser::ast::UnnestRelationBuilder;
 use crate::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
 };
 use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
+use crate::unparser::{ast::UnnestRelationBuilder, rewrite::rewrite_qualify};
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
     internal_err, not_impl_err,
@@ -95,7 +95,10 @@ pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement> {
 
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
-        let plan = normalize_union_schema(plan)?;
+        let mut plan = normalize_union_schema(plan)?;
+        if !self.dialect.supports_qualify() {
+            plan = rewrite_qualify(plan)?;
+        }
 
         match plan {
             LogicalPlan::Projection(_)
@@ -428,6 +431,18 @@ impl Unparser<'_> {
                         unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
+                } else if let (Some(window), true) = (
+                    find_window_nodes_within_select(
+                        plan,
+                        None,
+                        select.already_projected(),
+                    ),
+                    self.dialect.supports_qualify(),
+                ) {
+                    let unprojected =
+                        unproject_window_exprs(filter.predicate.clone(), &window)?;
+                    let filter_expr = self.expr_to_sql(&unprojected)?;
+                    select.qualify(Some(filter_expr));
                 } else {
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));

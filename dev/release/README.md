@@ -295,6 +295,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/catalog && cargo publish)
 (cd datafusion/catalog-listing && cargo publish)
 (cd datafusion/functions-table && cargo publish)
+(cd datafusion/datasource-arrow && cargo publish)
 (cd datafusion/datasource-csv && cargo publish)
 (cd datafusion/datasource-json && cargo publish)
 (cd datafusion/datasource-parquet && cargo publish)
