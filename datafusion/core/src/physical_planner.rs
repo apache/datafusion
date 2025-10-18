@@ -2492,7 +2492,7 @@ mod tests {
         // verify that the plan correctly casts u8 to i64
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "lit", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#;
+        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "lit", data_type: Int64 } }, fail_on_overflow: false"#;
 
         assert_contains!(format!("{exec_plan:?}"), expected);
         Ok(())
@@ -2552,9 +2552,6 @@ mod tests {
                                 name: "lit",
                                 data_type: Utf8,
                                 nullable: true,
-                                dict_id: 0,
-                                dict_is_ordered: false,
-                                metadata: {},
                             },
                         },
                         "c1",
@@ -2566,9 +2563,6 @@ mod tests {
                                 name: "lit",
                                 data_type: Int64,
                                 nullable: true,
-                                dict_id: 0,
-                                dict_is_ordered: false,
-                                metadata: {},
                             },
                         },
                         "c2",
@@ -2580,9 +2574,6 @@ mod tests {
                                 name: "lit",
                                 data_type: Int64,
                                 nullable: true,
-                                dict_id: 0,
-                                dict_is_ordered: false,
-                                metadata: {},
                             },
                         },
                         "c3",
@@ -2691,9 +2682,6 @@ mod tests {
                                 name: "lit",
                                 data_type: Utf8,
                                 nullable: true,
-                                dict_id: 0,
-                                dict_is_ordered: false,
-                                metadata: {},
                             },
                         },
                         "c1",
@@ -2705,9 +2693,6 @@ mod tests {
                                 name: "lit",
                                 data_type: Int64,
                                 nullable: true,
-                                dict_id: 0,
-                                dict_is_ordered: false,
-                                metadata: {},
                             },
                         },
                         "c2",
@@ -2719,9 +2704,6 @@ mod tests {
                                 name: "lit",
                                 data_type: Int64,
                                 nullable: true,
-                                dict_id: 0,
-                                dict_is_ordered: false,
-                                metadata: {},
                             },
                         },
                         "c3",
@@ -2895,7 +2877,7 @@ mod tests {
             .expect_err("planning error")
             .strip_backtrace();
 
-        insta::assert_snapshot!(e, @r#"Error during planning: Extension planner for NoOp created an ExecutionPlan with mismatched schema. LogicalPlan schema: DFSchema { inner: Schema { fields: [Field { name: "a", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, ExecutionPlan schema: Schema { fields: [Field { name: "b", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }"#);
+        insta::assert_snapshot!(e, @r#"Error during planning: Extension planner for NoOp created an ExecutionPlan with mismatched schema. LogicalPlan schema: DFSchema { inner: Schema { fields: [Field { name: "a", data_type: Int32 }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, ExecutionPlan schema: Schema { fields: [Field { name: "b", data_type: Int32 }], metadata: {} }"#);
     }
 
     #[tokio::test]
@@ -2911,7 +2893,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [ProjectionExpr { expr: BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
+        let expected = r#"expr: [ProjectionExpr { expr: BinaryExpr { left: BinaryExpr { left: Column { name: "c1", index: 0 }, op: Eq, right: Literal { value: Utf8("a"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false"#;
 
         assert_contains!(format!("{execution_plan:?}"), expected);
 
@@ -2933,7 +2915,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct(foo Boolean), Utf8]"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct("foo": Boolean), Utf8]"#
         );
 
         Ok(())

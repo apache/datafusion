@@ -208,7 +208,7 @@ impl FileOpener for ParquetOpener {
             let mut options = ArrowReaderOptions::new().with_page_index(false);
             #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
-                options = options.with_file_decryption_properties((*fd_val).clone());
+                options = options.with_file_decryption_properties(Arc::clone(&fd_val));
             }
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
 
@@ -581,8 +581,7 @@ impl EncryptionContext {
             None => match &self.encryption_factory {
                 Some((encryption_factory, encryption_config)) => Ok(encryption_factory
                     .get_file_decryption_properties(encryption_config, file_location)
-                    .await?
-                    .map(Arc::new)),
+                    .await?),
                 None => Ok(None),
             },
         }
