@@ -1045,6 +1045,52 @@ physical_plan
 statement ok
 drop table t;
 
+# Unnest tuple where the data is already sorted by column 1
+statement ok
+COPY (
+  SELECT * FROM VALUES
+    (100, [3,2,1], 'a'),
+    (200, [1,2,3], 'b'),
+    (300, [3,1,2], 'c')
+  ORDER BY column1
+ ) TO 'test_files/scratch/unnest/ordered_tuples.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/unnest/ordered_tuples.parquet'
+WITH ORDER (column1)
+
+query I?T
+SELECT * FROM t;
+----
+100 [3, 2, 1] a
+200 [1, 2, 3] b
+300 [3, 1, 2] c
+
+# Put the columns in a tuple and unnest, we need to sort because we discard ordering of unnested columns
+query TT
+EXPLAIN WITH unnested AS (
+  SELECT unnest((column1, column2, column3))
+  FROM t
+) SELECT * FROM unnested order by 1;
+----
+logical_plan
+01)Sort: unnested.__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0 ASC NULLS LAST
+02)--SubqueryAlias: unnested
+03)----Unnest: lists[] structs[__unnest_placeholder(struct(t.column1,t.column2,t.column3))]
+04)------Projection: struct(t.column1, t.column2, t.column3) AS __unnest_placeholder(struct(t.column1,t.column2,t.column3))
+05)--------TableScan: t projection=[column1, column2, column3]
+physical_plan
+01)SortExec: expr=[__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--UnnestExec
+03)----ProjectionExec: expr=[struct(column1@0, column2@1, column3@2) as __unnest_placeholder(struct(t.column1,t.column2,t.column3))]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_tuples.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 ASC NULLS LAST], file_type=parquet
+
+# cleanup
+statement ok
+drop table t;
+
 # Unnest struct where data is already ordered by column2 (100, 200, 300, 400)
 statement ok
 COPY (
