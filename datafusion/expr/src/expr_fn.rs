@@ -341,6 +341,11 @@ pub fn is_null(expr: Expr) -> Expr {
     Expr::IsNull(Box::new(expr))
 }
 
+/// Create is not null expression
+pub fn is_not_null(expr: Expr) -> Expr {
+    Expr::IsNotNull(Box::new(expr))
+}
+
 /// Create is true expression
 pub fn is_true(expr: Expr) -> Expr {
     Expr::IsTrue(Box::new(expr))
