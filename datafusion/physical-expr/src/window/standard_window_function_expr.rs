@@ -21,7 +21,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{FieldRef, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_expr::PartitionEvaluator;
+use datafusion_expr::{LimitEffect, PartitionEvaluator};
 
 use std::any::Any;
 use std::sync::Arc;
@@ -90,4 +90,6 @@ pub trait StandardWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn get_result_ordering(&self, _schema: &SchemaRef) -> Option<PhysicalSortExpr> {
         None
     }
+
+    fn limit_effect(&self) -> LimitEffect;
 }

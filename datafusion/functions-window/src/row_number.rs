@@ -25,15 +25,17 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
+use std::sync::Arc;
 
 define_udwf_and_expr!(
     RowNumber,
@@ -121,6 +123,10 @@ impl WindowUDFImpl for RowNumber {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::None
+    }
 }
 
 /// State for the `row_number` built-in window function.
@@ -140,7 +146,7 @@ impl PartitionEvaluator for NumRowsEvaluator {
         _values: &[ArrayRef],
         num_rows: usize,
     ) -> Result<ArrayRef> {
-        Ok(std::sync::Arc::new(UInt64Array::from_iter_values(
+        Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
     }

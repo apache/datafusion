@@ -17,17 +17,19 @@
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::logical_expr::ColumnarValue;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, Volatility, WindowUDFImpl,
+    Accumulator, AggregateUDFImpl, LimitEffect, PartitionEvaluator, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Arc;
 
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
@@ -172,6 +174,10 @@ impl WindowUDFImpl for CustomUDWF {
         field_args: WindowUDFFieldArgs,
     ) -> datafusion_common::Result<FieldRef> {
         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 
