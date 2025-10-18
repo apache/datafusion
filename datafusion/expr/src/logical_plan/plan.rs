@@ -2753,7 +2753,8 @@ pub struct Union {
 
 impl Union {
     /// Constructs new Union instance deriving schema from inputs.
-    fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+    /// Schema data types must match exactly.
+    pub fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, false, false)?;
         Ok(Union { inputs, schema })
     }

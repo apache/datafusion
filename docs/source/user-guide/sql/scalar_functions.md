@@ -1056,7 +1056,7 @@ nullif(expression1, expression2)
 
 ### `nvl`
 
-Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_.
+Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_ and _expression2_ is not evaluated. This function can be used to substitute a default value for NULL values.
 
 ```sql
 nvl(expression1, expression2)
@@ -2403,7 +2403,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `current_date`
 
-Returns the current UTC date.
+Returns the current date in the session time zone.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 

@@ -518,6 +518,7 @@ message AggregateUDFExprNode {
   LogicalExprNode filter = 3;
   repeated SortExprNode order_by = 4;
   optional bytes fun_definition = 6;
+  optional NullTreatment null_treatment = 7;
 }
 
 message ScalarUDFExprNode {
@@ -538,6 +539,9 @@ message WindowExprNode {
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
   optional bytes fun_definition = 10;
+  optional NullTreatment null_treatment = 11;
+  bool distinct = 12;
+  LogicalExprNode filter = 13;
 }
 
 message BetweenNode {
@@ -620,6 +624,11 @@ enum WindowFrameBoundType {
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
   datafusion_common.ScalarValue bound_value = 2;
+}
+
+enum NullTreatment {
+  RESPECT_NULLS = 0;
+  IGNORE_NULLS = 1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

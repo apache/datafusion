@@ -18,20 +18,21 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::{FileOpenFuture, FileOpener};
-use crate::error::Result;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
 use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
+use datafusion_common::error::Result;
 use datafusion_common::{exec_datafusion_err, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
+use datafusion_datasource::file_stream::FileOpenFuture;
+use datafusion_datasource::file_stream::FileOpener;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};

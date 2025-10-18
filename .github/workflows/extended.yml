@@ -36,6 +36,14 @@ on:
       # it is not expected to have many changes in these branches,
       # so running extended tests is not a burden
       - 'branch-*'
+  # Also run for changes to some critical areas that are most likely
+  # to trigger errors in extended tests
+  pull_request:
+    branches: [ '**' ]
+    paths:
+      - 'datafusion/physical*/**/*.rs'
+      - 'datafusion/expr*/**/*.rs'
+      - 'datafusion/optimizer/**/*.rs'
   workflow_dispatch:
     inputs:
       pr_number:
