@@ -609,10 +609,19 @@ impl TypeSignature {
                 .iter()
                 .flat_map(|s| s.to_string_repr_with_names(parameter_names))
                 .collect(),
+            TypeSignature::UserDefined => {
+                // UserDefined signatures can have parameter names
+                if let Some(names) = parameter_names {
+                    vec![names.join(", ")]
+                } else {
+                    self.to_string_repr()
+                }
+            }
             // Variable arity signatures cannot use parameter names
-            TypeSignature::Variadic(_)
-            | TypeSignature::VariadicAny
-            | TypeSignature::UserDefined => self.to_string_repr(),
+            TypeSignature::Variadic(_) | TypeSignature::VariadicAny => {
+                self.to_string_repr()
+            }
+
         }
     }
 
@@ -1680,9 +1689,15 @@ mod tests {
             variadic_any.to_string_repr()
         );
 
+        // UserDefined now shows parameter names when available
         let user_defined = TypeSignature::UserDefined;
         assert_eq!(
             user_defined.to_string_repr_with_names(Some(&names)),
+            vec!["x"]
+        );
+        // Without names, falls back to to_string_repr()
+        assert_eq!(
+            user_defined.to_string_repr_with_names(None),
             user_defined.to_string_repr()
         );
     }
