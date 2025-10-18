@@ -171,6 +171,23 @@ async fn row_count_demuxer(
         max_rows_per_file
     };
 
+    // Single-file output requires creating at least one file stream in advance.
+    // If no record batches are present in the input stream,
+    // the file stream must still be created to produce a valid output file.
+    if single_file_output {
+        open_file_streams.push(create_new_file_stream(
+            &base_output_path,
+            &write_id,
+            part_idx,
+            &file_extension,
+            single_file_output,
+            max_buffered_batches,
+            &mut tx,
+        )?);
+        row_counts.push(0);
+        part_idx += 1;
+    }
+
     while let Some(rb) = input.next().await.transpose()? {
         // ensure we have at least minimum_parallel_files open
         if open_file_streams.len() < minimum_parallel_files {
