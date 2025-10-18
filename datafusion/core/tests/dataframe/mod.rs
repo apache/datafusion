@@ -25,7 +25,7 @@ use arrow::array::{
     Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
     StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{
     DataType, Field, Float32Type, Int32Type, Schema, UInt64Type, UnionFields, UnionMode,
 };
@@ -38,6 +38,7 @@ use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
     sum_distinct,
 };
+use datafusion_functions_nested::expr_fn::{array_distinct, make_array};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
@@ -6475,6 +6476,101 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
     assert!(
         partial_agg_exec_schema.is_ok(),
         "Expected get AggregateExec schema to succeed with duplicate state fields"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn array_distinct_on_list_with_inner_nullability_causing_type_mismatch(
+) -> Result<()> {
+    let nullable_field = Arc::new(Field::new("nullable", DataType::Int32, true));
+    // [1, 1, 2, NULL]
+    let nullable_array = ListArray::new(
+        Arc::clone(&nullable_field),
+        OffsetBuffer::new(vec![0, 4].into()),
+        Arc::new(Int32Array::new(
+            vec![1, 1, 2, 0].into(),
+            Some(NullBuffer::from(vec![true, true, true, false])),
+        )),
+        None,
+    );
+
+    let nonnullable_field = Arc::new(Field::new("nonnullable", DataType::Int32, false));
+    // [1, 1, 2, 2]
+    let nonnullable_array = ListArray::new(
+        Arc::clone(&nonnullable_field),
+        OffsetBuffer::new(vec![0, 4].into()),
+        Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+        None,
+    );
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "nonnullable",
+            DataType::List(Arc::clone(&nonnullable_field)),
+            true,
+        ),
+        Field::new(
+            "nullable",
+            DataType::List(Arc::clone(&nullable_field)),
+            true,
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(nonnullable_array), Arc::new(nullable_array)],
+    )
+    .unwrap();
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("array_batch", batch).unwrap();
+    let df = ctx.table("array_batch").await.unwrap();
+
+    // view_all
+    assert_snapshot!(
+       batches_to_string(&df.clone().collect().await.unwrap()),
+        @r"
+    +--------------+-------------+
+    | nonnullable  | nullable    |
+    +--------------+-------------+
+    | [1, 1, 2, 2] | [1, 1, 2, ] |
+    +--------------+-------------+
+    "
+    );
+
+    // non-nullable filter
+    let filter_expr =
+        array_distinct(col("nonnullable")).eq(make_array(vec![lit(1), lit(2)]));
+    let result_df = df.clone().filter(filter_expr).unwrap();
+    assert_snapshot!(
+       batches_to_string(&result_df.collect().await.unwrap()),
+        @r"
+    +--------------+-------------+
+    | nonnullable  | nullable    |
+    +--------------+-------------+
+    | [1, 1, 2, 2] | [1, 1, 2, ] |
+    +--------------+-------------+
+    "
+    );
+
+    // nullable filter
+    let filter_expr = array_distinct(col("nullable")).eq(make_array(vec![
+        lit(ScalarValue::Int32(None)),
+        lit(1),
+        lit(2),
+    ]));
+    let result_df = df.clone().filter(filter_expr).unwrap();
+    assert_snapshot!(
+       batches_to_string(&result_df.collect().await.unwrap()),
+        @r"
+    +--------------+-------------+
+    | nonnullable  | nullable    |
+    +--------------+-------------+
+    | [1, 1, 2, 2] | [1, 1, 2, ] |
+    +--------------+-------------+
+    "
     );
 
     Ok(())
