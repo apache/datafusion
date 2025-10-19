@@ -25,7 +25,7 @@ use crate::utils::{calculate_binary_math, decimal128_to_i128, decimal256_to_i256
 use arrow::array::{Array, ArrayRef, PrimitiveArray};
 use arrow::datatypes::{
     ArrowNativeTypeOp, DataType, Decimal128Type, Decimal256Type, DecimalType,
-    Float32Type, Float64Type, Int32Type, Int64Type, DECIMAL128_MAX_PRECISION,
+    Float32Type, Float64Type, Int32Type, Int64Type,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
@@ -76,6 +76,15 @@ impl PowerFunc {
                     TypeSignature::Exact(vec![Int64, Int64]),
                     TypeSignature::Exact(vec![Float32, Float32]),
                     TypeSignature::Exact(vec![Float64, Float64]),
+                    // Extra signatures for decimals to avoid casting them to floats
+                    TypeSignature::Exact(vec![
+                        Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                        Int64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                        Float64,
+                    ]),
                     Numeric(2), // Catch-all for all decimals
                 ],
                 Volatility::Immutable,
