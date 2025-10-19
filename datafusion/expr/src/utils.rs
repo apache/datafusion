@@ -1295,6 +1295,7 @@ mod tests {
         Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
+    use datafusion_expr_common::signature::{TypeSignature, Volatility};
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -1717,8 +1718,6 @@ mod tests {
 
     #[test]
     fn test_generate_signature_error_msg_with_parameter_names() {
-        use datafusion_expr_common::signature::{TypeSignature, Volatility};
-
         // Create a signature like substr with parameter names
         // substr(str, start_pos) or substr(str, start_pos, length)
         let sig = Signature::one_of(
@@ -1755,8 +1754,6 @@ mod tests {
 
     #[test]
     fn test_generate_signature_error_msg_without_parameter_names() {
-        use datafusion_expr_common::signature::{TypeSignature, Volatility};
-
         // Create a signature without parameter names
         let sig = Signature::one_of(
             vec![TypeSignature::Any(2), TypeSignature::Any(3)],
