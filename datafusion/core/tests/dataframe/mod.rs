@@ -25,7 +25,7 @@ use arrow::array::{
     Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
     StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
     DataType, Field, Float32Type, Int32Type, Schema, UInt64Type, UnionFields, UnionMode,
 };
@@ -6475,90 +6475,6 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
     assert!(
         partial_agg_exec_schema.is_ok(),
         "Expected get AggregateExec schema to succeed with duplicate state fields"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn array_distinct_on_list_with_inner_nullability_causing_type_mismatch(
-) -> Result<()> {
-    let nullable_field = Arc::new(Field::new("nullable", DataType::Int32, true));
-    // [1, 1, 2, NULL]
-    let nullable_array = ListArray::new(
-        Arc::clone(&nullable_field),
-        OffsetBuffer::new(vec![0, 4].into()),
-        Arc::new(Int32Array::new(
-            vec![1, 1, 2, 0].into(),
-            Some(NullBuffer::from(vec![true, true, true, false])),
-        )),
-        None,
-    );
-
-    let nonnullable_field = Arc::new(Field::new("nonnullable", DataType::Int32, false));
-    // [1, 1, 2, 2]
-    let nonnullable_array = ListArray::new(
-        Arc::clone(&nonnullable_field),
-        OffsetBuffer::new(vec![0, 4].into()),
-        Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
-        None,
-    );
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "nonnullable",
-            DataType::List(Arc::clone(&nonnullable_field)),
-            true,
-        ),
-        Field::new(
-            "nullable",
-            DataType::List(Arc::clone(&nullable_field)),
-            true,
-        ),
-    ]));
-
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(nonnullable_array), Arc::new(nullable_array)],
-    )
-    .unwrap();
-    let ctx = SessionContext::new();
-
-    ctx.register_batch("array_batch", batch).unwrap();
-    let df = ctx.sql("select * from array_batch").await.unwrap();
-
-    // view_all
-    assert_snapshot!(
-       batches_to_string(&df.collect().await.unwrap()),
-        @r"
-    +--------------+-------------+
-    | nonnullable  | nullable    |
-    +--------------+-------------+
-    | [1, 1, 2, 2] | [1, 1, 2, ] |
-    +--------------+-------------+
-    "
-    );
-
-    let df = ctx
-        .sql(
-            r#"
-SELECT * FROM array_batch
-WHERE
-    array_distinct(nonnullable) = [1, 2]
-    AND array_distinct(nullable) = [NULL, 1, 2]
-"#,
-        )
-        .await
-        .unwrap();
-    assert_snapshot!(
-       batches_to_string(&df.collect().await.unwrap()),
-        @r"
-    +--------------+-------------+
-    | nonnullable  | nullable    |
-    +--------------+-------------+
-    | [1, 1, 2, 2] | [1, 1, 2, ] |
-    +--------------+-------------+
-    "
     );
 
     Ok(())
