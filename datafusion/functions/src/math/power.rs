@@ -22,10 +22,10 @@ use std::sync::Arc;
 use super::log::LogFunc;
 
 use crate::utils::{calculate_binary_math, decimal128_to_i128, decimal256_to_i256};
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef, PrimitiveArray};
 use arrow::datatypes::{
-    ArrowNativeTypeOp, DataType, Decimal128Type, Decimal256Type, Float32Type,
-    Float64Type, Int32Type, Int64Type,
+    ArrowNativeTypeOp, DataType, Decimal128Type, Decimal256Type, DecimalType,
+    Float32Type, Float64Type, Int32Type, Int64Type, DECIMAL128_MAX_PRECISION,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
@@ -148,6 +148,17 @@ fn pow_decimal256_int(base: i256, scale: i8, exp: i64) -> Result<i256, ArrowErro
     }
 }
 
+/// Change scale of decimal array to 0 instead of default scale 10
+/// It is required to reset scale for decimals. automatically constructed from
+/// Apache Arrow operations on i128/i256 type
+fn reset_decimal_scale<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
+where
+    T: DecimalType,
+{
+    let precision = array.precision();
+    Ok(array.clone().with_precision_and_scale(precision, 0)?)
+}
+
 impl ScalarUDFImpl for PowerFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -228,44 +239,62 @@ impl ScalarUDFImpl for PowerFunc {
                     },
                 )?
             }
-            DataType::Decimal128(_precision, scale) => match exponent.data_type() {
-                DataType::Int64 => {
-                    calculate_binary_math::<Decimal128Type, Int64Type, Decimal128Type, _>(
-                        &base,
-                        &exponent,
-                        |b, e| pow_decimal128_int(b, *scale, e),
-                    )?
-                }
-                DataType::Float64 => {
-                    calculate_binary_math::<Decimal128Type, Float64Type, Decimal128Type, _>(
-                        &base,
-                        &exponent,
-                        |b, e| pow_decimal128_float(b, *scale, e),
-                    )?
-                }
-                other => {
-                    return exec_err!("Unsupported data type {other:?} for exponent")
-                }
-            },
-            DataType::Decimal256(_precision, scale) => match exponent.data_type() {
-                DataType::Int64 => {
-                    calculate_binary_math::<Decimal256Type, Int64Type, Decimal256Type, _>(
-                        &base,
-                        &exponent,
-                        |b, e| pow_decimal256_int(b, *scale, e),
-                    )?
-                }
-                DataType::Float64 => {
-                    calculate_binary_math::<Decimal256Type, Float64Type, Decimal256Type, _>(
-                        &base,
-                        &exponent,
-                        |b, e| pow_decimal256_float(b, *scale, e),
-                    )?
-                }
-                other => {
-                    return exec_err!("Unsupported data type {other:?} for exponent")
-                }
-            },
+            DataType::Decimal128(_precision, scale) => {
+                let array = match exponent.data_type() {
+                    DataType::Int64 => {
+                        calculate_binary_math::<
+                            Decimal128Type,
+                            Int64Type,
+                            Decimal128Type,
+                            _,
+                        >(&base, &exponent, |b, e| {
+                            pow_decimal128_int(b, *scale, e)
+                        })?
+                    }
+                    DataType::Float64 => {
+                        calculate_binary_math::<
+                            Decimal128Type,
+                            Float64Type,
+                            Decimal128Type,
+                            _,
+                        >(&base, &exponent, |b, e| {
+                            pow_decimal128_float(b, *scale, e)
+                        })?
+                    }
+                    other => {
+                        return exec_err!("Unsupported data type {other:?} for exponent")
+                    }
+                };
+                Arc::new(reset_decimal_scale(array.as_ref())?)
+            }
+            DataType::Decimal256(_precision, scale) => {
+                let array = match exponent.data_type() {
+                    DataType::Int64 => {
+                        calculate_binary_math::<
+                            Decimal256Type,
+                            Int64Type,
+                            Decimal256Type,
+                            _,
+                        >(&base, &exponent, |b, e| {
+                            pow_decimal256_int(b, *scale, e)
+                        })?
+                    }
+                    DataType::Float64 => {
+                        calculate_binary_math::<
+                            Decimal256Type,
+                            Float64Type,
+                            Decimal256Type,
+                            _,
+                        >(&base, &exponent, |b, e| {
+                            pow_decimal256_float(b, *scale, e)
+                        })?
+                    }
+                    other => {
+                        return exec_err!("Unsupported data type {other:?} for exponent")
+                    }
+                };
+                Arc::new(reset_decimal_scale(array.as_ref())?)
+            }
             other => {
                 return exec_err!(
                     "Unsupported data type {other:?} for function {}",
@@ -329,7 +358,7 @@ fn is_log(func: &ScalarUDF) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Decimal128Array, Float64Array, Int64Array};
+    use arrow::array::{Array, Decimal128Array, Float64Array, Int64Array};
     use arrow::datatypes::{Field, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_SCALE};
     use datafusion_common::cast::{
         as_decimal128_array, as_decimal256_array, as_float64_array, as_int64_array,
@@ -507,6 +536,13 @@ mod tests {
 
                 assert_eq!(ints.len(), 1);
                 assert_eq!(ints.value(0), i128::from(8));
+
+                // Value is the same as expected, but scale should be 0
+                if let DataType::Decimal128(_precision, scale) = arr.data_type() {
+                    assert_eq!(*scale, 0);
+                } else {
+                    panic!("Expected Decimal256 result")
+                }
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
@@ -650,6 +686,13 @@ mod tests {
 
                 assert_eq!(ints.len(), 1);
                 assert_eq!(ints.value(0), i256::from(8));
+
+                // Value is the same as expected, but scale should be 0
+                if let DataType::Decimal256(_precision, scale) = arr.data_type() {
+                    assert_eq!(*scale, 0);
+                } else {
+                    panic!("Expected Decimal256 result")
+                }
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
