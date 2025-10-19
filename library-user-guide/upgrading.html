@@ -640,6 +640,40 @@
      </code>
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#reorganization-of-listingtable-into-datafusion-catalog-listing-crate">
+     Reorganization of
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ListingTable
+      </span>
+     </code>
+     into
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       datafusion-catalog-listing
+      </span>
+     </code>
+     crate
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#reorganization-of-arrowsource-into-datafusion-datasource-arrow-crate">
+     Reorganization of
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ArrowSource
+      </span>
+     </code>
+     into
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       datafusion-datasource-arrow
+      </span>
+     </code>
+     crate
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1453,6 +1487,23 @@ has changed from <code class="docutils literal notranslate"><span class="pre">&a
 <code class="docutils literal notranslate"><span class="pre">Dialect</span></code> is an enum defined in the <code class="docutils literal notranslate"><span class="pre">datafusion-common</span></code>
 crate under the <code class="docutils literal notranslate"><span class="pre">config</span></code> module that provides type safety
 and better validation for SQL dialect selection</p>
+</section>
+<section id="reorganization-of-listingtable-into-datafusion-catalog-listing-crate">
+<h3>Reorganization of <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> into <code class="docutils literal notranslate"><span class="pre">datafusion-catalog-listing</span></code> crate<a class="headerlink" href="#reorganization-of-listingtable-into-datafusion-catalog-listing-crate" title="Link to this heading">¶</a></h3>
+<p>There has been a long standing request to remove features such as <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code>
+from the <code class="docutils literal notranslate"><span class="pre">datafusion</span></code> crate to support faster build times. The structs
+<code class="docutils literal notranslate"><span class="pre">ListingOptions</span></code>, <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code>, and <code class="docutils literal notranslate"><span class="pre">ListingTableConfig</span></code> are now available
+within the <code class="docutils literal notranslate"><span class="pre">datafusion-catalog-listing</span></code> crate. These are re-exported in
+the <code class="docutils literal notranslate"><span class="pre">datafusion</span></code> crate, so this should be a minimal impact to existing users.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/14462">issue #14462</a> and <a class="reference external" href="https://github.com/apache/datafusion/issues/17713">issue #17713</a> for more details.</p>
+</section>
+<section id="reorganization-of-arrowsource-into-datafusion-datasource-arrow-crate">
+<h3>Reorganization of <code class="docutils literal notranslate"><span class="pre">ArrowSource</span></code> into <code class="docutils literal notranslate"><span class="pre">datafusion-datasource-arrow</span></code> crate<a class="headerlink" href="#reorganization-of-arrowsource-into-datafusion-datasource-arrow-crate" title="Link to this heading">¶</a></h3>
+<p>To support <a class="reference external" href="https://github.com/apache/datafusion/issues/17713">issue #17713</a> the <code class="docutils literal notranslate"><span class="pre">ArrowSource</span></code> code has been removed from
+the <code class="docutils literal notranslate"><span class="pre">datafusion</span></code> core crate into it’s own crate, <code class="docutils literal notranslate"><span class="pre">datafusion-datasource-arrow</span></code>.
+This follows the pattern for the AVRO, CSV, JSON, and Parquet data sources.
+Users may need to update their paths to account for these changes.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/17713">issue #17713</a> for more details.</p>
 </section>
 </section>
 <section id="datafusion-50-0-0">

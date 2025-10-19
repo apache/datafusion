@@ -94,6 +94,28 @@ has changed from `&str` to `&Dialect`.
 crate under the `config` module that provides type safety
 and better validation for SQL dialect selection
 
+### Reorganization of `ListingTable` into `datafusion-catalog-listing` crate
+
+There has been a long standing request to remove features such as `ListingTable`
+from the `datafusion` crate to support faster build times. The structs
+`ListingOptions`, `ListingTable`, and `ListingTableConfig` are now available
+within the `datafusion-catalog-listing` crate. These are re-exported in
+the `datafusion` crate, so this should be a minimal impact to existing users.
+
+See [issue #14462] and [issue #17713] for more details.
+
+[issue #14462]: https://github.com/apache/datafusion/issues/14462
+[issue #17713]: https://github.com/apache/datafusion/issues/17713
+
+### Reorganization of `ArrowSource` into `datafusion-datasource-arrow` crate
+
+To support [issue #17713] the `ArrowSource` code has been removed from
+the `datafusion` core crate into it's own crate, `datafusion-datasource-arrow`.
+This follows the pattern for the AVRO, CSV, JSON, and Parquet data sources.
+Users may need to update their paths to account for these changes.
+
+See [issue #17713] for more details.
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
