@@ -56,9 +56,9 @@ impl AvroSource {
             self.schema.expect("Schema must set before open").as_ref(),
         )?;
         ReaderBuilder::new()
-            .with_reader_schema(avro_schema)
+            .with_reader_schema(avro_schema) // Used for projection on read.
             .with_batch_size(self.batch_size.expect("Batch size must set before open"))
-            .build(reader)
+            .build(reader) // TODO - A File (which doesn't implement BufRead) is being passed; confirm whether this is safe.
             .map_err(Into::into)
     }
 }
