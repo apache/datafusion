@@ -1346,9 +1346,12 @@ impl Signature {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::types::{logical_int64, logical_string};
+    use datafusion_common::types::{logical_int32, logical_int64, logical_string};
 
     use super::*;
+    use crate::signature::{
+        ArrayFunctionArgument, ArrayFunctionSignature, Coercion, TypeSignatureClass,
+    };
 
     #[test]
     fn supports_zero_argument_tests() {
@@ -1713,9 +1716,6 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_coercible() {
-        use crate::signature::{Coercion, TypeSignatureClass};
-        use datafusion_common::types::logical_int32;
-
         // Test Coercible signature with parameter names
         let sig = TypeSignature::Coercible(vec![
             Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
@@ -1800,8 +1800,6 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_array_signature() {
-        use crate::signature::{ArrayFunctionArgument, ArrayFunctionSignature};
-
         // Test ArraySignature with parameter names
         let sig = TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
             arguments: vec![
@@ -1887,7 +1885,6 @@ mod tests {
 
     #[test]
     fn test_type_signature_arity_coercible() {
-        use datafusion_common::types::{logical_int32, logical_string};
         let sig = TypeSignature::Coercible(vec![
             Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
             Coercion::new_exact(TypeSignatureClass::Native(logical_string())),

@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
-    parser::DFParser,
+    parser::{DFParser, Statement as DFStatement},
     planner::{NullOrdering, ParserOptions, SqlToRel},
 };
 
@@ -46,6 +46,7 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
+use sqlparser::ast::{Expr as SQLExpr, FunctionArg, Statement};
 use sqlparser::dialect::{
     AnsiDialect, BigQueryDialect, ClickHouseDialect, DatabricksDialect, Dialect,
     DuckDbDialect, GenericDialect, HiveDialect, MsSqlDialect, MySqlDialect,
@@ -3956,8 +3957,6 @@ fn test_double_quoted_literal_string() {
 #[test]
 fn test_named_arguments_with_dialects() {
     // Test that named arguments syntax (param => value) with different dialects
-    use datafusion_sql::parser::Statement as DFStatement;
-    use sqlparser::ast::{Expr as SQLExpr, FunctionArg, Statement};
     use sqlparser::dialect::Dialect;
 
     let sql = "SELECT my_func(arg1 => 'value1')";
@@ -4009,7 +4008,7 @@ fn test_named_arguments_with_dialects() {
     assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
 
     let arg = extract_first_arg(&MsSqlDialect {});
-    assert!(matches!(arg, None));
+    assert!(arg.is_none());
 
     let arg = extract_first_arg(&MySqlDialect {});
     assert!(matches!(arg, Some(FunctionArg::Named { name, .. }) if name.value == "arg1"));
