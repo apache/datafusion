@@ -19,6 +19,7 @@
 
 use crate::Expr;
 use datafusion_common::{plan_err, Result};
+use std::collections::HashMap;
 
 /// Resolves function arguments, handling named and positional notation.
 ///
@@ -97,6 +98,13 @@ fn reorder_named_arguments(
     args: Vec<Expr>,
     arg_names: Vec<Option<String>>,
 ) -> Result<Vec<Expr>> {
+    // Build HashMap for O(1) parameter name lookups
+    let param_index_map: HashMap<&str, usize> = param_names
+        .iter()
+        .enumerate()
+        .map(|(idx, name)| (name.as_str(), idx))
+        .collect();
+
     // Count positional vs named arguments
     let positional_count = arg_names.iter().filter(|n| n.is_none()).count();
 
@@ -105,17 +113,24 @@ fn reorder_named_arguments(
 
     // Create a result vector with the expected size
     let expected_arg_count = param_names.len();
-    let mut result: Vec<Option<Expr>> = vec![None; expected_arg_count];
 
-    // Track which parameters have been assigned
-    let mut assigned = vec![false; expected_arg_count];
+    // Validate positional argument count upfront
+    if positional_count > expected_arg_count {
+        return plan_err!(
+            "Too many positional arguments: expected at most {}, got {}",
+            expected_arg_count,
+            positional_count
+        );
+    }
+
+    let mut result: Vec<Option<Expr>> = vec![None; expected_arg_count];
 
     // Process all arguments (both positional and named)
     for (i, (arg, arg_name)) in args.into_iter().zip(arg_names).enumerate() {
         if let Some(name) = arg_name {
-            // Named argument - find its position in param_names
+            // Named argument - O(1) lookup in HashMap
             let param_index =
-                param_names.iter().position(|p| p == &name).ok_or_else(|| {
+                param_index_map.get(name.as_str()).copied().ok_or_else(|| {
                     datafusion_common::plan_datafusion_err!(
                         "Unknown parameter name '{}'. Valid parameters are: [{}]",
                         name,
@@ -124,23 +139,14 @@ fn reorder_named_arguments(
                 })?;
 
             // Check if this parameter was already assigned
-            if assigned[param_index] {
+            if result[param_index].is_some() {
                 return plan_err!("Parameter '{}' specified multiple times", name);
             }
 
             result[param_index] = Some(arg);
-            assigned[param_index] = true;
         } else {
             // Positional argument - place at current position
-            if i >= expected_arg_count {
-                return plan_err!(
-                    "Too many positional arguments: expected at most {}, got {}",
-                    expected_arg_count,
-                    positional_count
-                );
-            }
             result[i] = Some(arg);
-            assigned[i] = true;
         }
     }
 
@@ -148,17 +154,13 @@ fn reorder_named_arguments(
     // Only require parameters up to the number of arguments provided (supports optional parameters)
     let required_count = args_len;
     for i in 0..required_count {
-        if !assigned[i] {
+        if result[i].is_none() {
             return plan_err!("Missing required parameter '{}'", param_names[i]);
         }
     }
 
     // Return only the assigned parameters (handles optional trailing parameters)
-    Ok(result
-        .into_iter()
-        .take(required_count)
-        .map(|e| e.unwrap())
-        .collect())
+    Ok(result.into_iter().take(required_count).flatten().collect())
 }
 
 #[cfg(test)]
