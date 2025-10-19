@@ -61,7 +61,6 @@ paste = "1.0.14"
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
 rand = { workspace = true }
-rstest = { workspace = true }
 
 [[bench]]
 harness = false
