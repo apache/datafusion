@@ -1718,8 +1718,6 @@ mod tests {
 
     #[test]
     fn test_generate_signature_error_msg_with_parameter_names() {
-        // Create a signature like substr with parameter names
-        // substr(str, start_pos) or substr(str, start_pos, length)
         let sig = Signature::one_of(
             vec![
                 TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
@@ -1741,7 +1739,6 @@ mod tests {
         // Generate error message with only 1 argument provided
         let error_msg = generate_signature_error_msg("substr", sig, &[DataType::Utf8]);
 
-        // Error message should contain parameter names with types
         assert!(
             error_msg.contains("str: Utf8, start_pos: Int64"),
             "Expected 'str: Utf8, start_pos: Int64' in error message, got: {error_msg}"
@@ -1754,16 +1751,13 @@ mod tests {
 
     #[test]
     fn test_generate_signature_error_msg_without_parameter_names() {
-        // Create a signature without parameter names
         let sig = Signature::one_of(
             vec![TypeSignature::Any(2), TypeSignature::Any(3)],
             Volatility::Immutable,
         );
 
-        // Generate error message
         let error_msg = generate_signature_error_msg("my_func", sig, &[DataType::Int32]);
 
-        // Should contain generic "Any" types when no parameter names
         assert!(
             error_msg.contains("Any, Any"),
             "Expected 'Any, Any' without parameter names, got: {error_msg}"

@@ -277,9 +277,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let (args, arg_names) =
                 self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
-            // Resolve named arguments if any are present
             let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
-                // Get parameter names from the signature if available
                 if let Some(param_names) = &fm.signature().parameter_names {
                     datafusion_expr::arguments::resolve_function_arguments(
                         param_names,
@@ -287,7 +285,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         arg_names,
                     )?
                 } else {
-                    // UDF doesn't support named arguments
                     return plan_err!(
                         "Function '{}' does not support named arguments",
                         fm.name()

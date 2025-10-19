@@ -52,7 +52,6 @@ pub fn resolve_function_arguments(
     args: Vec<Expr>,
     arg_names: Vec<Option<String>>,
 ) -> Result<Vec<Expr>> {
-    // Validate that arg_names length matches args length
     if args.len() != arg_names.len() {
         return plan_err!(
             "Internal error: args length ({}) != arg_names length ({})",
@@ -66,10 +65,8 @@ pub fn resolve_function_arguments(
         return Ok(args);
     }
 
-    // Validate mixed positional and named arguments
     validate_argument_order(&arg_names)?;
 
-    // Validate and reorder named arguments
     reorder_named_arguments(param_names, args, arg_names)
 }
 
@@ -105,16 +102,13 @@ fn reorder_named_arguments(
         .map(|(idx, name)| (name.as_str(), idx))
         .collect();
 
-    // Count positional vs named arguments
     let positional_count = arg_names.iter().filter(|n| n.is_none()).count();
 
     // Capture args length before consuming the vector
     let args_len = args.len();
 
-    // Create a result vector with the expected size
     let expected_arg_count = param_names.len();
 
-    // Validate positional argument count upfront
     if positional_count > expected_arg_count {
         return plan_err!(
             "Too many positional arguments: expected at most {}, got {}",
@@ -125,7 +119,6 @@ fn reorder_named_arguments(
 
     let mut result: Vec<Option<Expr>> = vec![None; expected_arg_count];
 
-    // Process all arguments (both positional and named)
     for (i, (arg, arg_name)) in args.into_iter().zip(arg_names).enumerate() {
         if let Some(name) = arg_name {
             // Named argument - O(1) lookup in HashMap
@@ -138,19 +131,16 @@ fn reorder_named_arguments(
                     )
                 })?;
 
-            // Check if this parameter was already assigned
             if result[param_index].is_some() {
                 return plan_err!("Parameter '{}' specified multiple times", name);
             }
 
             result[param_index] = Some(arg);
         } else {
-            // Positional argument - place at current position
             result[i] = Some(arg);
         }
     }
 
-    // Check if all required parameters were provided
     // Only require parameters up to the number of arguments provided (supports optional parameters)
     let required_count = args_len;
     for i in 0..required_count {
