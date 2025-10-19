@@ -145,9 +145,7 @@ mod private {
     use super::*;
 
     use bytes::Buf;
-    use datafusion_datasource::{
-        file_meta::FileMeta, file_stream::FileOpenFuture, PartitionedFile,
-    };
+    use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
 
@@ -157,15 +155,13 @@ mod private {
     }
 
     impl FileOpener for AvroOpener {
-        fn open(
-            &self,
-            file_meta: FileMeta,
-            _file: PartitionedFile,
-        ) -> Result<FileOpenFuture> {
+        fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let config = Arc::clone(&self.config);
             let object_store = Arc::clone(&self.object_store);
             Ok(Box::pin(async move {
-                let r = object_store.get(file_meta.location()).await?;
+                let r = object_store
+                    .get(&partitioned_file.object_meta.location)
+                    .await?;
                 match r.payload {
                     GetResultPayload::File(file, _) => {
                         let reader = config.open(file)?;

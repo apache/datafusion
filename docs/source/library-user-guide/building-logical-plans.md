@@ -153,9 +153,9 @@ Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
 Logical plans can not be directly executed. They must be "compiled" into an
 [`ExecutionPlan`], which is often referred to as a "physical plan".
 
-Compared to `LogicalPlan`s `ExecutionPlans` have many more details such as
-specific algorithms and detailed optimizations compared to. Given a
-`LogicalPlan` the easiest way to create an `ExecutionPlan` is using
+Compared to `LogicalPlan`s, `ExecutionPlan`s have many more details such as
+specific algorithms and detailed optimizations. Given a
+`LogicalPlan`, the easiest way to create an `ExecutionPlan` is using
 [`SessionState::create_physical_plan`] as shown below
 
 ```rust

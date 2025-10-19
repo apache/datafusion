@@ -49,7 +49,6 @@ pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
 /// optimizations. You should always define your function to have the strictest
 /// possible volatility to maximize performance and avoid unexpected
 /// results.
-///
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
     /// Always returns the same output when given the same input.

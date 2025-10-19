@@ -63,6 +63,10 @@ OPTIONS:
     -d, --disk-limit <DISK_LIMIT>
             Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
 
+      --object-store-profiling <OBJECT_STORE_PROFILING>
+          Specify the default object_store_profiling mode, defaults to 'disabled'.
+          [possible values: disabled, summary, trace] [default: Disabled]
+
     -p, --data-path <DATA_PATH>
             Path to your data, default to current directory
 
@@ -120,6 +124,41 @@ Available commands inside DataFusion CLI are:
 
 ```bash
 > \h function
+```
+
+- Object Store Profiling Mode
+
+```bash
+> \object_store_profiling [disabled|summary|trace]
+```
+
+When enabled, prints detailed information about object store (I/O) operations
+performed during query execution to STDOUT.
+
+```sql
+> \object_store_profiling trace
+ObjectStore Profile mode set to Trace
+> select count(*) from 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet';
++----------+
+| count(*) |
++----------+
+| 1000000  |
++----------+
+1 row(s) fetched.
+Elapsed 0.552 seconds.
+
+Object Store Profiling
+Instrumented Object Store: instrument_mode: Trace, inner: HttpStore
+2025-10-17T18:08:48.457992+00:00 operation=Get duration=0.043592s size=8 range: bytes=174965036-174965043 path=hits_compatible/athena_partitioned/hits_1.parquet
+2025-10-17T18:08:48.501878+00:00 operation=Get duration=0.031542s size=34322 range: bytes=174930714-174965035 path=hits_compatible/athena_partitioned/hits_1.parquet
+
+Summaries:
++-----------+----------+-----------+-----------+-----------+-----------+-------+
+| Operation | Metric   | min       | max       | avg       | sum       | count |
++-----------+----------+-----------+-----------+-----------+-----------+-------+
+| Get       | duration | 0.031542s | 0.043592s | 0.037567s | 0.075133s | 2     |
+| Get       | size     | 8 B       | 34322 B   | 17165 B   | 34330 B   | 2     |
++-----------+----------+-----------+-----------+-----------+-----------+-------+
 ```
 
 ## Supported SQL
