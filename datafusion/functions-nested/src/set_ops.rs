@@ -555,3 +555,54 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         array.nulls().cloned(),
     )?))
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::*;
+    use std::sync::Arc;
+
+    use arrow::{
+        array::{Int32Array, ListArray},
+        buffer::OffsetBuffer,
+        datatypes::{DataType, Field},
+    };
+    use datafusion_common::{config::ConfigOptions, DataFusionError};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+
+    use crate::set_ops::array_distinct_udf;
+
+    #[rstest(inner_nullable, case(true), case(false))]
+    #[test]
+    fn test_array_distinct_inner_nullability_result_type_match_return_type(
+        inner_nullable: bool,
+    ) -> Result<(), DataFusionError> {
+        let udf = array_distinct_udf();
+
+        let inner_field = Field::new_list_field(DataType::Int32, inner_nullable);
+        let input_field = Field::new_list("input", Arc::new(inner_field.clone()), true);
+
+        // [[1, 1, 2]]
+        let input_array = ListArray::new(
+            inner_field.into(),
+            OffsetBuffer::new(vec![0, 3].into()),
+            Arc::new(Int32Array::new(vec![1, 1, 2].into(), None)),
+            None,
+        );
+        let input_array = ColumnarValue::Array(Arc::new(input_array));
+
+        let result = udf.invoke_with_args(ScalarFunctionArgs {
+            args: vec![input_array],
+            arg_fields: vec![input_field.clone().into()],
+            number_rows: 1,
+            return_field: input_field.clone().into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        assert_eq!(
+            result.data_type(),
+            udf.return_type(&[input_field.data_type().clone()])?
+        );
+
+        Ok(())
+    }
+}
