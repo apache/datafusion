@@ -22,7 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::ExplainFormat;
+use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -991,6 +991,11 @@ config_namespace! {
         /// (format=tree only) Maximum total width of the rendered tree.
         /// When set to 0, the tree will have no width limit.
         pub tree_maximum_render_width: usize, default = 240
+
+        /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
+        /// "summary" shows common metrics for high-level insights.
+        /// "dev" provides deep operator-level introspection for developers.
+        pub analyze_level: ExplainAnalyzeLevel, default = ExplainAnalyzeLevel::Dev
     }
 }
 

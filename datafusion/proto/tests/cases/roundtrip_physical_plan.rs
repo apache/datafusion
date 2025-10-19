@@ -32,6 +32,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion::physical_plan::metrics::MetricType;
 use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -1436,6 +1437,7 @@ fn roundtrip_analyze() -> Result<()> {
     roundtrip_test(Arc::new(AnalyzeExec::new(
         false,
         false,
+        vec![MetricType::SUMMARY, MetricType::DEV],
         input,
         Arc::new(schema),
     )))
