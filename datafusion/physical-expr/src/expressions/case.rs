@@ -127,7 +127,7 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
 
 fn merge_result(
     current_value: &dyn Array,
-    then_value: ColumnarValue,
+    then_value: &ColumnarValue,
     then_scatter: &BooleanArray,
 ) -> std::result::Result<ArrayRef, ArrowError> {
     match then_value {
@@ -233,7 +233,9 @@ impl CaseExpr {
                 // keep `else_expr`'s data type and return type consistent
                 let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
                 let else_value = expr.evaluate(batch)?;
-                return Ok(ColumnarValue::Array(else_value.to_array(batch.num_rows())?));
+                return Ok(ColumnarValue::Array(
+                    else_value.into_array(batch.num_rows())?,
+                ));
             } else {
                 // No else expression, so the entire result is null.
                 return Ok(ColumnarValue::Array(new_null_array(
@@ -257,7 +259,7 @@ impl CaseExpr {
                 let nulls = is_null(base_value.as_ref())?;
                 let nulls_batch = filter_record_batch(batch, &nulls)?;
                 let else_value = expr.evaluate(&nulls_batch)?;
-                scatter(&nulls, &else_value.to_array(nulls_batch.num_rows())?)?
+                scatter(&nulls, &else_value.into_array(nulls_batch.num_rows())?)?
             } else {
                 new_null_array(&return_type, batch.num_rows())
             };
@@ -276,10 +278,10 @@ impl CaseExpr {
             // This results in a boolean array with the same length as the remaining number of rows
             let when_expression = &self.when_then_expr[i].0;
             let when_value = when_expression.evaluate(&remainder_batch)?;
-            let when_value = when_value.to_array(remainder_batch.num_rows())?;
+            let when_value = when_value.into_array(remainder_batch.num_rows())?;
             let when_value = compare_with_eq(
-                &base_value,
                 &when_value,
+                &base_value,
                 // The types of case and when expressions will be coerced to match.
                 // We only need to check if the base_value is nested.
                 base_value.data_type().is_nested(),
@@ -316,11 +318,13 @@ impl CaseExpr {
             let then_merge = then_merge.as_boolean();
 
             // Merge the 'then' values with the `current_value` array
-            current_value = merge_result(&current_value, then_value, then_merge)?;
+            current_value = merge_result(&current_value, &then_value, then_merge)?;
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
-            if remainder_batch.num_rows() == when_match_count {
+            if remainder_batch.num_rows() == when_match_count
+                || (self.else_expr.is_none() && i == self.when_then_expr.len() - 1)
+            {
                 return Ok(ColumnarValue::Array(current_value));
             }
 
@@ -340,7 +344,8 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
-            current_value = merge_result(&current_value, else_value, &remainder_scatter)?;
+            current_value =
+                merge_result(&current_value, &else_value, &remainder_scatter)?;
         }
 
         Ok(ColumnarValue::Array(current_value))
@@ -367,7 +372,7 @@ impl CaseExpr {
             // This results in a boolean array with the same length as the remaining number of rows
             let when_predicate = &self.when_then_expr[i].0;
             let when_value = when_predicate.evaluate(&remainder_batch)?;
-            let when_value = when_value.to_array(remainder_batch.num_rows())?;
+            let when_value = when_value.into_array(remainder_batch.num_rows())?;
             let when_value = as_boolean_array(&when_value).map_err(|_| {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
@@ -400,11 +405,13 @@ impl CaseExpr {
             let then_merge = then_merge.as_boolean();
 
             // Merge the 'then' values with the `current_value` array
-            current_value = merge_result(&current_value, then_value, then_merge)?;
+            current_value = merge_result(&current_value, &then_value, then_merge)?;
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
-            if remainder_batch.num_rows() == when_match_count {
+            if remainder_batch.num_rows() == when_match_count
+                || (self.else_expr.is_none() && i == self.when_then_expr.len() - 1)
+            {
                 return Ok(ColumnarValue::Array(current_value));
             }
 
@@ -423,7 +430,8 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
-            current_value = merge_result(&current_value, else_value, &remainder_scatter)?;
+            current_value =
+                merge_result(&current_value, &else_value, &remainder_scatter)?;
         }
 
         Ok(ColumnarValue::Array(current_value))
