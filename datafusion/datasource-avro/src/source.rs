@@ -52,7 +52,9 @@ impl AvroSource {
     }
 
     fn open<R: std::io::Read>(&self, reader: R) -> Result<Reader<R>> {
-        let avro_schema = AvroSchema::try_from(self.schema.expect("Schema must set before open").as_ref())?;
+        let avro_schema = AvroSchema::try_from(
+            self.schema.expect("Schema must set before open").as_ref(),
+        )?;
         ReaderBuilder::new()
             .with_reader_schema(avro_schema)
             .with_batch_size(self.batch_size.expect("Batch size must set before open"))
