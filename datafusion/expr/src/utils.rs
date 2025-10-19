@@ -1720,8 +1720,16 @@ mod tests {
         use datafusion_expr_common::signature::{TypeSignature, Volatility};
 
         // Create a signature like substr with parameter names
+        // substr(str, start_pos) or substr(str, start_pos, length)
         let sig = Signature::one_of(
-            vec![TypeSignature::Any(2), TypeSignature::Any(3)],
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Int64,
+                ]),
+            ],
             Volatility::Immutable,
         )
         .with_parameter_names(vec![
@@ -1734,20 +1742,14 @@ mod tests {
         // Generate error message with only 1 argument provided
         let error_msg = generate_signature_error_msg("substr", sig, &[DataType::Utf8]);
 
-        // Error message should contain parameter names
+        // Error message should contain parameter names with types
         assert!(
-            error_msg.contains("str, start_pos"),
-            "Expected 'str, start_pos' in error message, got: {error_msg}"
+            error_msg.contains("str: Utf8, start_pos: Int64"),
+            "Expected 'str: Utf8, start_pos: Int64' in error message, got: {error_msg}"
         );
         assert!(
-            error_msg.contains("str, start_pos, length"),
-            "Expected 'str, start_pos, length' in error message, got: {error_msg}"
-        );
-
-        // Should NOT contain generic "Any" types
-        assert!(
-            !error_msg.contains("Any, Any"),
-            "Should not contain 'Any, Any', got: {error_msg}"
+            error_msg.contains("str: Utf8, start_pos: Int64, length: Int64"),
+            "Expected 'str: Utf8, start_pos: Int64, length: Int64' in error message, got: {error_msg}"
         );
     }
 

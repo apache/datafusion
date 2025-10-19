@@ -695,8 +695,8 @@ When a function call fails due to incorrect arguments, DataFusion will show the 
 ```text
 No function matches the given name and argument types substr(Utf8).
     Candidate functions:
-    substr(str, start_pos)
-    substr(str, start_pos, length)
+    substr(str: Any, start_pos: Any)
+    substr(str: Any, start_pos: Any, length: Any)
 ```
 
 ## Adding a Window UDF

@@ -3957,7 +3957,7 @@ fn test_double_quoted_literal_string() {
 fn test_named_arguments_with_dialects() {
     // Test that named arguments syntax (param => value) with different dialects
     use datafusion_sql::parser::Statement as DFStatement;
-    use sqlparser::ast::{FunctionArg, Statement, Expr as SQLExpr};
+    use sqlparser::ast::{Expr as SQLExpr, FunctionArg, Statement};
     use sqlparser::dialect::Dialect;
 
     let sql = "SELECT my_func(arg1 => 'value1')";
@@ -3971,8 +3971,13 @@ fn test_named_arguments_with_dialects() {
             if let Statement::Query(query) = stmt.as_ref() {
                 if let sqlparser::ast::SetExpr::Select(select) = query.body.as_ref() {
                     let projection = &select.projection[0];
-                    if let sqlparser::ast::SelectItem::UnnamedExpr(SQLExpr::Function(func)) = projection {
-                        if let sqlparser::ast::FunctionArguments::List(arg_list) = &func.args {
+                    if let sqlparser::ast::SelectItem::UnnamedExpr(SQLExpr::Function(
+                        func,
+                    )) = projection
+                    {
+                        if let sqlparser::ast::FunctionArguments::List(arg_list) =
+                            &func.args
+                        {
                             return Some(arg_list.args[0].clone());
                         }
                     }
