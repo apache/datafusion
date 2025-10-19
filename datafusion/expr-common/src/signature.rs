@@ -84,6 +84,15 @@ pub enum Volatility {
     Volatile,
 }
 
+/// Represents the arity (number of arguments) of a function signature
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arity {
+    /// Fixed number of arguments
+    Fixed(usize),
+    /// Variable number of arguments (e.g., Variadic, VariadicAny, UserDefined)
+    Variable,
+}
+
 /// The types of arguments for which a function has implementations.
 ///
 /// [`TypeSignature`] **DOES NOT** define the types that a user query could call the
@@ -142,16 +151,6 @@ pub enum Volatility {
 ///   DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
 /// ]);
 /// ```
-///
-/// Represents the arity (number of arguments) of a function signature
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Arity {
-    /// Fixed number of arguments
-    Fixed(usize),
-    /// Variable number of arguments (e.g., Variadic, VariadicAny, UserDefined)
-    Variable,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum TypeSignature {
     /// One or more arguments of a common type out of a list of valid types.
