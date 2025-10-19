@@ -575,3 +575,12 @@ WHERE trace_id = '00000000000000000000000000000002'
 ORDER BY start_timestamp, trace_id;
 ----
 staging
+
+query P
+SELECT start_timestamp
+FROM t1
+WHERE trace_id = '00000000000000000000000000000002' AND deployment_environment = 'staging'
+ORDER BY start_timestamp, trace_id
+LIMIT 1;
+----
+2024-10-01T00:00:00Z

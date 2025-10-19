@@ -256,7 +256,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Map(_, _), other) => {
                 let data_type = other.data_type();
                 if data_type.is_nested() {
-                    exec_err!("unsupported type {:?} for map access", data_type)
+                    exec_err!("unsupported type {} for map access", data_type)
                 } else {
                     process_map_array(array, other.to_array()?)
                 }
@@ -275,7 +275,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
             (dt, name) => exec_err!(
                 "get_field is only possible on maps with utf8 indexes or struct \
-                                         with utf8 indexes. Received {dt:?} with {name:?} index"
+                                         with utf8 indexes. Received {dt} with {name:?} index"
             ),
         }
     }

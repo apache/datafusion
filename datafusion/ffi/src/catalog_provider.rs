@@ -327,7 +327,7 @@ mod tests {
         assert!(returned_schema.is_some());
         assert_eq!(foreign_catalog.schema_names().len(), 1);
 
-        // Retrieve non-existant schema
+        // Retrieve non-existent schema
         let returned_schema = foreign_catalog.schema("prior_schema");
         assert!(returned_schema.is_none());
 

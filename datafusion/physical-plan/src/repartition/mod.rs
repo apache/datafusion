@@ -45,8 +45,9 @@ use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
-use datafusion_common::{internal_err, HashMap};
+use datafusion_common::{internal_err, ColumnStatistics, HashMap};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -755,10 +756,44 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            self.input.partition_statistics(None)
+        if let Some(partition) = partition {
+            let partition_count = self.partitioning().partition_count();
+            if partition_count == 0 {
+                return Ok(Statistics::new_unknown(&self.schema()));
+            }
+
+            if partition >= partition_count {
+                return internal_err!(
+                    "RepartitionExec invalid partition {} (expected less than {})",
+                    partition,
+                    self.partitioning().partition_count()
+                );
+            }
+
+            let mut stats = self.input.partition_statistics(None)?;
+
+            // Distribute statistics across partitions
+            stats.num_rows = stats
+                .num_rows
+                .get_value()
+                .map(|rows| Precision::Inexact(rows / partition_count))
+                .unwrap_or(Precision::Absent);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .get_value()
+                .map(|bytes| Precision::Inexact(bytes / partition_count))
+                .unwrap_or(Precision::Absent);
+
+            // Make all column stats unknown
+            stats.column_statistics = stats
+                .column_statistics
+                .iter()
+                .map(|_| ColumnStatistics::new_unknown())
+                .collect();
+
+            Ok(stats)
         } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+            self.input.partition_statistics(None)
         }
     }
 
@@ -822,6 +857,27 @@ impl ExecutionPlan for RepartitionExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        _config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        use Partitioning::*;
+        let mut new_properties = self.cache.clone();
+        new_properties.partitioning = match new_properties.partitioning {
+            RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
+            Hash(hash, _) => Hash(hash, target_partitions),
+            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
+        };
+        Ok(Some(Arc::new(Self {
+            input: Arc::clone(&self.input),
+            state: Arc::clone(&self.state),
+            metrics: self.metrics.clone(),
+            preserve_order: self.preserve_order,
+            cache: new_properties,
+        })))
     }
 }
 
@@ -1726,17 +1782,12 @@ mod test {
     /// `$PLAN`: the plan to optimized
     ///
     macro_rules! assert_plan {
-        ($EXPECTED_PLAN_LINES: expr,  $PLAN: expr) => {
-            let physical_plan = $PLAN;
-            let formatted = crate::displayable(&physical_plan).indent(true).to_string();
-            let actual: Vec<&str> = formatted.trim().lines().collect();
+        ($PLAN: expr,  @ $EXPECTED: expr) => {
+            let formatted = crate::displayable($PLAN).indent(true).to_string();
 
-            let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
-                .iter().map(|s| *s).collect();
-
-            assert_eq!(
-                expected_plan_lines, actual,
-                "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+            insta::assert_snapshot!(
+                formatted,
+                @$EXPECTED
             );
         };
     }
@@ -1748,20 +1799,17 @@ mod test {
         let source1 = sorted_memory_exec(&schema, sort_exprs.clone());
         let source2 = sorted_memory_exec(&schema, sort_exprs);
         // output has multiple partitions, and is sorted
-        let union = UnionExec::new(vec![source1, source2]);
-        let exec =
-            RepartitionExec::try_new(Arc::new(union), Partitioning::RoundRobinBatch(10))
-                .unwrap()
-                .with_preserve_order();
+        let union = UnionExec::try_new(vec![source1, source2])?;
+        let exec = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
+            .with_preserve_order();
 
         // Repartition should preserve order
-        let expected_plan = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
-            "  UnionExec",
-            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-        ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(&exec, @r"
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC
+          UnionExec
+            DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
+            DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
+        ");
         Ok(())
     }
 
@@ -1771,16 +1819,15 @@ mod test {
         let sort_exprs = sort_exprs(&schema);
         let source = sorted_memory_exec(&schema, sort_exprs);
         // output is sorted, but has only a single partition, so no need to sort
-        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))
-            .unwrap()
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))?
             .with_preserve_order();
 
         // Repartition should not preserve order
-        let expected_plan = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "  DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-        ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(&exec, @r"
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
+        ");
+
         Ok(())
     }
 
@@ -1790,20 +1837,35 @@ mod test {
         let source1 = memory_exec(&schema);
         let source2 = memory_exec(&schema);
         // output has multiple partitions, but is not sorted
-        let union = UnionExec::new(vec![source1, source2]);
-        let exec =
-            RepartitionExec::try_new(Arc::new(union), Partitioning::RoundRobinBatch(10))
-                .unwrap()
-                .with_preserve_order();
+        let union = UnionExec::try_new(vec![source1, source2])?;
+        let exec = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
+            .with_preserve_order();
 
         // Repartition should not preserve order, as there is no order to preserve
-        let expected_plan = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-            "  UnionExec",
-            "    DataSourceExec: partitions=1, partition_sizes=[0]",
-            "    DataSourceExec: partitions=1, partition_sizes=[0]",
-        ];
-        assert_plan!(expected_plan, exec);
+        assert_plan!(&exec, @r"
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
+          UnionExec
+            DataSourceExec: partitions=1, partition_sizes=[0]
+            DataSourceExec: partitions=1, partition_sizes=[0]
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repartition() -> Result<()> {
+        let schema = test_schema();
+        let sort_exprs = sort_exprs(&schema);
+        let source = sorted_memory_exec(&schema, sort_exprs);
+        // output is sorted, but has only a single partition, so no need to sort
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))?
+            .repartitioned(20, &Default::default())?
+            .unwrap();
+
+        // Repartition should not preserve order
+        assert_plan!(exec.as_ref(), @r"
+        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
+        ");
         Ok(())
     }
 

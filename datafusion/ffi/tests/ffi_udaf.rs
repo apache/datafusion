@@ -16,7 +16,7 @@
 // under the License.
 
 /// Add an additional module here for convenience to scope this to only
-/// when the feature integtation-tests is built
+/// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
     use arrow::array::Float64Array;

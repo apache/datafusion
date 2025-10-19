@@ -24,7 +24,9 @@ use arrow::array::{new_null_array, ArrayIter, AsArray};
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::array::{ArrayAccessor, StringViewArray};
 use arrow::datatypes::DataType;
-use datafusion_common::cast::as_string_view_array;
+use datafusion_common::cast::{
+    as_large_string_array, as_string_array, as_string_view_array,
+};
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_common::ScalarValue;
@@ -95,13 +97,12 @@ impl Default for RegexpReplaceFunc {
 impl RegexpReplaceFunc {
     pub fn new() -> Self {
         use DataType::*;
+        use TypeSignature::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8, Utf8]),
+                    Uniform(3, vec![Utf8View, LargeUtf8, Utf8]),
+                    Uniform(4, vec![Utf8View, LargeUtf8, Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -238,15 +239,14 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 /// # Ok(())
 /// # }
 /// ```
-pub fn regexp_replace<'a, T: OffsetSizeTrait, V, B>(
-    string_array: V,
-    pattern_array: B,
-    replacement_array: B,
-    flags: Option<&ArrayRef>,
+pub fn regexp_replace<'a, T: OffsetSizeTrait, U>(
+    string_array: U,
+    pattern_array: U,
+    replacement_array: U,
+    flags_array: Option<U>,
 ) -> Result<ArrayRef>
 where
-    V: ArrayAccessor<Item = &'a str>,
-    B: ArrayAccessor<Item = &'a str>,
+    U: ArrayAccessor<Item = &'a str>,
 {
     // Default implementation for regexp_replace, assumes all args are arrays
     // and args is a sequence of 3 or 4 elements.
@@ -260,7 +260,7 @@ where
     let pattern_array_iter = ArrayIter::new(pattern_array);
     let replacement_array_iter = ArrayIter::new(replacement_array);
 
-    match flags {
+    match flags_array {
         None => {
             let result_iter = string_array_iter
                 .zip(pattern_array_iter)
@@ -307,13 +307,13 @@ where
                 }
             }
         }
-        Some(flags) => {
-            let flags_array = as_generic_string_array::<T>(flags)?;
+        Some(flags_array) => {
+            let flags_array_iter = ArrayIter::new(flags_array);
 
             let result_iter = string_array_iter
                 .zip(pattern_array_iter)
                 .zip(replacement_array_iter)
-                .zip(flags_array.iter())
+                .zip(flags_array_iter)
                 .map(|(((string, pattern), replacement), flags)| {
                     match (string, pattern, replacement, flags) {
                         (Some(string), Some(pattern), Some(replacement), Some(flags)) => {
@@ -398,12 +398,37 @@ fn _regexp_replace_early_abort<T: ArrayAccessor>(
 /// Note: If the array is empty or the first argument is null,
 /// then calls the given early abort function.
 macro_rules! fetch_string_arg {
-    ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
-        let array = as_generic_string_array::<$T>($ARG)?;
-        if array.len() == 0 || array.is_null(0) {
-            return $EARLY_ABORT(array, $ARRAY_SIZE);
-        } else {
-            array.value(0)
+    ($ARG:expr, $NAME:expr, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
+        let string_array_type = ($ARG).data_type();
+        match string_array_type {
+            DataType::Utf8 => {
+                let array = as_string_array($ARG)?;
+                if array.len() == 0 || array.is_null(0) {
+                    return $EARLY_ABORT(array, $ARRAY_SIZE);
+                } else {
+                    array.value(0)
+                }
+            }
+            DataType::LargeUtf8 => {
+                let array = as_large_string_array($ARG)?;
+                if array.len() == 0 || array.is_null(0) {
+                    return $EARLY_ABORT(array, $ARRAY_SIZE);
+                } else {
+                    array.value(0)
+                }
+            }
+            DataType::Utf8View => {
+                let array = as_string_view_array($ARG)?;
+                if array.len() == 0 || array.is_null(0) {
+                    return $EARLY_ABORT(array, $ARRAY_SIZE);
+                } else {
+                    array.value(0)
+                }
+            }
+            _ => unreachable!(
+                "Invalid data type for regexp_replace: {}",
+                string_array_type
+            ),
         }
     }};
 }
@@ -417,23 +442,17 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let array_size = args[0].len();
-    let pattern = fetch_string_arg!(
-        &args[1],
-        "pattern",
-        i32,
-        _regexp_replace_early_abort,
-        array_size
-    );
+    let pattern =
+        fetch_string_arg!(&args[1], "pattern", _regexp_replace_early_abort, array_size);
     let replacement = fetch_string_arg!(
         &args[2],
         "replacement",
-        i32,
         _regexp_replace_early_abort,
         array_size
     );
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(&args[3], "flags", i32, _regexp_replace_early_abort, array_size)),
+        4 => Some(fetch_string_arg!(&args[3], "flags", _regexp_replace_early_abort, array_size)),
         other => {
             return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
@@ -590,38 +609,61 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                 .map(|arg| arg.to_array(inferred_length))
                 .collect::<Result<Vec<_>>>()?;
 
-            match args[0].data_type() {
-                DataType::Utf8View => {
-                    let string_array = args[0].as_string_view();
-                    let pattern_array = args[1].as_string::<i32>();
-                    let replacement_array = args[2].as_string::<i32>();
-                    regexp_replace::<i32, _, _>(
-                        string_array,
-                        pattern_array,
-                        replacement_array,
-                        args.get(3),
-                    )
-                }
-                DataType::Utf8 => {
+            match (
+                args[0].data_type(),
+                args[1].data_type(),
+                args[2].data_type(),
+                args.get(3).map(|a| a.data_type()),
+            ) {
+                (
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    Some(DataType::Utf8) | None,
+                ) => {
                     let string_array = args[0].as_string::<i32>();
                     let pattern_array = args[1].as_string::<i32>();
                     let replacement_array = args[2].as_string::<i32>();
-                    regexp_replace::<i32, _, _>(
+                    let flags_array = args.get(3).map(|a| a.as_string::<i32>());
+                    regexp_replace::<i32, _>(
                         string_array,
                         pattern_array,
                         replacement_array,
-                        args.get(3),
+                        flags_array,
                     )
                 }
-                DataType::LargeUtf8 => {
+                (
+                    DataType::Utf8View,
+                    DataType::Utf8View,
+                    DataType::Utf8View,
+                    Some(DataType::Utf8View) | None,
+                ) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = args.get(3).map(|a| a.as_string_view());
+                    regexp_replace::<i32, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (
+                    DataType::LargeUtf8,
+                    DataType::LargeUtf8,
+                    DataType::LargeUtf8,
+                    Some(DataType::LargeUtf8) | None,
+                ) => {
                     let string_array = args[0].as_string::<i64>();
                     let pattern_array = args[1].as_string::<i64>();
                     let replacement_array = args[2].as_string::<i64>();
-                    regexp_replace::<i64, _, _>(
+                    let flags_array = args.get(3).map(|a| a.as_string::<i64>());
+                    regexp_replace::<i64, _>(
                         string_array,
                         pattern_array,
                         replacement_array,
-                        args.get(3),
+                        flags_array,
                     )
                 }
                 other => {
@@ -650,8 +692,8 @@ mod tests {
                     vec!["afooc", "acd", "afoocd1234567890123", "123456789012afooc"];
 
                 let values = <$T>::from(values);
-                let patterns = StringArray::from(patterns);
-                let replacements = StringArray::from(replacement);
+                let patterns = <$T>::from(patterns);
+                let replacements = <$T>::from(replacement);
                 let expected = <$T>::from(expected);
 
                 let re = _regexp_replace_static_pattern_replace::<$O>(&[

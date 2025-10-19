@@ -17,31 +17,33 @@
 
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
+use arrow::ipc::writer::StreamWriter;
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+};
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_sink_config::FileSink;
+use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::{FileRange, PartitionedFile};
+use datafusion_datasource_csv::file_format::CsvSink;
+use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::datasource::physical_plan::FileSink;
-use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
-use datafusion::physical_expr::ScalarFunctionExpr;
-use datafusion::physical_expr_common::physical_expr::snapshot_physical_expr;
-use datafusion::physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion::physical_plan::expressions::{
+use datafusion_datasource_parquet::file_format::ParquetSink;
+use datafusion_expr::WindowFrame;
+use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
+use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_plan::expressions::LikeExpr;
+use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
-use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion::{
-    datasource::{
-        file_format::{csv::CsvSink, json::JsonSink},
-        listing::{FileRange, PartitionedFile},
-        physical_plan::{FileScanConfig, FileSinkConfig},
-    },
-    physical_plan::expressions::LikeExpr,
-};
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::WindowFrame;
+use datafusion_physical_plan::udaf::AggregateFunctionExpr;
+use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
+use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 
 use crate::protobuf::{
     self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
@@ -81,12 +83,7 @@ fn serialize_physical_window_aggr_expr(
     _window_frame: &WindowFrame,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<(physical_window_expr_node::WindowFunction, Option<Vec<u8>>)> {
-    if aggr_expr.is_distinct() || aggr_expr.ignore_nulls() {
-        // TODO
-        return not_impl_err!(
-            "Distinct aggregate functions not supported in window expressions"
-        );
-    }
+    // Distinct and ignore_nulls are now supported in window expressions
 
     let mut buf = Vec::new();
     codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
@@ -106,44 +103,55 @@ pub fn serialize_physical_window_expr(
     let args = window_expr.expressions().to_vec();
     let window_frame = window_expr.get_window_frame();
 
-    let (window_function, fun_definition) = if let Some(plain_aggr_window_expr) =
-        expr.downcast_ref::<PlainAggregateWindowExpr>()
-    {
-        serialize_physical_window_aggr_expr(
-            plain_aggr_window_expr.get_aggregate_expr(),
-            window_frame,
-            codec,
-        )?
-    } else if let Some(sliding_aggr_window_expr) =
-        expr.downcast_ref::<SlidingAggregateWindowExpr>()
-    {
-        serialize_physical_window_aggr_expr(
-            sliding_aggr_window_expr.get_aggregate_expr(),
-            window_frame,
-            codec,
-        )?
-    } else if let Some(udf_window_expr) = expr.downcast_ref::<StandardWindowExpr>() {
-        if let Some(expr) = udf_window_expr
-            .get_standard_func_expr()
-            .as_any()
-            .downcast_ref::<WindowUDFExpr>()
+    let (window_function, fun_definition, ignore_nulls, distinct) =
+        if let Some(plain_aggr_window_expr) =
+            expr.downcast_ref::<PlainAggregateWindowExpr>()
         {
-            let mut buf = Vec::new();
-            codec.try_encode_udwf(expr.fun(), &mut buf)?;
+            let aggr_expr = plain_aggr_window_expr.get_aggregate_expr();
+            let (window_function, fun_definition) =
+                serialize_physical_window_aggr_expr(aggr_expr, window_frame, codec)?;
             (
-                physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
-                    expr.fun().name().to_string(),
-                ),
-                (!buf.is_empty()).then_some(buf),
+                window_function,
+                fun_definition,
+                aggr_expr.ignore_nulls(),
+                aggr_expr.is_distinct(),
             )
+        } else if let Some(sliding_aggr_window_expr) =
+            expr.downcast_ref::<SlidingAggregateWindowExpr>()
+        {
+            let aggr_expr = sliding_aggr_window_expr.get_aggregate_expr();
+            let (window_function, fun_definition) =
+                serialize_physical_window_aggr_expr(aggr_expr, window_frame, codec)?;
+            (
+                window_function,
+                fun_definition,
+                aggr_expr.ignore_nulls(),
+                aggr_expr.is_distinct(),
+            )
+        } else if let Some(udf_window_expr) = expr.downcast_ref::<StandardWindowExpr>() {
+            if let Some(expr) = udf_window_expr
+                .get_standard_func_expr()
+                .as_any()
+                .downcast_ref::<WindowUDFExpr>()
+            {
+                let mut buf = Vec::new();
+                codec.try_encode_udwf(expr.fun(), &mut buf)?;
+                (
+                    physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
+                        expr.fun().name().to_string(),
+                    ),
+                    (!buf.is_empty()).then_some(buf),
+                    false, // WindowUDFExpr doesn't have ignore_nulls/distinct
+                    false,
+                )
+            } else {
+                return not_impl_err!(
+                    "User-defined window function not supported: {window_expr:?}"
+                );
+            }
         } else {
-            return not_impl_err!(
-                "User-defined window function not supported: {window_expr:?}"
-            );
-        }
-    } else {
-        return not_impl_err!("WindowExpr not supported: {window_expr:?}");
-    };
+            return not_impl_err!("WindowExpr not supported: {window_expr:?}");
+        };
 
     let args = serialize_physical_exprs(&args, codec)?;
     let partition_by = serialize_physical_exprs(window_expr.partition_by(), codec)?;
@@ -151,7 +159,7 @@ pub fn serialize_physical_window_expr(
     let window_frame: protobuf::WindowFrame = window_frame
         .as_ref()
         .try_into()
-        .map_err(|e| DataFusionError::Internal(format!("{e}")))?;
+        .map_err(|e| internal_datafusion_err!("{e}"))?;
 
     Ok(protobuf::PhysicalWindowExprNode {
         args,
@@ -161,6 +169,8 @@ pub fn serialize_physical_window_expr(
         window_function: Some(window_function),
         name: window_expr.name().to_string(),
         fun_definition,
+        ignore_nulls,
+        distinct,
     })
 }
 
@@ -511,7 +521,11 @@ pub fn serialize_file_scan_config(
         .cloned()
         .collect::<Vec<_>>();
     fields.extend(conf.table_partition_cols.iter().cloned());
-    let schema = Arc::new(arrow::datatypes::Schema::new(fields.clone()));
+
+    let schema = Arc::new(
+        arrow::datatypes::Schema::new(fields.clone())
+            .with_metadata(conf.file_schema.metadata.clone()),
+    );
 
     Ok(protobuf::FileScanExecConf {
         file_groups,
@@ -552,6 +566,20 @@ pub fn serialize_maybe_filter(
             expr: Some(serialize_physical_expr(&expr, codec)?),
         }),
     }
+}
+
+pub fn serialize_record_batches(batches: &[RecordBatch]) -> Result<Vec<u8>> {
+    if batches.is_empty() {
+        return Ok(vec![]);
+    }
+    let schema = batches[0].schema();
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, &schema)?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.finish()?;
+    Ok(buf)
 }
 
 impl TryFrom<&JsonSink> for protobuf::JsonSink {

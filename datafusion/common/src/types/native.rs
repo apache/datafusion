@@ -23,6 +23,7 @@ use crate::error::{Result, _internal_err};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
+    DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
 };
 use std::{fmt::Display, sync::Arc};
 
@@ -185,7 +186,7 @@ pub enum NativeType {
 
 impl Display for NativeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NativeType::{self:?}")
+        write!(f, "{self:?}") // TODO: nicer formatting
     }
 }
 
@@ -228,7 +229,15 @@ impl LogicalType for NativeType {
             (Self::Float16, _) => Float16,
             (Self::Float32, _) => Float32,
             (Self::Float64, _) => Float64,
-            (Self::Decimal(p, s), _) if p <= &38 => Decimal128(*p, *s),
+            (Self::Decimal(p, s), _) if *p <= DECIMAL32_MAX_PRECISION => {
+                Decimal32(*p, *s)
+            }
+            (Self::Decimal(p, s), _) if *p <= DECIMAL64_MAX_PRECISION => {
+                Decimal64(*p, *s)
+            }
+            (Self::Decimal(p, s), _) if *p <= DECIMAL128_MAX_PRECISION => {
+                Decimal128(*p, *s)
+            }
             (Self::Decimal(p, s), _) => Decimal256(*p, *s),
             (Self::Timestamp(tu, tz), _) => Timestamp(*tu, tz.clone()),
             // If given type is Date, return the same type
@@ -352,10 +361,10 @@ impl LogicalType for NativeType {
             }
             _ => {
                 return _internal_err!(
-                "Unavailable default cast for native type {:?} from physical type {:?}",
-                self,
-                origin
-            )
+                    "Unavailable default cast for native type {} from physical type {}",
+                    self,
+                    origin
+                )
             }
         })
     }
@@ -471,5 +480,10 @@ impl NativeType {
     #[inline]
     pub fn is_duration(&self) -> bool {
         matches!(self, NativeType::Duration(_))
+    }
+
+    #[inline]
+    pub fn is_binary(&self) -> bool {
+        matches!(self, NativeType::Binary | NativeType::FixedSizeBinary(_))
     }
 }

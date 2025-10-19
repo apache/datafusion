@@ -24,9 +24,14 @@ use datafusion_expr::{
     Expr,
 };
 
+#[deprecated(
+    since = "50.0.0",
+    note = "Use UnicodeFunctionPlanner and DateTimeFunctionPlanner instead"
+)]
 #[derive(Default, Debug)]
 pub struct UserDefinedFunctionPlanner;
 
+#[expect(deprecated)]
 impl ExprPlanner for UserDefinedFunctionPlanner {
     #[cfg(feature = "datetime_expressions")]
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {

@@ -321,7 +321,7 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
 
     // compute the distinct index
     let distinct_index: DistinctIndex =
-        DistinctIndex::new(values.iter().map(|s| s.to_string()));
+        DistinctIndex::new(values.iter().map(|s| (*s).to_string()));
 
     let file = File::create(path)?;
 

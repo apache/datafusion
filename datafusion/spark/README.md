@@ -17,9 +17,15 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# datafusion-spark: Spark-compatible Expressions
+# Apache DataFusion Spark-compatible Expressions
 
-This crate provides Apache Spark-compatible expressions for use with DataFusion.
+[Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
+
+This crate is a submodule of DataFusion that provides [Apache Spark] compatible expressions for use with DataFusion.
+
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[apache spark]: https://spark.apache.org/
 
 ## Testing Guide
 
@@ -29,12 +35,15 @@ or `coerce_types`) is not applied.
 Therefore, direct invocation tests should only be used to verify that the function is correctly implemented.
 
 Please be sure to add additional tests beyond direct invocation.
-For more detailed testing guidelines, refer to
-the [Spark SQLLogicTest README](../sqllogictest/test_files/spark/README.md).
+For more detailed testing guidelines, refer to the [Spark SQLLogicTest README].
 
 ## Implementation References
 
 When implementing Spark-compatible functions, you can check if there are existing implementations in
-the [Sail](https://github.com/lakehq/sail) or [Comet](https://github.com/apache/datafusion-comet) projects first.
+the [Sail] or [Comet] projects first.
 If you do port functionality from these sources, make sure to port over the corresponding tests too, to ensure
 correctness and compatibility.
+
+[spark sqllogictest readme]: ../sqllogictest/test_files/spark/README.md
+[sail]: https://github.com/lakehq/sail
+[comet]: https://github.com/apache/datafusion-comet

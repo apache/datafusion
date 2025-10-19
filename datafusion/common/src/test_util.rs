@@ -158,7 +158,7 @@ macro_rules! assert_batches_sorted_eq {
 /// Is a macro so test error
 /// messages are on the same line as the failure;
 ///
-/// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
+/// Both arguments must be convertible into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_contains {
     ($ACTUAL: expr, $EXPECTED: expr) => {
@@ -181,7 +181,7 @@ macro_rules! assert_contains {
 /// Is a macro so test error
 /// messages are on the same line as the failure;
 ///
-/// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
+/// Both arguments must be convertible into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_not_contains {
     ($ACTUAL: expr, $UNEXPECTED: expr) => {
@@ -255,7 +255,14 @@ pub fn arrow_test_data() -> String {
 #[cfg(feature = "parquet")]
 pub fn parquet_test_data() -> String {
     match get_data_dir("PARQUET_TEST_DATA", "../../parquet-testing/data") {
-        Ok(pb) => pb.display().to_string(),
+        Ok(pb) => {
+            let mut path = pb.display().to_string();
+            if cfg!(target_os = "windows") {
+                // Replace backslashes (Windows paths; avoids some test issues).
+                path = path.replace("\\", "/");
+            }
+            path
+        }
         Err(err) => panic!("failed to get parquet data dir: {err}"),
     }
 }

@@ -19,9 +19,9 @@
 name = "datafusion-proto-common"
 description = "Protobuf serialization of DataFusion common types"
 keywords = ["arrow", "query", "sql"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -39,7 +39,7 @@ name = "datafusion_proto_common"
 
 [features]
 default = []
-json = ["serde", "serde_json", "pbjson"]
+json = ["serde", "pbjson"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -47,7 +47,6 @@ datafusion-common = { workspace = true }
 pbjson = { workspace = true, optional = true }
 prost = { workspace = true }
 serde = { version = "1.0", optional = true }
-serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 doc-comment = { workspace = true }

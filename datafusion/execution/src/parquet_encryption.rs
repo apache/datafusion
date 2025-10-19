@@ -16,10 +16,11 @@
 // under the License.
 
 use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_common::error::Result;
-use datafusion_common::DataFusionError;
+use datafusion_common::internal_datafusion_err;
 use object_store::path::Path;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
@@ -32,9 +33,10 @@ use std::sync::Arc;
 /// For example usage, see the [`parquet_encrypted_with_kms` example].
 ///
 /// [`parquet_encrypted_with_kms` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/parquet_encrypted_with_kms.rs
+#[async_trait]
 pub trait EncryptionFactory: Send + Sync + std::fmt::Debug + 'static {
     /// Generate file encryption properties to use when writing a Parquet file.
-    fn get_file_encryption_properties(
+    async fn get_file_encryption_properties(
         &self,
         config: &EncryptionFactoryOptions,
         schema: &SchemaRef,
@@ -42,7 +44,7 @@ pub trait EncryptionFactory: Send + Sync + std::fmt::Debug + 'static {
     ) -> Result<Option<FileEncryptionProperties>>;
 
     /// Generate file decryption properties to use when reading a Parquet file.
-    fn get_file_decryption_properties(
+    async fn get_file_decryption_properties(
         &self,
         config: &EncryptionFactoryOptions,
         file_path: &Path,
@@ -73,9 +75,9 @@ impl EncryptionFactoryRegistry {
             .get(id)
             .map(|f| Arc::clone(f.value()))
             .ok_or_else(|| {
-                DataFusionError::Internal(format!(
+                internal_datafusion_err!(
                     "No Parquet encryption factory found for id '{id}'"
-                ))
+                )
             })
     }
 }

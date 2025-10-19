@@ -22,8 +22,8 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_err};
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
+use crate::{Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
     OffsetSizeTrait,
@@ -31,9 +31,8 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, SchemaRef};
-use sqlparser::ast::Ident;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
+#[cfg(feature = "sql")]
+use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{min, Ordering};
 use std::collections::HashSet;
@@ -148,9 +147,7 @@ pub fn bisect<const SIDE: bool>(
     let low: usize = 0;
     let high: usize = item_columns
         .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
+        .ok_or_else(|| _internal_datafusion_err!("Column array shouldn't be empty"))?
         .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare_rows(current, target, sort_options)?;
@@ -199,9 +196,7 @@ pub fn linear_search<const SIDE: bool>(
     let low: usize = 0;
     let high: usize = item_columns
         .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
+        .ok_or_else(|| _internal_datafusion_err!("Column array shouldn't be empty"))?
         .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare_rows(current, target, sort_options)?;
@@ -282,6 +277,7 @@ fn needs_quotes(s: &str) -> bool {
     !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+#[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     let dialect = GenericDialect;
     let mut parser = Parser::new(&dialect).try_with_sql(s)?;
@@ -289,6 +285,7 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
+#[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
@@ -297,6 +294,59 @@ pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<St
             Some(_) => id.value,
             None if ignore_case => id.value,
             _ => id.value.to_ascii_lowercase(),
+        })
+        .collect::<Vec<_>>()
+}
+
+#[cfg(not(feature = "sql"))]
+pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<String>> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in s.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '.' if !in_quotes => {
+                result.push(current.clone());
+                current.clear();
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+
+    // Push the last part if it's not empty
+    if !current.is_empty() {
+        result.push(current);
+    }
+
+    Ok(result)
+}
+
+#[cfg(not(feature = "sql"))]
+pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
+    parse_identifiers(s)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| {
+            let is_double_quoted = if id.len() > 2 {
+                let mut chars = id.chars();
+                chars.next() == Some('"') && chars.last() == Some('"')
+            } else {
+                false
+            };
+            if is_double_quoted {
+                id[1..id.len() - 1].to_string().replace("\"\"", "\"")
+            } else if ignore_case {
+                id
+            } else {
+                id.to_ascii_lowercase()
+            }
         })
         .collect::<Vec<_>>()
 }
@@ -311,9 +361,7 @@ pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
         .map(|idx| items.get(*idx.borrow()).cloned())
         .collect::<Option<Vec<T>>>()
         .ok_or_else(|| {
-            DataFusionError::Execution(
-                "Expects indices to be in the range of searched vector".to_string(),
-            )
+            _exec_datafusion_err!("Expects indices to be in the range of searched vector")
         })
 }
 
@@ -754,7 +802,7 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
         .into_iter()
         .map(|target| items.iter().position(|e| target.borrow().eq(e)))
         .collect::<Option<_>>()
-        .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
+        .ok_or_else(|| _exec_datafusion_err!("Target not found"))
 }
 
 /// Transposes the given vector of vectors.
@@ -890,6 +938,7 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
+    use sqlparser::ast::Ident;
     use sqlparser::tokenizer::Span;
 
     #[test]
@@ -1086,6 +1135,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "sql")]
     #[test]
     fn test_quote_identifier() -> Result<()> {
         let cases = vec![

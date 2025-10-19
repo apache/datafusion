@@ -45,7 +45,7 @@ macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
         $(
             // switch to single-function cases below
-            export_functions!(single $FUNC, $DOC, $($arg)*);
+            $crate::export_functions!(single $FUNC, $DOC, $($arg)*);
         )*
     };
 
@@ -122,7 +122,7 @@ macro_rules! make_stub_package {
 macro_rules! downcast_named_arg {
     ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            internal_datafusion_err!(
+            datafusion_common::internal_datafusion_err!(
                 "could not cast {} to {}",
                 $NAME,
                 std::any::type_name::<$ARRAY_TYPE>()
@@ -139,7 +139,7 @@ macro_rules! downcast_named_arg {
 #[macro_export]
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        downcast_named_arg!($ARG, "", $ARRAY_TYPE)
+        $crate::downcast_named_arg!($ARG, "", $ARRAY_TYPE)
     }};
 }
 
@@ -155,7 +155,7 @@ macro_rules! downcast_arg {
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_unary_udf {
     ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
-        make_udf_function!($NAME::$UDF, $NAME);
+        $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;
@@ -269,7 +269,7 @@ macro_rules! make_math_unary_udf {
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_binary_udf {
     ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
-        make_udf_function!($NAME::$UDF, $NAME);
+        $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;

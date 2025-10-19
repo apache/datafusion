@@ -30,8 +30,13 @@ use dashmap::DashMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-/// Collected statistics for files
+/// Default implementation of [`FileStatisticsCache`]
+///
+/// Stores collected statistics for files
+///
 /// Cache is invalided when file size or last modification has changed
+///
+/// [`FileStatisticsCache`]: crate::cache::cache_manager::FileStatisticsCache
 #[derive(Default)]
 pub struct DefaultFileStatisticsCache {
     statistics: DashMap<Path, (ObjectMeta, Arc<Statistics>)>,
@@ -102,8 +107,13 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     }
 }
 
+/// Default implementation of [`ListFilesCache`]
+///
 /// Collected files metadata for listing files.
-/// Cache will not invalided until user call remove or clear.
+///
+/// Cache is not invalided until user calls [`Self::remove`] or [`Self::clear`].
+///
+/// [`ListFilesCache`]: crate::cache::cache_manager::ListFilesCache
 #[derive(Default)]
 pub struct DefaultListFilesCache {
     statistics: DashMap<Path, Arc<Vec<ObjectMeta>>>,
@@ -280,21 +290,36 @@ impl DefaultFilesMetadataCacheState {
     }
 }
 
+/// Default implementation of [`FileMetadataCache`]
+///
 /// Collected file embedded metadata cache.
-/// The metadata for some file is invalided when the file size or last modification time have been
-/// changed.
-/// The `memory_limit` passed in the constructor controls the maximum size of the cache, which uses
-/// a Least Recently Used eviction algorithm.
-/// Users should use the `get` and `put` methods. The `get_with_extra` and `put_with_extra` methods
-/// simply call `get` and `put`, respectively.
+///
+/// The metadata for each file is invalidated when the file size or last
+/// modification time have been changed.
+///
+/// # Internal details
+///
+/// The `memory_limit` controls the maximum size of the cache, which uses a
+/// Least Recently Used eviction algorithm. When adding a new entry, if the total
+/// size of the cached entries exceeds `memory_limit`, the least recently used entries
+/// are evicted until the total size is lower than `memory_limit`.
+///
+/// # `Extra` Handling
+///
+/// Users should use the [`Self::get`] and [`Self::put`] methods. The
+/// [`Self::get_with_extra`] and [`Self::put_with_extra`] methods simply call
+/// `get` and `put`, respectively.
 pub struct DefaultFilesMetadataCache {
     // the state is wrapped in a Mutex to ensure the operations are atomic
     state: Mutex<DefaultFilesMetadataCacheState>,
 }
 
 impl DefaultFilesMetadataCache {
-    /// The `memory_limit` parameter controls the maximum size of the cache, in bytes, using a Least
-    /// Recently Used eviction algorithm.
+    /// Create a new instance of [`DefaultFilesMetadataCache`].
+    ///
+    /// # Arguments
+    /// `memory_limit`:  the maximum size of the cache, in bytes
+    //
     pub fn new(memory_limit: usize) -> Self {
         Self {
             state: Mutex::new(DefaultFilesMetadataCacheState::new(memory_limit)),

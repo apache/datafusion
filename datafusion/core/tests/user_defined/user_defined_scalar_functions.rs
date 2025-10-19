@@ -37,8 +37,8 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
-    plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_datafusion_err,
+    exec_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -478,13 +478,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     "###);
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
-    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
-    +------------+
-    | dummy(t.i) |
-    +------------+
-    | 1          |
-    +------------+
-    "###);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r"
+    +------------------+
+    | dummy_alias(t.i) |
+    +------------------+
+    | 1                |
+    +------------------+
+    ");
 
     Ok(())
 }
@@ -775,10 +775,12 @@ async fn deregister_udf() -> Result<()> {
     ctx.register_udf(cast2i64);
 
     assert!(ctx.udfs().contains("cast_to_i64"));
+    assert!(FunctionRegistry::udfs(&ctx).contains("cast_to_i64"));
 
     ctx.deregister_udf("cast_to_i64");
 
     assert!(!ctx.udfs().contains("cast_to_i64"));
+    assert!(!FunctionRegistry::udfs(&ctx).contains("cast_to_i64"));
 
     Ok(())
 }
@@ -1007,9 +1009,7 @@ impl ScalarFunctionWrapper {
     fn parse_placeholder_identifier(placeholder: &str) -> Result<usize> {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Placeholder `{placeholder}` parsing error: {e}!"
-                ))
+                exec_datafusion_err!("Placeholder `{placeholder}` parsing error: {e}!")
             })?)
         } else {
             exec_err!("Placeholder should start with `$`!")
@@ -1438,7 +1438,7 @@ impl ScalarUDFImpl for MetadataBasedUdf {
             .get("modify_values")
             .map(|v| v == "double_output")
             .unwrap_or(false);
-        let mulitplier = if should_double { 2 } else { 1 };
+        let multiplier = if should_double { 2 } else { 1 };
 
         match &args.args[0] {
             ColumnarValue::Array(array) => {
@@ -1447,7 +1447,7 @@ impl ScalarUDFImpl for MetadataBasedUdf {
                     .downcast_ref::<UInt64Array>()
                     .unwrap()
                     .iter()
-                    .map(|v| v.map(|x| x * mulitplier))
+                    .map(|v| v.map(|x| x * multiplier))
                     .collect();
                 let array_ref = Arc::new(UInt64Array::from(array_values)) as ArrayRef;
                 Ok(ColumnarValue::Array(array_ref))
@@ -1458,7 +1458,7 @@ impl ScalarUDFImpl for MetadataBasedUdf {
                 };
 
                 Ok(ColumnarValue::Scalar(ScalarValue::UInt64(
-                    value.map(|v| v * mulitplier),
+                    value.map(|v| v * multiplier),
                 )))
             }
         }
@@ -1634,7 +1634,7 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Field::new("canonical_extension_udf", DataType::Utf8, true)
-            .with_extension_type(MyUserExtentionType {})
+            .with_extension_type(MyUserExtensionType {})
             .into())
     }
 
@@ -1682,10 +1682,10 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
     }
 }
 
-struct MyUserExtentionType {}
+struct MyUserExtensionType {}
 
-impl ExtensionType for MyUserExtentionType {
-    const NAME: &'static str = "my_user_extention_type";
+impl ExtensionType for MyUserExtensionType {
+    const NAME: &'static str = "my_user_Extension_type";
     type Metadata = ();
 
     fn metadata(&self) -> &Self::Metadata {
@@ -1757,9 +1757,9 @@ async fn test_extension_based_udf() -> Result<()> {
     // To test for input extensions handling, we check the strings returned
     let expected_schema = Schema::new(vec![
         Field::new("without_bool8_extension", DataType::Utf8, true)
-            .with_extension_type(MyUserExtentionType {}),
+            .with_extension_type(MyUserExtensionType {}),
         Field::new("with_bool8_extension", DataType::Utf8, true)
-            .with_extension_type(MyUserExtentionType {}),
+            .with_extension_type(MyUserExtensionType {}),
     ]);
 
     let expected = record_batch!(
@@ -1830,5 +1830,184 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
 
     assert_eq!(expected, actual[0]);
 
+    Ok(())
+}
+
+/// https://github.com/apache/datafusion/issues/17425
+#[tokio::test]
+async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct MakeExtension {
+        signature: Signature,
+    }
+
+    impl Default for MakeExtension {
+        fn default() -> Self {
+            Self {
+                signature: Signature::user_defined(Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for MakeExtension {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "make_extension"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            Ok(arg_types.to_vec())
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!("This shouldn't have been called")
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            Ok(args.arg_fields[0]
+                .as_ref()
+                .clone()
+                .with_metadata(HashMap::from([(
+                    "ARROW:extension:metadata".to_string(),
+                    "foofy.foofy".to_string(),
+                )]))
+                .into())
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let ctx = SessionContext::new();
+    ctx.register_udf(MakeExtension::default().into());
+
+    let batches = ctx
+        .sql(
+            "
+SELECT extension FROM (VALUES
+    ('one', make_extension('foofy one')),
+    ('two', make_extension('foofy two')),
+    ('three', make_extension('foofy three')))
+AS t(string, extension)
+        ",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(
+        batches[0]
+            .schema()
+            .field(0)
+            .metadata()
+            .get("ARROW:extension:metadata"),
+        Some(&"foofy.foofy".into())
+    );
+    Ok(())
+}
+
+/// https://github.com/apache/datafusion/issues/17422
+#[tokio::test]
+async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct ExtensionScalarPredicate {
+        signature: Signature,
+    }
+
+    impl Default for ExtensionScalarPredicate {
+        fn default() -> Self {
+            Self {
+                signature: Signature::user_defined(Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for ExtensionScalarPredicate {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "extension_predicate"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            Ok(arg_types.to_vec())
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!("This shouldn't have been called")
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            for arg in args.arg_fields {
+                assert!(arg.metadata().contains_key("ARROW:extension:name"));
+            }
+
+            Ok(Field::new("", DataType::Boolean, true).into())
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            for arg in args.arg_fields {
+                assert!(arg.metadata().contains_key("ARROW:extension:name"));
+            }
+
+            let array =
+                ScalarValue::Boolean(Some(true)).to_array_of_size(args.number_rows)?;
+            Ok(ColumnarValue::Array(array))
+        }
+    }
+
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("geometry", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "foofy.foofy".to_string(),
+        )])),
+    ]);
+
+    let batch_lhs = RecordBatch::try_new(
+        schema.clone().into(),
+        vec![
+            create_array!(Int64, [1, 2]),
+            create_array!(Utf8, [Some("item1"), Some("item2")]),
+        ],
+    )?;
+
+    let batch_rhs = RecordBatch::try_new(
+        schema.clone().into(),
+        vec![
+            create_array!(Int64, [2, 3]),
+            create_array!(Utf8, [Some("item2"), Some("item3")]),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("l", batch_lhs)?;
+    ctx.register_batch("r", batch_rhs)?;
+    ctx.register_udf(ExtensionScalarPredicate::default().into());
+
+    let df = ctx
+        .sql(
+            "
+        SELECT L.id l_id FROM L
+        WHERE EXISTS (SELECT 1 FROM R WHERE extension_predicate(L.geometry, R.geometry))
+        ORDER BY l_id
+        ",
+        )
+        .await?;
+    assert!(!df.collect().await?.is_empty());
     Ok(())
 }

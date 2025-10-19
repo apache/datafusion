@@ -155,10 +155,7 @@ impl CaseExpr {
                 && else_expr.as_ref().unwrap().as_any().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
-            } else if when_then_expr.len() == 1
-                && is_cheap_and_infallible(&(when_then_expr[0].1))
-                && else_expr.as_ref().is_some_and(is_cheap_and_infallible)
-            {
+            } else if when_then_expr.len() == 1 && else_expr.is_some() {
                 EvalMethod::ExpressionOrExpression
             } else {
                 EvalMethod::NoExpression
@@ -323,12 +320,14 @@ impl CaseExpr {
         }
 
         if let Some(e) = self.else_expr() {
-            // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-            let else_ = expr
-                .evaluate_selection(batch, &remainder)?
-                .into_array(batch.num_rows())?;
-            current_value = zip(&remainder, &else_, &current_value)?;
+            if remainder.true_count() > 0 {
+                // keep `else_expr`'s data type and return type consistent
+                let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
+                let else_ = expr
+                    .evaluate_selection(batch, &remainder)?
+                    .into_array(batch.num_rows())?;
+                current_value = zip(&remainder, &else_, &current_value)?;
+            }
         }
 
         Ok(ColumnarValue::Array(current_value))
@@ -413,7 +412,7 @@ impl CaseExpr {
     fn expr_or_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
 
-        // evalute when condition on batch
+        // evaluate when condition on batch
         let when_value = self.when_then_expr[0].0.evaluate(batch)?;
         let when_value = when_value.into_array(batch.num_rows())?;
         let when_value = as_boolean_array(&when_value).map_err(|e| {
@@ -422,6 +421,16 @@ impl CaseExpr {
                 Box::new(e),
             )
         })?;
+
+        // For the true and false/null selection vectors, bypass `evaluate_selection` and merging
+        // results. This avoids materializing the array for the other branch which we will discard
+        // entirely anyway.
+        let true_count = when_value.true_count();
+        if true_count == batch.num_rows() {
+            return self.when_then_expr[0].1.evaluate(batch);
+        } else if true_count == 0 {
+            return self.else_expr.as_ref().unwrap().evaluate(batch);
+        }
 
         // Treat 'NULL' as false value
         let when_value = match when_value.null_count() {
@@ -1068,7 +1077,6 @@ mod tests {
         .into_iter()
         .collect();
 
-        //let valid_array = vec![true, false, false, true, false, tru
         let null_buffer = Buffer::from([0b00101001u8]);
         let load4 = load4
             .into_data()

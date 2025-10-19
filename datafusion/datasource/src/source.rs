@@ -22,13 +22,12 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
 use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -39,11 +38,8 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{
-    conjunction, EquivalenceProperties, Partitioning, PhysicalExpr,
-};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::filter::collect_columns_from_predicate;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -164,8 +160,8 @@ pub trait DataSource: Send + Sync + Debug {
     }
     fn try_swapping_with_projection(
         &self,
-        _projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
+        _projection: &[ProjectionExpr],
+    ) -> Result<Option<Arc<dyn DataSource>>>;
     /// Try to push down filters into this DataSource.
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
@@ -321,36 +317,12 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        match self.data_source.try_swapping_with_projection(projection)? {
-            Some(new_plan) => {
-                if let Some(new_data_source_exec) =
-                    new_plan.as_any().downcast_ref::<DataSourceExec>()
-                {
-                    let projection_mapping = ProjectionMapping::try_new(
-                        projection.expr().iter().cloned(),
-                        &self.schema(),
-                    )?;
-
-                    // Project the equivalence properties to the new schema
-                    let projected_eq_properties = self
-                        .cache
-                        .eq_properties
-                        .project(&projection_mapping, new_data_source_exec.schema());
-
-                    let preserved_exec = DataSourceExec {
-                        data_source: Arc::clone(&new_data_source_exec.data_source),
-                        cache: PlanProperties::new(
-                            projected_eq_properties,
-                            new_data_source_exec.cache.partitioning.clone(),
-                            new_data_source_exec.cache.emission_type,
-                            new_data_source_exec.cache.boundedness,
-                        )
-                        .with_scheduling_type(new_data_source_exec.cache.scheduling_type),
-                    };
-                    Ok(Some(Arc::new(preserved_exec)))
-                } else {
-                    Ok(Some(new_plan))
-                }
+        match self
+            .data_source
+            .try_swapping_with_projection(projection.expr())?
+        {
+            Some(new_data_source) => {
+                Ok(Some(Arc::new(DataSourceExec::new(new_data_source))))
             }
             None => Ok(None),
         }
@@ -375,21 +347,10 @@ impl ExecutionPlan for DataSourceExec {
             Some(data_source) => {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
+                // Re-compute properties since we have new filters which will impact equivalence info
                 new_node.cache =
                     Self::compute_properties(Arc::clone(&new_node.data_source));
 
-                // Recompute equivalence info using new filters
-                let filter = conjunction(
-                    res.filters
-                        .iter()
-                        .zip(parent_filters)
-                        .filter_map(|(s, f)| match s {
-                            PushedDown::Yes => Some(f),
-                            PushedDown::No => None,
-                        })
-                        .collect_vec(),
-                );
-                new_node = new_node.add_filter_equivalence_info(filter)?;
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
                     updated_node: Some(Arc::new(new_node)),
@@ -435,20 +396,6 @@ impl DataSourceExec {
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.cache = self.cache.with_partitioning(partitioning);
         self
-    }
-
-    /// Add filters' equivalence info
-    fn add_filter_equivalence_info(
-        mut self,
-        filter: Arc<dyn PhysicalExpr>,
-    ) -> Result<Self> {
-        let (equal_pairs, _) = collect_columns_from_predicate(&filter);
-        for (lhs, rhs) in equal_pairs {
-            self.cache
-                .eq_properties
-                .add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
-        }
-        Ok(self)
     }
 
     fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {

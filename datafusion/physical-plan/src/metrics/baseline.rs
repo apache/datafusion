@@ -62,9 +62,15 @@ impl BaselineMetrics {
         start_time.record();
 
         Self {
-            end_time: MetricBuilder::new(metrics).end_timestamp(partition),
-            elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
-            output_rows: MetricBuilder::new(metrics).output_rows(partition),
+            end_time: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .end_timestamp(partition),
+            elapsed_compute: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .elapsed_compute(partition),
+            output_rows: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::SUMMARY)
+                .output_rows(partition),
         }
     }
 
@@ -173,15 +179,15 @@ impl SpillMetrics {
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
     /// Number of times an input [`RecordBatch`] was split
-    pub batches_splitted: Count,
+    pub batches_split: Count,
 }
 
 impl SplitMetrics {
     /// Create a new [`SplitMetrics`]
     pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         Self {
-            batches_splitted: MetricBuilder::new(metrics)
-                .counter("batches_splitted", partition),
+            batches_split: MetricBuilder::new(metrics)
+                .counter("batches_split", partition),
         }
     }
 }

@@ -15,11 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod map_from_arrays;
+pub mod map_from_entries;
+mod utils;
+
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+make_udf_function!(map_from_arrays::MapFromArrays, map_from_arrays);
+make_udf_function!(map_from_entries::MapFromEntries, map_from_entries);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        map_from_arrays,
+        "Creates a map from arrays of keys and values.",
+        keys values
+    ));
+
+    export_functions!((
+        map_from_entries,
+        "Creates a map from array<struct<key, value>>.",
+        arg1
+    ));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![]
+    vec![map_from_arrays(), map_from_entries()]
 }

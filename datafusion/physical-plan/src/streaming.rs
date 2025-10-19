@@ -299,7 +299,7 @@ impl ExecutionPlan for StreamingTableExec {
         let streaming_table_projections =
             self.projection().as_ref().map(|i| i.as_ref().to_vec());
         let new_projections = new_projections_for_columns(
-            projection,
+            projection.expr(),
             &streaming_table_projections
                 .unwrap_or_else(|| (0..self.schema().fields().len()).collect()),
         );

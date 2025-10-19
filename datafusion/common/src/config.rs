@@ -22,6 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
+use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -257,7 +258,7 @@ config_namespace! {
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
-        pub dialect: String, default = "generic".to_string()
+        pub dialect: Dialect, default = Dialect::Generic
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
         /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
@@ -288,6 +289,94 @@ config_namespace! {
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
         pub default_null_ordering: String, default = "nulls_max".to_string()
+    }
+}
+
+/// This is the SQL dialect used by DataFusion's parser.
+/// This mirrors [sqlparser::dialect::Dialect](https://docs.rs/sqlparser/latest/sqlparser/dialect/trait.Dialect.html)
+/// trait in order to offer an easier API and avoid adding the `sqlparser` dependency
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    #[default]
+    Generic,
+    MySQL,
+    PostgreSQL,
+    Hive,
+    SQLite,
+    Snowflake,
+    Redshift,
+    MsSQL,
+    ClickHouse,
+    BigQuery,
+    Ansi,
+    DuckDB,
+    Databricks,
+}
+
+impl AsRef<str> for Dialect {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Generic => "generic",
+            Self::MySQL => "mysql",
+            Self::PostgreSQL => "postgresql",
+            Self::Hive => "hive",
+            Self::SQLite => "sqlite",
+            Self::Snowflake => "snowflake",
+            Self::Redshift => "redshift",
+            Self::MsSQL => "mssql",
+            Self::ClickHouse => "clickhouse",
+            Self::BigQuery => "bigquery",
+            Self::Ansi => "ansi",
+            Self::DuckDB => "duckdb",
+            Self::Databricks => "databricks",
+        }
+    }
+}
+
+impl FromStr for Dialect {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value = match s.to_ascii_lowercase().as_str() {
+            "generic" => Self::Generic,
+            "mysql" => Self::MySQL,
+            "postgresql" | "postgres" => Self::PostgreSQL,
+            "hive" => Self::Hive,
+            "sqlite" => Self::SQLite,
+            "snowflake" => Self::Snowflake,
+            "redshift" => Self::Redshift,
+            "mssql" => Self::MsSQL,
+            "clickhouse" => Self::ClickHouse,
+            "bigquery" => Self::BigQuery,
+            "ansi" => Self::Ansi,
+            "duckdb" => Self::DuckDB,
+            "databricks" => Self::Databricks,
+            other => {
+                let error_message = format!(
+                    "Invalid Dialect: {other}. Expected one of: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks"
+                );
+                return Err(DataFusionError::Configuration(error_message));
+            }
+        };
+        Ok(value)
+    }
+}
+
+impl ConfigField for Dialect {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = Self::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for Dialect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = self.as_ref();
+        write!(f, "{str}")
     }
 }
 
@@ -455,6 +544,11 @@ config_namespace! {
         /// tables (e.g. `/table/year=2021/month=01/data.parquet`).
         pub listing_table_ignore_subdirectory: bool, default = true
 
+        /// Should a `ListingTable` created through the `ListingTableFactory` infer table
+        /// partitions from Hive compliant directories. Defaults to true (partition columns are
+        /// inferred and will be represented in the table schema).
+        pub listing_table_factory_infer_partitions: bool, default = true
+
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
 
@@ -559,6 +653,14 @@ config_namespace! {
 
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
+
+        /// (reading) The maximum predicate cache size, in bytes. When
+        /// `pushdown_filters` is enabled, sets the maximum memory used to cache
+        /// the results of predicate evaluation between filter evaluation and
+        /// output generation. Decreasing this value will reduce memory usage,
+        /// but may increase IO and CPU usage. None means use the default
+        /// parquet reader setting. 0 means no caching.
+        pub max_predicate_cache_size: Option<usize>, default = None
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -671,6 +773,8 @@ config_namespace! {
 
 config_namespace! {
     /// Options for configuring Parquet Modular Encryption
+    ///
+    /// To use Parquet encryption, you must enable the `parquet_encryption` feature flag, as it is not activated by default.
     pub struct ParquetEncryptionOptions {
         /// Optional file decryption properties
         pub file_decryption: Option<ConfigFileDecryptionProperties>, default = None
@@ -725,11 +829,25 @@ config_namespace! {
         /// during aggregations, if possible
         pub enable_topk_aggregation: bool, default = true
 
-        /// When set to true attempts to push down dynamic filters generated by operators into the file scan phase.
+        /// When set to true, the optimizer will attempt to push limit operations
+        /// past window functions, if possible
+        pub enable_window_limits: bool, default = true
+
+        /// When set to true, the optimizer will attempt to push down TopK dynamic filters
+        /// into the file scan phase.
+        pub enable_topk_dynamic_filter_pushdown: bool, default = true
+
+        /// When set to true, the optimizer will attempt to push down Join dynamic filters
+        /// into the file scan phase.
+        pub enable_join_dynamic_filter_pushdown: bool, default = true
+
+        /// When set to true attempts to push down dynamic filters generated by operators (topk & join) into the file scan phase.
         /// For example, for a query such as `SELECT * FROM t ORDER BY timestamp DESC LIMIT 10`, the optimizer
         /// will attempt to push down the current top 10 timestamps that the TopK operator references into the file scans.
         /// This means that if we already have 10 timestamps in the year 2025
         /// any files that only have timestamps in the year 2024 can be skipped / pruned at various stages in the scan.
+        /// The config will suppress `enable_join_dynamic_filter_pushdown` & `enable_topk_dynamic_filter_pushdown`
+        /// So if you disable `enable_topk_dynamic_filter_pushdown`, then enable `enable_dynamic_filter_pushdown`, the `enable_topk_dynamic_filter_pushdown` will be overridden.
         pub enable_dynamic_filter_pushdown: bool, default = true
 
         /// When set to true, the optimizer will insert filters before a join between
@@ -868,11 +986,16 @@ config_namespace! {
 
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
-        pub format: String, default = "indent".to_string()
+        pub format: ExplainFormat, default = ExplainFormat::Indent
 
         /// (format=tree only) Maximum total width of the rendered tree.
         /// When set to 0, the tree will have no width limit.
         pub tree_maximum_render_width: usize, default = 240
+
+        /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
+        /// "summary" shows common metrics for high-level insights.
+        /// "dev" provides deep operator-level introspection for developers.
+        pub analyze_level: ExplainAnalyzeLevel, default = ExplainAnalyzeLevel::Dev
     }
 }
 
@@ -1019,6 +1142,20 @@ impl ConfigOptions {
         };
 
         if prefix == "datafusion" {
+            if key == "optimizer.enable_dynamic_filter_pushdown" {
+                let bool_value = value.parse::<bool>().map_err(|e| {
+                    DataFusionError::Configuration(format!(
+                        "Failed to parse '{value}' as bool: {e}",
+                    ))
+                })?;
+
+                {
+                    self.optimizer.enable_dynamic_filter_pushdown = bool_value;
+                    self.optimizer.enable_topk_dynamic_filter_pushdown = bool_value;
+                    self.optimizer.enable_join_dynamic_filter_pushdown = bool_value;
+                }
+                return Ok(());
+            }
             return ConfigField::set(self, key, value);
         }
 
@@ -1880,6 +2017,8 @@ pub struct TableParquetOptions {
     /// ```
     pub key_value_metadata: HashMap<String, Option<String>>,
     /// Options for configuring Parquet modular encryption
+    ///
+    /// To use Parquet encryption, you must enable the `parquet_encryption` feature flag, as it is not activated by default.
     /// See ConfigFileEncryptionProperties and ConfigFileDecryptionProperties in datafusion/common/src/config.rs
     /// These can be set via 'format.crypto', for example:
     /// ```sql
@@ -2513,6 +2652,16 @@ config_namespace! {
         // The input regex for Nulls when loading CSVs.
         pub null_regex: Option<String>, default = None
         pub comment: Option<u8>, default = None
+        /// Whether to allow truncated rows when parsing, both within a single file and across files.
+        ///
+        /// When set to false (default), reading a single CSV file which has rows of different lengths will
+        /// error; if reading multiple CSV files with different number of columns, it will also fail.
+        ///
+        /// When set to true, reading a single CSV file with rows of different lengths will pad the truncated
+        /// rows with null values for the missing columns; if reading multiple CSV files with different number
+        /// of columns, it creates a union schema containing all columns found across the files, and will
+        /// pad any files missing columns with null values for their rows.
+        pub truncated_rows: Option<bool>, default = None
     }
 }
 
@@ -2605,6 +2754,15 @@ impl CsvOptions {
         self
     }
 
+    /// Whether to allow truncated rows when parsing.
+    /// By default this is set to false and will error if the CSV rows have different lengths.
+    /// When set to true then it will allow records with less than the expected number of columns and fill the missing columns with nulls.
+    /// If the record’s schema is not nullable, then it will still return an error.
+    pub fn with_truncated_rows(mut self, allow: bool) -> Self {
+        self.truncated_rows = Some(allow);
+        self
+    }
+
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
@@ -2663,9 +2821,11 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "parquet")]
+    use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions, TableParquetOptions,
+        Extensions, TableOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;

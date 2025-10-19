@@ -29,6 +29,25 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 Aggregate functions operate on a set of values to compute a single result.
 
+## Filter clause
+
+Aggregate functions support the SQL `FILTER (WHERE ...)` clause to restrict which input rows contribute to the aggregate result.
+
+```sql
+function([exprs]) FILTER (WHERE condition)
+```
+
+Example:
+
+```sql
+SELECT
+  sum(salary) FILTER (WHERE salary > 0) AS sum_positive_salaries,
+  count(*)    FILTER (WHERE active)     AS active_count
+FROM employees;
+```
+
+Note: When no rows pass the filter, `COUNT` returns `0` while `SUM`/`AVG`/`MIN`/`MAX` return `NULL`.
+
 ## General Functions
 
 - [array_agg](#array_agg)
@@ -46,6 +65,8 @@ Aggregate functions operate on a set of values to compute a single result.
 - [mean](#mean)
 - [median](#median)
 - [min](#min)
+- [percentile_cont](#percentile_cont)
+- [quantile_cont](#quantile_cont)
 - [string_agg](#string_agg)
 - [sum](#sum)
 - [var](#var)
@@ -368,6 +389,49 @@ min(expression)
 | 12                   |
 +----------------------+
 ```
+
+### `percentile_cont`
+
+Returns the exact percentile of input values, interpolating between values if needed.
+
+```sql
+percentile_cont(percentile) WITHIN GROUP (ORDER BY expression)
+```
+
+#### Arguments
+
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
+
+#### Example
+
+```sql
+> SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++----------------------------------------------------------+
+| percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) |
++----------------------------------------------------------+
+| 45.5                                                     |
++----------------------------------------------------------+
+```
+
+An alternate syntax is also supported:
+
+```sql
+> SELECT percentile_cont(column_name, 0.75) FROM table_name;
++---------------------------------------+
+| percentile_cont(column_name, 0.75)    |
++---------------------------------------+
+| 45.5                                  |
++---------------------------------------+
+```
+
+#### Aliases
+
+- quantile_cont
+
+### `quantile_cont`
+
+_Alias of [percentile_cont](#percentile_cont)._
 
 ### `string_agg`
 

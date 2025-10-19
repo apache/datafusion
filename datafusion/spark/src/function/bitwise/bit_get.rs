@@ -234,14 +234,20 @@ mod tests {
             Arc::new(Int64Array::from(vec![11])),
             Arc::new(Int32Array::from(vec![-1])),
         ]);
-        assert_eq!(result.unwrap_err().message(), "Compute error: bit_get: position -1 is out of bounds. Expected pos < 64 and pos >= 0");
+        assert_eq!(
+            result.unwrap_err().message().lines().next().unwrap(),
+            "Compute error: bit_get: position -1 is out of bounds. Expected pos < 64 and pos >= 0"
+        );
 
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![11])),
             Arc::new(Int32Array::from(vec![64])),
         ]);
 
-        assert_eq!(result.unwrap_err().message(), "Compute error: bit_get: position 64 is out of bounds. Expected pos < 64 and pos >= 0");
+        assert_eq!(
+            result.unwrap_err().message().lines().next().unwrap(),
+            "Compute error: bit_get: position 64 is out of bounds. Expected pos < 64 and pos >= 0"
+        );
     }
 
     #[test]

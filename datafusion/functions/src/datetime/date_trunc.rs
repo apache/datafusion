@@ -32,7 +32,9 @@ use arrow::array::{Array, ArrayRef, Int64Array, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, plan_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -191,7 +193,7 @@ impl ScalarUDFImpl for DateTruncFunc {
             // fast path for fine granularities
             if matches!(
                 granularity.as_str(),
-                // For morden timezones, it's correct to truncate "minute" in this way.
+                // For modern timezones, it's correct to truncate "minute" in this way.
                 // Both datafusion and arrow are ignoring historical timezone's non-minute granularity
                 // bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
                 "second" | "minute" | "millisecond" | "microsecond"
@@ -427,16 +429,13 @@ fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i6
             // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
             // and NaiveDateTime (ISO 8601) has no concept of timezones
             let value = as_datetime_with_timezone::<TimestampNanosecondType>(value, tz)
-                .ok_or(DataFusionError::Execution(format!(
-                "Timestamp {value} out of range"
-            )))?;
+                .ok_or(exec_datafusion_err!("Timestamp {value} out of range"))?;
             _date_trunc_coarse_with_tz(granularity, Some(value))
         }
         None => {
             // Use chrono NaiveDateTime to clear the various fields, if we don't have a timezone.
-            let value = timestamp_ns_to_datetime(value).ok_or_else(|| {
-                DataFusionError::Execution(format!("Timestamp {value} out of range"))
-            })?;
+            let value = timestamp_ns_to_datetime(value)
+                .ok_or_else(|| exec_datafusion_err!("Timestamp {value} out of range"))?;
             _date_trunc_coarse_without_tz(granularity, Some(value))
         }
     }?;
@@ -541,9 +540,8 @@ fn general_date_trunc(
 fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
     tz.as_ref()
         .map(|tz| {
-            Tz::from_str(tz).map_err(|op| {
-                DataFusionError::Execution(format!("failed on timezone {tz}: {op:?}"))
-            })
+            Tz::from_str(tz)
+                .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {op:?}"))
         })
         .transpose()
 }

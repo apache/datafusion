@@ -19,7 +19,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
@@ -37,7 +37,8 @@
 //! # Example: using all function packages
 //!
 //! You can register all the functions in all packages using the [`register_all`]
-//! function as shown below.
+//! function as shown below. Any existing functions will be overwritten, with these
+//! Spark functions taking priority.
 //!
 //! ```
 //! # use datafusion_execution::FunctionRegistry;
@@ -53,6 +54,8 @@
 //! # impl FunctionRegistry for SessionContext {
 //! #    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> { Ok (None) }
 //! #    fn udfs(&self) -> HashSet<String> { unimplemented!() }
+//! #    fn udafs(&self) -> HashSet<String> { unimplemented!() }
+//! #    fn udwfs(&self) -> HashSet<String> { unimplemented!() }
 //! #    fn udf(&self, _name: &str) -> Result<Arc<ScalarUDF>> { unimplemented!() }
 //! #    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {unimplemented!() }
 //! #    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> { unimplemented!() }
@@ -66,10 +69,9 @@
 //! # async fn stub() -> Result<()> {
 //! // Create a new session context
 //! let mut ctx = SessionContext::new();
-//! // register all spark functions with the context
+//! // Register all Spark functions with the context
 //! datafusion_spark::register_all(&mut ctx)?;
-//! // run a query. Note the `sha2` function is now available which
-//! // has Spark semantics
+//! // Run a query using the `sha2` function which is now available and has Spark semantics
 //! let df = ctx.sql("SELECT sha2('The input String', 256)").await?;
 //! # Ok(())
 //! # }
@@ -104,6 +106,7 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::function::aggregate::expr_fn::*;
     pub use super::function::array::expr_fn::*;
+    pub use super::function::bitmap::expr_fn::*;
     pub use super::function::bitwise::expr_fn::*;
     pub use super::function::collection::expr_fn::*;
     pub use super::function::conditional::expr_fn::*;
@@ -130,6 +133,7 @@ pub mod expr_fn {
 pub fn all_default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
     function::array::functions()
         .into_iter()
+        .chain(function::bitmap::functions())
         .chain(function::bitwise::functions())
         .chain(function::collection::functions())
         .chain(function::conditional::functions())
@@ -166,7 +170,8 @@ pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
     function::table::functions()
 }
 
-/// Registers all enabled packages with a [`FunctionRegistry`]
+/// Registers all enabled packages with a [`FunctionRegistry`], overriding any existing
+/// functions if there is a name clash.
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let scalar_functions: Vec<Arc<ScalarUDF>> = all_default_scalar_functions();
     scalar_functions.into_iter().try_for_each(|udf| {

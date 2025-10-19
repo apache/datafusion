@@ -17,6 +17,7 @@
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::SchemaRef;
+use async_trait::async_trait;
 use base64::Engine;
 use datafusion::common::extensions_options;
 use datafusion::config::{EncryptionFactoryOptions, TableParquetOptions};
@@ -211,6 +212,7 @@ struct TestEncryptionFactory {}
 
 /// `EncryptionFactory` is a DataFusion trait for types that generate
 /// file encryption and decryption properties.
+#[async_trait]
 impl EncryptionFactory for TestEncryptionFactory {
     /// Generate file encryption properties to use when writing a Parquet file.
     /// The `schema` is provided so that it may be used to dynamically configure
@@ -219,7 +221,7 @@ impl EncryptionFactory for TestEncryptionFactory {
     /// but other implementations may want to use this to compute an
     /// AAD prefix for the file, or to allow use of external key material
     /// (where key metadata is stored in a JSON file alongside Parquet files).
-    fn get_file_encryption_properties(
+    async fn get_file_encryption_properties(
         &self,
         options: &EncryptionFactoryOptions,
         schema: &SchemaRef,
@@ -262,7 +264,7 @@ impl EncryptionFactory for TestEncryptionFactory {
     /// Generate file decryption properties to use when reading a Parquet file.
     /// Rather than provide the AES keys directly for decryption, we set a `KeyRetriever`
     /// that can determine the keys using the encryption metadata.
-    fn get_file_decryption_properties(
+    async fn get_file_decryption_properties(
         &self,
         _options: &EncryptionFactoryOptions,
         _file_path: &Path,

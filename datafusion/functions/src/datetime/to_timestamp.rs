@@ -55,7 +55,7 @@ Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for in
 | 2023-05-17T03:59:00.123456789                                                                          |
 +--------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -89,7 +89,7 @@ pub struct ToTimestampFunc {
 | 2023-05-17T03:59:00                                                                                            |
 +----------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -123,7 +123,7 @@ pub struct ToTimestampSecondsFunc {
 | 2023-05-17T03:59:00.123                                                                                       |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -157,7 +157,7 @@ pub struct ToTimestampMillisFunc {
 | 2023-05-17T03:59:00.123456                                                                                    |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -191,7 +191,7 @@ pub struct ToTimestampMicrosFunc {
 | 2023-05-17T03:59:00.123456789                                                                                |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "expression",
@@ -368,10 +368,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 }
             }
             other => {
-                exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp",
-                    other
-                )
+                exec_err!("Unsupported data type {other} for function to_timestamp")
             }
         }
     }
@@ -424,7 +421,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             }
             other => {
                 exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp_seconds",
+                    "Unsupported data type {} for function to_timestamp_seconds",
                     other
                 )
             }
@@ -482,7 +479,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             ),
             other => {
                 exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp_millis",
+                    "Unsupported data type {} for function to_timestamp_millis",
                     other
                 )
             }
@@ -540,7 +537,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             ),
             other => {
                 exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp_micros",
+                    "Unsupported data type {} for function to_timestamp_micros",
                     other
                 )
             }
@@ -597,7 +594,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             }
             other => {
                 exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp_nanos",
+                    "Unsupported data type {} for function to_timestamp_nanos",
                     other
                 )
             }
@@ -804,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_with_unparseable_data() -> Result<()> {
+    fn to_timestamp_with_unparsable_data() -> Result<()> {
         let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
 
         date_string_builder.append_null();
@@ -956,7 +953,7 @@ mod tests {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
             let actual = string_to_datetime_formatted(&Utc, s, f)
                 .unwrap_err()
-                .to_string();
+                .strip_backtrace();
             assert_eq!(actual, expected)
         }
     }
@@ -984,7 +981,7 @@ mod tests {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
             let actual = string_to_datetime_formatted(&Utc, s, f)
                 .unwrap_err()
-                .to_string();
+                .strip_backtrace();
             assert_eq!(actual, expected)
         }
     }

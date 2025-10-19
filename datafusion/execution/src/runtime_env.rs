@@ -258,7 +258,8 @@ impl RuntimeEnvBuilder {
     /// Specify the total memory to use while running the DataFusion
     /// plan to `max_memory * memory_fraction` in bytes.
     ///
-    /// This defaults to using [`GreedyMemoryPool`]
+    /// This defaults to using [`GreedyMemoryPool`] wrapped in the
+    /// [`TrackConsumersPool`] with a maximum of 5 consumers.
     ///
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
