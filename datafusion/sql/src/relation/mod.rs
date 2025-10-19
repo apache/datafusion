@@ -43,7 +43,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name, alias, args, ..
             } => {
                 if let Some(func_args) = args {
-                    // Convert name parts to fully qualified name (supports schema.func)
                     let tbl_func_name = name
                         .0
                         .iter()
@@ -180,7 +179,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         _ => plan_err!("Unsupported function argument: {arg:?}"),
                     })
                     .collect::<Result<Vec<Expr>>>()?;
-                // Pass the full qualified name to support schema.func resolution
                 let qualified_name = tbl_func_ref.to_string();
                 let provider = self
                     .context_provider

@@ -496,7 +496,7 @@ SELECT c, f.*  FROM json_table, LATERAL generate_series(1,2) f;
 2 2
 
 #
-# Test schema-qualified table function names (Phase 3)
+# Test schema-qualified table function names
 # Global table functions are not accessible via qualified names
 #
 

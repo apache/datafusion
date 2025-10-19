@@ -96,8 +96,7 @@ pub trait SchemaProvider: Debug + Sync + Send {
 
     /// Retrieves a specific table function from the schema by name, if it exists,
     /// otherwise returns `None`.
-    fn udtf(&self, name: &str) -> Result<Option<Arc<TableFunction>>> {
-        let _ = name; // suppress unused warning
+    fn udtf(&self, _name: &str) -> Result<Option<Arc<TableFunction>>> {
         Ok(None)
     }
 
@@ -123,8 +122,7 @@ pub trait SchemaProvider: Debug + Sync + Send {
     }
 
     /// Returns true if table function exists in the schema provider, false otherwise.
-    fn udtf_exist(&self, name: &str) -> bool {
-        let _ = name;
+    fn udtf_exist(&self, _name: &str) -> bool {
         false
     }
 }

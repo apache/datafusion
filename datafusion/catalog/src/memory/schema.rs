@@ -188,16 +188,13 @@ mod tests {
             Arc::new(DummyTableFunc),
         ));
 
-        // Register
         let result = schema.register_udtf("my_func".to_string(), func.clone());
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
 
-        // Verify exists
         assert!(schema.udtf_exist("my_func"));
         assert_eq!(schema.udtf_names(), vec!["my_func"]);
 
-        // Retrieve
         let retrieved = schema.udtf("my_func").unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().name(), "my_func");
@@ -215,7 +212,6 @@ mod tests {
             .register_udtf("my_func".to_string(), func.clone())
             .unwrap();
 
-        // Second registration should fail
         let result = schema.register_udtf("my_func".to_string(), func.clone());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
@@ -232,13 +228,11 @@ mod tests {
         schema.register_udtf("my_func".to_string(), func).unwrap();
         assert!(schema.udtf_exist("my_func"));
 
-        // Deregister
         let removed = schema.deregister_udtf("my_func").unwrap();
         assert!(removed.is_some());
         assert!(!schema.udtf_exist("my_func"));
         assert_eq!(schema.udtf_names(), Vec::<String>::new());
 
-        // Deregister non-existent should return None
         let removed = schema.deregister_udtf("my_func").unwrap();
         assert!(removed.is_none());
     }
@@ -247,7 +241,6 @@ mod tests {
     fn test_udtf_not_found() {
         let schema = MemorySchemaProvider::new();
 
-        // Non-existent function
         assert!(!schema.udtf_exist("nonexistent"));
         let result = schema.udtf("nonexistent").unwrap();
         assert!(result.is_none());

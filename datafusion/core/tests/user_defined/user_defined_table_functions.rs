@@ -109,12 +109,10 @@ async fn test_deregister_udtf() -> Result<()> {
     Ok(())
 }
 
-/// Test schema-qualified UDTF names
 #[tokio::test]
 async fn test_schema_qualified_udtf() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Register UDTF in schema
     let catalog = ctx.catalog("datafusion").unwrap();
     let schema = catalog.schema("public").unwrap();
     let memory_schema = schema
@@ -130,7 +128,6 @@ async fn test_schema_qualified_udtf() -> Result<()> {
         .register_udtf("schema_func".to_string(), func)
         .unwrap();
 
-    // Test qualified name
     let csv_file = "tests/tpch-csv/nation.csv";
     let rbs = ctx
         .sql(format!("SELECT * FROM public.schema_func('{csv_file}', 3);").as_str())
@@ -148,10 +145,8 @@ async fn test_schema_qualified_udtf() -> Result<()> {
 async fn test_unqualified_uses_global_registry() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Register globally
     ctx.register_udtf("global_func", Arc::new(SimpleCsvTableFunc {}));
 
-    // Unqualified name should resolve from global registry
     let csv_file = "tests/tpch-csv/nation.csv";
     let rbs = ctx
         .sql(format!("SELECT * FROM global_func('{csv_file}', 2);").as_str())
@@ -164,15 +159,12 @@ async fn test_unqualified_uses_global_registry() -> Result<()> {
     Ok(())
 }
 
-/// Test that schema-qualified names don't fallback to global
 #[tokio::test]
 async fn test_schema_qualified_not_in_global() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Register only globally
     ctx.register_udtf("global_only", Arc::new(SimpleCsvTableFunc {}));
 
-    // Trying to access with qualified name should fail
     let csv_file = "tests/tpch-csv/nation.csv";
     let result = ctx
         .sql(format!("SELECT * FROM public.global_only('{csv_file}');").as_str())
