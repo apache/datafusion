@@ -33,7 +33,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
+    LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
@@ -280,6 +280,10 @@ impl StandardWindowFunctionExpr for WindowUDFExpr {
                 let expr = Arc::new(Column::new(field.name(), idx));
                 PhysicalSortExpr { expr, options }
             })
+    }
+
+    fn limit_effect(&self) -> LimitEffect {
+        self.fun.inner().limit_effect(self.args.as_slice())
     }
 }
 
