@@ -591,7 +591,6 @@ impl TypeSignature {
         match self {
             TypeSignature::Exact(types) => {
                 if let Some(names) = parameter_names {
-                    // Combine names with types: "name: Type"
                     vec![names
                         .iter()
                         .zip(types.iter())
@@ -604,7 +603,6 @@ impl TypeSignature {
             }
             TypeSignature::Any(count) => {
                 if let Some(names) = parameter_names {
-                    // Combine names with "Any": "name: Any"
                     vec![names
                         .iter()
                         .take(*count)
@@ -619,7 +617,6 @@ impl TypeSignature {
             }
             TypeSignature::Uniform(count, types) => {
                 if let Some(names) = parameter_names {
-                    // Combine names with union of types: "name: Type1/Type2"
                     let type_str = Self::join_types(types, "/");
                     vec![names
                         .iter()
@@ -628,13 +625,11 @@ impl TypeSignature {
                         .collect::<Vec<_>>()
                         .join(", ")]
                 } else {
-                    // Fallback to original representation
                     self.to_string_repr()
                 }
             }
             TypeSignature::Coercible(coercions) => {
                 if let Some(names) = parameter_names {
-                    // Combine names with coercion types: "name: Type"
                     vec![names
                         .iter()
                         .zip(coercions.iter())
@@ -647,7 +642,6 @@ impl TypeSignature {
             }
             TypeSignature::Comparable(count) => {
                 if let Some(names) = parameter_names {
-                    // Combine names with "Comparable": "name: Comparable"
                     vec![names
                         .iter()
                         .take(*count)
@@ -660,7 +654,6 @@ impl TypeSignature {
             }
             TypeSignature::Numeric(count) => {
                 if let Some(names) = parameter_names {
-                    // Combine names with "Numeric": "name: Numeric"
                     vec![names
                         .iter()
                         .take(*count)
@@ -673,7 +666,6 @@ impl TypeSignature {
             }
             TypeSignature::String(count) => {
                 if let Some(names) = parameter_names {
-                    // Combine names with "String": "name: String"
                     vec![names
                         .iter()
                         .take(*count)
@@ -684,16 +676,11 @@ impl TypeSignature {
                     self.to_string_repr()
                 }
             }
-            TypeSignature::Nullary => {
-                // No parameters, so no names to show
-                self.to_string_repr()
-            }
+            TypeSignature::Nullary => self.to_string_repr(),
             TypeSignature::ArraySignature(array_sig) => {
-                // ArraySignature has fixed arity, so it can support parameter names
                 if let Some(names) = parameter_names {
                     match array_sig {
                         ArrayFunctionSignature::Array { arguments, .. } => {
-                            // Pair each name with its corresponding array argument type
                             vec![names
                                 .iter()
                                 .zip(arguments.iter())
@@ -719,7 +706,6 @@ impl TypeSignature {
                         }
                     }
                 } else {
-                    // Fallback to semantic names like "array, index, element"
                     self.to_string_repr()
                 }
             }
@@ -728,7 +714,6 @@ impl TypeSignature {
                 .flat_map(|s| s.to_string_repr_with_names(parameter_names))
                 .collect(),
             TypeSignature::UserDefined => {
-                // UserDefined signatures can have parameter names but no type info
                 if let Some(names) = parameter_names {
                     vec![names.join(", ")]
                 } else {
@@ -1309,7 +1294,6 @@ impl Signature {
 
     /// Validate that parameter names are compatible with this signature
     fn validate_parameter_names(&self, names: &[String]) -> Result<()> {
-        // Check arity compatibility
         match self.type_signature.arity() {
             Arity::Fixed(expected) => {
                 if names.len() != expected {
@@ -1332,7 +1316,6 @@ impl Signature {
             }
         }
 
-        // Validate no duplicate names
         let mut seen = std::collections::HashSet::new();
         for name in names {
             if !seen.insert(name) {
@@ -1512,7 +1495,6 @@ mod tests {
 
     #[test]
     fn test_signature_with_parameter_names() {
-        // Test adding parameter names to exact signature
         let sig = Signature::exact(
             vec![DataType::Int32, DataType::Utf8],
             Volatility::Immutable,
@@ -1532,7 +1514,6 @@ mod tests {
 
     #[test]
     fn test_signature_parameter_names_wrong_count() {
-        // Test that wrong number of names fails
         let result = Signature::exact(
             vec![DataType::Int32, DataType::Utf8],
             Volatility::Immutable,
@@ -1548,7 +1529,6 @@ mod tests {
 
     #[test]
     fn test_signature_parameter_names_duplicate() {
-        // Test that duplicate names fail
         let result = Signature::exact(
             vec![DataType::Int32, DataType::Int32],
             Volatility::Immutable,
@@ -1564,7 +1544,6 @@ mod tests {
 
     #[test]
     fn test_signature_parameter_names_variadic() {
-        // Test that variadic signatures reject parameter names
         let result = Signature::variadic(vec![DataType::Int32], Volatility::Immutable)
             .with_parameter_names(vec!["arg".to_string()]);
 
@@ -1577,7 +1556,6 @@ mod tests {
 
     #[test]
     fn test_signature_without_parameter_names() {
-        // Test that signatures without parameter names still work
         let sig = Signature::exact(
             vec![DataType::Int32, DataType::Utf8],
             Volatility::Immutable,
@@ -1588,7 +1566,6 @@ mod tests {
 
     #[test]
     fn test_signature_uniform_with_parameter_names() {
-        // Test uniform signature with parameter names
         let sig = Signature::uniform(3, vec![DataType::Float64], Volatility::Immutable)
             .with_parameter_names(vec!["x".to_string(), "y".to_string(), "z".to_string()])
             .unwrap();
@@ -1601,7 +1578,6 @@ mod tests {
 
     #[test]
     fn test_signature_numeric_with_parameter_names() {
-        // Test numeric signature with parameter names
         let sig = Signature::numeric(2, Volatility::Immutable)
             .with_parameter_names(vec!["a".to_string(), "b".to_string()])
             .unwrap();
@@ -1614,7 +1590,6 @@ mod tests {
 
     #[test]
     fn test_signature_nullary_with_empty_names() {
-        // Test that nullary signature accepts empty parameter names
         let sig = Signature::nullary(Volatility::Immutable)
             .with_parameter_names(Vec::<String>::new())
             .unwrap();
@@ -1624,13 +1599,10 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_exact() {
-        // Test Exact signature with parameter names
         let sig = TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]);
 
-        // Without names: should show types
         assert_eq!(sig.to_string_repr_with_names(None), vec!["Int32, Utf8"]);
 
-        // With names: should show parameter names with types
         let names = vec!["id".to_string(), "name".to_string()];
         assert_eq!(
             sig.to_string_repr_with_names(Some(&names)),
@@ -1640,13 +1612,10 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_any() {
-        // Test Any signature with parameter names
         let sig = TypeSignature::Any(3);
 
-        // Without names: should show "Any" for each parameter
         assert_eq!(sig.to_string_repr_with_names(None), vec!["Any, Any, Any"]);
 
-        // With names: should show parameter names with "Any" type
         let names = vec!["x".to_string(), "y".to_string(), "z".to_string()];
         assert_eq!(
             sig.to_string_repr_with_names(Some(&names)),
@@ -1656,17 +1625,14 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_one_of() {
-        // Test OneOf signature with parameter names (like substr)
         let sig =
             TypeSignature::OneOf(vec![TypeSignature::Any(2), TypeSignature::Any(3)]);
 
-        // Without names: should show generic "Any" types
         assert_eq!(
             sig.to_string_repr_with_names(None),
             vec!["Any, Any", "Any, Any, Any"]
         );
 
-        // With names: should use names with types for each variant
         let names = vec![
             "str".to_string(),
             "start_pos".to_string(),
@@ -1683,7 +1649,6 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_partial() {
-        // Test with more names than a single signature needs (valid for OneOf)
         // This simulates providing max arity names for a OneOf signature
         let sig = TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8]);
 
@@ -1697,16 +1662,13 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_uniform() {
-        // Test Uniform signature with parameter names
         let sig = TypeSignature::Uniform(2, vec![DataType::Float64]);
 
-        // Without names: should show type representation
         assert_eq!(
             sig.to_string_repr_with_names(None),
             vec!["Float64, Float64"]
         );
 
-        // With names: should show parameter names with types
         let names = vec!["x".to_string(), "y".to_string()];
         assert_eq!(
             sig.to_string_repr_with_names(Some(&names)),
@@ -1716,13 +1678,11 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_coercible() {
-        // Test Coercible signature with parameter names
         let sig = TypeSignature::Coercible(vec![
             Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
             Coercion::new_exact(TypeSignatureClass::Native(logical_int32())),
         ]);
 
-        // With names: should show parameter names with coercion types
         let names = vec!["a".to_string(), "b".to_string()];
         let result = sig.to_string_repr_with_names(Some(&names));
         // Check that it contains the parameter names with type annotations
@@ -1733,7 +1693,6 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_comparable_numeric_string() {
-        // Test Comparable, Numeric, and String signatures
         let comparable = TypeSignature::Comparable(3);
         let numeric = TypeSignature::Numeric(2);
         let string_sig = TypeSignature::String(2);
@@ -1757,7 +1716,6 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_variadic_fallback() {
-        // Test that variadic variants fall back to to_string_repr()
         let variadic = TypeSignature::Variadic(vec![DataType::Utf8, DataType::LargeUtf8]);
         let names = vec!["x".to_string()];
         assert_eq!(
@@ -1777,7 +1735,6 @@ mod tests {
             user_defined.to_string_repr_with_names(Some(&names)),
             vec!["x"]
         );
-        // Without names, falls back to to_string_repr()
         assert_eq!(
             user_defined.to_string_repr_with_names(None),
             user_defined.to_string_repr()
@@ -1786,7 +1743,6 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_nullary() {
-        // Test Nullary signature (no arguments)
         let sig = TypeSignature::Nullary;
         let names = vec!["x".to_string()];
 
@@ -1800,7 +1756,6 @@ mod tests {
 
     #[test]
     fn test_to_string_repr_with_names_array_signature() {
-        // Test ArraySignature with parameter names
         let sig = TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
             arguments: vec![
                 ArrayFunctionArgument::Array,
@@ -1810,20 +1765,17 @@ mod tests {
             array_coercion: None,
         });
 
-        // Without names: should show semantic types
         assert_eq!(
             sig.to_string_repr_with_names(None),
             vec!["array, index, element"]
         );
 
-        // With names: should pair each name with its array argument type
         let names = vec!["arr".to_string(), "idx".to_string(), "val".to_string()];
         assert_eq!(
             sig.to_string_repr_with_names(Some(&names)),
             vec!["arr: array, idx: index, val: element"]
         );
 
-        // Test RecursiveArray (1 argument)
         let recursive =
             TypeSignature::ArraySignature(ArrayFunctionSignature::RecursiveArray);
         let names = vec!["array".to_string()];

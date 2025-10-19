@@ -3956,9 +3956,6 @@ fn test_double_quoted_literal_string() {
 
 #[test]
 fn test_named_arguments_with_dialects() {
-    // Test that named arguments syntax (param => value) with different dialects
-    use sqlparser::dialect::Dialect;
-
     let sql = "SELECT my_func(arg1 => 'value1')";
 
     // Returns None if the dialect doesn't support the => operator
