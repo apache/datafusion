@@ -353,6 +353,19 @@ jobs:
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
+      - name: Remove unnecessary preinstalled software
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          apt-get clean
+          rm -rf /__t/CodeQL
+          rm -rf /__t/PyPy
+          rm -rf /__t/Java_Temurin-Hotspot_jdk
+          rm -rf /__t/Python
+          rm -rf /__t/go
+          rm -rf /__t/Ruby
+          echo "Disk space after cleanup:"
+          df -h
       - name: Run examples
         run: |
           # test datafusion-sql examples
