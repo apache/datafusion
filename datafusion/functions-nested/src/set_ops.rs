@@ -29,9 +29,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{
-    exec_err, internal_err, plan_err, utils::take_function_args, Result,
-};
+use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -289,17 +287,7 @@ impl ScalarUDFImpl for ArrayDistinct {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            List(field) => Ok(DataType::new_list(
-                field.data_type().clone(),
-                field.is_nullable(),
-            )),
-            LargeList(field) => Ok(DataType::new_large_list(
-                field.data_type().clone(),
-                field.is_nullable(),
-            )),
-            arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(
