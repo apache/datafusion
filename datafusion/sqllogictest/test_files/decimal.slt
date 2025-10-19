@@ -886,17 +886,15 @@ NULL
 
 # power with decimals
 
-# TODO: Result should be decimal
 query RT
-SELECT power(2::decimal(12, 0), 4), arrow_typeof(power(2::decimal(12, 0), 4));
+SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
 ----
-16 Float64
+16 Decimal128(38, 0)
 
-query RR
-SELECT power(2::decimal(39, 0), 4), power(2::decimal(39, 0), 0);
+query RT
+SELECT power(10000000000::decimal(38, 0), 2), arrow_typeof(power(10000000000::decimal(38, 0), 2));
 ----
-16 1
-
+100000000000000000000 Decimal128(38, 0)
 
 # Set parse_float_as_decimal to false to test float parsing
 statement ok
@@ -922,15 +920,14 @@ select log(100000000000000000000000000000000000::decimal(38,0))
 ----
 34
 
-# power with decimals-as-floats
-
+# Result is decimal since argument is decimal regardless decimals-as-floats parsing
 query R
-SELECT power(2::decimal(39, 0), 4);
+SELECT power(10000000000::decimal(38, 0), 2);
 ----
-16
+100000000000000000000
 
-# Result is float
 query RT
-SELECT power(2::decimal(12, 0), 4), arrow_typeof(power(2::decimal(12, 0), 4));
+SELECT power(10000000000::decimal(38, 0), 2),
+       arrow_typeof(power(10000000000::decimal(38, 0), 2));
 ----
-16 Float64
+100000000000000000000 Decimal128(38, 0)
