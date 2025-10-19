@@ -106,11 +106,10 @@ pub trait SchemaProvider: Debug + Sync + Send {
     ///
     /// If a table function of the same name was already registered, returns "Table
     /// function already exists" error.
-    #[allow(unused_variables)]
     fn register_udtf(
         &self,
-        name: String,
-        function: Arc<TableFunction>,
+        _name: String,
+        _function: Arc<TableFunction>,
     ) -> Result<Option<Arc<TableFunction>>> {
         exec_err!("schema provider does not support registering table functions")
     }
@@ -119,8 +118,7 @@ pub trait SchemaProvider: Debug + Sync + Send {
     /// schema and returns the previously registered [`TableFunction`], if any.
     ///
     /// If no `name` table function exists, returns Ok(None).
-    #[allow(unused_variables)]
-    fn deregister_udtf(&self, name: &str) -> Result<Option<Arc<TableFunction>>> {
+    fn deregister_udtf(&self, _name: &str) -> Result<Option<Arc<TableFunction>>> {
         exec_err!("schema provider does not support deregistering table functions")
     }
 
