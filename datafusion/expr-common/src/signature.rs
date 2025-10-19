@@ -621,7 +621,6 @@ impl TypeSignature {
             TypeSignature::Variadic(_) | TypeSignature::VariadicAny => {
                 self.to_string_repr()
             }
-
         }
     }
 

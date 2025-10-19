@@ -67,7 +67,69 @@ SELECT substr(invalid => 'hello', start_pos => 1, length => 3);
 query error DataFusion error: Error during planning: Parameter 'str' specified multiple times
 SELECT substr(str => 'hello', str => 'world', start_pos => 1);
 
+# Test case-insensitive parameter names (unquoted identifiers)
+query T
+SELECT substr(STR => 'hello world', START_POS => 7, LENGTH => 5);
+----
+world
+
+# Test case-insensitive with mixed case
+query T
+SELECT substr(Str => 'hello world', Start_Pos => 7);
+----
+world
+
+# Error: case-sensitive quoted parameter names don't match
+query error DataFusion error: Error during planning: Unknown parameter name 'STR'
+SELECT substr("STR" => 'hello world', "start_pos" => 7);
+
 # Error: wrong number of arguments
 # This query provides only 1 argument but substr requires 2 or 3
 query error DataFusion error: Error during planning: Execution error: Function 'substr' user-defined coercion failed with "Error during planning: The substr function requires 2 or 3 arguments, but got 1."
 SELECT substr(str => 'hello world');
+
+#############
+## PostgreSQL Dialect Tests (uses ExprNamed variant)
+#############
+
+statement ok
+set datafusion.sql_parser.dialect = 'PostgreSQL';
+
+# Test named arguments in order
+query T
+SELECT substr(str => 'hello world', start_pos => 7, length => 5);
+----
+world
+
+# Test named arguments out of order
+query T
+SELECT substr(length => 5, str => 'hello world', start_pos => 7);
+----
+world
+
+# Test mixed positional and named arguments
+query T
+SELECT substr('hello world', start_pos => 7, length => 5);
+----
+world
+
+# Test with only 2 parameters (length optional)
+query T
+SELECT substr(str => 'hello world', start_pos => 7);
+----
+world
+
+# Reset to default dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
+#############
+## MsSQL Dialect Tests (does NOT support => operator)
+#############
+
+statement ok
+set datafusion.sql_parser.dialect = 'MsSQL';
+
+# Error: MsSQL dialect does not support => operator
+query error DataFusion error: SQL error: ParserError\("Expected: \), found: => at Line: 1, Column: 19"\)
+SELECT substr(str => 'hello world', start_pos => 7, length => 5);
