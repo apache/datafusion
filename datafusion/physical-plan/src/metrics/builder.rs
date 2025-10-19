@@ -19,6 +19,8 @@
 
 use std::{borrow::Cow, sync::Arc};
 
+use crate::metrics::MetricType;
+
 use super::{
     Count, ExecutionPlanMetricsSet, Gauge, Label, Metric, MetricValue, Time, Timestamp,
 };
@@ -52,21 +54,35 @@ pub struct MetricBuilder<'a> {
 
     /// arbitrary name=value pairs identifying this metric
     labels: Vec<Label>,
+
+    /// The type controlling the verbosity/category for this builder
+    /// See comments in [`MetricType`] for details
+    metric_type: MetricType,
 }
 
 impl<'a> MetricBuilder<'a> {
     /// Create a new `MetricBuilder` that will register the result of `build()` with the `metrics`
+    ///
+    /// `self.metric_type` controls when such metric is displayed. See comments in
+    /// [`MetricType`] for details.
     pub fn new(metrics: &'a ExecutionPlanMetricsSet) -> Self {
         Self {
             metrics,
             partition: None,
             labels: vec![],
+            metric_type: MetricType::DEV,
         }
     }
 
     /// Add a label to the metric being constructed
     pub fn with_label(mut self, label: Label) -> Self {
         self.labels.push(label);
+        self
+    }
+
+    /// Set the metric type to the metric being constructed
+    pub fn with_type(mut self, metric_type: MetricType) -> Self {
+        self.metric_type = metric_type;
         self
     }
 
@@ -92,8 +108,11 @@ impl<'a> MetricBuilder<'a> {
             labels,
             partition,
             metrics,
+            metric_type,
         } = self;
-        let metric = Arc::new(Metric::new_with_labels(value, partition, labels));
+        let metric = Arc::new(
+            Metric::new_with_labels(value, partition, labels).with_type(metric_type),
+        );
         metrics.register(metric);
     }
 

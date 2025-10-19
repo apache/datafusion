@@ -86,6 +86,14 @@ See [issue #17601] for more details.
 
 [issue #17601]: https://github.com/apache/datafusion/issues/17601
 
+### `SessionState`'s `sql_to_statement` method takes `Dialect` rather than a `str`
+
+The `dialect` parameter of `sql_to_statement` method defined in `datafusion::execution::session_state::SessionState`
+has changed from `&str` to `&Dialect`.
+`Dialect` is an enum defined in the `datafusion-common`
+crate under the `config` module that provides type safety
+and better validation for SQL dialect selection
+
 ## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
