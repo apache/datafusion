@@ -124,6 +124,7 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any().is::<Column>()
 }
 
+/// Creates a [FilterPredicate] from a boolean array.
 fn create_filter(predicate: &BooleanArray, optimize: bool) -> FilterPredicate {
     let mut filter_builder = FilterBuilder::new(predicate);
     if optimize {
@@ -150,6 +151,7 @@ fn filter_record_batch(
     }
 }
 
+#[inline(always)]
 fn filter_array(
     array: &dyn Array,
     filter: &FilterPredicate,
@@ -164,16 +166,28 @@ struct InterleaveBuilder {
 
 impl InterleaveBuilder {
     fn new(data_type: &DataType, capacity: usize) -> Self {
+        // By settings indices to (0, 0) every entry points to the single
+        // null value in the first array.
         Self {
             indices: vec![(0, 0); capacity],
             arrays: vec![new_null_array(data_type, 1)],
         }
     }
 
-    fn add(&mut self, rows: &ArrayRef, value: ColumnarValue) -> Result<()> {
+    /// Adds a result value.
+    ///
+    /// `rows` should be a [UInt32Array] containing [RecordBatch] relative row indices
+    /// for which `value` contains result values.
+    ///
+    /// If `value` is a scalar, the scalar value is used for each row in `rows`.
+    /// If `value` is an array, the values from the array and the indices from `rows` will be
+    /// processed pairwise.
+    fn add_result(&mut self, rows: &ArrayRef, value: ColumnarValue) -> Result<()> {
         let array_index = self.arrays.len();
         match value {
             ColumnarValue::Array(a) => {
+                assert_eq!(a.len(), rows.len());
+
                 self.arrays.push(a);
                 for (array_ix, row_ix) in rows
                     .as_primitive::<UInt32Type>()
@@ -274,14 +288,19 @@ impl CaseExpr {
     ///     [ELSE result]
     /// END
     fn case_when_with_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.data_type(&batch.schema())?;
         let optimize_filters = batch.num_columns() > 1;
+
+        let return_type = self.data_type(&batch.schema())?;
         let mut interleave_builder =
             InterleaveBuilder::new(&return_type, batch.num_rows());
 
+        // `remainder_rows` contains the indices of the rows that need to be evaluated
         let mut remainder_rows: ArrayRef =
             Arc::new(UInt32Array::from_iter(0..batch.num_rows() as u32));
+        // `remainder_batch` contains the rows themselves that need to be evaluated
         let mut remainder_batch = Cow::Borrowed(batch);
+
+        // evaluate the base expression
         let mut base_value = self
             .expr
             .as_ref()
@@ -289,8 +308,14 @@ impl CaseExpr {
             .evaluate(batch)?
             .into_array(batch.num_rows())?;
 
+        // Fill in a result value already for rows where the base expression value is null
+        // Since each when expression is tested against the base expression using the equality
+        // operator, null base values can never match any when expression. `x == NULL` is false,
+        // for all possible values of `x`.
         let base_nulls = is_null(base_value.as_ref())?;
         if base_nulls.true_count() > 0 {
+            // If there is an else expression, use that as the default value for the null rows
+            // Otherwise the default `null` value from the eInterleaveBuilder will be used.
             if let Some(e) = self.else_expr() {
                 let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
 
@@ -298,9 +323,10 @@ impl CaseExpr {
                 let nulls_batch = filter_record_batch(&remainder_batch, &nulls_filter)?;
                 let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
                 let nulls_value = expr.evaluate(&nulls_batch)?;
-                interleave_builder.add(&nulls_rows, nulls_value)?;
+                interleave_builder.add_result(&nulls_rows, nulls_value)?;
             }
 
+            // Remove the null rows from the remainder batch
             let not_null_filter = create_filter(&not(&base_nulls)?, optimize_filters);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &not_null_filter)?);
@@ -334,11 +360,11 @@ impl CaseExpr {
             // for the current branch
             let then_filter = create_filter(&when_value, optimize_filters);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
+            let then_rows = filter_array(&remainder_rows, &then_filter)?;
+
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
-
-            let then_rows = filter_array(&remainder_rows, &then_filter)?;
-            interleave_builder.add(&then_rows, then_value)?;
+            interleave_builder.add_result(&then_rows, then_value)?;
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
@@ -348,6 +374,7 @@ impl CaseExpr {
                 return interleave_builder.finish();
             }
 
+            // Prepare the next when branch (or the else branch)
             let next_selection = not(&when_value)?;
             let next_filter = create_filter(&next_selection, optimize_filters);
             remainder_batch =
@@ -362,7 +389,7 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
-            interleave_builder.add(&remainder_rows, else_value)?;
+            interleave_builder.add_result(&remainder_rows, else_value)?;
         }
 
         interleave_builder.finish()
@@ -377,12 +404,15 @@ impl CaseExpr {
     /// END
     fn case_when_no_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let optimize_filters = batch.num_columns() > 1;
+
         let return_type = self.data_type(&batch.schema())?;
         let mut interleave_builder =
             InterleaveBuilder::new(&return_type, batch.num_rows());
 
+        // `remainder_rows` contains the indices of the rows that need to be evaluated
         let mut remainder_rows: ArrayRef =
             Arc::new(UInt32Array::from_iter(0..batch.num_rows() as u32));
+        // `remainder_batch` contains the rows themselves that need to be evaluated
         let mut remainder_batch = Cow::Borrowed(batch);
 
         for i in 0..self.when_then_expr.len() {
@@ -412,11 +442,11 @@ impl CaseExpr {
             // for the current branch
             let then_filter = create_filter(&when_value, optimize_filters);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
+            let then_rows = filter_array(&remainder_rows, &then_filter)?;
+
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
-
-            let then_rows = filter_array(&remainder_rows, &then_filter)?;
-            interleave_builder.add(&then_rows, then_value)?;
+            interleave_builder.add_result(&then_rows, then_value)?;
 
             // If the 'when' predicate matched all remaining row, there's nothing left to do so
             // we can return early
@@ -426,6 +456,7 @@ impl CaseExpr {
                 return interleave_builder.finish();
             }
 
+            // Prepare the next when branch (or the else branch)
             let next_selection = not(&when_value)?;
             let next_filter = create_filter(&next_selection, optimize_filters);
             remainder_batch =
@@ -439,7 +470,7 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_value = expr.evaluate(&remainder_batch)?;
-            interleave_builder.add(&remainder_rows, else_value)?;
+            interleave_builder.add_result(&remainder_rows, else_value)?;
         }
 
         interleave_builder.finish()
