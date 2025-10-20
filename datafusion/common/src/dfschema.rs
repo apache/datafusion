@@ -1270,6 +1270,13 @@ pub trait SchemaExt {
     ///
     /// It is only used by insert into cases.
     fn logically_equivalent_names_and_types(&self, other: &Self) -> Result<()>;
+
+    /// Create a table schema from a file schema and partition columns.
+    /// Partition columns are always added to the end of the schema.
+    fn table_schema(
+        file_schema: &Self,
+        table_partition_cols: &[FieldRef],
+    ) -> Self;
 }
 
 impl SchemaExt for Schema {
@@ -1320,6 +1327,17 @@ impl SchemaExt for Schema {
                     }
                 })
         }
+    }
+
+    fn table_schema(
+        file_schema: &Self,
+        table_partition_cols: &[FieldRef],
+    ) -> Self {
+        let mut builder = SchemaBuilder::from(file_schema);
+        for field in table_partition_cols {
+            builder.push(Arc::clone(&field));
+        }
+        builder.finish()
     }
 }
 
