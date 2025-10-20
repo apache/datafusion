@@ -3225,19 +3225,19 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
     "
     );
 
+    let test_config = TestConfig::default();
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     // Expected Outcome:
     // data should not be repartitioned / resorted
-    let expected_parquet = &[
-        "ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
-    let test_config = TestConfig::default();
-    test_config.run(
-        expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config.run(expected_parquet, plan_parquet, &SORT_DISTRIB_DISTRIB)?;
+    assert_plan!(
+        plan_parquet_distrib,
+        @r"
+ProjectionExec: expr=[a@0 as a2, c@2 as c2]
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+"
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     Ok(())
 }
