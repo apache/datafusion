@@ -2276,10 +2276,10 @@ impl SubqueryAlias {
         let func_dependencies = plan.schema().functional_dependencies().clone();
 
         let schema = DFSchema::from_unqualified_fields(fields, meta_data)?;
-        let schema = Schema::from(schema);
+        let schema = schema.as_arrow();
 
         let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
+            DFSchema::try_from_qualified_schema(alias.clone(), schema)?
                 .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
@@ -2543,16 +2543,22 @@ impl Window {
         )
     }
 
+    /// Create a new window function using the provided schema to avoid the overhead of
+    /// building the schema again when the schema is already known.
+    ///
+    /// This method should only be called when you are absolutely sure that the schema being
+    /// provided is correct for the window function. If in doubt, call [try_new](Self::try_new) instead.
     pub fn try_new_with_schema(
         window_expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        if window_expr.len() != schema.fields().len() - input.schema().fields().len() {
+        let input_fields_count = input.schema().fields().len();
+        if schema.fields().len() != input_fields_count + window_expr.len() {
             return plan_err!(
-                "Window has mismatch between number of expressions ({}) and number of fields in schema ({})",
-                window_expr.len(),
-                schema.fields().len() - input.schema().fields().len()
+                "Window schema has wrong number of fields. Expected {} got {}",
+                input_fields_count + window_expr.len(),
+                schema.fields().len()
             );
         }
 
@@ -2702,7 +2708,7 @@ impl TableScan {
                 let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
+                            (Some(table_name.clone()), Arc::clone(&schema.fields()[*i]))
                         })
                         .collect(),
                     schema.metadata.clone(),
@@ -2747,7 +2753,8 @@ pub struct Union {
 
 impl Union {
     /// Constructs new Union instance deriving schema from inputs.
-    fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+    /// Schema data types must match exactly.
+    pub fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, false, false)?;
         Ok(Union { inputs, schema })
     }

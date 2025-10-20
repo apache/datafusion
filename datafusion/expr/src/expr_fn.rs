@@ -29,8 +29,8 @@ use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
-    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    AggregateUDF, Expr, LimitEffect, LogicalPlan, Operator, PartitionEvaluator,
+    ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -42,6 +42,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -704,6 +705,10 @@ impl WindowUDFImpl for SimpleWindowUDF {
             self.return_type.clone(),
             true,
         )))
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
     }
 }
 

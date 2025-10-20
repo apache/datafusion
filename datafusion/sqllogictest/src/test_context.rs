@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -31,8 +32,13 @@ use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
 };
-use datafusion::common::DataFusionError;
-use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
+use datafusion::common::{not_impl_err, DataFusionError, Result};
+use datafusion::functions::math::abs;
+use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
+use datafusion::logical_expr::{
+    create_udf, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::{
@@ -132,6 +138,10 @@ impl TestContext {
             "union_function.slt" => {
                 info!("Registering table with union column");
                 register_union_table(test_ctx.session_ctx())
+            }
+            "async_udf.slt" => {
+                info!("Registering dummy async udf");
+                register_async_abs_udf(test_ctx.session_ctx())
             }
             _ => {
                 info!("Using default SessionContext");
@@ -235,7 +245,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
 
     #[async_trait]
     impl TableProvider for TestTable {
-        fn as_any(&self) -> &dyn std::any::Any {
+        fn as_any(&self) -> &dyn Any {
             self
         }
 
@@ -457,4 +467,49 @@ fn register_union_table(ctx: &SessionContext) {
         RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(union)]).unwrap();
 
     ctx.register_batch("union_table", batch).unwrap();
+}
+
+fn register_async_abs_udf(ctx: &SessionContext) {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct AsyncAbs {
+        inner_abs: Arc<ScalarUDF>,
+    }
+    impl AsyncAbs {
+        fn new() -> Self {
+            AsyncAbs { inner_abs: abs() }
+        }
+    }
+    impl ScalarUDFImpl for AsyncAbs {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "async_abs"
+        }
+
+        fn signature(&self) -> &Signature {
+            self.inner_abs.signature()
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            self.inner_abs.return_type(arg_types)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            not_impl_err!("{} can only be called from async contexts", self.name())
+        }
+    }
+    #[async_trait]
+    impl AsyncScalarUDFImpl for AsyncAbs {
+        async fn invoke_async_with_args(
+            &self,
+            args: ScalarFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            return self.inner_abs.invoke_with_args(args);
+        }
+    }
+    let async_abs = AsyncAbs::new();
+    let udf = AsyncScalarUDF::new(Arc::new(async_abs));
+    ctx.register_udf(udf.into_scalar_udf());
 }

@@ -19,10 +19,104 @@
 
 # Upgrade Guides
 
-## DataFusion `50.0.0`
+## DataFusion `51.0.0`
 
-**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
+
+### `MSRV` updated to 1.87.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+
+[`1.87.0`]: https://releases.rs/docs/1.87.0/
+
+### `FunctionRegistry` exposes two additional methods
+
+`FunctionRegistry` exposes two additional methods `udafs` and `udwfs` which expose set of registered user defined aggregation and window function names. To upgrade implement methods returning set of registered function names:
+
+```diff
+impl FunctionRegistry for FunctionRegistryImpl {
+      fn udfs(&self) -> HashSet<String> {
+         self.scalar_functions.keys().cloned().collect()
+     }
++    fn udafs(&self) -> HashSet<String> {
++        self.aggregate_functions.keys().cloned().collect()
++    }
++
++    fn udwfs(&self) -> HashSet<String> {
++        self.window_functions.keys().cloned().collect()
++    }
+}
+```
+
+### `datafusion-proto` use `TaskContext` rather than `SessionContext` in physical plan serde methods
+
+There have been changes in the public API methods of `datafusion-proto` which handle physical plan serde.
+
+Methods like `physical_plan_from_bytes`, `parse_physical_expr` and similar, expect `TaskContext` instead of `SessionContext`
+
+```diff
+- let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
++ let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+```
+
+as `TaskContext` contains `RuntimeEnv` methods such as `try_into_physical_plan` will not have explicit `RuntimeEnv` parameter.
+
+```diff
+let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+-   .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
++.  .try_into_physical_plan(&ctx.task_ctx(), &composed_codec)
+```
+
+`PhysicalExtensionCodec::try_decode()` expects `TaskContext` instead of `FunctionRegistry`:
+
+```diff
+pub trait PhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+-        registry: &dyn FunctionRegistry,
++        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+```
+
+See [issue #17601] for more details.
+
+[issue #17601]: https://github.com/apache/datafusion/issues/17601
+
+### `SessionState`'s `sql_to_statement` method takes `Dialect` rather than a `str`
+
+The `dialect` parameter of `sql_to_statement` method defined in `datafusion::execution::session_state::SessionState`
+has changed from `&str` to `&Dialect`.
+`Dialect` is an enum defined in the `datafusion-common`
+crate under the `config` module that provides type safety
+and better validation for SQL dialect selection
+
+### Reorganization of `ListingTable` into `datafusion-catalog-listing` crate
+
+There has been a long standing request to remove features such as `ListingTable`
+from the `datafusion` crate to support faster build times. The structs
+`ListingOptions`, `ListingTable`, and `ListingTableConfig` are now available
+within the `datafusion-catalog-listing` crate. These are re-exported in
+the `datafusion` crate, so this should be a minimal impact to existing users.
+
+See [issue #14462] and [issue #17713] for more details.
+
+[issue #14462]: https://github.com/apache/datafusion/issues/14462
+[issue #17713]: https://github.com/apache/datafusion/issues/17713
+
+### Reorganization of `ArrowSource` into `datafusion-datasource-arrow` crate
+
+To support [issue #17713] the `ArrowSource` code has been removed from
+the `datafusion` core crate into it's own crate, `datafusion-datasource-arrow`.
+This follows the pattern for the AVRO, CSV, JSON, and Parquet data sources.
+Users may need to update their paths to account for these changes.
+
+See [issue #17713] for more details.
+
+## DataFusion `50.0.0`
 
 ### ListingTable automatically detects Hive Partitioned tables
 

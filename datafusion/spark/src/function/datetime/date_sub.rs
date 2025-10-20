@@ -21,6 +21,7 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute;
 use arrow::datatypes::{DataType, Date32Type};
+use arrow::error::ArrowError;
 use datafusion_common::cast::{
     as_date32_array, as_int16_array, as_int32_array, as_int8_array,
 };
@@ -90,31 +91,43 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
     let result = match days_arg.data_type() {
         DataType::Int8 => {
             let days_array = as_int8_array(days_arg)?;
-            compute::binary::<_, _, _, Date32Type>(
+            compute::try_binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| date - days as i32,
+                |date, days| {
+                    date.checked_sub(days as i32).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_sub".to_string())
+                    })
+                },
             )?
         }
         DataType::Int16 => {
             let days_array = as_int16_array(days_arg)?;
-            compute::binary::<_, _, _, Date32Type>(
+            compute::try_binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| date - days as i32,
+                |date, days| {
+                    date.checked_sub(days as i32).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_sub".to_string())
+                    })
+                },
             )?
         }
         DataType::Int32 => {
             let days_array = as_int32_array(days_arg)?;
-            compute::binary::<_, _, _, Date32Type>(
+            compute::try_binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| date - days,
+                |date, days| {
+                    date.checked_sub(days).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_sub".to_string())
+                    })
+                },
             )?
         }
         _ => {
             return internal_err!(
-                "Spark `date_add` function: argument must be int8, int16, int32, got {:?}",
+                "Spark `date_sub` function: argument must be int8, int16, int32, got {:?}",
                 days_arg.data_type()
             );
         }

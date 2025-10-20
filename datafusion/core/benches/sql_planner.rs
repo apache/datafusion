@@ -30,7 +30,7 @@ use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::DataFrame;
-use datafusion_common::ScalarValue;
+use datafusion_common::{config::Dialect, ScalarValue};
 use datafusion_expr::Expr::Literal;
 use datafusion_expr::{cast, col, lit, not, try_cast, when};
 use datafusion_functions::expr_fn::{
@@ -288,7 +288,10 @@ fn benchmark_with_param_values_many_columns(
     }
     // SELECT max(attr0), ..., max(attrN) FROM t1.
     let query = format!("SELECT {aggregates} FROM t1");
-    let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
+    let statement = ctx
+        .state()
+        .sql_to_statement(&query, &Dialect::Generic)
+        .unwrap();
     let plan =
         rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
     b.iter(|| {
@@ -476,7 +479,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
-    for partitioning_columns in [4, 7, 8] {
+    // It was observed in production that queries with window functions sometimes partition over more than 30 columns
+    for partitioning_columns in [4, 7, 8, 12, 30] {
         c.bench_function(
             &format!(
                 "physical_window_function_partition_by_{partitioning_columns}_on_values"
@@ -663,6 +667,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
 
     let raw_tpcds_sql_queries = (1..100)
+        // skip query 75 until it is fixed
+        // https://github.com/apache/datafusion/issues/17801
+        .filter(|q| *q != 75)
         .map(|q| std::fs::read_to_string(format!("{tests_path}tpc-ds/{q}.sql")).unwrap())
         .collect::<Vec<_>>();
 

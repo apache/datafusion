@@ -54,9 +54,9 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, not_impl_err, plan_datafusion_err,
-    plan_err, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, NullEquality,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    exec_err, get_target_functional_dependencies, internal_datafusion_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
+    NullEquality, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -1188,7 +1188,7 @@ impl LogicalPlanBuilder {
         if join_on.is_empty() {
             let join = Self::from(self.plan).cross_join(right)?;
             join.filter(filters.ok_or_else(|| {
-                DataFusionError::Internal("filters should not be None here".to_string())
+                internal_datafusion_err!("filters should not be None here")
             })?)
         } else {
             let join = Join::try_new(
@@ -1696,7 +1696,10 @@ pub fn build_join_schema(
     );
 
     let (schema1, schema2) = match join_type {
-        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
+        JoinType::Right
+        | JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::RightMark => (left, right),
         _ => (right, left),
     };
 
@@ -1995,6 +1998,7 @@ pub fn table_scan_with_filter_and_fetch(
 }
 
 pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+    // TODO should we take SchemaRef and avoid cloning?
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource {
         table_schema,
@@ -2006,6 +2010,7 @@ pub fn table_source_with_constraints(
     table_schema: &Schema,
     constraints: Constraints,
 ) -> Arc<dyn TableSource> {
+    // TODO should we take SchemaRef and avoid cloning?
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource {
         table_schema,
@@ -2186,7 +2191,9 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
     use crate::test::function_stub::sum;
-    use datafusion_common::{Constraint, RecursionUnnestOption, SchemaError};
+    use datafusion_common::{
+        Constraint, DataFusionError, RecursionUnnestOption, SchemaError,
+    };
     use insta::assert_snapshot;
 
     #[test]

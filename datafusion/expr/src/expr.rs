@@ -401,6 +401,12 @@ impl Default for Expr {
     }
 }
 
+impl AsRef<Expr> for Expr {
+    fn as_ref(&self) -> &Expr {
+        self
+    }
+}
+
 /// Create an [`Expr`] from a [`Column`]
 impl From<Column> for Expr {
     fn from(value: Column) -> Self {
@@ -4108,5 +4114,59 @@ mod test {
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);
         assert_eq!(size_of::<Arc<Expr>>(), 8);
+    }
+
+    #[test]
+    fn test_accept_exprs() {
+        fn accept_exprs<E: AsRef<Expr>>(_: &[E]) {}
+
+        let expr = || -> Expr { lit(1) };
+
+        // Call accept_exprs with owned expressions
+        let owned_exprs = vec![expr(), expr()];
+        accept_exprs(&owned_exprs);
+
+        // Call accept_exprs with expressions from expr tree
+        let udf = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::new_from_impl(TestUDF {})),
+            args: vec![expr(), expr()],
+        });
+        let Expr::ScalarFunction(scalar) = &udf else {
+            unreachable!()
+        };
+        accept_exprs(&scalar.args);
+
+        // Call accept_exprs with expressions collected from expr tree, without cloning
+        let mut collected_refs: Vec<&Expr> = scalar.args.iter().collect();
+        collected_refs.extend(&owned_exprs);
+        accept_exprs(&collected_refs);
+
+        // test helpers
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestUDF {}
+        impl ScalarUDFImpl for TestUDF {
+            fn as_any(&self) -> &dyn Any {
+                unimplemented!()
+            }
+
+            fn name(&self) -> &str {
+                unimplemented!()
+            }
+
+            fn signature(&self) -> &Signature {
+                unimplemented!()
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                unimplemented!()
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                unimplemented!()
+            }
+        }
     }
 }
