@@ -3247,12 +3247,14 @@ fn parallelization_ignores_transitively_with_projection_csv() -> Result<()> {
     }]
     .into();
     let plan_csv = sort_preserving_merge_exec(sort_key_after_projection, proj_csv);
-    let expected = &[
-        "SortPreservingMergeExec: [c2@1 ASC]",
-        "  ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
-    ];
-    plans_matches_expected!(expected, &plan_csv);
+    assert_plan!(
+        plan_csv,
+        @r"
+SortPreservingMergeExec: [c2@1 ASC]
+  ProjectionExec: expr=[a@0 as a2, c@2 as c2]
+    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
+"
+    );
 
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
