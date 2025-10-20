@@ -18,9 +18,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, AsArray};
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Float32, Float64, Int64};
+use arrow::datatypes::DataType::{Decimal128, Float32, Float64, Int64};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
@@ -33,7 +33,6 @@ use datafusion_functions::utils::make_scalar_function;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for SparkCeil {
@@ -45,8 +44,11 @@ impl Default for SparkCeil {
 impl SparkCeil {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
-            aliases: vec![],
+            signature: Signature::uniform(
+                1,
+                vec![Float32, Float64, Int64, Decimal128(19, 10)],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -71,13 +73,8 @@ impl ScalarUDFImpl for SparkCeil {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_ceil, vec![])(&args.args)
     }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
 }
-
-pub fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
         return exec_err!("ceil expects exactly 1 argument, got {}", args.len());
     }
@@ -101,11 +98,36 @@ pub fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(array))
         }
         Int64 => Ok(Arc::clone(&args[0])),
+
+        Decimal128(_, scale) if *scale > 0 => {
+            let decimal_array = array.as_primitive::<arrow::datatypes::Decimal128Type>();
+            let div = 10_i128.pow_wrapping(*scale as u32);
+            let result_array =
+                decimal_array.unary::<_, arrow::datatypes::Int64Type>(|value: i128| {
+                    div_ceil(value, div) as i64
+                });
+            Ok(Arc::new(result_array))
+        }
         _ => {
             exec_err!(
                 "ceil expects a numeric argument, got {}",
                 args[0].data_type()
             )
         }
+    }
+}
+
+// Helper function to calculate the ceil for Decimals
+#[inline]
+fn div_ceil(a: i128, b: i128) -> i128 {
+    if b == 0 {
+        panic!("division by zero");
+    }
+    let div = a / b;
+    let rem = a % b;
+    if (rem != 0) && ((b > 0 && a > 0) || (b < 0 && a < 0)) {
+        div + 1
+    } else {
+        div
     }
 }
