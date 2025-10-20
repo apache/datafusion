@@ -3719,27 +3719,35 @@ async fn test_distribute_sort_parquet() -> Result<()> {
     let physical_plan = sort_exec(sort_key, parquet_exec_with_stats(10000 * 8192));
 
     // prior to optimization, this is the starting plan
-    let starting = &[
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    plans_matches_expected!(starting, physical_plan.clone());
+    assert_plan!(
+        physical_plan,
+        @r"
+SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
 
     // what the enforce distribution run does.
-    let expected = &[
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        "  CoalescePartitionsExec",
-        "    DataSourceExec: file_groups={10 groups: [[x:0..8192000], [x:8192000..16384000], [x:16384000..24576000], [x:24576000..32768000], [x:32768000..40960000], [x:40960000..49152000], [x:49152000..57344000], [x:57344000..65536000], [x:65536000..73728000], [x:73728000..81920000]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(expected, physical_plan.clone(), &[Run::Distribution])?;
+    let plan_distribution = test_config.run2(physical_plan.clone(), &[Run::Distribution]);
+    assert_plan!(
+        plan_distribution,
+        @r"
+SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+  CoalescePartitionsExec
+    DataSourceExec: file_groups={10 groups: [[x:0..8192000], [x:8192000..16384000], [x:16384000..24576000], [x:24576000..32768000], [x:32768000..40960000], [x:40960000..49152000], [x:49152000..57344000], [x:57344000..65536000], [x:65536000..73728000], [x:73728000..81920000]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
 
     // what the sort parallelization (in enforce sorting), does after the enforce distribution changes
-    let expected = &[
-        "SortPreservingMergeExec: [c@2 ASC]",
-        "  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]",
-        "    DataSourceExec: file_groups={10 groups: [[x:0..8192000], [x:8192000..16384000], [x:16384000..24576000], [x:24576000..32768000], [x:32768000..40960000], [x:40960000..49152000], [x:49152000..57344000], [x:57344000..65536000], [x:65536000..73728000], [x:73728000..81920000]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(expected, physical_plan, &[Run::Distribution, Run::Sorting])?;
+    let plan_both = test_config.run2(physical_plan, &[Run::Distribution, Run::Sorting]);
+    assert_plan!(
+        plan_both,
+        @r"
+SortPreservingMergeExec: [c@2 ASC]
+  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]
+    DataSourceExec: file_groups={10 groups: [[x:0..8192000], [x:8192000..16384000], [x:16384000..24576000], [x:24576000..32768000], [x:32768000..40960000], [x:40960000..49152000], [x:49152000..57344000], [x:57344000..65536000], [x:65536000..73728000], [x:73728000..81920000]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
     Ok(())
 }
 
