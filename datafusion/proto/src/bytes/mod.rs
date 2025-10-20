@@ -66,7 +66,7 @@ pub trait Serializeable: Sized {
     /// user defined functions, in which case use [`from_bytes_with_ctx`].
     ///
     /// [`to_bytes`]: Self::to_bytes
-    /// [`from_bytes_with_registry`]: Self::from_bytes_with_registry
+    /// [`from_bytes_with_ctx`]: Self::from_bytes_with_ctx
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
         Self::from_bytes_with_ctx(bytes, &TaskContext::default())
     }
