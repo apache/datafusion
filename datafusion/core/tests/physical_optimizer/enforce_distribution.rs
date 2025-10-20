@@ -2681,46 +2681,54 @@ fn parallelization_compressed_csv() -> Result<()> {
         FileCompressionType::UNCOMPRESSED,
     ];
 
-    let expected_not_partitioned = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
-        "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
-        "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-    ];
+    insta::allow_duplicates! {
+        for compression_type in compression_types {
+            let plan = aggregate_exec_with_alias(
+                DataSourceExec::from_data_source(
+                    FileScanConfigBuilder::new(
+                        ObjectStoreUrl::parse("test:///").unwrap(),
+                        schema(),
+                        Arc::new(CsvSource::new(false, b',', b'"')),
+                    )
+                    .with_file(PartitionedFile::new("x".to_string(), 100))
+                    .with_file_compression_type(compression_type)
+                    .build(),
+                ),
+                vec![("a".to_string(), "a".to_string())],
+            );
+            let test_config = TestConfig::default()
+                .with_query_execution_partitions(2)
+                .with_prefer_repartition_file_scans(10);
 
-    let expected_partitioned = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
-        "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
-        "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-    ];
+            let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+            if compression_type.is_compressed() {
+                // Compressed files cannot be partitioned
+                assert_plan!(
+                    plan_distrib,
+                    @r"
+AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
+    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+"
+                );
+            } else {
+                // Uncompressed files can be partitioned
+                assert_plan!(
+                    plan_distrib,
+                    @r"
+AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
+    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+"
+                );
+            }
 
-    for compression_type in compression_types {
-        let expected = if compression_type.is_compressed() {
-            &expected_not_partitioned[..]
-        } else {
-            &expected_partitioned[..]
-        };
-
-        let plan = aggregate_exec_with_alias(
-            DataSourceExec::from_data_source(
-                FileScanConfigBuilder::new(
-                    ObjectStoreUrl::parse("test:///").unwrap(),
-                    schema(),
-                    Arc::new(CsvSource::new(false, b',', b'"')),
-                )
-                .with_file(PartitionedFile::new("x".to_string(), 100))
-                .with_file_compression_type(compression_type)
-                .build(),
-            ),
-            vec![("a".to_string(), "a".to_string())],
-        );
-        let test_config = TestConfig::default()
-            .with_query_execution_partitions(2)
-            .with_prefer_repartition_file_scans(10);
-        test_config.run(expected, plan.clone(), &DISTRIB_DISTRIB_SORT)?;
-        test_config.run(expected, plan, &SORT_DISTRIB_DISTRIB)?;
+            let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+            assert_plan!(plan_distrib, plan_sort);
+        }
     }
     Ok(())
 }
