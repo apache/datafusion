@@ -286,6 +286,10 @@ impl Projection {
     /// Apply another projection on top of this projection, returning the combined projection.
     /// For example, if this projection is `SELECT c@2 AS x, b@1 AS y, a@0 as z` and the other projection is `SELECT x@0 + 1 AS c1, y@1 + z@2 as c2`,
     /// we return a projection equivalent to `SELECT c@2 + 1 AS c1, b@1 + a@0 as c2`.
+    ///
+    /// # Errors
+    /// This function returns an error if any expression in the `other` projection cannot be
+    /// applied on top of this projection.
     pub fn try_merge(&self, other: &Projection) -> Result<Projection> {
         let mut new_exprs = Vec::with_capacity(other.exprs.len());
         for proj_expr in &other.exprs {
@@ -865,6 +869,14 @@ pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
 ///    given the expressions `c@0`, `a@1` and `b@2`, and the [`ProjectionExec`] with
 ///    an output schema of `a, c_new`, then `c@0` becomes `c_new@1`, `a@1` becomes
 ///    `a@0`, but `b@2` results in `None` since the projection does not include `b`.
+///
+/// # Errors
+/// This function returns an error if `sync_with_child` is `true` and if any expression references
+/// an index that is out of bounds for `projected_exprs`.
+/// For example:
+/// - `expr` is `a@3`
+/// - `projected_exprs` is [`a@0`, `b@1`]
+/// In this case, `a@3` references index 3, which is out of bounds for `projected_exprs` (which has length 2).
 pub fn update_expr(
     expr: &Arc<dyn PhysicalExpr>,
     projected_exprs: &[ProjectionExpr],
@@ -895,9 +907,14 @@ pub fn update_expr(
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
-                Ok(Transformed::yes(Arc::clone(
-                    &projected_exprs[column.index()].expr,
-                )))
+                let projected_expr = projected_exprs.get(column.index()).ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Column index {} out of bounds for projected expressions of length {}",
+                        column.index(),
+                        projected_exprs.len()
+                    )
+                })?;
+                Ok(Transformed::yes(Arc::clone(&projected_expr.expr)))
             } else {
                 // default to invalid, in case we can't find the relevant column
                 state = RewriteState::RewrittenInvalid;
@@ -923,9 +940,9 @@ pub fn update_expr(
                     )
             }
         })
-        .data();
+        .data()?;
 
-    new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
+    Ok((state == RewriteState::RewrittenValid).then_some(new_expr))
 }
 
 /// Updates the given lexicographic ordering according to given projected
@@ -1916,6 +1933,37 @@ mod tests {
         assert_eq!(result.as_ref()[1].alias, "c2");
 
         Ok(())
+    }
+
+    #[test]
+    fn try_merge_error() {
+        // Create a base projection
+        let base = Projection::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                alias: "x".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                alias: "y".to_string(),
+            },
+        ]);
+
+        // Create a top projection that references a non-existent column index
+        let top = Projection::new(vec![ProjectionExpr {
+            expr: Arc::new(Column::new("z", 5)), // Invalid index
+            alias: "result".to_string(),
+        }]);
+
+        // Attempt to merge and expect an error
+        let result = base.try_merge(&top);
+        assert!(result.is_err());
+
+        let err_msg = result.err().unwrap().to_string();
+        insta::assert_snapshot!(err_msg, @r"
+        Internal error: Column index 5 out of bounds for projected expressions of length 2.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        ");
     }
 
     #[test]
