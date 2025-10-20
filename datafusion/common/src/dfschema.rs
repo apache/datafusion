@@ -1342,9 +1342,7 @@ impl TableSchema {
     /// Create a new TableSchema
     pub fn new(file_schema: SchemaRef, table_partition_cols: Vec<FieldRef>) -> Self {
         let mut builder = SchemaBuilder::from(file_schema.as_ref());
-        for field in &table_partition_cols {
-            builder.push(Arc::clone(field));
-        }
+        builder.extend(table_partition_cols.iter().cloned());
         Self {
             file_schema,
             table_partition_cols,
