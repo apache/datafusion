@@ -2588,28 +2588,32 @@ fn parallelization_single_partition() -> Result<()> {
         .with_query_execution_partitions(2);
 
     // Test: with parquet
-    let expected_parquet = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
-        "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
-        "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(
-        &expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config.run(&expected_parquet, plan_parquet, &SORT_DISTRIB_DISTRIB)?;
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_parquet_distrib,
+        @r"
+AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
+    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let expected_csv = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
-        "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
-        "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-    ];
-    test_config.run(&expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(&expected_csv, plan_csv, &SORT_DISTRIB_DISTRIB)?;
+    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_csv_distrib,
+        @r"
+AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
+    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+"
+    );
+    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
 }
@@ -2633,40 +2637,32 @@ fn parallelization_multiple_files() -> Result<()> {
     // The groups must have only contiguous ranges of rows from the same file
     // if any group has rows from multiple files, the data is no longer sorted destroyed
     // https://github.com/apache/datafusion/issues/8451
-    let expected_with_3_target_partitions = [
-        "SortRequiredExec: [a@0 ASC]",
-        "  FilterExec: c@2 = 0",
-        "    DataSourceExec: file_groups={3 groups: [[x:0..50], [y:0..100], [x:50..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
     let test_config_concurrency_3 =
         test_config.clone().with_query_execution_partitions(3);
-    test_config_concurrency_3.run(
-        &expected_with_3_target_partitions,
-        plan.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config_concurrency_3.run(
-        &expected_with_3_target_partitions,
-        plan.clone(),
-        &SORT_DISTRIB_DISTRIB,
-    )?;
+    let plan_3_distrib = test_config_concurrency_3.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_3_distrib,
+        @r"
+SortRequiredExec: [a@0 ASC]
+  FilterExec: c@2 = 0
+    DataSourceExec: file_groups={3 groups: [[x:0..50], [y:0..100], [x:50..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+"
+    );
+    let plan_3_sort = test_config_concurrency_3.run2(plan.clone(), &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_3_distrib, plan_3_sort);
 
-    let expected_with_8_target_partitions = [
-        "SortRequiredExec: [a@0 ASC]",
-        "  FilterExec: c@2 = 0",
-        "    DataSourceExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
     let test_config_concurrency_8 = test_config.with_query_execution_partitions(8);
-    test_config_concurrency_8.run(
-        &expected_with_8_target_partitions,
-        plan.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config_concurrency_8.run(
-        &expected_with_8_target_partitions,
-        plan,
-        &SORT_DISTRIB_DISTRIB,
-    )?;
+    let plan_8_distrib = test_config_concurrency_8.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_8_distrib,
+        @r"
+SortRequiredExec: [a@0 ASC]
+  FilterExec: c@2 = 0
+    DataSourceExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+"
+    );
+    let plan_8_sort = test_config_concurrency_8.run2(plan, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_8_distrib, plan_8_sort);
 
     Ok(())
 }
