@@ -25,7 +25,7 @@ use crate::utils::{calculate_binary_math, decimal128_to_i128, decimal256_to_i256
 use arrow::array::{Array, ArrayRef, PrimitiveArray};
 use arrow::datatypes::{
     ArrowNativeTypeOp, DataType, Decimal128Type, Decimal256Type, DecimalType,
-    Float32Type, Float64Type, Int32Type, Int64Type,
+    Float32Type, Float64Type, Int32Type, Int64Type, DECIMAL128_MAX_PRECISION,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
