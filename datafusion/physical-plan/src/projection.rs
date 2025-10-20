@@ -1962,35 +1962,11 @@ mod tests {
         assert!(result.is_err());
 
         let err_msg = result.err().unwrap().to_string();
-        insta::assert_snapshot!(err_msg, @r"
-        Internal error: Column index 5 out of bounds for projected expressions of length 2.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        ");
-    }
-
-    #[test]
-    #[should_panic(expected = "index out of bounds")]
-    fn test_merge_failure() {
-        // Create a base projection with only 2 columns
-        let base = Projection::new(vec![
-            ProjectionExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                alias: "x".to_string(),
-            },
-            ProjectionExpr {
-                expr: Arc::new(Column::new("b", 1)),
-                alias: "y".to_string(),
-            },
-        ]);
-
-        // Try to merge with a projection that references column index 3 (out of bounds)
-        let top = Projection::new(vec![ProjectionExpr {
-            expr: Arc::new(Column::new("z", 3)), // This will panic - index 3 doesn't exist
-            alias: "result".to_string(),
-        }]);
-
-        // This should panic because column index 3 is out of bounds
-        let _result = base.try_merge(&top);
+        assert!(
+            err_msg.contains("Internal error: Column index 5 out of bounds for projected expressions of length 2"),
+            "Unexpected error message: {}",
+            err_msg
+        );
     }
 
     #[test]
