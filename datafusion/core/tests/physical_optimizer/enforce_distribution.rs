@@ -3276,14 +3276,16 @@ fn remove_redundant_roundrobins() -> Result<()> {
     let input = parquet_exec();
     let repartition = repartition_exec(repartition_exec(input));
     let physical_plan = repartition_exec(filter_exec(repartition));
-    let expected = &[
-        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
-        "  FilterExec: c@2 = 0",
-        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
-        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    plans_matches_expected!(expected, &physical_plan);
+    assert_plan!(
+        physical_plan,
+        @r"
+RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10
+  FilterExec: c@2 = 0
+    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
 
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
