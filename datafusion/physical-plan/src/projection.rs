@@ -64,7 +64,7 @@ use log::trace;
 #[derive(Debug, Clone)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
-    pub(crate) expr: Projection,
+    projection: Projection,
     /// The schema once the projection has been applied to the input
     schema: SchemaRef,
     /// The input plan
@@ -144,7 +144,7 @@ impl ProjectionExec {
         let cache =
             Self::compute_properties(&input, &projection_mapping, Arc::clone(&schema))?;
         Ok(Self {
-            expr: projection,
+            projection,
             schema,
             input,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -154,7 +154,7 @@ impl ProjectionExec {
 
     /// The projection expressions stored as tuples of (expression, output column name)
     pub fn expr(&self) -> &[ProjectionExpr] {
-        self.expr.as_ref()
+        self.projection.as_ref()
     }
 
     /// The input plan
@@ -406,7 +406,7 @@ impl DisplayAs for ProjectionExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr: Vec<String> = self
-                    .expr
+                    .projection
                     .as_ref()
                     .iter()
                     .map(|proj_expr| {
@@ -457,7 +457,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        let all_simple_exprs = self.expr.as_ref().iter().all(|proj_expr| {
+        let all_simple_exprs = self.projection.as_ref().iter().all(|proj_expr| {
             proj_expr.expr.as_any().is::<Column>()
                 || proj_expr.expr.as_any().is::<Literal>()
         });
@@ -474,8 +474,11 @@ impl ExecutionPlan for ProjectionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        ProjectionExec::try_new(self.expr.as_ref().to_vec(), children.swap_remove(0))
-            .map(|p| Arc::new(p) as _)
+        ProjectionExec::try_new(
+            self.projection.as_ref().to_vec(),
+            children.swap_remove(0),
+        )
+        .map(|p| Arc::new(p) as _)
     }
 
     fn execute(
@@ -487,7 +490,7 @@ impl ExecutionPlan for ProjectionExec {
         Ok(Box::pin(ProjectionStream {
             schema: Arc::clone(&self.schema),
             expr: self
-                .expr
+                .projection
                 .as_ref()
                 .iter()
                 .map(|x| Arc::clone(&x.expr))
@@ -507,7 +510,7 @@ impl ExecutionPlan for ProjectionExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
-        self.expr
+        self.projection
             .project_statistics(&input_stats, &self.input.schema())
     }
 
