@@ -53,10 +53,10 @@ use crate::utils::{
 };
 use crate::PhysicalOptimizerRule;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -210,13 +210,14 @@ impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config_options = config.options();
         let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
         // Execute a bottom-up traversal to enforce sorting requirements,
         // remove unnecessary sorts, and optimize sort-sensitive operators:
         let adjusted = plan_requirements.transform_up(ensure_sorting)?.data;
-        let new_plan = if config.optimizer.repartition_sorts {
+        let new_plan = if config_options.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
             let parallel = plan_with_coalesce_partitions
@@ -234,7 +235,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
                     plan_with_pipeline_fixer,
                     false,
                     true,
-                    config,
+                    config_options,
                 )
             })
             .data()?;

@@ -41,7 +41,6 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
@@ -53,6 +52,7 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
+use datafusion_execution::config::SessionConfig;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -370,7 +370,7 @@ impl ExecutionPlan for ProjectionExec {
         &self,
         _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterDescription> {
         // TODO: In future, we can try to handle inverting aliases here.
         // For the time being, we pass through untransformed filters, so filters on aliases are not handled.
@@ -382,7 +382,7 @@ impl ExecutionPlan for ProjectionExec {
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }

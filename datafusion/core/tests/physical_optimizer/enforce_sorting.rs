@@ -31,9 +31,9 @@ use crate::physical_optimizer::test_utils::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_common::{Result,  TableReference};
+use datafusion_execution::config::SessionConfig;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
@@ -110,8 +110,9 @@ impl EnforceSortingTest {
     /// Runs the enforce sorting test and returns a string with the input and
     /// optimized plan as strings for snapshot comparison using insta
     pub(crate) fn run(&self) -> String {
-        let mut config = ConfigOptions::new();
-        config.optimizer.repartition_sorts = self.repartition_sorts;
+        let mut session_config = SessionConfig::new();
+        session_config.options_mut().optimizer.repartition_sorts = self.repartition_sorts;
+        let config = session_config.options();
 
         // This file has 4 rules that use tree node, apply these rules as in the
         // EnforceSorting::optimize implementation
@@ -149,7 +150,7 @@ impl EnforceSortingTest {
                         plan_with_pipeline_fixer,
                         false,
                         true,
-                        &config,
+                        config,
                     )
                 })
                 .data()
@@ -171,7 +172,7 @@ impl EnforceSortingTest {
 
         // Run the actual optimizer
         let optimized_physical_plan = EnforceSorting::new()
-            .optimize(Arc::clone(&self.plan), &config)
+            .optimize(Arc::clone(&self.plan), &session_config)
             .expect("enforce_sorting failed");
 
         // Get string representation of the plan
@@ -2277,7 +2278,7 @@ async fn test_commutativity() -> Result<()> {
           DataSourceExec: partitions=1, partition_sizes=[0]
     "#);
 
-    let config = ConfigOptions::new();
+    let config = SessionConfig::new();
     let rules = vec![
         Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,

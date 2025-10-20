@@ -59,6 +59,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use datafusion_execution::config::SessionConfig;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -845,7 +846,7 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
     }
@@ -854,7 +855,7 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }

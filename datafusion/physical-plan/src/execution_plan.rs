@@ -53,6 +53,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
+use datafusion_execution::config::SessionConfig;
 use futures::stream::{StreamExt, TryStreamExt};
 
 /// Represent nodes in the DataFusion Physical Plan.
@@ -553,7 +554,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         &self,
         _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterDescription> {
         Ok(FilterDescription::all_unsupported(
             &parent_filters,
@@ -644,7 +645,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }

@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::internal_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::ExecutionPlan;
@@ -39,9 +39,9 @@ impl PhysicalOptimizerRule for CoalesceAsyncExecInput {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let target_batch_size = config.execution.batch_size;
+        let target_batch_size = config.options().execution.batch_size;
         plan.transform(|plan| {
             if let Some(async_exec) = plan.as_any().downcast_ref::<AsyncFuncExec>() {
                 if async_exec.children().len() != 1 {

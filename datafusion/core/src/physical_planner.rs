@@ -2118,7 +2118,7 @@ impl DefaultPhysicalPlanner {
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
-                .optimize(new_plan, session_state.config_options())
+                .optimize(new_plan, session_state.config())
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
@@ -2441,7 +2441,6 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::SchemaRef;
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
         assert_contains, DFSchemaRef, TableReference, ToDFSchema as _,
     };
@@ -3545,7 +3544,7 @@ digraph {
         fn optimize(
             &self,
             plan: Arc<dyn ExecutionPlan>,
-            _config: &ConfigOptions,
+            _config: &SessionConfig,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(plan)
         }

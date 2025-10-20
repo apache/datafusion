@@ -59,6 +59,7 @@ use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{displayable, ExecutionPlan};
 
+use datafusion_execution::config::SessionConfig;
 use insta::assert_snapshot;
 use itertools::Itertools;
 
@@ -449,7 +450,7 @@ fn test_csv_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -487,7 +488,7 @@ fn test_memory_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -583,7 +584,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
     )?) as _;
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let result = after_optimize
         .as_any()
@@ -683,7 +684,7 @@ fn test_projection_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(top_projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(top_projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -751,7 +752,7 @@ fn test_output_req_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -842,7 +843,7 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -900,7 +901,7 @@ fn test_filter_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1003,7 +1004,7 @@ fn test_join_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1133,7 +1134,7 @@ fn test_join_after_required_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1211,7 +1212,7 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
     );
 
     let after_optimize_string =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
     let after_optimize_string = displayable(after_optimize_string.as_ref())
         .indent(true)
         .to_string();
@@ -1308,7 +1309,7 @@ fn test_hash_join_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
         .to_string();
@@ -1336,7 +1337,7 @@ fn test_hash_join_after_projection() -> Result<()> {
     )?);
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
         .to_string();
@@ -1389,7 +1390,7 @@ fn test_repartition_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1460,7 +1461,7 @@ fn test_sort_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1514,7 +1515,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1559,7 +1560,7 @@ fn test_union_after_projection() -> Result<()> {
     );
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1626,7 +1627,7 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
     )?);
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1672,7 +1673,7 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
     )?);
 
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize(projection, &SessionConfig::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)

@@ -404,41 +404,56 @@ const SORT_DISTRIB_DISTRIB: [Run; 3] =
 
 #[derive(Clone)]
 struct TestConfig {
-    config: ConfigOptions,
+    session_config: SessionConfig,
 }
 
 impl Default for TestConfig {
     fn default() -> Self {
-        Self {
-            config: test_suite_default_config_options(),
-        }
+        let config = test_suite_default_config_options();
+        let session_config = SessionConfig::from(config.clone());
+        Self { session_config }
     }
 }
 
 impl TestConfig {
     /// If preferred, will not repartition / resort data if it is already sorted.
     fn with_prefer_existing_sort(mut self) -> Self {
-        self.config.optimizer.prefer_existing_sort = true;
+        self.session_config
+            .options_mut()
+            .optimizer
+            .prefer_existing_sort = true;
         self
     }
 
     /// If preferred, will not attempt to convert Union to Interleave.
     fn with_prefer_existing_union(mut self) -> Self {
-        self.config.optimizer.prefer_existing_union = true;
+        self.session_config
+            .options_mut()
+            .optimizer
+            .prefer_existing_union = true;
         self
     }
 
     /// If preferred, will repartition file scans.
     /// Accepts a minimum file size to repartition.
     fn with_prefer_repartition_file_scans(mut self, file_min_size: usize) -> Self {
-        self.config.optimizer.repartition_file_scans = true;
-        self.config.optimizer.repartition_file_min_size = file_min_size;
+        self.session_config
+            .options_mut()
+            .optimizer
+            .repartition_file_scans = true;
+        self.session_config
+            .options_mut()
+            .optimizer
+            .repartition_file_min_size = file_min_size;
         self
     }
 
     /// Set the preferred target partitions for query execution concurrency.
     fn with_query_execution_partitions(mut self, target_partitions: usize) -> Self {
-        self.config.execution.target_partitions = target_partitions;
+        self.session_config
+            .options_mut()
+            .execution
+            .target_partitions = target_partitions;
         self
     }
 
@@ -455,13 +470,18 @@ impl TestConfig {
 
         // Add the ancillary output requirements operator at the start:
         let optimizer = OutputRequirements::new_add_mode();
-        let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
+        let mut optimized = optimizer.optimize(plan.clone(), &self.session_config)?;
 
         // This file has 2 rules that use tree node, apply these rules to original plan consecutively
         // After these operations tree nodes should be in a consistent state.
         // This code block makes sure that these rules doesn't violate tree node integrity.
         {
-            let adjusted = if self.config.optimizer.top_down_join_key_reordering {
+            let adjusted = if self
+                .session_config
+                .options()
+                .optimizer
+                .top_down_join_key_reordering
+            {
                 // Run adjust_input_keys_ordering rule
                 let plan_requirements =
                     PlanWithKeyRequirements::new_default(plan.clone());
@@ -483,7 +503,10 @@ impl TestConfig {
             // Then run ensure_distribution rule
             DistributionContext::new_default(adjusted)
                 .transform_up(|distribution_context| {
-                    ensure_distribution(distribution_context, &self.config)
+                    ensure_distribution(
+                        distribution_context,
+                        self.session_config.options(),
+                    )
                 })
                 .data()
                 .and_then(check_integrity)?;
@@ -494,18 +517,18 @@ impl TestConfig {
             optimized = match run {
                 Run::Distribution => {
                     let optimizer = EnforceDistribution::new();
-                    optimizer.optimize(optimized, &self.config)?
+                    optimizer.optimize(optimized, &self.session_config)?
                 }
                 Run::Sorting => {
                     let optimizer = EnforceSorting::new();
-                    optimizer.optimize(optimized, &self.config)?
+                    optimizer.optimize(optimized, &self.session_config)?
                 }
             };
         }
 
         // Remove the ancillary output requirements operator when done:
         let optimizer = OutputRequirements::new_remove_mode();
-        let optimized = optimizer.optimize(optimized, &self.config)?;
+        let optimized = optimizer.optimize(optimized, &self.session_config)?;
 
         // Now format correctly
         let actual_lines = get_plan_string(&optimized);
@@ -3340,10 +3363,13 @@ fn do_not_put_sort_when_input_is_invalid() -> Result<()> {
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
 
-    let mut config = ConfigOptions::new();
-    config.execution.target_partitions = 10;
-    config.optimizer.enable_round_robin_repartition = true;
-    config.optimizer.prefer_existing_sort = false;
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.target_partitions = 10;
+    config
+        .options_mut()
+        .optimizer
+        .enable_round_robin_repartition = true;
+    config.options_mut().optimizer.prefer_existing_sort = false;
     let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
     assert_plan_txt!(expected, dist_plan);
 
@@ -3378,10 +3404,13 @@ fn put_sort_when_input_is_valid() -> Result<()> {
         "    DataSourceExec: file_groups={10 groups: [[x:0..20], [y:0..20], [x:20..40], [y:20..40], [x:40..60], [y:40..60], [x:60..80], [y:60..80], [x:80..100], [y:80..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
 
-    let mut config = ConfigOptions::new();
-    config.execution.target_partitions = 10;
-    config.optimizer.enable_round_robin_repartition = true;
-    config.optimizer.prefer_existing_sort = false;
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.target_partitions = 10;
+    config
+        .options_mut()
+        .optimizer
+        .enable_round_robin_repartition = true;
+    config.options_mut().optimizer.prefer_existing_sort = false;
     let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
     assert_plan_txt!(expected, dist_plan);
 
@@ -3503,7 +3532,11 @@ async fn test_distribute_sort_parquet() -> Result<()> {
     let test_config: TestConfig =
         TestConfig::default().with_prefer_repartition_file_scans(1000);
     assert!(
-        test_config.config.optimizer.repartition_file_scans,
+        test_config
+            .session_config
+            .options()
+            .optimizer
+            .repartition_file_scans,
         "should enable scans to be repartitioned"
     );
 
@@ -3542,7 +3575,11 @@ async fn test_distribute_sort_memtable() -> Result<()> {
     let test_config: TestConfig =
         TestConfig::default().with_prefer_repartition_file_scans(1000);
     assert!(
-        test_config.config.optimizer.repartition_file_scans,
+        test_config
+            .session_config
+            .options()
+            .optimizer
+            .repartition_file_scans,
         "should enable scans to be repartitioned"
     );
 

@@ -25,9 +25,9 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::Result;
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
 use datafusion_physical_plan::ExecutionPlan;
@@ -65,7 +65,7 @@ impl PhysicalOptimizerRule for EnsureCooperative {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
             let is_leaf = plan.children().is_empty();
@@ -96,14 +96,14 @@ impl PhysicalOptimizerRule for EnsureCooperative {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::config::ConfigOptions;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_physical_plan::{displayable, test::scan_partitioned};
     use insta::assert_snapshot;
 
     #[tokio::test]
     async fn test_cooperative_exec_for_custom_exec() {
         let test_custom_exec = scan_partitioned(1);
-        let config = ConfigOptions::new();
+        let config = SessionConfig::new();
         let optimized = EnsureCooperative::new()
             .optimize(test_custom_exec, &config)
             .unwrap();

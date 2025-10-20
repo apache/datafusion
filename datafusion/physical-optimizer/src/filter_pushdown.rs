@@ -36,7 +36,8 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{config::ConfigOptions, internal_err, Result};
+use datafusion_common::{internal_err, Result};
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
@@ -419,7 +420,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(
             push_down_filters(Arc::clone(&plan), vec![], config, self.phase)?
@@ -440,7 +441,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
 fn push_down_filters(
     node: Arc<dyn ExecutionPlan>,
     parent_predicates: Vec<Arc<dyn PhysicalExpr>>,
-    config: &ConfigOptions,
+    config: &SessionConfig,
     phase: FilterPushdownPhase,
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
     let mut parent_filter_pushdown_supports: Vec<Vec<PushedDown>> =

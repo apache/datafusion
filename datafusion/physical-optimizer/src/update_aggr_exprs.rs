@@ -20,9 +20,9 @@
 
 use std::sync::Arc;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 use datafusion_physical_plan::aggregates::{concat_slices, AggregateExec};
@@ -73,7 +73,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
             if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {

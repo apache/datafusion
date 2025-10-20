@@ -24,9 +24,9 @@ use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
+use datafusion_execution::config::SessionConfig;
 
 use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
@@ -161,9 +161,13 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if config.optimizer.enable_distinct_aggregation_soft_limit {
+        if config
+            .options()
+            .optimizer
+            .enable_distinct_aggregation_soft_limit
+        {
             plan.transform_down(|plan| {
                 Ok(
                     if let Some(plan) =

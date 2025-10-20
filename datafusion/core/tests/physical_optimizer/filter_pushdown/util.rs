@@ -18,13 +18,14 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
+use datafusion_common::{internal_err, Result, Statistics};
 use datafusion_datasource::{
     file::FileSource, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
@@ -49,6 +50,7 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
+
 pub struct TestOpener {
     batches: Vec<RecordBatch>,
     batch_size: Option<usize>,
@@ -219,9 +221,9 @@ impl FileSource for TestSource {
     fn try_pushdown_filters(
         &self,
         mut filters: Vec<Arc<dyn PhysicalExpr>>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
-        if self.support && config.execution.parquet.pushdown_filters {
+        if self.support && config.options().execution.parquet.pushdown_filters {
             if let Some(internal) = self.predicate.as_ref() {
                 filters.push(Arc::clone(internal));
             }
@@ -380,9 +382,12 @@ impl OptimizationTest {
     where
         O: PhysicalOptimizerRule,
     {
-        let mut parquet_pushdown_config = ConfigOptions::default();
-        parquet_pushdown_config.execution.parquet.pushdown_filters =
-            allow_pushdown_filters;
+        let mut parquet_pushdown_config = SessionConfig::default();
+        parquet_pushdown_config
+            .options_mut()
+            .execution
+            .parquet
+            .pushdown_filters = allow_pushdown_filters;
 
         let input = format_execution_plan(&input_plan);
         let input_schema = input_plan.schema();
@@ -519,7 +524,7 @@ impl ExecutionPlan for TestNode {
         &self,
         _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterDescription> {
         // Since TestNode marks all parent filters as supported and adds its own filter,
         // we use from_child to create a description with all parent filters supported
@@ -533,7 +538,7 @@ impl ExecutionPlan for TestNode {
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         if self.inject_filter {
             // Add a FilterExec if our own filter was not handled by the child

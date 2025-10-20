@@ -66,6 +66,7 @@ use datafusion_physical_expr::expressions::{lit, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 
+use datafusion_execution::config::SessionConfig;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -1345,7 +1346,7 @@ impl ExecutionPlan for SortExec {
         &self,
         phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        config: &datafusion_common::config::ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<FilterDescription> {
         if !matches!(phase, FilterPushdownPhase::Post) {
             return FilterDescription::from_children(parent_filters, &self.children());
@@ -1355,7 +1356,11 @@ impl ExecutionPlan for SortExec {
             ChildFilterDescription::from_child(&parent_filters, self.input())?;
 
         if let Some(filter) = &self.filter {
-            if config.optimizer.enable_topk_dynamic_filter_pushdown {
+            if config
+                .options()
+                .optimizer
+                .enable_topk_dynamic_filter_pushdown
+            {
                 child = child.with_self_filter(filter.read().expr());
             }
         }

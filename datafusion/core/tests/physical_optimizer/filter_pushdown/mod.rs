@@ -239,9 +239,12 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
             .with_fetch(Some(2)),
     ) as Arc<dyn ExecutionPlan>;
 
-    let mut config = ConfigOptions::default();
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    config.execution.parquet.pushdown_filters = true;
+    let mut config = SessionConfig::default();
+    config
+        .options_mut()
+        .optimizer
+        .enable_dynamic_filter_pushdown = true;
+    config.options_mut().execution.parquet.pushdown_filters = true;
 
     // Apply the FilterPushdown optimizer rule
     let plan = FilterPushdown::new_post_optimization()
@@ -720,10 +723,14 @@ async fn test_topk_dynamic_filter_pushdown() {
     );
 
     // Actually apply the optimization to the plan and put some data through it to check that the filter is updated to reflect the TopK state
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
+    let mut session_config = SessionConfig::default();
+    session_config
+        .options_mut()
+        .execution
+        .parquet
+        .pushdown_filters = true;
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize(plan, &session_config)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
@@ -803,10 +810,14 @@ async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
     );
 
     // Actually apply the optimization to the plan and put some data through it to check that the filter is updated to reflect the TopK state
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
+    let mut session_config = SessionConfig::default();
+    session_config
+        .options_mut()
+        .execution
+        .parquet
+        .pushdown_filters = true;
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize(plan, &session_config)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
@@ -1049,11 +1060,18 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     );
 
     // Actually apply the optimization to the plan and execute to see the filter in action
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let mut session_config = SessionConfig::default();
+    session_config
+        .options_mut()
+        .execution
+        .parquet
+        .pushdown_filters = true;
+    session_config
+        .options_mut()
+        .optimizer
+        .enable_dynamic_filter_pushdown = true;
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize(plan, &session_config)
         .unwrap();
 
     // Test for https://github.com/apache/datafusion/pull/17371: dynamic filter linking survives `with_new_children`
@@ -1277,11 +1295,18 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     );
 
     // Actually apply the optimization to the plan and execute to see the filter in action
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let mut session_config = SessionConfig::default();
+    session_config
+        .options_mut()
+        .execution
+        .parquet
+        .pushdown_filters = true;
+    session_config
+        .options_mut()
+        .optimizer
+        .enable_dynamic_filter_pushdown = true;
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize(plan, &session_config)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(10);
     let session_ctx = SessionContext::new_with_config(config);
@@ -1474,11 +1499,18 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     );
 
     // Actually apply the optimization to the plan and execute to see the filter in action
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let mut session_config = SessionConfig::default();
+    session_config
+        .options_mut()
+        .execution
+        .parquet
+        .pushdown_filters = true;
+    session_config
+        .options_mut()
+        .optimizer
+        .enable_dynamic_filter_pushdown = true;
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize(plan, &session_config)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(10);
     let session_ctx = SessionContext::new_with_config(config);
@@ -1646,11 +1678,18 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     );
 
     // Execute the plan to verify the dynamic filters are properly updated
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let mut session_config = SessionConfig::default();
+    session_config
+        .options_mut()
+        .execution
+        .parquet
+        .pushdown_filters = true;
+    session_config
+        .options_mut()
+        .optimizer
+        .enable_dynamic_filter_pushdown = true;
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(outer_join, &config)
+        .optimize(outer_join, &session_config)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(10);
     let session_ctx = SessionContext::new_with_config(config);

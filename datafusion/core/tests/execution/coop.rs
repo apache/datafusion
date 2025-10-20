@@ -810,8 +810,7 @@ async fn query_yields(
     task_ctx: Arc<TaskContext>,
 ) -> Result<(), Box<dyn Error>> {
     // Run plan through EnsureCooperative
-    let optimized =
-        EnsureCooperative::new().optimize(plan, task_ctx.session_config().options())?;
+    let optimized = EnsureCooperative::new().optimize(plan, task_ctx.session_config())?;
 
     // Get the stream
     let stream = physical_plan::execute_stream(optimized, task_ctx)?;

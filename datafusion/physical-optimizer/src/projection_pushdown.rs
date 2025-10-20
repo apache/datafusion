@@ -26,11 +26,11 @@ use datafusion_common::alias::AliasGenerator;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{JoinSide, JoinType, Result};
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -60,7 +60,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let alias_generator = AliasGenerator::new();
         let plan = plan
@@ -447,6 +447,7 @@ fn is_volatile_expression_tree(expr: &dyn PhysicalExpr) -> bool {
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr_common::operator::Operator;
     use datafusion_functions::math::random;
     use datafusion_physical_expr::expressions::{binary, lit};

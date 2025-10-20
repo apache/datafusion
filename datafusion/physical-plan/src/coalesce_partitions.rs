@@ -32,8 +32,8 @@ use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, Result};
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -268,7 +268,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         &self,
         _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
     }

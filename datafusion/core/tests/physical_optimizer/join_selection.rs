@@ -29,6 +29,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};
 use datafusion_common::{JoinSide, NullEquality};
 use datafusion_common::{Result, Statistics};
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::col;
@@ -227,7 +228,7 @@ async fn test_join_with_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, &SessionConfig::new())
         .unwrap();
 
     let swapping_projection = optimized_join
@@ -289,7 +290,7 @@ async fn test_left_join_no_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, &SessionConfig::new())
         .unwrap();
 
     let swapped_join = optimized_join
@@ -339,7 +340,7 @@ async fn test_join_with_swap_semi() {
         let original_schema = join.schema();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(Arc::new(join), &SessionConfig::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -394,7 +395,7 @@ async fn test_join_with_swap_mark() {
         let original_schema = join.schema();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(Arc::new(join), &SessionConfig::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -431,7 +432,7 @@ macro_rules! assert_optimized {
 
         let plan = Arc::new($PLAN);
         let optimized = JoinSelection::new()
-            .optimize(plan.clone(), &ConfigOptions::new())
+            .optimize(plan.clone(), &SessionConfig::new())
             .unwrap();
 
         let plan_string = displayable(optimized.as_ref()).indent(true).to_string();
@@ -523,7 +524,7 @@ async fn test_join_no_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, &SessionConfig::new())
         .unwrap();
 
     let swapped_join = optimized_join
@@ -572,7 +573,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, &SessionConfig::new())
         .unwrap();
 
     let swapping_projection = optimized_join
@@ -652,7 +653,7 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     let optimized_join = JoinSelection::new()
         .optimize(
             Arc::<NestedLoopJoinExec>::clone(&join),
-            &ConfigOptions::new(),
+            &SessionConfig::new(),
         )
         .unwrap();
 
@@ -911,7 +912,7 @@ fn check_join_partition_mode(
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, &SessionConfig::new())
         .unwrap();
 
     if !is_swapped {
@@ -1556,7 +1557,7 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
     )?) as _;
 
     let optimized_join_plan =
-        JoinSelection::new().optimize(Arc::clone(&join), &ConfigOptions::new())?;
+        JoinSelection::new().optimize(Arc::clone(&join), &SessionConfig::new())?;
 
     // If swap did happen
     let projection_added = optimized_join_plan.as_any().is::<ProjectionExec>();

@@ -25,8 +25,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast};
@@ -67,7 +67,7 @@ async fn assert_count_optim_success(
     let task_ctx = Arc::new(TaskContext::default());
     let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
 
-    let config = ConfigOptions::new();
+    let config = SessionConfig::new();
     let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &config)?;
 
     // A ProjectionExec is a sign that the count optimization was applied
@@ -264,7 +264,7 @@ async fn test_count_inexact_stat() -> Result<()> {
         Arc::clone(&schema),
     )?;
 
-    let conf = ConfigOptions::new();
+    let conf = SessionConfig::new();
     let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
@@ -308,7 +308,7 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
         Arc::clone(&schema),
     )?;
 
-    let conf = ConfigOptions::new();
+    let conf = SessionConfig::new();
     let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
     // check that the original ExecutionPlan was not replaced

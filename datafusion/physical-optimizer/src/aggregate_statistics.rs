@@ -16,10 +16,10 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -46,7 +46,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::physical_optimizer::test_utils::parquet_exec;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::config::ConfigOptions;
+use datafusion_execution::config::SessionConfig;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -47,7 +47,7 @@ macro_rules! assert_optimized {
     ($PLAN: expr, @ $EXPECTED_LINES: literal $(,)?) => {
         // run optimizer
         let optimizer = CombinePartialFinalAggregate {};
-        let config = ConfigOptions::new();
+        let config = SessionConfig::new();
         let optimized = optimizer.optimize($PLAN, &config)?;
         // Now format correctly
         let plan = displayable(optimized.as_ref()).indent(true).to_string();

@@ -37,6 +37,7 @@ use itertools::Itertools;
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -169,7 +170,7 @@ pub trait DataSource: Send + Sync + Debug {
     fn try_pushdown_filters(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
@@ -332,7 +333,7 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
         let parent_filters = child_pushdown_result

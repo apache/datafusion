@@ -35,7 +35,6 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_datafusion_err, ColumnStatistics,
     Constraints, Result, ScalarValue, Statistics,
@@ -63,6 +62,7 @@ use std::{
     fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
 };
 
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
@@ -666,7 +666,7 @@ impl DataSource for FileScanConfig {
     fn try_pushdown_filters(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         let result = self.file_source.try_pushdown_filters(filters, config)?;
         match result.updated_node {

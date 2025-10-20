@@ -28,6 +28,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, JoinSide, JoinType};
+use datafusion_execution::config::SessionConfig;
 use datafusion_expr_common::sort_properties::SortProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::LexOrdering;
@@ -106,8 +107,9 @@ impl PhysicalOptimizerRule for JoinSelection {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config_options = config.options();
         // First, we make pipeline-fixing modifications to joins so as to accommodate
         // unbounded inputs. Each pipeline-fixing subrule, which is a function
         // of type `PipelineFixerSubrule`, takes a single [`PipelineStatePropagator`]
@@ -118,7 +120,7 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_swap_subrule),
         ];
         let new_plan = plan
-            .transform_up(|p| apply_subrules(p, &subrules, config))
+            .transform_up(|p| apply_subrules(p, &subrules, config_options))
             .data()?;
         // Next, we apply another subrule that tries to optimize joins using any
         // statistics their inputs might have.
@@ -131,9 +133,11 @@ impl PhysicalOptimizerRule for JoinSelection {
         //   do not modify join sides.
         // - We will also swap left and right sides for cross joins so that the left
         //   side is the small side.
-        let config = &config.optimizer;
-        let collect_threshold_byte_size = config.hash_join_single_partition_threshold;
-        let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
+        let optimizer_config = &config_options.optimizer;
+        let collect_threshold_byte_size =
+            optimizer_config.hash_join_single_partition_threshold;
+        let collect_threshold_num_rows =
+            optimizer_config.hash_join_single_partition_threshold_rows;
         new_plan
             .transform_up(|plan| {
                 statistical_join_selection_subrule(

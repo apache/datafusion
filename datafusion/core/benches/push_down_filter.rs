@@ -19,8 +19,8 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, BytesMut};
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::config::ConfigOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -88,7 +88,7 @@ async fn create_plan() -> Arc<dyn ExecutionPlan> {
 #[derive(Clone)]
 struct BenchmarkPlan {
     plan: Arc<dyn ExecutionPlan>,
-    config: ConfigOptions,
+    config: SessionConfig,
 }
 
 impl std::fmt::Display for BenchmarkPlan {
@@ -102,8 +102,8 @@ fn bench_push_down_filter(c: &mut Criterion) {
     let plan = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(create_plan());
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
+    let mut config = SessionConfig::default();
+    config.options_mut().execution.parquet.pushdown_filters = true;
     let plan = BenchmarkPlan { plan, config };
     let optimizer = FilterPushdown::new();
 
