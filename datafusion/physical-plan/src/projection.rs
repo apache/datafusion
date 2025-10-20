@@ -335,7 +335,7 @@ impl Projection {
     ) -> Result<Statistics> {
         stats_projection(
             input_stats.clone(),
-            self.exprs.iter().map(|p| Arc::clone(&p.expr)),
+            self.exprs.iter().map(|p| &p.expr),
             input_schema,
         )
     }
@@ -465,9 +465,7 @@ impl ExecutionPlan for ProjectionExec {
         let input_stats = self.input.partition_statistics(partition)?;
         stats_projection(
             input_stats,
-            self.expr
-                .iter()
-                .map(|proj_expr| Arc::clone(&proj_expr.expr)),
+            self.expr.iter().map(|proj_expr| &proj_expr.expr),
             &self.input.schema(),
         )
     }
@@ -515,9 +513,9 @@ impl ExecutionPlan for ProjectionExec {
     }
 }
 
-fn stats_projection(
+fn stats_projection<'a>(
     mut stats: Statistics,
-    exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
+    exprs: impl Iterator<Item = &'a Arc<dyn PhysicalExpr>>,
     schema: &Schema,
 ) -> Result<Statistics> {
     let mut primitive_row_size = 0;
@@ -1458,7 +1456,7 @@ mod tests {
             Arc::new(Column::new("col0", 0)),
         ];
 
-        let result = stats_projection(source, exprs.into_iter(), &schema).unwrap();
+        let result = stats_projection(source, exprs.iter(), &schema).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -1494,7 +1492,7 @@ mod tests {
             Arc::new(Column::new("col0", 0)),
         ];
 
-        let result = stats_projection(source, exprs.into_iter(), &schema).unwrap();
+        let result = stats_projection(source, exprs.iter(), &schema).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
