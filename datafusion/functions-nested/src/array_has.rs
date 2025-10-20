@@ -144,8 +144,11 @@ impl ScalarUDFImpl for ArrayHas {
                     assert_eq!(scalar_values.len(), 1);
                     let list = scalar_values
                         .into_iter()
+                        // If the vec is a singular null, `list` will be empty due to this flatten().
+                        // It would be more clear if we handled the None separately, but this is more performant.
                         .flatten()
-                        .map(|v| Expr::Literal(v, None))
+                        .flatten()
+                        .map(|v| Expr::Literal(v.clone(), None))
                         .collect();
 
                     return Ok(ExprSimplifyResult::Simplified(in_list(

@@ -1,0 +1,109 @@
+{
+  "extensionUris": [
+    {
+      "extensionUriAnchor": 1,
+      "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_arithmetic.yaml"
+    }
+  ],
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUriReference": 1,
+        "functionAnchor": 1,
+        "name": "sum:i8"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "aggregate": {
+            "common": {
+              "direct": {}
+            },
+            "input": {
+              "read": {
+                "baseSchema": {
+                  "names": [
+                    "c0",
+                    "c1"
+                  ],
+                  "struct": {
+                    "nullability": "NULLABILITY_REQUIRED",
+                    "types": [
+                      {
+                        "i8": {
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      {
+                        "i8": {
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "common": {
+                  "direct": {}
+                },
+                "virtualTable": {}
+              }
+            },
+            "groupingExpressions": [
+              {
+                "selection": {
+                  "directReference": {
+                    "structField": {}
+                  },
+                  "rootReference": {}
+                }
+              }
+            ],
+            "groupings": [
+              {
+                "expressionReferences": [0]
+              }
+
+            ],
+            "measures": [
+              {
+                "measure": {
+                  "arguments": [
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {}
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    }
+                  ],
+                  "functionReference": 1,
+                  "invocation": "AGGREGATION_INVOCATION_ALL",
+                  "outputType": {
+                    "i8": {
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  },
+                  "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT"
+                }
+              }
+            ]
+          }
+        },
+        "names": [
+          "c0",
+          "summation"
+        ]
+      }
+    }
+  ],
+  "version": {
+    "minorNumber": 29,
+    "producer": "substrait-go v4.2.0"
+  }
+}
