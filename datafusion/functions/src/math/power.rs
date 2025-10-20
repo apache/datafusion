@@ -791,7 +791,7 @@ mod tests {
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Decimal32(
-                    Some(i32::from(2)),
+                    Some(2),
                     DECIMAL32_MAX_SCALE as u8,
                     0,
                 )), // base
@@ -817,7 +817,7 @@ mod tests {
                     .expect("failed to convert result to an array");
 
                 assert_eq!(ints.len(), 1);
-                assert_eq!(ints.value(0), i32::from(8));
+                assert_eq!(ints.value(0), 8);
 
                 // Value is the same as expected, but scale should be 0
                 if let DataType::Decimal32(_precision, scale) = arr.data_type() {
