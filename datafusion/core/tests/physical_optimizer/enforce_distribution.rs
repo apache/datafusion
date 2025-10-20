@@ -2990,34 +2990,38 @@ fn parallelization_union_inputs() -> Result<()> {
     let test_config = TestConfig::default();
 
     // Test: with parquet
-    let expected_parquet = &[
-        "UnionExec",
-        // Union doesn't benefit from input partitioning - no parallelism
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(
-        expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config.run(expected_parquet, plan_parquet, &SORT_DISTRIB_DISTRIB)?;
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    // Union doesn't benefit from input partitioning - no parallelism
+    assert_plan!(
+        plan_parquet_distrib,
+        @r"
+UnionExec
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let expected_csv = &[
-        "UnionExec",
-        // Union doesn't benefit from input partitioning - no parallelism
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-    ];
-    test_config.run(expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected_csv, plan_csv, &SORT_DISTRIB_DISTRIB)?;
+    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    // Union doesn't benefit from input partitioning - no parallelism
+    assert_plan!(
+        plan_csv_distrib,
+        @r"
+UnionExec
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+"
+    );
+    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
 }
