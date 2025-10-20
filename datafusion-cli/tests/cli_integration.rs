@@ -402,7 +402,6 @@ async fn test_object_store_profiling() {
     let container = setup_minio_container().await;
 
     let mut settings = make_settings();
-    settings.set_snapshot_suffix("s3_url_fallback");
 
     // as the object store profiling contains timestamps and durations, we must
     // filter them out to have stable snapshots
@@ -416,14 +415,13 @@ async fn test_object_store_profiling() {
         "<TIMESTAMP> operation=$1 duration=[DURATION] size=$2 path=$3",
     );
 
-    // We also need to filter out the durations reported in the summary output
-    //
+    // We also need to filter out the summary statistics (anything with an 's' at the end)
     // Example line(s) to filter:
-    //
-    // duration min: 0.000729s
-    // duration max: 0.000729s
-    // duration avg: 0.000729s
-    settings.add_filter(r"duration (min|max|avg): \d+\.\d{6}s", "[SUMMARY_DURATION]");
+    // | Get       | duration | 5.000000s | 5.000000s | 5.000000s |           | 1         |
+    settings.add_filter(
+        r"\| (Get|Put|Delete|List|Head)( +)\| duration \| .*? \| .*? \| .*? \| .*? \| (.*?) \|",
+        "| $1$2 | duration | ...NORMALIZED...| $3 |",
+    );
 
     let _bound = settings.bind_to_scope();
 
@@ -434,8 +432,11 @@ LOCATION 's3://data/cars.csv';
 
 -- Initial query should not show any profiling as the object store is not instrumented yet
 SELECT * from CARS LIMIT 1;
-\object_store_profiling enabled
--- Query again to see the profiling output
+\object_store_profiling trace
+-- Query again to see the full profiling output
+SELECT * from CARS LIMIT 1;
+\object_store_profiling summary
+-- Query again to see the summarized profiling output
 SELECT * from CARS LIMIT 1;
 \object_store_profiling disabled
 -- Final query should not show any profiling as we disabled it again

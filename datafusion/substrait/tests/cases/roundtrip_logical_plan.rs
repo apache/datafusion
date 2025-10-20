@@ -1144,6 +1144,7 @@ async fn all_type_literal() -> Result<()> {
             uint32_col = arrow_cast('0', 'UInt32') AND
             int64_col = arrow_cast('0', 'Int64') AND
             uint64_col = arrow_cast('0', 'UInt64') AND
+            float16_col = arrow_cast(0.0, 'Float16') AND
             float32_col = arrow_cast('0', 'Float32') AND
             float64_col = arrow_cast('0', 'Float64') AND
             sec_timestamp_col = arrow_cast('2020-01-01 00:00:00', 'Timestamp (Second, None)') AND
@@ -1856,6 +1857,7 @@ async fn create_all_type_context() -> Result<SessionContext> {
         Field::new("uint32_col", DataType::UInt32, true),
         Field::new("int64_col", DataType::Int64, true),
         Field::new("uint64_col", DataType::UInt64, true),
+        Field::new("float16_col", DataType::Float16, true),
         Field::new("float32_col", DataType::Float32, true),
         Field::new("float64_col", DataType::Float64, true),
         Field::new(
