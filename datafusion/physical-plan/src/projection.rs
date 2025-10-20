@@ -201,6 +201,16 @@ pub struct ProjectionExpr {
     pub alias: String,
 }
 
+impl std::fmt::Display for ProjectionExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.expr.to_string() == self.alias {
+            write!(f, "{}", self.alias)
+        } else {
+            write!(f, "{} AS {}", self.expr, self.alias)
+        }
+    }
+}
+
 impl ProjectionExpr {
     /// Create a new projection expression
     pub fn new(expr: Arc<dyn PhysicalExpr>, alias: String) -> Self {
@@ -282,8 +292,9 @@ impl Projection {
             let new_expr = update_expr(&proj_expr.expr, &self.exprs, true)?
                 .ok_or_else(|| {
                     internal_datafusion_err!(
-                        "Failed to combine projections: expression {} could not be updated",
-                        proj_expr.expr
+                        "Failed to combine projections: expression {} could not be applied on top of existing projections {}",
+                        proj_expr.expr,
+                        self.exprs.iter().map(|e| format!("{}", e)).join(", ")
                     )
                 })?;
             new_exprs.push(ProjectionExpr {
@@ -292,23 +303,6 @@ impl Projection {
             });
         }
         Ok(Projection::new(new_exprs))
-    }
-
-    /// Merge an iterator of projections into a single projection.
-    /// For example, if the projections are:
-    /// 1. `SELECT c@2 AS x, b@1 AS y, a@0 as z`
-    /// 2. `SELECT x@0 + 1 AS c1, y@1 + z@2 as c2`
-    /// 3. `SELECT c1@0 * 2 AS final_c1`
-    /// we return a projection equivalent to `SELECT (c@2 + 1) * 2 AS final_c1`.
-    pub fn try_merge_iter<I>(projections: I) -> Result<Projection>
-    where
-        I: IntoIterator<Item = Projection>,
-    {
-        let mut iter = projections.into_iter();
-        let first = iter
-            .next()
-            .ok_or_else(|| internal_datafusion_err!("No projections to merge"))?;
-        iter.try_fold(first, |acc, proj| acc.try_merge(&proj))
     }
 
     /// Extract the column indices used in this projection.
