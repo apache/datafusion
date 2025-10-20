@@ -1440,7 +1440,7 @@ fn multi_smj_joins() -> Result<()> {
                     sort_merge_join_exec(join.clone(), parquet_exec(), &top_join_on, &join_type);
 
                 let mut settings = Settings::clone_current();
-                settings.add_filter(&format!("join_type={}", join_type), "join_type=...");
+                settings.add_filter(&format!("join_type={join_type}"), "join_type=...");
                 settings.bind(|| {
                     let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
