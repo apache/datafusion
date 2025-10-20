@@ -1790,52 +1790,58 @@ fn smj_join_key_ordering() -> Result<()> {
 
     // Test: run EnforceDistribution, then EnforceSort.
     // Only two RepartitionExecs added
-    let expected = &[
-        "SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]",
-        "  SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]",
-        "    ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
-        "      ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-        "        AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
-        "          RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
-        "            AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
-        "              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[true]",
-        "    ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
-        "      AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
-        "        RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
-        "          AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
-        "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(expected, join.clone(), &DISTRIB_DISTRIB_SORT)?;
+    let plan_distrib = test_config.run2(join.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_distrib,
+        @r"
+SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
+  SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]
+    ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
+      ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
+        AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
+          RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
+            AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
+              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[true]
+    ProjectionExec: expr=[a@1 as a2, b@0 as b2]
+      AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
+        RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
+          AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
-    let expected_first_sort_enforcement = &[
-        "SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]",
-        "  RepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=10, preserve_order=true, sort_exprs=b3@1 ASC, a3@0 ASC",
-        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[false]",
-        "        CoalescePartitionsExec",
-        "          ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
-        "            ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-        "              AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
-        "                RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
-        "                  AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
-        "                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  RepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=10, preserve_order=true, sort_exprs=b2@1 ASC, a2@0 ASC",
-        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[false]",
-        "        CoalescePartitionsExec",
-        "          ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
-        "            AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
-        "              RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
-        "                AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
-        "                  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(expected_first_sort_enforcement, join, &SORT_DISTRIB_DISTRIB)?;
+    let plan_sort = test_config.run2(join, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(
+        plan_sort,
+        @r"
+SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
+  RepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=10, preserve_order=true, sort_exprs=b3@1 ASC, a3@0 ASC
+    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[false]
+        CoalescePartitionsExec
+          ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
+            ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
+              AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
+                RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
+                  AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
+                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  RepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=10, preserve_order=true, sort_exprs=b2@1 ASC, a2@0 ASC
+    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[false]
+        CoalescePartitionsExec
+          ProjectionExec: expr=[a@1 as a2, b@0 as b2]
+            AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
+              RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
+                AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
+                  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
 
     Ok(())
 }
