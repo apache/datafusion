@@ -31,7 +31,7 @@ use datafusion_common::{
 };
 use datafusion_expr::ColumnarValue;
 
-use super::{Column, Literal};
+use super::super::{Column, Literal};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
