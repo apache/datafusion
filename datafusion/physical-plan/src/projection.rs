@@ -64,7 +64,7 @@ use log::trace;
 #[derive(Debug, Clone)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
-    pub(crate) expr: Vec<ProjectionExpr>,
+    pub(crate) expr: Projection,
     /// The schema once the projection has been applied to the input
     schema: SchemaRef,
     /// The input plan
@@ -128,19 +128,23 @@ impl ProjectionExec {
     {
         let input_schema = input.schema();
         // convert argument to Vec<ProjectionExpr>
-        let expr = expr.into_iter().map(Into::into).collect::<Vec<_>>();
+        let expr_vec = expr.into_iter().map(Into::into).collect::<Vec<_>>();
+        let projection = Projection::new(expr_vec);
 
-        let schema = Arc::new(project_schema(&expr, &input_schema)?);
+        let schema = Arc::new(projection.project_schema(&input_schema)?);
 
         // Construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = ProjectionMapping::try_new(
-            expr.iter().map(|p| (Arc::clone(&p.expr), p.alias.clone())),
+            projection
+                .as_ref()
+                .iter()
+                .map(|p| (Arc::clone(&p.expr), p.alias.clone())),
             &input_schema,
         )?;
         let cache =
             Self::compute_properties(&input, &projection_mapping, Arc::clone(&schema))?;
         Ok(Self {
-            expr,
+            expr: projection,
             schema,
             input,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -150,7 +154,7 @@ impl ProjectionExec {
 
     /// The projection expressions stored as tuples of (expression, output column name)
     pub fn expr(&self) -> &[ProjectionExpr] {
-        &self.expr
+        self.expr.as_ref()
     }
 
     /// The input plan
@@ -181,34 +185,7 @@ impl ProjectionExec {
     }
 }
 
-pub fn project_schema(expr: &[ProjectionExpr], input_schema: &Schema) -> Result<Schema> {
-    let fields: Result<Vec<Field>> = expr
-        .iter()
-        .map(|proj_expr| {
-            let metadata = proj_expr
-                .expr
-                .return_field(input_schema)?
-                .metadata()
-                .clone();
-
-            let field = Field::new(
-                &proj_expr.alias,
-                proj_expr.expr.data_type(input_schema)?,
-                proj_expr.expr.nullable(input_schema)?,
-            )
-            .with_metadata(metadata);
-
-            Ok(field)
-        })
-        .collect();
-
-    Ok(Schema::new_with_metadata(
-        fields?,
-        input_schema.metadata().clone(),
-    ))
-}
-
-/// A projection expression that is created by [`ProjectionExec`]
+/// A projection expression as used by [`ProjectionExec`].
 ///
 /// The expression is evaluated and the result is stored in a column
 /// with the name specified by `alias`.
@@ -243,6 +220,29 @@ impl ProjectionExpr {
     }
 }
 
+impl From<(Arc<dyn PhysicalExpr>, String)> for ProjectionExpr {
+    fn from(value: (Arc<dyn PhysicalExpr>, String)) -> Self {
+        Self::new(value.0, value.1)
+    }
+}
+
+impl From<&(Arc<dyn PhysicalExpr>, String)> for ProjectionExpr {
+    fn from(value: &(Arc<dyn PhysicalExpr>, String)) -> Self {
+        Self::new(Arc::clone(&value.0), value.1.clone())
+    }
+}
+
+impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
+    fn from(value: ProjectionExpr) -> Self {
+        (value.expr, value.alias)
+    }
+}
+
+/// A collection of projection expressions.
+///
+/// This struct encapsulates multiple `ProjectionExpr` instances,
+/// representing a complete projection operation and provides
+/// methods to manipulate and analyze the projection as a whole.
 #[derive(Debug, Clone)]
 pub struct Projection {
     exprs: Vec<ProjectionExpr>,
@@ -251,6 +251,14 @@ pub struct Projection {
 impl From<Vec<ProjectionExpr>> for Projection {
     fn from(value: Vec<ProjectionExpr>) -> Self {
         Self { exprs: value }
+    }
+}
+
+impl From<&[ProjectionExpr]> for Projection {
+    fn from(value: &[ProjectionExpr]) -> Self {
+        Self {
+            exprs: value.to_vec(),
+        }
     }
 }
 
@@ -322,7 +330,31 @@ impl Projection {
     /// if the input schema is `[a: Int32, b: Int32, c: Int32]`, the output schema would be `[x: Int32, y: Int32]`.
     /// Fields' metadata are preserved from the input schema.
     pub fn project_schema(&self, input_schema: &Schema) -> Result<Schema> {
-        project_schema(&self.exprs, input_schema)
+        let fields: Result<Vec<Field>> = self
+            .exprs
+            .iter()
+            .map(|proj_expr| {
+                let metadata = proj_expr
+                    .expr
+                    .return_field(input_schema)?
+                    .metadata()
+                    .clone();
+
+                let field = Field::new(
+                    &proj_expr.alias,
+                    proj_expr.expr.data_type(input_schema)?,
+                    proj_expr.expr.nullable(input_schema)?,
+                )
+                .with_metadata(metadata);
+
+                Ok(field)
+            })
+            .collect();
+
+        Ok(Schema::new_with_metadata(
+            fields?,
+            input_schema.metadata().clone(),
+        ))
     }
 
     /// Project statistics according to this projection.
@@ -333,29 +365,35 @@ impl Projection {
         input_stats: &Statistics,
         input_schema: &Schema,
     ) -> Result<Statistics> {
-        stats_projection(
-            input_stats.clone(),
-            self.exprs.iter().map(|p| &p.expr),
-            input_schema,
-        )
-    }
-}
+        let mut stats = input_stats.clone();
+        let mut primitive_row_size = 0;
+        let mut primitive_row_size_possible = true;
+        let mut column_statistics = vec![];
 
-impl From<(Arc<dyn PhysicalExpr>, String)> for ProjectionExpr {
-    fn from(value: (Arc<dyn PhysicalExpr>, String)) -> Self {
-        Self::new(value.0, value.1)
-    }
-}
+        for proj_expr in &self.exprs {
+            let expr = &proj_expr.expr;
+            let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                stats.column_statistics[col.index()].clone()
+            } else {
+                // TODO stats: estimate more statistics from expressions
+                // (expressions should compute their statistics themselves)
+                ColumnStatistics::new_unknown()
+            };
+            column_statistics.push(col_stats);
+            let data_type = expr.data_type(input_schema)?;
+            if let Some(value) = data_type.primitive_width() {
+                primitive_row_size += value;
+                continue;
+            }
+            primitive_row_size_possible = false;
+        }
 
-impl From<&(Arc<dyn PhysicalExpr>, String)> for ProjectionExpr {
-    fn from(value: &(Arc<dyn PhysicalExpr>, String)) -> Self {
-        Self::new(Arc::clone(&value.0), value.1.clone())
-    }
-}
-
-impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
-    fn from(value: ProjectionExpr) -> Self {
-        (value.expr, value.alias)
+        if primitive_row_size_possible {
+            stats.total_byte_size =
+                Precision::Exact(primitive_row_size).multiply(&stats.num_rows);
+        }
+        stats.column_statistics = column_statistics;
+        Ok(stats)
     }
 }
 
@@ -369,6 +407,7 @@ impl DisplayAs for ProjectionExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr: Vec<String> = self
                     .expr
+                    .as_ref()
                     .iter()
                     .map(|proj_expr| {
                         let e = proj_expr.expr.to_string();
@@ -418,7 +457,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        let all_simple_exprs = self.expr.iter().all(|proj_expr| {
+        let all_simple_exprs = self.expr.as_ref().iter().all(|proj_expr| {
             proj_expr.expr.as_any().is::<Column>()
                 || proj_expr.expr.as_any().is::<Literal>()
         });
@@ -435,7 +474,7 @@ impl ExecutionPlan for ProjectionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        ProjectionExec::try_new(self.expr.clone(), children.swap_remove(0))
+        ProjectionExec::try_new(self.expr.as_ref().to_vec(), children.swap_remove(0))
             .map(|p| Arc::new(p) as _)
     }
 
@@ -447,7 +486,12 @@ impl ExecutionPlan for ProjectionExec {
         trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         Ok(Box::pin(ProjectionStream {
             schema: Arc::clone(&self.schema),
-            expr: self.expr.iter().map(|x| Arc::clone(&x.expr)).collect(),
+            expr: self
+                .expr
+                .as_ref()
+                .iter()
+                .map(|x| Arc::clone(&x.expr))
+                .collect(),
             input: self.input.execute(partition, context)?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
@@ -463,11 +507,8 @@ impl ExecutionPlan for ProjectionExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
-        stats_projection(
-            input_stats,
-            self.expr.iter().map(|proj_expr| &proj_expr.expr),
-            &self.input.schema(),
-        )
+        self.expr
+            .project_statistics(&input_stats, &self.input.schema())
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -511,39 +552,6 @@ impl ExecutionPlan for ProjectionExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
-}
-
-fn stats_projection<'a>(
-    mut stats: Statistics,
-    exprs: impl Iterator<Item = &'a Arc<dyn PhysicalExpr>>,
-    schema: &Schema,
-) -> Result<Statistics> {
-    let mut primitive_row_size = 0;
-    let mut primitive_row_size_possible = true;
-    let mut column_statistics = vec![];
-    for expr in exprs {
-        let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-            stats.column_statistics[col.index()].clone()
-        } else {
-            // TODO stats: estimate more statistics from expressions
-            // (expressions should compute their statistics themselves)
-            ColumnStatistics::new_unknown()
-        };
-        column_statistics.push(col_stats);
-        let data_type = expr.data_type(schema)?;
-        if let Some(value) = data_type.primitive_width() {
-            primitive_row_size += value;
-            continue;
-        }
-        primitive_row_size_possible = false;
-    }
-
-    if primitive_row_size_possible {
-        stats.total_byte_size =
-            Precision::Exact(primitive_row_size).multiply(&stats.num_rows);
-    }
-    stats.column_statistics = column_statistics;
-    Ok(stats)
 }
 
 impl ProjectionStream {
@@ -1451,12 +1459,18 @@ mod tests {
         let source = get_stats();
         let schema = get_schema();
 
-        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new("col1", 1)),
-            Arc::new(Column::new("col0", 0)),
-        ];
+        let projection = Projection::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col1", 1)),
+                alias: "col1".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "col0".to_string(),
+            },
+        ]);
 
-        let result = stats_projection(source, exprs.iter(), &schema).unwrap();
+        let result = projection.project_statistics(&source, &schema).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -1487,12 +1501,18 @@ mod tests {
         let source = get_stats();
         let schema = get_schema();
 
-        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new("col2", 2)),
-            Arc::new(Column::new("col0", 0)),
-        ];
+        let projection = Projection::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col2", 2)),
+                alias: "col2".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "col0".to_string(),
+            },
+        ]);
 
-        let result = stats_projection(source, exprs.iter(), &schema).unwrap();
+        let result = projection.project_statistics(&source, &schema).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
