@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{as_largestring_array, Array, ArrayRef};
+use arrow::array::{as_largestring_array, Array, ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Field};
 use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
@@ -71,9 +71,6 @@ impl ConcatFunc {
     }
 
     fn concat_arrays(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        use arrow::array::{make_array, ArrayData, AsArray};
-        use arrow::compute;
-
         let arrays: Result<Vec<ArrayRef>> = args
             .iter()
             .map(|arg| match arg {
@@ -83,75 +80,39 @@ impl ConcatFunc {
             .collect();
         let arrays = arrays?;
 
-        let all_null = arrays.iter().all(|array| array.null_count() == array.len());
-
-        if all_null {
-            let return_type = arrays
-                .iter()
-                .map(|arg| arg.data_type())
-                .find(|d| !d.is_null())
-                .unwrap_or_else(|| arrays[0].data_type())
-                .clone();
-
-            return Ok(ColumnarValue::Array(make_array(ArrayData::new_null(
-                &return_type,
-                arrays[0].len(),
-            ))));
-        }
-
-        let mut result_elements = Vec::new();
-
+        // Extract values from each list and concatenate them
+        let mut all_elements = Vec::new();
         for array in &arrays {
             match array.data_type() {
                 DataType::List(_) => {
                     let list_array = array.as_list::<i32>();
-                    for i in 0..list_array.len() {
-                        if !list_array.is_null(i) {
-                            let elements = list_array.value(i);
-                            result_elements.extend(
-                                (0..elements.len()).map(|j| elements.slice(j, 1)),
-                            );
-                        }
+                    if !list_array.is_null(0) {
+                        all_elements.push(list_array.value(0));
                     }
                 }
                 DataType::LargeList(_) => {
                     let list_array = array.as_list::<i64>();
-                    for i in 0..list_array.len() {
-                        if !list_array.is_null(i) {
-                            let elements = list_array.value(i);
-                            result_elements.extend(
-                                (0..elements.len()).map(|j| elements.slice(j, 1)),
-                            );
-                        }
+                    if !list_array.is_null(0) {
+                        all_elements.push(list_array.value(0));
                     }
                 }
-                DataType::FixedSizeList(_, size) => {
+                DataType::FixedSizeList(_, _) => {
                     let list_array = array.as_fixed_size_list();
-                    for i in 0..list_array.len() {
-                        if !list_array.is_null(i) {
-                            let elements = list_array.value(i);
-                            result_elements.extend(
-                                (0..*size as usize).map(|j| elements.slice(j, 1)),
-                            );
-                        }
+                    if !list_array.is_null(0) {
+                        all_elements.push(list_array.value(0));
                     }
                 }
-                _ => {
-                    return internal_err!(
-                        "Unsupported array type for concatenation: {}",
-                        array.data_type()
-                    )
-                }
+                _ => return internal_err!("Expected array type"),
             }
         }
 
-        if result_elements.is_empty() {
+        if all_elements.is_empty() {
             return plan_err!("No elements to concatenate");
         }
 
         let element_refs: Vec<&dyn Array> =
-            result_elements.iter().map(|a| a.as_ref()).collect();
-        let concatenated = compute::concat(&element_refs)?;
+            all_elements.iter().map(|a| a.as_ref()).collect();
+        let concatenated = arrow::compute::concat(&element_refs)?;
 
         let field = Field::new_list_field(concatenated.data_type().clone(), true);
         let offsets = arrow::buffer::OffsetBuffer::from_lengths([concatenated.len()]);
@@ -178,6 +139,7 @@ impl ScalarUDFImpl for ConcatFunc {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         use DataType::*;
 
+        // Arrays don't need coercion
         if arg_types
             .iter()
             .any(|dt| matches!(dt, List(_) | LargeList(_) | FixedSizeList(_, _)))
@@ -185,36 +147,17 @@ impl ScalarUDFImpl for ConcatFunc {
             return Ok(arg_types.to_vec());
         }
 
+        // For non-array types, coerce to best string type
+        let mut best_type = Utf8;
         for arg_type in arg_types {
             match arg_type {
-                Utf8 | Utf8View | LargeUtf8 => {}
-                Dictionary(_, value_type) => {
-                    if !matches!(value_type.as_ref(), Utf8 | Utf8View | LargeUtf8) {
-                        return Ok(vec![Utf8; arg_types.len()]);
-                    }
-                }
-                _ => return Ok(vec![Utf8; arg_types.len()]),
-            }
-        }
-
-        let mut best_string_type = Utf8;
-        for arg_type in arg_types {
-            match arg_type {
-                Utf8View => best_string_type = Utf8View,
-                LargeUtf8 if best_string_type != Utf8View => best_string_type = LargeUtf8,
-                Utf8 => {}
-                Dictionary(_, value_type) => match value_type.as_ref() {
-                    Utf8View => best_string_type = Utf8View,
-                    LargeUtf8 if best_string_type != Utf8View => {
-                        best_string_type = LargeUtf8
-                    }
-                    _ => {}
-                },
+                Utf8View => best_type = Utf8View,
+                LargeUtf8 if best_type != Utf8View => best_type = LargeUtf8,
                 _ => {}
             }
         }
 
-        Ok(vec![best_string_type; arg_types.len()])
+        Ok(vec![best_type; arg_types.len()])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -227,17 +170,9 @@ impl ScalarUDFImpl for ConcatFunc {
             return Ok(arg_types[0].clone());
         }
 
-        let mut dt = &Utf8;
-        arg_types.iter().for_each(|data_type| {
-            if data_type == &Utf8View {
-                dt = data_type;
-            }
-            if data_type == &LargeUtf8 && dt != &Utf8View {
-                dt = data_type;
-            }
-        });
-
-        Ok(dt.to_owned())
+        // Use coerced types for return type
+        let coerced = self.coerce_types(arg_types)?;
+        Ok(coerced[0].clone())
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -259,46 +194,6 @@ impl ScalarUDFImpl for ConcatFunc {
         }) {
             return self.concat_arrays(&args);
         }
-
-        let has_dictionary_types = args
-            .iter()
-            .any(|arg| matches!(arg.data_type(), DataType::Dictionary(_, _)));
-        let args = if has_dictionary_types {
-            let mut processed_args = Vec::with_capacity(args.len());
-            for arg in args {
-                match arg.data_type() {
-                    DataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                            use arrow::compute::cast;
-                            match arg {
-                                ColumnarValue::Array(array) => {
-                                    let casted =
-                                        cast(array.as_ref(), value_type.as_ref())?;
-                                    processed_args.push(ColumnarValue::Array(casted));
-                                }
-                                ColumnarValue::Scalar(ref scalar) => match scalar {
-                                    ScalarValue::Dictionary(_, v) => {
-                                        processed_args.push(ColumnarValue::Scalar(
-                                            v.as_ref().clone(),
-                                        ));
-                                    }
-                                    _ => processed_args.push(arg),
-                                },
-                            }
-                        }
-                        _ => {
-                            return plan_err!("Dictionary with value type {value_type} is not supported for concat");
-                        }
-                    },
-                    _ => {
-                        processed_args.push(arg);
-                    }
-                }
-            }
-            processed_args
-        } else {
-            args
-        };
 
         let mut return_datatype = DataType::Utf8;
         args.iter().for_each(|col| {
