@@ -2831,32 +2831,36 @@ fn parallelization_sorted_limit() -> Result<()> {
     let test_config = TestConfig::default();
 
     // Test: with parquet
-    let expected_parquet = &[
-        "GlobalLimitExec: skip=0, fetch=100",
-        "  LocalLimitExec: fetch=100",
-        // data is sorted so can't repartition here
-        "    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        // Doesn't parallelize for SortExec without preserve_partitioning
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(
-        expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config.run(expected_parquet, plan_parquet, &SORT_DISTRIB_DISTRIB)?;
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    // data is sorted so can't repartition here
+    // Doesn't parallelize for SortExec without preserve_partitioning
+    assert_plan!(
+        plan_parquet_distrib,
+        @r"
+GlobalLimitExec: skip=0, fetch=100
+  LocalLimitExec: fetch=100
+    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let expected_csv = &[
-        "GlobalLimitExec: skip=0, fetch=100",
-        "  LocalLimitExec: fetch=100",
-        // data is sorted so can't repartition here
-        "    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        // Doesn't parallelize for SortExec without preserve_partitioning
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-    ];
-    test_config.run(expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected_csv, plan_csv, &SORT_DISTRIB_DISTRIB)?;
+    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    // data is sorted so can't repartition here
+    // Doesn't parallelize for SortExec without preserve_partitioning
+    assert_plan!(
+        plan_csv_distrib,
+        @r"
+GlobalLimitExec: skip=0, fetch=100
+  LocalLimitExec: fetch=100
+    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+"
+    );
+    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
 }
