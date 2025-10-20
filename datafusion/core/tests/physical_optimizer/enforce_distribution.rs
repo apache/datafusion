@@ -71,6 +71,27 @@ use datafusion_physical_plan::{
 };
 use insta::Settings;
 
+/// Helper function to replace only the first occurrence of a regex pattern in a plan
+/// Returns (captured_group_1, modified_string)
+fn hide_first(plan: &dyn ExecutionPlan, regex: &str, replacement: &str) -> (String, String) {
+    let plan_str = displayable(plan).indent(true).to_string();
+    let pattern = regex::Regex::new(regex).unwrap();
+
+    if let Some(captures) = pattern.captures(&plan_str) {
+        let full_match = captures.get(0).unwrap();
+        let captured_value = captures.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+        let pos = full_match.start();
+        let end_pos = full_match.end();
+        let mut result = String::with_capacity(plan_str.len());
+        result.push_str(&plan_str[..pos]);
+        result.push_str(replacement);
+        result.push_str(&plan_str[end_pos..]);
+        (captured_value, result)
+    } else {
+        (String::new(), plan_str)
+    }
+}
+
 macro_rules! assert_plan {
     ($plan: expr, @ $expected:literal) => {
         insta::assert_snapshot!(
@@ -1281,41 +1302,43 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
         JoinType::RightAnti,
     ];
 
-    for join_type in join_types {
-        let top_join = hash_join_exec(
-            bottom_left_projection.clone(),
-            bottom_right_join.clone(),
-            &top_join_on,
-            &join_type,
-        );
-        let top_join_plan =
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]", &join_type);
+    insta::allow_duplicates! {
+        for join_type in join_types {
+            let top_join = hash_join_exec(
+                bottom_left_projection.clone(),
+                bottom_right_join.clone(),
+                &top_join_on,
+                &join_type,
+            );
 
-        let reordered = reorder_join_keys_to_inputs(top_join)?;
+            let reordered = reorder_join_keys_to_inputs(top_join).unwrap();
 
-        // The top joins' join key ordering is adjusted based on the children inputs.
-        let expected = &[
-            top_join_plan.as_str(),
-            "  ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1), (c@2, c1@2)]",
-            "      RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 10), input_partitions=10",
-            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-            "      RepartitionExec: partitioning=Hash([a1@0, b1@1, c1@2], 10), input_partitions=10",
-            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-            "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-            "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)]",
-            "    RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-            "    RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-            "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        ];
+            // The top joins' join key ordering is adjusted based on the children inputs.
+            let (captured_join_type, modified_plan) = hide_first(reordered.as_ref(), r"join_type=(\w+)", "join_type=...");
+            assert_eq!(captured_join_type, join_type.to_string());
 
-        assert_plan_txt!(expected, reordered);
+            insta::assert_snapshot!(modified_plan, @r"
+HashJoinExec: mode=Partitioned, join_type=..., on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]
+  ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1), (c@2, c1@2)]
+      RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 10), input_partitions=10
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([a1@0, b1@1, c1@2], 10), input_partitions=10
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)]
+    RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=10
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=10
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+            );
+        }
     }
 
     Ok(())
