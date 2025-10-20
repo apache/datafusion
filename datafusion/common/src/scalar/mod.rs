@@ -70,7 +70,7 @@ use arrow::array::{
     TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
     UInt64Array, UInt8Array, UnionArray,
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{cast_with_options, CastOptions};
 use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
@@ -2888,9 +2888,17 @@ impl ScalarValue {
             ScalarValue::Decimal256(e, precision, scale) => Arc::new(
                 ScalarValue::build_decimal256_array(*e, *precision, *scale, size)?,
             ),
-            ScalarValue::Boolean(e) => {
-                Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
-            }
+            ScalarValue::Boolean(e) => match e {
+                None => new_null_array(&DataType::Boolean, size),
+                Some(true) => {
+                    Arc::new(BooleanArray::new(BooleanBuffer::new_set(size), None))
+                        as ArrayRef
+                }
+                Some(false) => {
+                    Arc::new(BooleanArray::new(BooleanBuffer::new_unset(size), None))
+                        as ArrayRef
+                }
+            },
             ScalarValue::Float64(e) => {
                 build_array_from_option!(Float64, Float64Array, e, size)
             }
@@ -2973,15 +2981,13 @@ impl ScalarValue {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<BinaryArray>(),
                 ),
-                None => Arc::new(repeat_n(None::<&str>, size).collect::<BinaryArray>()),
+                None => new_null_array(&DataType::Binary, size),
             },
             ScalarValue::BinaryView(e) => match e {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<BinaryViewArray>(),
                 ),
-                None => {
-                    Arc::new(repeat_n(None::<&str>, size).collect::<BinaryViewArray>())
-                }
+                None => new_null_array(&DataType::BinaryView, size),
             },
             ScalarValue::FixedSizeBinary(s, e) => match e {
                 Some(value) => Arc::new(
@@ -2991,21 +2997,13 @@ impl ScalarValue {
                     )
                     .unwrap(),
                 ),
-                None => Arc::new(
-                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                        repeat_n(None::<&[u8]>, size),
-                        *s,
-                    )
-                    .unwrap(),
-                ),
+                None => Arc::new(FixedSizeBinaryArray::new_null(*s, size)),
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
                     repeat_n(Some(value.as_slice()), size).collect::<LargeBinaryArray>(),
                 ),
-                None => {
-                    Arc::new(repeat_n(None::<&str>, size).collect::<LargeBinaryArray>())
-                }
+                None => new_null_array(&DataType::LargeBinary, size),
             },
             ScalarValue::List(arr) => {
                 if size == 1 {
