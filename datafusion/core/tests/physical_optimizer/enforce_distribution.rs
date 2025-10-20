@@ -3655,12 +3655,14 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
 #[test]
 fn optimize_away_unnecessary_repartition() -> Result<()> {
     let physical_plan = coalesce_partitions_exec(repartition_exec(parquet_exec()));
-    let expected = &[
-        "CoalescePartitionsExec",
-        "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    plans_matches_expected!(expected, physical_plan.clone());
+    assert_plan!(
+        physical_plan,
+        @r"
+CoalescePartitionsExec
+  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
 
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
