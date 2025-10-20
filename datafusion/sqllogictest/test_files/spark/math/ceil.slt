@@ -15,28 +15,162 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+# Test cases for the ceil function
 
-## Original Query: SELECT ceil(-0.1);
-## PySpark 3.5.5 Result: {'CEIL(-0.1)': Decimal('0'), 'typeof(CEIL(-0.1))': 'decimal(1,0)', 'typeof(-0.1)': 'decimal(1,1)'}
-#query
-#SELECT ceil(-0.1::decimal(1,1));
+# Test basic positive float values
+query I
+SELECT ceil(3.14::float);
+----
+4
 
-## Original Query: SELECT ceil(3.1411, -3);
-## PySpark 3.5.5 Result: {'ceil(3.1411, -3)': Decimal('1000'), 'typeof(ceil(3.1411, -3))': 'decimal(4,0)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(-3)': 'int'}
-#query
-#SELECT ceil(3.1411::decimal(5,4), -3::int);
+query I
+SELECT ceil(2.1::float);
+----
+3
 
-## Original Query: SELECT ceil(3.1411, 3);
-## PySpark 3.5.5 Result: {'ceil(3.1411, 3)': Decimal('3.142'), 'typeof(ceil(3.1411, 3))': 'decimal(5,3)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(3)': 'int'}
-#query
-#SELECT ceil(3.1411::decimal(5,4), 3::int);
+query I
+SELECT ceil(5.9::float);
+----
+6
 
-## Original Query: SELECT ceil(5);
-## PySpark 3.5.5 Result: {'CEIL(5)': 5, 'typeof(CEIL(5))': 'bigint', 'typeof(5)': 'int'}
-#query
-#SELECT ceil(5::int);
+# Test basic positive double values
+query I
+SELECT ceil(3.14159);
+----
+4
+
+query I
+SELECT ceil(2.1);
+----
+3
+
+query I
+SELECT ceil(5.999);
+----
+6
+
+# Test negative float values
+query I
+SELECT ceil(-3.14::float);
+----
+-3
+
+query I
+SELECT ceil(-2.1::float);
+----
+-2
+
+query I
+SELECT ceil(-5.9::float);
+----
+-5
+
+# Test negative double values
+query I
+SELECT ceil(-3.14159);
+----
+-3
+
+query I
+SELECT ceil(-2.1);
+----
+-2
+
+query I
+SELECT ceil(-5.999);
+----
+-5
+
+# Test integer values
+query I
+SELECT ceil(52);
+----
+52
+
+query I
+SELECT ceil(-39);
+----
+-39
+
+# Test zero values
+query I
+SELECT ceil(0.0);
+----
+0
+
+query I
+SELECT ceil(0.0::float);
+----
+0
+
+query I
+SELECT ceil(-3.0::float);
+----
+-3
+
+# Test very small decimal values
+query I
+SELECT ceil(0.0001);
+----
+1
+
+query I
+SELECT ceil(-0.0001);
+----
+0
+
+# Test large numbers
+query I
+SELECT ceil(123456.789);
+----
+123457
+
+query I
+SELECT ceil(-98765.432);
+----
+-98765
+
+# Test with NULL values
+query I
+SELECT ceil(NULL);
+----
+NULL
+
+# Test array inputs
+query I
+SELECT ceil(column1) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(column1);
+----
+2
+3
+-1
+NULL
+
+query I
+SELECT ceil(column1::float) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(column1);
+----
+2
+3
+-1
+NULL
+
+# Test edge cases
+query I
+SELECT ceil(0.999999999999);
+----
+1
+
+query I
+SELECT ceil(-0.999999999999);
+----
+0
+
+# Test boundary values
+query I
+SELECT ceil(9223372036854775807.0);
+----
+9223372036854775807
+
+query I
+SELECT ceil(-9223372036854775808.0);
+----
+-9223372036854775808
