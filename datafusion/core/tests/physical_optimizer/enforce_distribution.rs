@@ -462,153 +462,78 @@ impl TestConfig {
         self
     }
 
+
     /// Perform a series of runs using the current [`TestConfig`],
     /// assert the expected plan result,
     /// and return the result plan (for potential subsequent runs).
+    fn try_run(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        optimizers_to_run: &[Run],
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Add the ancillary output requirements operator at the start:
+        let optimizer = OutputRequirements::new_add_mode();
+        let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
+
+        // This file has 2 rules that use tree node, apply these rules to original plan consecutively
+        // After these operations tree nodes should be in a consistent state.
+        // This code block makes sure that these rules doesn't violate tree node integrity.
+        {
+            let adjusted = if self.config.optimizer.top_down_join_key_reordering {
+                // Run adjust_input_keys_ordering rule
+                let plan_requirements =
+                    PlanWithKeyRequirements::new_default(plan.clone());
+                let adjusted = plan_requirements
+                    .transform_down(adjust_input_keys_ordering)
+                    .data()
+                    .and_then(check_integrity)?;
+                // TODO: End state payloads will be checked here.
+                adjusted.plan
+            } else {
+                // Run reorder_join_keys_to_inputs rule
+                plan.clone()
+                    .transform_up(|plan| {
+                        Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
+                    })
+                    .data()?
+            };
+
+            // Then run ensure_distribution rule
+            DistributionContext::new_default(adjusted)
+                .transform_up(|distribution_context| {
+                    ensure_distribution(distribution_context, &self.config)
+                })
+                .data()
+                .and_then(check_integrity)?;
+            // TODO: End state payloads will be checked here.
+        }
+
+        for run in optimizers_to_run {
+            optimized = match run {
+                Run::Distribution => {
+                    let optimizer = EnforceDistribution::new();
+                    optimizer.optimize(optimized, &self.config)?
+                }
+                Run::Sorting => {
+                    let optimizer = EnforceSorting::new();
+                    optimizer.optimize(optimized, &self.config)?
+                }
+            };
+        }
+
+        // Remove the ancillary output requirements operator when done:
+        let optimizer = OutputRequirements::new_remove_mode();
+        let optimized = optimizer.optimize(optimized, &self.config)?;
+
+        Ok(optimized)
+    }
+
     fn run(
-        &self,
-        expected_lines: &[&str],
-        plan: Arc<dyn ExecutionPlan>,
-        optimizers_to_run: &[Run],
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let expected_lines: Vec<&str> = expected_lines.to_vec();
-
-        // Add the ancillary output requirements operator at the start:
-        let optimizer = OutputRequirements::new_add_mode();
-        let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
-
-        // This file has 2 rules that use tree node, apply these rules to original plan consecutively
-        // After these operations tree nodes should be in a consistent state.
-        // This code block makes sure that these rules doesn't violate tree node integrity.
-        {
-            let adjusted = if self.config.optimizer.top_down_join_key_reordering {
-                // Run adjust_input_keys_ordering rule
-                let plan_requirements =
-                    PlanWithKeyRequirements::new_default(plan.clone());
-                let adjusted = plan_requirements
-                    .transform_down(adjust_input_keys_ordering)
-                    .data()
-                    .and_then(check_integrity)?;
-                // TODO: End state payloads will be checked here.
-                adjusted.plan
-            } else {
-                // Run reorder_join_keys_to_inputs rule
-                plan.clone()
-                    .transform_up(|plan| {
-                        Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
-                    })
-                    .data()?
-            };
-
-            // Then run ensure_distribution rule
-            DistributionContext::new_default(adjusted)
-                .transform_up(|distribution_context| {
-                    ensure_distribution(distribution_context, &self.config)
-                })
-                .data()
-                .and_then(check_integrity)?;
-            // TODO: End state payloads will be checked here.
-        }
-
-        for run in optimizers_to_run {
-            optimized = match run {
-                Run::Distribution => {
-                    let optimizer = EnforceDistribution::new();
-                    optimizer.optimize(optimized, &self.config)?
-                }
-                Run::Sorting => {
-                    let optimizer = EnforceSorting::new();
-                    optimizer.optimize(optimized, &self.config)?
-                }
-            };
-        }
-
-        // Remove the ancillary output requirements operator when done:
-        let optimizer = OutputRequirements::new_remove_mode();
-        let optimized = optimizer.optimize(optimized, &self.config)?;
-
-        // Now format correctly
-        let actual_lines = get_plan_string(&optimized);
-
-        assert_eq!(
-            &expected_lines, &actual_lines,
-            "\n\nexpected:\n\n{expected_lines:#?}\nactual:\n\n{actual_lines:#?}\n\n"
-        );
-
-        Ok(optimized)
-    }
-
-    /// Perform a series of runs using the current [`TestConfig`],
-    /// assert the expected plan result,
-    /// and return the result plan (for potential subsequent runs).
-    fn try_run2(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        optimizers_to_run: &[Run],
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Add the ancillary output requirements operator at the start:
-        let optimizer = OutputRequirements::new_add_mode();
-        let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
-
-        // This file has 2 rules that use tree node, apply these rules to original plan consecutively
-        // After these operations tree nodes should be in a consistent state.
-        // This code block makes sure that these rules doesn't violate tree node integrity.
-        {
-            let adjusted = if self.config.optimizer.top_down_join_key_reordering {
-                // Run adjust_input_keys_ordering rule
-                let plan_requirements =
-                    PlanWithKeyRequirements::new_default(plan.clone());
-                let adjusted = plan_requirements
-                    .transform_down(adjust_input_keys_ordering)
-                    .data()
-                    .and_then(check_integrity)?;
-                // TODO: End state payloads will be checked here.
-                adjusted.plan
-            } else {
-                // Run reorder_join_keys_to_inputs rule
-                plan.clone()
-                    .transform_up(|plan| {
-                        Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
-                    })
-                    .data()?
-            };
-
-            // Then run ensure_distribution rule
-            DistributionContext::new_default(adjusted)
-                .transform_up(|distribution_context| {
-                    ensure_distribution(distribution_context, &self.config)
-                })
-                .data()
-                .and_then(check_integrity)?;
-            // TODO: End state payloads will be checked here.
-        }
-
-        for run in optimizers_to_run {
-            optimized = match run {
-                Run::Distribution => {
-                    let optimizer = EnforceDistribution::new();
-                    optimizer.optimize(optimized, &self.config)?
-                }
-                Run::Sorting => {
-                    let optimizer = EnforceSorting::new();
-                    optimizer.optimize(optimized, &self.config)?
-                }
-            };
-        }
-
-        // Remove the ancillary output requirements operator when done:
-        let optimizer = OutputRequirements::new_remove_mode();
-        let optimized = optimizer.optimize(optimized, &self.config)?;
-
-        Ok(optimized)
-    }
-
-    fn run2(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         optimizers_to_run: &[Run],
     ) -> Arc<dyn ExecutionPlan> {
-        self.try_run2(plan, optimizers_to_run).unwrap()
+        self.try_run(plan, optimizers_to_run).unwrap()
     }
 }
 
@@ -692,7 +617,7 @@ fn multi_hash_joins() -> Result<()> {
                 );
 
                 let test_config = TestConfig::default();
-                let plan_distrub = test_config.run2(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+                let plan_distrub = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
                 match join_type {
                     // Should include 3 RepartitionExecs
@@ -734,7 +659,7 @@ fn multi_hash_joins() -> Result<()> {
                 };
 
 
-                let plan_sort = test_config.run2(top_join, &SORT_DISTRIB_DISTRIB);
+                let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
                 assert_plan!(plan_distrub, plan_sort);
             }
             JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {}
@@ -761,7 +686,7 @@ fn multi_hash_joins() -> Result<()> {
                     hash_join_exec(join, parquet_exec(), &top_join_on, &join_type);
 
                 let test_config = TestConfig::default();
-                let plan_distrub = test_config.run2(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+                let plan_distrub = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
                 match join_type {
                     // Should include 3 RepartitionExecs
@@ -809,7 +734,7 @@ fn multi_hash_joins() -> Result<()> {
                 };
 
 
-                let plan_sort = test_config.run2(top_join, &SORT_DISTRIB_DISTRIB);
+                let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
                         assert_plan!(plan_distrub, plan_sort);
             }
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {}
@@ -856,7 +781,7 @@ fn multi_joins_after_alias() -> Result<()> {
 
     // Output partition need to respect the Alias and should not introduce additional RepartitionExec
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -874,7 +799,7 @@ fn multi_joins_after_alias() -> Result<()> {
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(top_join, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     // Join on (a2 == c)
@@ -887,7 +812,7 @@ fn multi_joins_after_alias() -> Result<()> {
 
     // Output partition need to respect the Alias and should not introduce additional RepartitionExec
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -905,7 +830,7 @@ fn multi_joins_after_alias() -> Result<()> {
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(top_join, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -943,7 +868,7 @@ fn multi_joins_after_multi_alias() -> Result<()> {
     // The Column 'a' has different meaning now after the two Projections
     // The original Output partition can not satisfy the Join requirements and need to add an additional RepartitionExec
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -963,7 +888,7 @@ fn multi_joins_after_multi_alias() -> Result<()> {
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(top_join, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -991,7 +916,7 @@ fn join_after_agg_alias() -> Result<()> {
 
     // Only two RepartitionExecs added
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(join.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -1008,7 +933,7 @@ fn join_after_agg_alias() -> Result<()> {
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(join, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -1048,7 +973,7 @@ fn hash_join_key_ordering() -> Result<()> {
 
     // Only two RepartitionExecs added
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(join.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -1066,7 +991,7 @@ fn hash_join_key_ordering() -> Result<()> {
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(join, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -1172,7 +1097,7 @@ fn multi_hash_join_key_ordering() -> Result<()> {
 
     // The bottom joins' join key ordering is adjusted based on the top join. And the top join should not introduce additional RepartitionExec
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(filter_top_join.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(filter_top_join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -1197,7 +1122,7 @@ fn multi_hash_join_key_ordering() -> Result<()> {
                 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(filter_top_join, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(filter_top_join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -1525,7 +1450,7 @@ fn multi_smj_joins() -> Result<()> {
             let mut settings = Settings::clone_current();
             settings.add_filter(&format!("join_type={}", join_type), "join_type=...");
             settings.bind(|| {
-                let plan_distrib = test_config.run2(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+                let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
                 match join_type {
                     // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
@@ -1582,7 +1507,7 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
                     }
                 }
 
-                let plan_sort = test_config.run2(top_join.clone(), &SORT_DISTRIB_DISTRIB);
+                let plan_sort = test_config.run(top_join.clone(), &SORT_DISTRIB_DISTRIB);
 
                 match join_type {
                     // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
@@ -1654,7 +1579,7 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
                         let top_join =
                             sort_merge_join_exec(join, parquet_exec(), &top_join_on, &join_type);
 
-                        let plan_distrib = test_config.run2(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+                        let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
                         match join_type {
                             // Should include 6 RepartitionExecs(3 hash, 3 round-robin) and 3 SortExecs
@@ -1707,7 +1632,7 @@ SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
                             _ => unreachable!()
                         }
 
-                        let plan_sort = test_config.run2(top_join, &SORT_DISTRIB_DISTRIB);
+                        let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
 
                         match join_type {
                             // Should include 6 RepartitionExecs (3 of them preserves order) and 3 SortExecs
@@ -1823,7 +1748,7 @@ fn smj_join_key_ordering() -> Result<()> {
 
     // Test: run EnforceDistribution, then EnforceSort.
     // Only two RepartitionExecs added
-    let plan_distrib = test_config.run2(join.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -1847,7 +1772,7 @@ SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
     );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
-    let plan_sort = test_config.run2(join, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
         plan_sort,
         @r"
@@ -1904,7 +1829,7 @@ fn merge_does_not_need_sort() -> Result<()> {
     // The optimizer should not add an additional SortExec as the
     // data is already sorted
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(exec.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(exec.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -1920,7 +1845,7 @@ SortPreservingMergeExec: [a@0 ASC]
     // (according to flag: PREFER_EXISTING_SORT)
     // hence in this case ordering lost during CoalescePartitionsExec and re-introduced with
     // SortExec at the top.
-    let plan_sort = test_config.run2(exec, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(exec, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
         plan_sort,
         @r"
@@ -1956,7 +1881,7 @@ fn union_to_interleave() -> Result<()> {
 
     // Only two RepartitionExecs added, no final RepartitionExec required
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -1975,7 +1900,7 @@ fn union_to_interleave() -> Result<()> {
                   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2005,7 +1930,7 @@ fn union_not_to_interleave() -> Result<()> {
     // TestConfig: Prefer existing union.
     let test_config = TestConfig::default().with_prefer_existing_union();
 
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -2025,7 +1950,7 @@ fn union_not_to_interleave() -> Result<()> {
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2037,7 +1962,7 @@ fn added_repartition_to_single_partition() -> Result<()> {
     let plan = aggregate_exec_with_alias(parquet_exec(), alias);
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -2048,7 +1973,7 @@ fn added_repartition_to_single_partition() -> Result<()> {
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2060,7 +1985,7 @@ fn repartition_deepest_node() -> Result<()> {
     let plan = aggregate_exec_with_alias(filter_exec(parquet_exec()), alias);
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -2072,7 +1997,7 @@ fn repartition_deepest_node() -> Result<()> {
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2083,7 +2008,7 @@ fn repartition_unsorted_limit() -> Result<()> {
     let plan = limit_exec(filter_exec(parquet_exec()));
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_distrib,
         @r"
@@ -2095,7 +2020,7 @@ fn repartition_unsorted_limit() -> Result<()> {
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2112,7 +2037,7 @@ fn repartition_sorted_limit() -> Result<()> {
     let plan = limit_exec(sort_exec(sort_key, parquet_exec()));
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2122,7 +2047,7 @@ GlobalLimitExec: skip=0, fetch=100
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2142,7 +2067,7 @@ fn repartition_sorted_limit_with_filter() -> Result<()> {
     );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2153,7 +2078,7 @@ SortRequiredExec: [c@2 ASC]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2168,7 +2093,7 @@ fn repartition_ignores_limit() -> Result<()> {
     );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2186,7 +2111,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2197,7 +2122,7 @@ fn repartition_ignores_union() -> Result<()> {
     let plan = union_exec(vec![parquet_exec(); 5]);
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2209,7 +2134,7 @@ UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2227,7 +2152,7 @@ fn repartition_through_sort_preserving_merge() -> Result<()> {
     let plan = sort_preserving_merge_exec(sort_key, parquet_exec());
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2235,7 +2160,7 @@ SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2256,7 +2181,7 @@ fn repartition_ignores_sort_preserving_merge() -> Result<()> {
     );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2266,7 +2191,7 @@ SortPreservingMergeExec: [c@2 ASC]
         );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
             plan_sort,
             @r"
@@ -2295,7 +2220,7 @@ fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
     let plan = sort_preserving_merge_exec(sort_key, input);
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2307,7 +2232,7 @@ SortPreservingMergeExec: [c@2 ASC]
         );
 
     // test: result IS DIFFERENT, if EnforceSorting is run first:
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
             plan_sort,
             @r"
@@ -2341,7 +2266,7 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
     // TestConfig: Prefer existing sort.
     let test_config = TestConfig::default().with_prefer_existing_sort();
 
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2351,7 +2276,7 @@ SortRequiredExec: [d@3 ASC]
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2382,7 +2307,7 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
     let plan = union_exec(vec![input1, input2]);
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2394,7 +2319,7 @@ UnionExec
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2421,7 +2346,7 @@ fn repartition_transitively_with_projection() -> Result<()> {
     let plan = sort_preserving_merge_exec(sort_key, proj);
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2434,7 +2359,7 @@ SortPreservingMergeExec: [sum@0 ASC]
         );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
             plan_sort,
             @r"
@@ -2472,7 +2397,7 @@ fn repartition_ignores_transitively_with_projection() -> Result<()> {
     );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2481,7 +2406,7 @@ SortRequiredExec: [c@2 ASC]
     DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2509,7 +2434,7 @@ fn repartition_transitively_past_sort_with_projection() -> Result<()> {
     );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2518,7 +2443,7 @@ SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -2535,7 +2460,7 @@ fn repartition_transitively_past_sort_with_filter() -> Result<()> {
     let plan = sort_exec(sort_key, filter_exec(parquet_exec()));
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2548,7 +2473,7 @@ SortPreservingMergeExec: [a@0 ASC]
         );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
             plan_sort,
             @r"
@@ -2585,7 +2510,7 @@ fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()>
     );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -2599,7 +2524,7 @@ SortPreservingMergeExec: [a@0 ASC]
         );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
-    let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
             plan_sort,
             @r"
@@ -2627,7 +2552,7 @@ fn parallelization_single_partition() -> Result<()> {
 
     // Test: with parquet
     let plan_parquet_distrib =
-        test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+        test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_parquet_distrib,
             @r"
@@ -2637,11 +2562,11 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_csv_distrib,
             @r"
@@ -2651,7 +2576,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
         );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -2679,7 +2604,7 @@ fn parallelization_multiple_files() -> Result<()> {
     let test_config_concurrency_3 =
         test_config.clone().with_query_execution_partitions(3);
     let plan_3_distrib =
-        test_config_concurrency_3.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+        test_config_concurrency_3.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_3_distrib,
             @r"
@@ -2688,12 +2613,12 @@ SortRequiredExec: [a@0 ASC]
     DataSourceExec: file_groups={3 groups: [[x:0..50], [y:0..100], [x:50..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
         );
-    let plan_3_sort = test_config_concurrency_3.run2(plan.clone(), &SORT_DISTRIB_DISTRIB);
+    let plan_3_sort = test_config_concurrency_3.run(plan.clone(), &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_3_distrib, plan_3_sort);
 
     let test_config_concurrency_8 = test_config.with_query_execution_partitions(8);
     let plan_8_distrib =
-        test_config_concurrency_8.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+        test_config_concurrency_8.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_8_distrib,
             @r"
@@ -2702,7 +2627,7 @@ SortRequiredExec: [a@0 ASC]
     DataSourceExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
         );
-    let plan_8_sort = test_config_concurrency_8.run2(plan, &SORT_DISTRIB_DISTRIB);
+    let plan_8_sort = test_config_concurrency_8.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_8_distrib, plan_8_sort);
 
     Ok(())
@@ -2739,7 +2664,7 @@ fn parallelization_compressed_csv() -> Result<()> {
                 .with_query_execution_partitions(2)
                 .with_prefer_repartition_file_scans(10);
 
-            let plan_distrib = test_config.run2(plan.clone(), &DISTRIB_DISTRIB_SORT);
+            let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
             if compression_type.is_compressed() {
                 // Compressed files cannot be partitioned
                 assert_plan!(
@@ -2765,7 +2690,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
                 );
             }
 
-            let plan_sort = test_config.run2(plan, &SORT_DISTRIB_DISTRIB);
+            let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
             assert_plan!(plan_distrib, plan_sort);
         }
     }
@@ -2783,7 +2708,7 @@ fn parallelization_two_partitions() -> Result<()> {
         .with_prefer_repartition_file_scans(10);
 
     // Test: with parquet
-    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_parquet_distrib = test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_parquet_distrib,
         @r"
@@ -2793,11 +2718,11 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=parquet
 "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_csv_distrib,
         @r"
@@ -2807,7 +2732,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
     );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -2824,7 +2749,7 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
         .with_prefer_repartition_file_scans(10);
 
     // Test: with parquet
-    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_parquet_distrib = test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     // Multiple source files split across partitions
     assert_plan!(
         plan_parquet_distrib,
@@ -2835,11 +2760,11 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=parquet
 "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     // Multiple source files split across partitions
     assert_plan!(
         plan_csv_distrib,
@@ -2850,7 +2775,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
     );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -2870,7 +2795,7 @@ fn parallelization_sorted_limit() -> Result<()> {
     let test_config = TestConfig::default();
 
     // Test: with parquet
-    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_parquet_distrib = test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     // data is sorted so can't repartition here
     // Doesn't parallelize for SortExec without preserve_partitioning
     assert_plan!(
@@ -2882,11 +2807,11 @@ GlobalLimitExec: skip=0, fetch=100
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     // data is sorted so can't repartition here
     // Doesn't parallelize for SortExec without preserve_partitioning
     assert_plan!(
@@ -2898,7 +2823,7 @@ GlobalLimitExec: skip=0, fetch=100
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
     );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -2919,7 +2844,7 @@ fn parallelization_limit_with_filter() -> Result<()> {
     let test_config = TestConfig::default();
 
     // Test: with parquet
-    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_parquet_distrib = test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     // even though data is sorted, we can use repartition here. Since
     // ordering is not used in subsequent stages anyway.
     // SortExec doesn't benefit from input partitioning
@@ -2935,11 +2860,11 @@ GlobalLimitExec: skip=0, fetch=100
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     // even though data is sorted, we can use repartition here. Since
     // ordering is not used in subsequent stages anyway.
     // SortExec doesn't benefit from input partitioning
@@ -2955,7 +2880,7 @@ GlobalLimitExec: skip=0, fetch=100
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
     );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -2975,7 +2900,7 @@ fn parallelization_ignores_limit() -> Result<()> {
 
     // Test: with parquet
     let plan_parquet_distrib =
-        test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+        test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_parquet_distrib,
         @r"
@@ -2993,11 +2918,11 @@ fn parallelization_ignores_limit() -> Result<()> {
                           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_csv_distrib,
         @r"
@@ -3015,7 +2940,7 @@ fn parallelization_ignores_limit() -> Result<()> {
                           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
     );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -3029,7 +2954,7 @@ fn parallelization_union_inputs() -> Result<()> {
     let test_config = TestConfig::default();
 
     // Test: with parquet
-    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_parquet_distrib = test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     // Union doesn't benefit from input partitioning - no parallelism
     assert_plan!(
         plan_parquet_distrib,
@@ -3042,11 +2967,11 @@ UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     // Union doesn't benefit from input partitioning - no parallelism
     assert_plan!(
         plan_csv_distrib,
@@ -3059,7 +2984,7 @@ UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
     );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -3088,21 +3013,21 @@ fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
 
     // Test: with parquet
     let plan_parquet_distrib =
-        test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+        test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_parquet_distrib,
         @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet"
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_csv_distrib,
         @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false"
     );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -3134,7 +3059,7 @@ fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
 
     // Test: with parquet
     let plan_parquet_distrib =
-        test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+        test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_parquet_distrib,
         @r"
@@ -3144,7 +3069,7 @@ fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
     "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
         plan_parquet_sort,
         @r"
@@ -3157,7 +3082,7 @@ fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
     );
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_csv_distrib,
         @r"
@@ -3167,7 +3092,7 @@ fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
     "
     );
-    let plan_csv_sort = test_config.run2(plan_csv.clone(), &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv.clone(), &SORT_DISTRIB_DISTRIB);
     assert_plan!(
         plan_csv_sort,
         @r"
@@ -3206,7 +3131,7 @@ fn parallelization_does_not_benefit() -> Result<()> {
 
     // Test: with parquet
     let plan_parquet_distrib =
-        test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+        test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_parquet_distrib,
         @r"
@@ -3214,11 +3139,11 @@ fn parallelization_does_not_benefit() -> Result<()> {
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
     "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
         plan_csv_distrib,
         @r"
@@ -3226,7 +3151,7 @@ fn parallelization_does_not_benefit() -> Result<()> {
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
     "
     );
-    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
@@ -3269,7 +3194,7 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
     );
 
     let test_config = TestConfig::default();
-    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_parquet_distrib = test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     // Expected Outcome:
     // data should not be repartitioned / resorted
     assert_plan!(
@@ -3279,7 +3204,7 @@ ProjectionExec: expr=[a@0 as a2, c@2 as c2]
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
     );
-    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     Ok(())
@@ -3319,7 +3244,7 @@ SortPreservingMergeExec: [c2@1 ASC]
         );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3327,7 +3252,7 @@ ProjectionExec: expr=[a@0 as a2, c@2 as c2]
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
 "
         );
-    let plan_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3350,7 +3275,7 @@ RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10
         );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3359,7 +3284,7 @@ FilterExec: c@2 = 0
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3380,7 +3305,7 @@ fn remove_unnecessary_spm_after_filter() -> Result<()> {
     // TestConfig: Prefer existing sort.
     let test_config = TestConfig::default().with_prefer_existing_sort();
 
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3390,7 +3315,7 @@ CoalescePartitionsExec
       DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3411,7 +3336,7 @@ fn preserve_ordering_through_repartition() -> Result<()> {
     // TestConfig: Prefer existing sort.
     let test_config = TestConfig::default().with_prefer_existing_sort();
 
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3421,7 +3346,7 @@ SortPreservingMergeExec: [d@3 ASC]
       DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3440,7 +3365,7 @@ fn do_not_preserve_ordering_through_repartition() -> Result<()> {
 
     let test_config = TestConfig::default();
 
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3453,7 +3378,7 @@ SortPreservingMergeExec: [a@0 ASC]
         );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
             plan_sort,
             @r"
@@ -3480,7 +3405,7 @@ fn no_need_for_sort_after_filter() -> Result<()> {
     let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3490,7 +3415,7 @@ CoalescePartitionsExec
       DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3515,7 +3440,7 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
 
     let test_config = TestConfig::default();
 
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3528,7 +3453,7 @@ SortPreservingMergeExec: [a@0 ASC]
         );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
             plan_sort,
             @r"
@@ -3556,7 +3481,7 @@ fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
     let physical_plan = filter_exec(input);
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3565,7 +3490,7 @@ FilterExec: c@2 = 0
     DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3663,7 +3588,7 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
     // Make sure target partition number is 1. In this case hash repartition is unnecessary.
     let test_config = TestConfig::default().with_query_execution_partitions(1);
 
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3672,7 +3597,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3695,7 +3620,7 @@ fn do_not_add_unnecessary_hash2() -> Result<()> {
     // Make sure target partition number is larger than 2 (e.g partition number at the source).
     let test_config = TestConfig::default().with_query_execution_partitions(4);
 
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3708,7 +3633,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
             DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3727,14 +3652,14 @@ CoalescePartitionsExec
         );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3758,7 +3683,7 @@ FilterExec: c@2 = 0
         );
 
     let test_config = TestConfig::default();
-    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
             plan_distrib,
             @r"
@@ -3768,7 +3693,7 @@ FilterExec: c@2 = 0
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
         );
-    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
@@ -3798,7 +3723,7 @@ SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
         );
 
     // what the enforce distribution run does.
-    let plan_distribution = test_config.run2(physical_plan.clone(), &[Run::Distribution]);
+    let plan_distribution = test_config.run(physical_plan.clone(), &[Run::Distribution]);
     assert_plan!(
             plan_distribution,
             @r"
@@ -3809,7 +3734,7 @@ SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
         );
 
     // what the sort parallelization (in enforce sorting), does after the enforce distribution changes
-    let plan_both = test_config.run2(physical_plan, &[Run::Distribution, Run::Sorting]);
+    let plan_both = test_config.run(physical_plan, &[Run::Distribution, Run::Sorting]);
     assert_plan!(
             plan_both,
             @r"
