@@ -298,7 +298,7 @@ impl Projection {
                     internal_datafusion_err!(
                         "Failed to combine projections: expression {} could not be applied on top of existing projections {}",
                         proj_expr.expr,
-                        self.exprs.iter().map(|e| format!("{}", e)).join(", ")
+                        self.exprs.iter().map(|e| format!("{e}")).join(", ")
                     )
                 })?;
             new_exprs.push(ProjectionExpr {
@@ -874,8 +874,10 @@ pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
 /// This function returns an error if `sync_with_child` is `true` and if any expression references
 /// an index that is out of bounds for `projected_exprs`.
 /// For example:
+///
 /// - `expr` is `a@3`
-/// - `projected_exprs` is [`a@0`, `b@1`]
+/// - `projected_exprs` is \[`a@0`, `b@1`\]
+///
 /// In this case, `a@3` references index 3, which is out of bounds for `projected_exprs` (which has length 2).
 pub fn update_expr(
     expr: &Arc<dyn PhysicalExpr>,
