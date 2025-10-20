@@ -48,6 +48,7 @@ use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{DataType, Field, FieldRef, Schema};
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
+use datafusion::logical_expr::expr_rewriter::unalias;
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::logical_expr_common::interval_arithmetic::Interval;
 use datafusion::logical_expr_common::sort_properties::ExprProperties;
@@ -68,7 +69,6 @@ use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{any::Any, ffi::c_void, sync::Arc};
 use tokio::runtime::Handle;
-use datafusion::logical_expr::expr_rewriter::unalias;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -262,13 +262,13 @@ unsafe extern "C" fn evaluate_bounds_fn_wrapper(
     children: &RVec<FFI_Interval>,
 ) -> FFIResult<FFI_Interval> {
     let expr = expr.inner();
-    let children = children
+    let children = rresult_return!( children
         .iter()
-        .map(|child| child.into())
-        .collect::<Vec<_>>();
+        .map(Interval::try_from)
+        .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
 
-    rresult!(expr.evaluate_bounds(&children_borrowed).map(Into::into))
+    rresult!(expr.evaluate_bounds(&children_borrowed).and_then(FFI_Interval::try_from))
 }
 
 unsafe extern "C" fn propagate_constraints_fn_wrapper(
@@ -277,21 +277,24 @@ unsafe extern "C" fn propagate_constraints_fn_wrapper(
     children: &RVec<FFI_Interval>,
 ) -> FFIResult<ROption<RVec<FFI_Interval>>> {
     let expr = expr.inner();
-    let interval = interval.into();
-    let children = children
+    let interval = rresult_return!(Interval::try_from(interval));
+    let children = rresult_return!(children
         .iter()
-        .map(|child| child.into())
-        .collect::<Vec<_>>();
+        .map(Interval::try_from)
+        .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
 
     let result =
         rresult_return!(expr.propagate_constraints(&interval, &children_borrowed));
 
-    RResult::ROk(
-        result
-            .map(|i| i.into_iter().map(Into::into).collect())
-            .into(),
-    )
+    let result = rresult_return!(result
+        .map(|intervals| intervals
+            .into_iter()
+            .map(FFI_Interval::try_from)
+            .collect::<Result<RVec<_>>>())
+        .transpose());
+
+    RResult::ROk(result.into())
 }
 
 unsafe extern "C" fn evaluate_statistics_fn_wrapper(
@@ -367,8 +370,7 @@ unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> RString {
     format!("{expr}").into()
 }
 
-unsafe extern "C" fn hash_fn_wrapper(expr: &FFI_PhysicalExpr) -> u64
-{
+unsafe extern "C" fn hash_fn_wrapper(expr: &FFI_PhysicalExpr) -> u64 {
     let mut expr = expr.inner();
     let mut hasher = DefaultHasher::new();
     expr.hash(&mut hasher);
@@ -559,9 +561,10 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         unsafe {
             let children = children
                 .iter()
-                .map(|interval| FFI_Interval::from(*interval))
-                .collect::<RVec<_>>();
-            df_result!((self.expr.evaluate_bounds)(&self.expr, &children)).map(Into::into)
+                .map(|interval| FFI_Interval::try_from(*interval))
+                .collect::<Result<RVec<_>>>()?;
+            df_result!((self.expr.evaluate_bounds)(&self.expr, &children))
+                .and_then(Interval::try_from)
         }
     }
 
@@ -571,20 +574,24 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         unsafe {
-            let interval = interval.into();
+            let interval = interval.try_into()?;
             let children = children
                 .iter()
-                .map(|interval| FFI_Interval::from(*interval))
-                .collect::<RVec<_>>();
+                .map(|interval| FFI_Interval::try_from(*interval))
+                .collect::<Result<RVec<_>>>()?;
             let result = df_result!((self.expr.propagate_constraints)(
                 &self.expr, &interval, &children
             ))?;
 
-            Ok(result
+            let result: Option<_> = result
                 .map(|intervals| {
-                    intervals.into_iter().map(Into::into).collect::<Vec<_>>()
+                    intervals
+                        .into_iter()
+                        .map(Interval::try_from)
+                        .collect::<Result<Vec<_>>>()
                 })
-                .into())
+                .into();
+            result.transpose()
         }
     }
 
@@ -673,9 +680,7 @@ impl Hash for ForeignPhysicalExpr {
 
 impl Display for ForeignPhysicalExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let display = unsafe {
-            (self.expr.display)(&self.expr)
-        };
+        let display = unsafe { (self.expr.display)(&self.expr) };
         write!(f, "{display}")
     }
 }
