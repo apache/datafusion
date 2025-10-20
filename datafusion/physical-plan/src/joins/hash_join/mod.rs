@@ -20,5 +20,5 @@
 pub use exec::HashJoinExec;
 
 mod exec;
-mod shared_bounds;
+mod information_passing;
 mod stream;
