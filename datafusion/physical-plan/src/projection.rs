@@ -207,7 +207,7 @@ impl ProjectionExpr {
         Self { expr, alias }
     }
 
-    /// Create a new projection expression from an expression and a schema using the expression' output field name as alias.
+    /// Create a new projection expression from an expression and a schema using the expression's output field name as alias.
     pub fn new_from_expression(
         expr: Arc<dyn PhysicalExpr>,
         schema: &Schema,
@@ -318,8 +318,7 @@ impl Projection {
     pub fn column_indices(&self) -> Vec<usize> {
         self.exprs
             .iter()
-            .map(|e| collect_columns(&e.expr).into_iter().map(|col| col.index()))
-            .flatten()
+            .flat_map(|e| collect_columns(&e.expr).into_iter().map(|col| col.index()))
             .sorted_unstable()
             .dedup()
             .collect_vec()
