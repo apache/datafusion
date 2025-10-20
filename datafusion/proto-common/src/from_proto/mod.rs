@@ -138,11 +138,23 @@ where
     }
 }
 
+impl From<protobuf::ColumnRelation> for TableReference {
+    fn from(rel: protobuf::ColumnRelation) -> Self {
+        Self::parse_str_normalized(rel.relation.as_str(), true)
+    }
+}
+
+impl From<&protobuf::ColumnRelation> for TableReference {
+    fn from(rel: &protobuf::ColumnRelation) -> Self {
+        rel.clone().into()
+    }
+}
+
 impl From<protobuf::Column> for Column {
     fn from(c: protobuf::Column) -> Self {
         let protobuf::Column { relation, name } = c;
 
-        Self::new(relation.map(|r| r.relation), name)
+        Self::new(relation, name)
     }
 }
 
@@ -167,7 +179,7 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
                     df_field
                         .qualifier
                         .as_ref()
-                        .map(|q| q.relation.clone().into()),
+                        .map(|q| q.into()),
                     Arc::new(field),
                 ))
             })
