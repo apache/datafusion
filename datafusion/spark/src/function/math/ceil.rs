@@ -87,13 +87,17 @@ pub fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
         Float32 => {
             let array = array
                 .as_primitive::<arrow::datatypes::Float32Type>()
-                .unary::<_, arrow::datatypes::Int64Type>(|value: f32| value.ceil() as i64);
+                .unary::<_, arrow::datatypes::Int64Type>(|value: f32| {
+                value.ceil() as i64
+            });
             Ok(Arc::new(array))
         }
         Float64 => {
             let array = array
                 .as_primitive::<arrow::datatypes::Float64Type>()
-                .unary::<_, arrow::datatypes::Int64Type>(|value: f64| value.ceil() as i64);
+                .unary::<_, arrow::datatypes::Int64Type>(|value: f64| {
+                value.ceil() as i64
+            });
             Ok(Arc::new(array))
         }
         Int64 => Ok(Arc::clone(&args[0])),
