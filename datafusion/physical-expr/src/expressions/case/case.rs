@@ -34,6 +34,7 @@ use datafusion_expr::ColumnarValue;
 use super::super::{Column, Literal};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
+use crate::expressions::case::literal_values::LookupTable;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -66,6 +67,58 @@ enum EvalMethod {
     ///
     /// CASE WHEN condition THEN expression ELSE expression END
     ExpressionOrExpression,
+
+    /// This is a specialization for [`EvalMethod::WithExpression`] when the value and results are literals
+    ///
+    /// `CASE WHEN` pattern on supported lookup types:
+    ///
+    /// This optimization applies to CASE expressions of the form:
+    /// ```sql
+    /// CASE <expr_a>
+    ///     WHEN <literal_a> THEN <literal_e>
+    ///     WHEN <literal_b> THEN <literal_f>
+    ///     WHEN <literal_c> THEN <literal_g>
+    ///     WHEN <literal_d> THEN <literal_h>
+    ///     ELSE <optional-fallback_literal>
+    /// END
+    /// ```
+    ///
+    /// all the `WHEN` expressions are equality comparisons on the same expression against literals,
+    /// and all the `THEN` expressions are literals
+    /// the expression `<expr_a>` can be any expression as long as it does not have any state (e.g. random number generator, current timestamp, etc.)
+    ///
+    /// TODO - how to assert that the expression is stateless and deterministic
+    ///
+    /// # Improvement idea
+    /// TODO - we should think of unwrapping the `IN` expressions into multiple equality comparisons
+    /// so it will use this optimization as well, e.g.
+    /// ```sql
+    /// -- Before
+    /// CASE
+    ///     WHEN (<expr_a> = <literal_a>) THEN <literal_e>
+    ///     WHEN (<expr_a> in (<literal_b>, <literal_c>) THEN <literal_f>
+    ///     WHEN (<expr_a> = <literal_d>) THEN <literal_g>
+    /// ELSE <optional-fallback_literal>
+    ///
+    /// -- After
+    /// CASE
+    ///     WHEN (<expr_a> = <literal_a>) THEN <literal_e>
+    ///     WHEN (<expr_a> = <literal_b>) THEN <literal_f>
+    ///     WHEN (<expr_a> = <literal_c>) THEN <literal_g>
+    ///     WHEN (<expr_a> = <literal_d>) THEN <literal_h>
+    ///     ELSE <optional-fallback_literal>
+    /// END
+    /// ```
+    ///
+    WithExpressionOnlyScalarValuesAndResults(ScalarsOrNullLookup)
+}
+
+#[derive(Debug)]
+struct ScalarsOrNullLookup {
+    /// The lookup table to use for evaluating the CASE expression
+    lookup: Arc<dyn LookupTable>,
+
+    values_to_take_from: ArrayRef,
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -455,21 +508,44 @@ impl CaseExpr {
         };
 
         let then_value = self.when_then_expr[0]
-            .1
-            .evaluate_selection(batch, &when_value)?
-            .into_array(batch.num_rows())?;
+          .1
+          .evaluate_selection(batch, &when_value)?
+          .into_array(batch.num_rows())?;
 
         // evaluate else expression on the values not covered by when_value
         let remainder = not(&when_value)?;
         let e = self.else_expr.as_ref().unwrap();
+
         // keep `else_expr`'s data type and return type consistent
         let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
-            .unwrap_or_else(|_| Arc::clone(e));
+          .unwrap_or_else(|_| Arc::clone(e));
         let else_ = expr
-            .evaluate_selection(batch, &remainder)?
-            .into_array(batch.num_rows())?;
+          .evaluate_selection(batch, &remainder)?
+          .into_array(batch.num_rows())?;
 
         Ok(ColumnarValue::Array(zip(&remainder, &else_, &then_value)?))
+    }
+
+    fn with_expression_scalars_values_and_results(&self, batch: &RecordBatch, scalars_or_null_lookup: &ScalarsOrNullLookup) -> Result<ColumnarValue> {
+        let expr = self.expr.as_ref().unwrap();
+        let evaluated_expression = expr.evaluate(batch)?;
+        let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
+        let evaluated_expression = evaluated_expression.to_array(1)?;
+
+        let take_indices = scalars_or_null_lookup.lookup.match_values(&evaluated_expression)?;
+
+        // Zero-copy conversion
+        let take_indices = Int32Array::from(take_indices);
+
+        let output = arrow::compute::take(&scalars_or_null_lookup.values_to_take_from, &take_indices, None)?;
+
+        let result = if is_scalar {
+            ColumnarValue::Scalar(ScalarValue::try_from_array(output.as_ref(), 0)?)
+        } else {
+            ColumnarValue::Array(output)
+        };
+
+        Ok(result)
     }
 }
 
@@ -535,6 +611,7 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression => self.expr_or_expr(batch),
+            EvalMethod::WithExpressionOnlyScalarValuesAndResults(ref e) => self.with_expression_scalars_values_and_results(batch, e),
         }
     }
 
