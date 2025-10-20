@@ -18,159 +18,159 @@
 # Test cases for the ceil function
 
 # Test basic positive float values
-query I
+query R
 SELECT ceil(3.14::float);
 ----
-4.0
+4
 
-query I
+query R
 SELECT ceil(2.1::float);
 ----
-3.0
+3
 
-query I
+query R
 SELECT ceil(5.9::float);
 ----
-6.0
+6
 
 # Test basic positive double values
-query I
+query R
 SELECT ceil(3.14159);
 ----
-4.0
+4
 
-query I
+query R
 SELECT ceil(2.1);
 ----
-3.0
+3
 
-query I
+query R
 SELECT ceil(5.999);
 ----
-6.0
+6
 
 # Test negative float values
-query I
+query R
 SELECT ceil(-3.14::float);
 ----
--3.0
+-3
 
-query I
+query R
 SELECT ceil(-2.1::float);
 ----
--2.0
+-2
 
-query I
+query R
 SELECT ceil(-5.9::float);
 ----
--5.0
+-5
 
 # Test negative double values
-query I
+query R
 SELECT ceil(-3.14159);
 ----
--3.0
+-3
 
-query I
+query R
 SELECT ceil(-2.1);
 ----
--2.0
+-2
 
-query I
+query R
 SELECT ceil(-5.999);
 ----
--5.0
+-5
 
 # Test integer values
-query I
+query R
 SELECT ceil(52);
 ----
-52.0
+52
 
-query I
+query R
 SELECT ceil(-39);
 ----
--39.0
+-39
 
 # Test zero values
-query I
+query R
 SELECT ceil(0.0);
 ----
-0.0
+0
 
-query I
+query R
 SELECT ceil(0.0::float);
 ----
-0.0
+0
 
-query I
+query R
 SELECT ceil(-3.0::float);
 ----
--3.0
+-3
 
 # Test very small decimal values
-query I
+query R
 SELECT ceil(0.0001);
 ----
-1.0
+1
 
-query I
+query R
 SELECT ceil(-0.0001);
 ----
-0.0
+0
 
 # Test large numbers
-query I
+query R
 SELECT ceil(123456.789);
 ----
-123457.0
+123457
 
-query I
+query R
 SELECT ceil(-98765.432);
 ----
--98765.0
+-98765
 
 # Test with NULL values
-query I
+query R
 SELECT ceil(NULL);
 ----
 NULL
 
 # Test array inputs
-query I
+query R
 SELECT ceil(column1) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(column1);
 ----
-2.0
-3.0
--1.0
+2
+3
+-1
 NULL
 
-query I
+query R
 SELECT ceil(column1::float) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(column1);
 ----
-2.0
-3.0
--1.0
+2
+3
+-1
 NULL
 
 # Test edge cases
-query I
+query R
 SELECT ceil(0.999999999999);
 ----
-1.0
+1
 
-query I
+query R
 SELECT ceil(-0.999999999999);
 ----
--0.0
+0
 
 # Test boundary values
-query I
+query R
 SELECT ceil(9223372036854775807.0);
 ----
-9223372036854775807.0
+9223372036854775807
 
-query I
+query R
 SELECT ceil(-9223372036854775808.0);
 ----
--9223372036854775808.0
+-9223372036854775808

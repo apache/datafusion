@@ -28,7 +28,7 @@ use datafusion_functions::utils::make_scalar_function;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#ceil>
 /// Difference between spark: There is no second optional argument to control the rounding behaviour.
-/// Takes an Int64/Float32/Float64 input and returns the smallest number after rounding up that is
+/// Takes a numeric value as input and returns the smallest number after rounding up that is
 /// not smaller than the input.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
@@ -84,27 +84,32 @@ fn spark_ceil(args: &[ArrayRef]) -> Result<ArrayRef> {
         Float32 => {
             let array = array
                 .as_primitive::<arrow::datatypes::Float32Type>()
-                .unary::<_, arrow::datatypes::Int64Type>(|value: f32| {
-                value.ceil() as i64
+                .unary::<_, arrow::datatypes::Float64Type>(|value: f32| {
+                value.ceil() as f64
             });
             Ok(Arc::new(array))
         }
         Float64 => {
-            let array = array
-                .as_primitive::<arrow::datatypes::Float64Type>()
-                .unary::<_, arrow::datatypes::Int64Type>(|value: f64| {
-                value.ceil() as i64
-            });
+            let array =
+                array
+                    .as_primitive::<arrow::datatypes::Float64Type>()
+                    .unary::<_, arrow::datatypes::Float64Type>(|value: f64| value.ceil());
             Ok(Arc::new(array))
         }
-        Int64 => Ok(Arc::clone(&args[0])),
+        Int64 => {
+            let array =
+                array
+                    .as_primitive::<arrow::datatypes::Int64Type>()
+                    .unary::<_, arrow::datatypes::Float64Type>(|value: i64| value as f64);
+            Ok(Arc::new(array))
+        }
 
         Decimal128(_, scale) if *scale > 0 => {
             let decimal_array = array.as_primitive::<arrow::datatypes::Decimal128Type>();
             let div = 10_i128.pow_wrapping(*scale as u32);
             let result_array =
-                decimal_array.unary::<_, arrow::datatypes::Int64Type>(|value: i128| {
-                    div_ceil(value, div) as i64
+                decimal_array.unary::<_, arrow::datatypes::Float64Type>(|value: i128| {
+                    div_ceil(value, div) as f64
                 });
             Ok(Arc::new(result_array))
         }
