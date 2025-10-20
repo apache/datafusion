@@ -3249,15 +3249,17 @@ fn parallelization_ignores_transitively_with_projection_csv() -> Result<()> {
     ];
     plans_matches_expected!(expected, &plan_csv);
 
-    // Expected Outcome:
-    // data should not be repartitioned / resorted
-    let expected_csv = &[
-        "ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
-    ];
     let test_config = TestConfig::default();
-    test_config.run(expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected_csv, plan_csv, &SORT_DISTRIB_DISTRIB)?;
+    let plan_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_distrib,
+        @r"
+ProjectionExec: expr=[a@0 as a2, c@2 as c2]
+  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
+"
+    );
+    let plan_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
 }
@@ -3678,15 +3680,19 @@ fn optimize_away_unnecessary_repartition2() -> Result<()> {
     ];
     plans_matches_expected!(expected, physical_plan.clone());
 
-    let expected = &[
-        "FilterExec: c@2 = 0",
-        "  FilterExec: c@2 = 0",
-        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
     let test_config = TestConfig::default();
-    test_config.run(expected, physical_plan.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected, physical_plan, &SORT_DISTRIB_DISTRIB)?;
+    let plan_distrib = test_config.run2(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_distrib,
+        @r"
+FilterExec: c@2 = 0
+  FilterExec: c@2 = 0
+    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
+    let plan_sort = test_config.run2(physical_plan, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_distrib, plan_sort);
 
     Ok(())
 }
