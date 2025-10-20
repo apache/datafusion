@@ -3772,12 +3772,14 @@ async fn test_distribute_sort_memtable() -> Result<()> {
     let physical_plan = dataframe.create_physical_plan().await?;
 
     // this is the final, optimized plan
-    let expected = &[
-        "SortPreservingMergeExec: [id@0 ASC NULLS LAST]",
-        "  SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]",
-        "    DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]",
-    ];
-    plans_matches_expected!(expected, physical_plan);
+    assert_plan!(
+        physical_plan,
+        @r"
+SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+  SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+    DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]
+"
+    );
 
     Ok(())
 }
