@@ -546,7 +546,8 @@ mod tests {
         let (files, _file_names) = store_parquet(vec![batch1], false).await?;
 
         let state = SessionContext::new().state();
-        let format = ParquetFormat::default();
+        // Make metadata size hint None to keep original behavior
+        let format = ParquetFormat::default().with_metadata_size_hint(None);
         let _schema = format.infer_schema(&state, &store.upcast(), &files).await?;
         assert_eq!(store.request_count(), 3);
         // No increase, cache being used.
@@ -620,7 +621,9 @@ mod tests {
 
         let mut state = SessionContext::new().state();
         state = set_view_state(state, force_views);
-        let format = ParquetFormat::default().with_force_view_types(force_views);
+        let format = ParquetFormat::default()
+            .with_force_view_types(force_views)
+            .with_metadata_size_hint(None);
         let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
         assert_eq!(store.request_count(), 6);
 
