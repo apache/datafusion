@@ -1,657 +1,692 @@
+
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+
+<html lang="en" data-content_root="../" >
+
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Reading Explain Plans &#8212; Apache DataFusion  documentation</title>
-    
-    <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
-<link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
   
-    
-    <link rel="stylesheet"
-      href="../_static/vendor/fontawesome/5.13.0/css/all.min.css">
-    <link rel="preload" as="font" type="font/woff2" crossorigin
-      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
-    <link rel="preload" as="font" type="font/woff2" crossorigin
-      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
   
-    
-      
   
-    
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
-    <link rel="stylesheet" type="text/css" href="../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
     <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=955f83bf" />
-    
-    <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script src="../_static/documentation_options.js?v=8a448e45"></script>
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/explain-usage';</script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Frequently Asked Questions" href="faq.html" />
     <link rel="prev" title="Configuration Settings" href="configs.html" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
-    
-
-    <!-- Google Analytics -->
-    
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
   </head>
-  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
     
-    <div class="container-fluid" id="banner"></div>
-
-    
-
-
-    <div class="container-xl">
-      <div class="row">
-          
-            
-            <!-- Only show if we have sidebars configured, else just a small margin  -->
-            <div class="col-12 col-md-3 bd-sidebar">
-              <div class="sidebar-start-items">
-
-<form class="bd-search d-flex align-items-center" action="../search.html" method="get">
-  <i class="icon fas fa-search"></i>
-  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
 </form>
+  </dialog>
 
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://apache.org">
+    Apache Software Foundation
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/licenses/">
+    License
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/foundation/sponsorship.html">
+    Donate
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/foundation/thanks.html">
+    Thanks
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/security/">
+    Security
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://github.com/apache/datafusion">
+    GitHub and Issue Tracker
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://crates.io/crates/datafusion">
+    crates.io
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://docs.rs/datafusion/latest/datafusion/">
+    API Docs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/blog/">
+    Blog
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+    Code of conduct
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../download.html">
+    Download
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="introduction.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="example-usage.html">
+    Example Usage
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="features.html">
+    Features
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="concepts-readings-events.html">
+    Concepts, Readings, Events
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="crate-configuration.html">
+    Crate Configuration
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="cli/index.html">
+    DataFusion CLI
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="dataframe.html">
+    DataFrame API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="expressions.html">
+    Expression API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="sql/index.html">
+    SQL Reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="configs.html">
+    Configuration Settings
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="#">
+    Reading Explain Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="faq.html">
+    Frequently Asked Questions
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/index.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/upgrading.html">
+    Upgrade Guides
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/extensions.html">
+    Extensions List
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/using-the-sql-api.html">
+    Using the SQL API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/working-with-exprs.html">
+    Working with Exprs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/using-the-dataframe-api.html">
+    Using the DataFrame API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/building-logical-plans.html">
+    Building Logical Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/catalogs.html">
+    Catalogs, Schemas, and Tables
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/functions/index.html">
+    Functions
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/custom-table-providers.html">
+    Custom Table Provider
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/table-constraints.html">
+    Table Constraint Enforcement
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/extending-operators.html">
+    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/profiling.html">
+    Profiling Cookbook
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../library-user-guide/query-optimizer.html">
+    DataFusion Query Optimizer
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/index.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/communication.html">
+    Communication
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/development_environment.html">
+    Development Environment
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/architecture.html">
+    Architecture
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/testing.html">
+    Testing
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/api-health.html">
+    API health policy
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/howtos.html">
+    HOWTOs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/roadmap.html">
+    Roadmap and Improvement Proposals
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/governance.html">
+    Governance
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/inviting.html">
+    Inviting New Committers and PMC Members
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/specification/index.html">
+    Specifications
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../contributor-guide/gsoc/index.html">
+    Google Summer of Code (GSOC)
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/ballista/">
+    DataFusion Ballista
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/comet/">
+    DataFusion Comet
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/python/">
+    DataFusion Python
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><p>
+  <a href="../index.html">
+    <img src="../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  </a>
+</p>
+<p>
+  <form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+    <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+  </form>
+</p>
 <nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
   <div class="bd-toc-item active">
     
-    <p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  ASF Links
- </span>
-</p>
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
 <ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference external" href="https://apache.org">
-   Apache Software Foundation
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://www.apache.org/licenses/">
-   License
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">
-   Donate
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://www.apache.org/foundation/thanks.html">
-   Thanks
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://www.apache.org/security/">
-   Security
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  Links
- </span>
-</p>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
 <ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/datafusion">
-   GitHub and Issue Tracker
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://crates.io/crates/datafusion">
-   crates.io
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
-   API Docs
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://datafusion.apache.org/blog/">
-   Blog
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
-   Code of conduct
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../download.html">
-   Download
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../download.html">Download</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  User Guide
- </span>
-</p>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference internal" href="introduction.html">
-   Introduction
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="example-usage.html">
-   Example Usage
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="features.html">
-   Features
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="concepts-readings-events.html">
-   Concepts, Readings, Events
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="crate-configuration.html">
-   Crate Configuration
-  </a>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="cli/index.html">
-   DataFusion CLI
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
-  <label for="toctree-checkbox-1">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="cli/overview.html">
-     Overview
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="cli/installation.html">
-     Installation
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="cli/usage.html">
-     Usage
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="cli/datasources.html">
-     Local Files / Directories
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="cli/functions.html">
-     CLI Specific Functions
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="dataframe.html">
-   DataFrame API
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="expressions.html">
-   Expression API
-  </a>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="sql/index.html">
-   SQL Reference
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
-  <label for="toctree-checkbox-2">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/data_types.html">
-     Data Types
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/select.html">
-     SELECT syntax
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/subqueries.html">
-     Subqueries
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/ddl.html">
-     DDL
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/dml.html">
-     DML
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/explain.html">
-     EXPLAIN
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/information_schema.html">
-     Information Schema
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/operators.html">
-     Operators and Literals
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/aggregate_functions.html">
-     Aggregate Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/window_functions.html">
-     Window Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/scalar_functions.html">
-     Scalar Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/special_functions.html">
-     Special Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/format_options.html">
-     Format Options
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="sql/prepared_statements.html">
-     Prepared Statements
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="configs.html">
-   Configuration Settings
-  </a>
- </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
-   Reading Explain Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="faq.html">
-   Frequently Asked Questions
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference internal" href="introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="cli/functions.html">CLI Specific Functions</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  Library User Guide
- </span>
-</p>
-<ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/index.html">
-   Introduction
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/upgrading.html">
-   Upgrade Guides
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/extensions.html">
-   Extensions List
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/using-the-sql-api.html">
-   Using the SQL API
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/working-with-exprs.html">
-   Working with
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Expr
-    </span>
-   </code>
-   s
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">
-   Using the DataFrame API
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/building-logical-plans.html">
-   Building Logical Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/catalogs.html">
-   Catalogs, Schemas, and Tables
-  </a>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../library-user-guide/functions/index.html">
-   Functions
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
-  <label for="toctree-checkbox-3">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../library-user-guide/functions/adding-udfs.html">
-     Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../library-user-guide/functions/spark.html">
-     Spark Compatible Functions
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/custom-table-providers.html">
-   Custom Table Provider
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/table-constraints.html">
-   Table Constraint Enforcement
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/extending-operators.html">
-   Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/profiling.html">
-   Profiling Cookbook
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/query-optimizer.html">
-   DataFusion Query Optimizer
-  </a>
- </li>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="sql/prepared_statements.html">Prepared Statements</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  Contributor Guide
- </span>
-</p>
-<ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/index.html">
-   Introduction
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/communication.html">
-   Communication
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/development_environment.html">
-   Development Environment
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/architecture.html">
-   Architecture
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/testing.html">
-   Testing
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/api-health.html">
-   API health policy
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/howtos.html">
-   HOWTOs
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/roadmap.html">
-   Roadmap and Improvement Proposals
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/governance.html">
-   Governance
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/inviting.html">
-   Inviting New Committers and PMC Members
-  </a>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../contributor-guide/specification/index.html">
-   Specifications
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
-  <label for="toctree-checkbox-4">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../contributor-guide/specification/invariants.html">
-     Invariants
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">
-     Output field name semantics
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../contributor-guide/gsoc/index.html">
-   Google Summer of Code (GSOC)
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
-  <label for="toctree-checkbox-5">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">
-     GSoC Application Guidelines (2025)
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../contributor-guide/gsoc/gsoc_project_ideas_2025.html">
-     GSoC Project Ideas (2025)
-    </a>
-   </li>
-  </ul>
- </li>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="configs.html">Configuration Settings</a></li>
+
+
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  DataFusion Subprojects
- </span>
-</p>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
 <ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference external" href="https://datafusion.apache.org/ballista/">
-   DataFusion Ballista
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://datafusion.apache.org/comet/">
-   DataFusion Comet
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://datafusion.apache.org/python/">
-   DataFusion Python
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/index.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/upgrading.html">Upgrade Guides</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extending-operators.html">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/query-optimizer.html">DataFusion Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/index.html">Introduction</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/communication.html">Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
 </ul>
 
     
   </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
 
-  <a class="navbar-brand" href="../index.html">
-    <img src="../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
-  </a>
-</nav>
 
-              </div>
-              <div class="sidebar-end-items">
-              </div>
-            </div>
-            
-          
-
-          
-          <div class="d-none d-xl-block col-xl-2 bd-toc">
-            
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
               
-              <div class="toc-item">
-                
-<div class="tocsection onthispage pt-5 pb-3">
-    <i class="fas fa-list"></i> On this page
-</div>
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
 
-<nav id="bd-toc-nav">
-    <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#introduction">
-   Introduction
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#example-select-and-filter">
-   Example: Select and filter
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#query-plans-are-trees">
-   Query plans are trees
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#understanding-large-query-plans">
-   Understanding large query plans
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#more-debugging-information-explain-verbose">
-   More Debugging Information:
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     EXPLAIN
-    </span>
-    <span class="pre">
-     VERBOSE
-    </span>
-   </code>
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#execution-counters-explain-analyze">
-   Execution Counters:
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     EXPLAIN
-    </span>
-    <span class="pre">
-     ANALYZE
-    </span>
-   </code>
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#partitions-and-execution">
-   Partitions and Execution
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#example-of-an-aggregate-query">
-   Example of an Aggregate Query
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#data-in-this-example">
-     Data in this Example
-    </a>
-   </li>
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Reading Explain Plans</span></li>
   </ul>
- </li>
-</ul>
-
 </nav>
-              </div>
-              
-              <div class="toc-item">
-                
-
-<div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/explain-usage.md">
-        <i class="fas fa-pencil-alt"></i> Edit this page
-    </a>
 </div>
-
-              </div>
+      
+    </div>
+  
+  
+</div>
+</div>
               
-            
-          </div>
-          
-
-          
-          
-            
-          
-          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
               
-              <div>
+              
                 
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
   <!---
   Licensed to the Apache Software Foundation (ASF) under one
   or more contributor license agreements.  See the NOTICE file
@@ -671,9 +706,9 @@
   under the License.
 -->
 <section id="reading-explain-plans">
-<h1>Reading Explain Plans<a class="headerlink" href="#reading-explain-plans" title="Link to this heading">¶</a></h1>
+<h1>Reading Explain Plans<a class="headerlink" href="#reading-explain-plans" title="Link to this heading">#</a></h1>
 <section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">#</a></h2>
 <p>This section describes of how to read a DataFusion query plan. While fully
 comprehending all details of these plans requires significant expertise in the
 DataFusion engine, this guide will help you get started with the basics.</p>
@@ -682,7 +717,7 @@ running the query, add the keyword <code class="docutils literal notranslate"><s
 <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.explain">DataFrame::explain</a> method</p>
 </section>
 <section id="example-select-and-filter">
-<h2>Example: Select and filter<a class="headerlink" href="#example-select-and-filter" title="Link to this heading">¶</a></h2>
+<h2>Example: Select and filter<a class="headerlink" href="#example-select-and-filter" title="Link to this heading">#</a></h2>
 <p>In this section, we run example queries against the <code class="docutils literal notranslate"><span class="pre">hits.parquet</span></code> file. See
 <a class="reference internal" href="#data-in-this-example">below</a>) for information on how to get this file.</p>
 <p>Let’s see how DataFusion runs a query that selects the top 5 watch lists for the
@@ -728,7 +763,7 @@ design to make fewer but larger files. This document focuses on how to read a qu
 query run faster depends on the reason it is slow and beyond the scope of this document.</p>
 </section>
 <section id="query-plans-are-trees">
-<h2>Query plans are trees<a class="headerlink" href="#query-plans-are-trees" title="Link to this heading">¶</a></h2>
+<h2>Query plans are trees<a class="headerlink" href="#query-plans-are-trees" title="Link to this heading">#</a></h2>
 <p>A query plan is an upside down tree, and we always read from bottom up. The
 physical plan in Figure 1 in tree format will look like</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>                         ▲
@@ -783,7 +818,7 @@ processed, transformed and sent up.</p>
 </ol>
 </section>
 <section id="understanding-large-query-plans">
-<h2>Understanding large query plans<a class="headerlink" href="#understanding-large-query-plans" title="Link to this heading">¶</a></h2>
+<h2>Understanding large query plans<a class="headerlink" href="#understanding-large-query-plans" title="Link to this heading">#</a></h2>
 <p>A large query plan may look intimidating, but you can quickly understand what it does by following these steps</p>
 <ol class="arabic simple">
 <li><p>As always, read from bottom up, one operator at a time.</p></li>
@@ -800,7 +835,7 @@ you can use the <code class="docutils literal notranslate"><span class="pre">EXP
 next section)</p>
 </section>
 <section id="more-debugging-information-explain-verbose">
-<h2>More Debugging Information: <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code><a class="headerlink" href="#more-debugging-information-explain-verbose" title="Link to this heading">¶</a></h2>
+<h2>More Debugging Information: <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code><a class="headerlink" href="#more-debugging-information-explain-verbose" title="Link to this heading">#</a></h2>
 <p>If the plan has to read too many files, not all of them will be shown in the
 <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code>. To see them, use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VEBOSE</span></code>. Like <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code>, <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code>
 does not run the query. Instead it shows the full explain plan, with information
@@ -809,7 +844,7 @@ plans DataFusion generates before returning. This mode can be very helpful for
 debugging to see why and when DataFusion added and removed operators from a plan.</p>
 </section>
 <section id="execution-counters-explain-analyze">
-<h2>Execution Counters: <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code><a class="headerlink" href="#execution-counters-explain-analyze" title="Link to this heading">¶</a></h2>
+<h2>Execution Counters: <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code><a class="headerlink" href="#execution-counters-explain-analyze" title="Link to this heading">#</a></h2>
 <p>During execution, DataFusion operators collect detailed metrics. You can access
 them programmatically via <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::metrics</span></code></a> as well as with the
 <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> command. For example here is the same query query as
@@ -897,7 +932,7 @@ by all 16 cores.</p>
 </ul>
 </section>
 <section id="partitions-and-execution">
-<h2>Partitions and Execution<a class="headerlink" href="#partitions-and-execution" title="Link to this heading">¶</a></h2>
+<h2>Partitions and Execution<a class="headerlink" href="#partitions-and-execution" title="Link to this heading">#</a></h2>
 <p>DataFusion determines the optimal number of cores to use as part of query
 planning. Roughly speaking, each “partition” in the plan is run independently using
 a separate core. Data crosses between cores only within certain operators such as
@@ -905,7 +940,7 @@ a separate core. Data crosses between cores only within certain operators such a
 <p>You can read more about this in the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html">Partitioning Docs</a>.</p>
 </section>
 <section id="example-of-an-aggregate-query">
-<h2>Example of an Aggregate Query<a class="headerlink" href="#example-of-an-aggregate-query" title="Link to this heading">¶</a></h2>
+<h2>Example of an Aggregate Query<a class="headerlink" href="#example-of-an-aggregate-query" title="Link to this heading">#</a></h2>
 <p>Let us delve into an example query that aggregates data from the <code class="docutils literal notranslate"><span class="pre">hits.parquet</span></code>
 file. For example, this query from ClickBench finds the top 10 users by their
 number of hits:</p>
@@ -1019,7 +1054,7 @@ number of hits:</p>
 </li>
 </ul>
 <section id="data-in-this-example">
-<h3>Data in this Example<a class="headerlink" href="#data-in-this-example" title="Link to this heading">¶</a></h3>
+<h3>Data in this Example<a class="headerlink" href="#data-in-this-example" title="Link to this heading">#</a></h3>
 <p>The examples in this section use data from <a class="reference external" href="https://benchmark.clickhouse.com/">ClickBench</a>, a benchmark for data
 analytics. The examples are in terms of the 14GB <a class="reference external" href="https://datasets.clickhouse.com/hits_compatible/hits.parquet"><code class="docutils literal notranslate"><span class="pre">hits.parquet</span></code></a> file and can be
 downloaded from the website or using the following commands:</p>
@@ -1057,50 +1092,110 @@ Elapsed<span class="w"> </span><span class="m">0</span>.062<span class="w"> </sp
 </section>
 
 
-              </div>
+                </article>
               
               
-              <!-- Previous / next buttons -->
-<div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="configs.html" title="previous page">
-        <i class="fas fa-angle-left"></i>
-        <div class="prev-next-info">
-            <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Configuration Settings</p>
-        </div>
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="configs.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Configuration Settings</p>
+      </div>
     </a>
-    <a class='right-next' id="next-link" href="faq.html" title="next page">
-    <div class="prev-next-info">
+    <a class="right-next"
+       href="faq.html"
+       title="next page">
+      <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
         <p class="prev-next-title">Frequently Asked Questions</p>
-    </div>
-    <i class="fas fa-angle-right"></i>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
     </a>
 </div>
+                </footer>
               
-          </main>
-          
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
 
-      </div>
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#introduction">Introduction</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-select-and-filter">Example: Select and filter</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#query-plans-are-trees">Query plans are trees</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#understanding-large-query-plans">Understanding large query plans</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#more-debugging-information-explain-verbose">More Debugging Information: <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#execution-counters-explain-analyze">Execution Counters: <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#partitions-and-execution">Partitions and Execution</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-of-an-aggregate-query">Example of an Aggregate Query</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-in-this-example">Data in this Example</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/explain-usage.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/user-guide/explain-usage.md.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
     </div>
+  </div>
   
-    <script src="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
-  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
 <!-- Based on pydata_sphinx_theme/footer.html -->
 <footer class="footer mt-5 mt-md-0">
   <div class="container">
-    
-    <div class="footer-item">
-      <p class="copyright">
-    &copy; Copyright 2019-2025, Apache Software Foundation.<br>
-</p>
-    </div>
-    
-    <div class="footer-item">
-      <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.2.3.<br>
-</p>
-    </div>
     
     <div class="footer-item">
       <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>

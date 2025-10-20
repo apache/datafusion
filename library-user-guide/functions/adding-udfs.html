@@ -1,709 +1,695 @@
+
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../../">
+
+<html lang="en" data-content_root="../../" >
+
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions &#8212; Apache DataFusion  documentation</title>
-    
-    <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
-<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
   
-    
-    <link rel="stylesheet"
-      href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
-    <link rel="preload" as="font" type="font/woff2" crossorigin
-      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
-    <link rel="preload" as="font" type="font/woff2" crossorigin
-      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
   
-    
-      
   
-    
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
     <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=955f83bf" />
-    
-    <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
+  <!-- So that users can add custom icons -->
+  <script src="../../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'library-user-guide/functions/adding-udfs';</script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Spark Compatible Functions" href="spark.html" />
     <link rel="prev" title="Functions" href="index.html" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
-    
-
-    <!-- Google Analytics -->
-    
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
   </head>
-  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
     
-    <div class="container-fluid" id="banner"></div>
-
-    
-
-
-    <div class="container-xl">
-      <div class="row">
-          
-            
-            <!-- Only show if we have sidebars configured, else just a small margin  -->
-            <div class="col-12 col-md-3 bd-sidebar">
-              <div class="sidebar-start-items">
-
-<form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
-  <i class="icon fas fa-search"></i>
-  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
 </form>
+  </dialog>
 
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://apache.org">
+    Apache Software Foundation
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/licenses/">
+    License
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/foundation/sponsorship.html">
+    Donate
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/foundation/thanks.html">
+    Thanks
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://www.apache.org/security/">
+    Security
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://github.com/apache/datafusion">
+    GitHub and Issue Tracker
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://crates.io/crates/datafusion">
+    crates.io
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://docs.rs/datafusion/latest/datafusion/">
+    API Docs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/blog/">
+    Blog
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+    Code of conduct
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../download.html">
+    Download
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/introduction.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/example-usage.html">
+    Example Usage
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/features.html">
+    Features
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/concepts-readings-events.html">
+    Concepts, Readings, Events
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/crate-configuration.html">
+    Crate Configuration
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/cli/index.html">
+    DataFusion CLI
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/dataframe.html">
+    DataFrame API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/expressions.html">
+    Expression API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/sql/index.html">
+    SQL Reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/configs.html">
+    Configuration Settings
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/explain-usage.html">
+    Reading Explain Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../user-guide/faq.html">
+    Frequently Asked Questions
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../index.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../upgrading.html">
+    Upgrade Guides
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../extensions.html">
+    Extensions List
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../using-the-sql-api.html">
+    Using the SQL API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../working-with-exprs.html">
+    Working with Exprs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../using-the-dataframe-api.html">
+    Using the DataFrame API
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../building-logical-plans.html">
+    Building Logical Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../catalogs.html">
+    Catalogs, Schemas, and Tables
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="index.html">
+    Functions
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../custom-table-providers.html">
+    Custom Table Provider
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../table-constraints.html">
+    Table Constraint Enforcement
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../extending-operators.html">
+    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../profiling.html">
+    Profiling Cookbook
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../query-optimizer.html">
+    DataFusion Query Optimizer
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/index.html">
+    Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/communication.html">
+    Communication
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/development_environment.html">
+    Development Environment
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/architecture.html">
+    Architecture
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/testing.html">
+    Testing
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/api-health.html">
+    API health policy
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/howtos.html">
+    HOWTOs
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/roadmap.html">
+    Roadmap and Improvement Proposals
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/governance.html">
+    Governance
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/inviting.html">
+    Inviting New Committers and PMC Members
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/specification/index.html">
+    Specifications
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../contributor-guide/gsoc/index.html">
+    Google Summer of Code (GSOC)
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/ballista/">
+    DataFusion Ballista
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/comet/">
+    DataFusion Comet
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://datafusion.apache.org/python/">
+    DataFusion Python
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><p>
+  <a href="../../index.html">
+    <img src="../../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  </a>
+</p>
+<p>
+  <form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+    <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+  </form>
+</p>
 <nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
   <div class="bd-toc-item active">
     
-    <p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  ASF Links
- </span>
-</p>
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
 <ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference external" href="https://apache.org">
-   Apache Software Foundation
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://www.apache.org/licenses/">
-   License
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">
-   Donate
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://www.apache.org/foundation/thanks.html">
-   Thanks
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://www.apache.org/security/">
-   Security
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  Links
- </span>
-</p>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
 <ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/datafusion">
-   GitHub and Issue Tracker
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://crates.io/crates/datafusion">
-   crates.io
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
-   API Docs
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://datafusion.apache.org/blog/">
-   Blog
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
-   Code of conduct
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../download.html">
-   Download
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../download.html">Download</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  User Guide
- </span>
-</p>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/introduction.html">
-   Introduction
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/example-usage.html">
-   Example Usage
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/features.html">
-   Features
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/concepts-readings-events.html">
-   Concepts, Readings, Events
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/crate-configuration.html">
-   Crate Configuration
-  </a>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../user-guide/cli/index.html">
-   DataFusion CLI
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
-  <label for="toctree-checkbox-1">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/cli/overview.html">
-     Overview
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/cli/installation.html">
-     Installation
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/cli/usage.html">
-     Usage
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/cli/datasources.html">
-     Local Files / Directories
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/cli/functions.html">
-     CLI Specific Functions
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/dataframe.html">
-   DataFrame API
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/expressions.html">
-   Expression API
-  </a>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../user-guide/sql/index.html">
-   SQL Reference
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
-  <label for="toctree-checkbox-2">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/data_types.html">
-     Data Types
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/select.html">
-     SELECT syntax
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/subqueries.html">
-     Subqueries
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/ddl.html">
-     DDL
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/dml.html">
-     DML
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/explain.html">
-     EXPLAIN
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/information_schema.html">
-     Information Schema
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/operators.html">
-     Operators and Literals
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/aggregate_functions.html">
-     Aggregate Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/window_functions.html">
-     Window Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/scalar_functions.html">
-     Scalar Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/special_functions.html">
-     Special Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/format_options.html">
-     Format Options
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user-guide/sql/prepared_statements.html">
-     Prepared Statements
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/configs.html">
-   Configuration Settings
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/explain-usage.html">
-   Reading Explain Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../user-guide/faq.html">
-   Frequently Asked Questions
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/functions.html">CLI Specific Functions</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  Library User Guide
- </span>
-</p>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/configs.html">Configuration Settings</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
 <ul class="current nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference internal" href="../index.html">
-   Introduction
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../upgrading.html">
-   Upgrade Guides
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../extensions.html">
-   Extensions List
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../using-the-sql-api.html">
-   Using the SQL API
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../working-with-exprs.html">
-   Working with
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Expr
-    </span>
-   </code>
-   s
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../using-the-dataframe-api.html">
-   Using the DataFrame API
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../building-logical-plans.html">
-   Building Logical Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../catalogs.html">
-   Catalogs, Schemas, and Tables
-  </a>
- </li>
- <li class="toctree-l1 current active has-children">
-  <a class="reference internal" href="index.html">
-   Functions
-  </a>
-  <input checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
-  <label for="toctree-checkbox-3">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul class="current">
-   <li class="toctree-l2 current active">
-    <a class="current reference internal" href="#">
-     Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="spark.html">
-     Spark Compatible Functions
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../custom-table-providers.html">
-   Custom Table Provider
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../table-constraints.html">
-   Table Constraint Enforcement
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../extending-operators.html">
-   Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../profiling.html">
-   Profiling Cookbook
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../query-optimizer.html">
-   DataFusion Query Optimizer
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../upgrading.html">Upgrade Guides</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Functions</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="spark.html">Spark Compatible Functions</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  Contributor Guide
- </span>
-</p>
-<ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/index.html">
-   Introduction
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/communication.html">
-   Communication
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/development_environment.html">
-   Development Environment
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/architecture.html">
-   Architecture
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/testing.html">
-   Testing
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/api-health.html">
-   API health policy
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/howtos.html">
-   HOWTOs
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/roadmap.html">
-   Roadmap and Improvement Proposals
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/governance.html">
-   Governance
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../contributor-guide/inviting.html">
-   Inviting New Committers and PMC Members
-  </a>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../contributor-guide/specification/index.html">
-   Specifications
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
-  <label for="toctree-checkbox-4">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
-     Invariants
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
-     Output field name semantics
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../contributor-guide/gsoc/index.html">
-   Google Summer of Code (GSOC)
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
-  <label for="toctree-checkbox-5">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">
-     GSoC Application Guidelines (2025)
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../contributor-guide/gsoc/gsoc_project_ideas_2025.html">
-     GSoC Project Ideas (2025)
-    </a>
-   </li>
-  </ul>
- </li>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extending-operators.html">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../query-optimizer.html">DataFusion Query Optimizer</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading">
- <span class="caption-text">
-  DataFusion Subprojects
- </span>
-</p>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
 <ul class="nav bd-sidenav">
- <li class="toctree-l1">
-  <a class="reference external" href="https://datafusion.apache.org/ballista/">
-   DataFusion Ballista
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://datafusion.apache.org/comet/">
-   DataFusion Comet
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://datafusion.apache.org/python/">
-   DataFusion Python
-  </a>
- </li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/index.html">Introduction</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/communication.html">Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
 </ul>
 
     
   </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
 
-  <a class="navbar-brand" href="../../index.html">
-    <img src="../../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
-  </a>
-</nav>
 
-              </div>
-              <div class="sidebar-end-items">
-              </div>
-            </div>
-            
-          
-
-          
-          <div class="d-none d-xl-block col-xl-2 bd-toc">
-            
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
               
-              <div class="toc-item">
-                
-<div class="tocsection onthispage pt-5 pb-3">
-    <i class="fas fa-list"></i> On this page
-</div>
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
 
-<nav id="bd-toc-nav">
-    <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#adding-a-scalar-udf">
-   Adding a Scalar UDF
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#adding-by-impl-scalarudfimpl">
-     Adding by
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       impl
-      </span>
-      <span class="pre">
-       ScalarUDFImpl
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#adding-a-scalar-udf-by-create-udf">
-     Adding a Scalar UDF by
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       create_udf
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id1">
-       Adding a Scalar UDF
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
       </a>
-     </li>
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#registering-a-scalar-udf">
-       Registering a Scalar UDF
-      </a>
-     </li>
-    </ul>
-   </li>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Functions</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</span></li>
   </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#adding-a-async-scalar-udf">
-   Adding a Async Scalar UDF
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#adding-by-impl-asyncscalarudfimpl">
-     Adding by
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       impl
-      </span>
-      <span class="pre">
-       AsyncScalarUDFImpl
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#adding-a-window-udf">
-   Adding a Window UDF
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#registering-a-window-udf">
-     Registering a Window UDF
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#adding-an-aggregate-udf">
-   Adding an Aggregate UDF
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#registering-an-aggregate-udf">
-     Registering an Aggregate UDF
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#adding-a-user-defined-table-function">
-   Adding a User-Defined Table Function
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#writing-the-udtf">
-     Writing the UDTF
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#registering-and-using-the-udtf">
-     Registering and Using the UDTF
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#custom-expression-planning">
-   Custom Expression Planning
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#implementing-custom-expression-planning">
-     Implementing Custom Expression Planning
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
 </nav>
-              </div>
-              
-              <div class="toc-item">
-                
-
-<div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/functions/adding-udfs.md">
-        <i class="fas fa-pencil-alt"></i> Edit this page
-    </a>
 </div>
-
-              </div>
+      
+    </div>
+  
+  
+</div>
+</div>
               
-            
-          </div>
-          
-
-          
-          
-            
-          
-          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
               
-              <div>
+              
                 
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
   <!---
   Licensed to the Apache Software Foundation (ASF) under one
   or more contributor license agreements.  See the NOTICE file
@@ -723,10 +709,10 @@
   under the License.
 -->
 <section id="adding-user-defined-functions-scalar-window-aggregate-table-functions">
-<h1>Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions<a class="headerlink" href="#adding-user-defined-functions-scalar-window-aggregate-table-functions" title="Link to this heading">¶</a></h1>
+<h1>Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions<a class="headerlink" href="#adding-user-defined-functions-scalar-window-aggregate-table-functions" title="Link to this heading">#</a></h1>
 <p>User Defined Functions (UDFs) are functions that can be used in the context of DataFusion execution.</p>
 <p>This page covers how to add UDFs to DataFusion. In particular, it covers how to add Scalar, Window, and Aggregate UDFs.</p>
-<table class="table">
+<div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>UDF Type</p></th>
 <th class="head"><p>Description</p></th>
@@ -756,10 +742,11 @@
 </tr>
 </tbody>
 </table>
+</div>
 <p>First we’ll talk about adding an Scalar UDF end-to-end, then we’ll talk about the differences between the different
 types of UDFs.</p>
 <section id="adding-a-scalar-udf">
-<h2>Adding a Scalar UDF<a class="headerlink" href="#adding-a-scalar-udf" title="Link to this heading">¶</a></h2>
+<h2>Adding a Scalar UDF<a class="headerlink" href="#adding-a-scalar-udf" title="Link to this heading">#</a></h2>
 <p>A Scalar UDF is a function that takes a row of data and returns a single value. To achieve good performance,
 such functions are “vectorized” in DataFusion, meaning they get one or more Arrow Arrays as input and produce
 an Arrow Array with the same number of rows as output.</p>
@@ -773,7 +760,7 @@ and how to calculate the results.</p></li>
 <p>For brevity, we’ll skip some error handling.
 For production code, you may want to check, for example, that <code class="docutils literal notranslate"><span class="pre">args.len()</span></code> matches the expected number of arguments.</p>
 <section id="adding-by-impl-scalarudfimpl">
-<h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">ScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-scalarudfimpl" title="Link to this heading">¶</a></h3>
+<h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">ScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-scalarudfimpl" title="Link to this heading">#</a></h3>
 <p>This a lower level API with more functionality but is more complex, also documented in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udf.rs</span></code></a>.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">any</span><span class="p">::</span><span class="n">Any</span><span class="p">;</span>
@@ -851,10 +838,10 @@ For production code, you may want to check, for example, that <code class="docut
 </div>
 </section>
 <section id="adding-a-scalar-udf-by-create-udf">
-<h3>Adding a Scalar UDF by <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a><a class="headerlink" href="#adding-a-scalar-udf-by-create-udf" title="Link to this heading">¶</a></h3>
+<h3>Adding a Scalar UDF by <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a><a class="headerlink" href="#adding-a-scalar-udf-by-create-udf" title="Link to this heading">#</a></h3>
 <p>There is a an older, more concise, but also more limited API <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a> available as well</p>
 <section id="id1">
-<h4>Adding a Scalar UDF<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
+<h4>Adding a Scalar UDF<a class="headerlink" href="#id1" title="Link to this heading">#</a></h4>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">array</span><span class="p">::{</span><span class="n">ArrayRef</span><span class="p">,</span><span class="w"> </span><span class="n">Int64Array</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">cast</span><span class="p">::</span><span class="n">as_int64_array</span><span class="p">;</span>
@@ -891,7 +878,7 @@ For production code, you may want to check, for example, that <code class="docut
 that it can be used in the context of a query.</p>
 </section>
 <section id="registering-a-scalar-udf">
-<h4>Registering a Scalar UDF<a class="headerlink" href="#registering-a-scalar-udf" title="Link to this heading">¶</a></h4>
+<h4>Registering a Scalar UDF<a class="headerlink" href="#registering-a-scalar-udf" title="Link to this heading">#</a></h4>
 <p>To register a Scalar UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html"><code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code></a> struct and then register it
 with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>.
 DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a> and helper functions to make this easier.</p>
@@ -947,7 +934,7 @@ for the same input.</p></li>
 </section>
 </section>
 <section id="adding-a-async-scalar-udf">
-<h2>Adding a Async Scalar UDF<a class="headerlink" href="#adding-a-async-scalar-udf" title="Link to this heading">¶</a></h2>
+<h2>Adding a Async Scalar UDF<a class="headerlink" href="#adding-a-async-scalar-udf" title="Link to this heading">#</a></h2>
 <p>An Async Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
 UDF.</p>
@@ -957,7 +944,7 @@ UDF.</p>
 <li><p>Wrap your implementation with <code class="docutils literal notranslate"><span class="pre">AsyncScalarUDF::new</span></code> and register it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>.</p></li>
 </ol>
 <section id="adding-by-impl-asyncscalarudfimpl">
-<h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">AsyncScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-asyncscalarudfimpl" title="Link to this heading">¶</a></h3>
+<h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">AsyncScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-asyncscalarudfimpl" title="Link to this heading">#</a></h3>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Debug, PartialEq, Eq, Hash)]</span>
 <span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">AsyncUpper</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">signature</span><span class="p">:</span><span class="w"> </span><span class="nc">Signature</span><span class="p">,</span>
@@ -1060,7 +1047,7 @@ UDF.</p>
 </section>
 </section>
 <section id="adding-a-window-udf">
-<h2>Adding a Window UDF<a class="headerlink" href="#adding-a-window-udf" title="Link to this heading">¶</a></h2>
+<h2>Adding a Window UDF<a class="headerlink" href="#adding-a-window-udf" title="Link to this heading">#</a></h2>
 <p>Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have
 access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.</p>
 <p>For example, we will declare a user defined window function that computes a moving average.</p>
@@ -1131,7 +1118,7 @@ access to the rows around them. Access to the proximal rows is helpful, but adds
 </pre></div>
 </div>
 <section id="registering-a-window-udf">
-<h3>Registering a Window UDF<a class="headerlink" href="#registering-a-window-udf" title="Link to this heading">¶</a></h3>
+<h3>Registering a Window UDF<a class="headerlink" href="#registering-a-window-udf" title="Link to this heading">#</a></h3>
 <p>To register a Window UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html"><code class="docutils literal notranslate"><span class="pre">WindowUDF</span></code></a> struct and then register it
 with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>. DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html"><code class="docutils literal notranslate"><span class="pre">create_udwf</span></code></a> helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udwf.rs</span></code></a>.</p>
@@ -1243,7 +1230,7 @@ green,10.3,1996-04-12T12:05:04.000000000
 </section>
 </section>
 <section id="adding-an-aggregate-udf">
-<h2>Adding an Aggregate UDF<a class="headerlink" href="#adding-an-aggregate-udf" title="Link to this heading">¶</a></h2>
+<h2>Adding an Aggregate UDF<a class="headerlink" href="#adding-an-aggregate-udf" title="Link to this heading">#</a></h2>
 <p>Aggregate UDFs are functions that take a group of rows and return a single value. These are akin to SQL’s <code class="docutils literal notranslate"><span class="pre">SUM</span></code> or
 <code class="docutils literal notranslate"><span class="pre">COUNT</span></code> functions.</p>
 <p>For example, we will declare a single-type, single return type UDAF that computes the geometric mean.</p>
@@ -1336,7 +1323,7 @@ green,10.3,1996-04-12T12:05:04.000000000
 </pre></div>
 </div>
 <section id="registering-an-aggregate-udf">
-<h3>Registering an Aggregate UDF<a class="headerlink" href="#registering-an-aggregate-udf" title="Link to this heading">¶</a></h3>
+<h3>Registering an Aggregate UDF<a class="headerlink" href="#registering-an-aggregate-udf" title="Link to this heading">#</a></h3>
 <p>To register a Aggregate UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html"><code class="docutils literal notranslate"><span class="pre">AggregateUDF</span></code></a> struct and then register
 it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>. DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html"><code class="docutils literal notranslate"><span class="pre">create_udaf</span></code></a> helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udaf.rs</span></code></a>.</p>
@@ -1409,7 +1396,7 @@ for the same input.</p></li>
 </section>
 </section>
 <section id="adding-a-user-defined-table-function">
-<h2>Adding a User-Defined Table Function<a class="headerlink" href="#adding-a-user-defined-table-function" title="Link to this heading">¶</a></h2>
+<h2>Adding a User-Defined Table Function<a class="headerlink" href="#adding-a-user-defined-table-function" title="Link to this heading">#</a></h2>
 <p>A User-Defined Table Function (UDTF) is a function that takes parameters and returns a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
 <p>Because we’re returning a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>, in this example we’ll use the <code class="docutils literal notranslate"><span class="pre">MemTable</span></code> data source to represent a table.
 This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would
@@ -1436,7 +1423,7 @@ in the CLI to read the metadata from a Parquet file.</p>
 </pre></div>
 </div>
 <section id="writing-the-udtf">
-<h3>Writing the UDTF<a class="headerlink" href="#writing-the-udtf" title="Link to this heading">¶</a></h3>
+<h3>Writing the UDTF<a class="headerlink" href="#writing-the-udtf" title="Link to this heading">#</a></h3>
 <p>The simple UDTF used here takes a single <code class="docutils literal notranslate"><span class="pre">Int64</span></code> argument and returns a table with a single column with the value of the
 argument. To create a function in DataFusion, you need to implement the <code class="docutils literal notranslate"><span class="pre">TableFunctionImpl</span></code> trait. This trait has a
 single method, <code class="docutils literal notranslate"><span class="pre">call</span></code>, that takes a slice of <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s and returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;dyn</span> <span class="pre">TableProvider&gt;&gt;</span></code>.</p>
@@ -1480,7 +1467,7 @@ validation of the input <code class="docutils literal notranslate"><span class="
 </div>
 </section>
 <section id="registering-and-using-the-udtf">
-<h3>Registering and Using the UDTF<a class="headerlink" href="#registering-and-using-the-udtf" title="Link to this heading">¶</a></h3>
+<h3>Registering and Using the UDTF<a class="headerlink" href="#registering-and-using-the-udtf" title="Link to this heading">#</a></h3>
 <p>With the UDTF implemented, you can register it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">execution</span><span class="p">::</span><span class="n">context</span><span class="p">::</span><span class="n">SessionContext</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">util</span><span class="p">::</span><span class="n">pretty</span><span class="p">;</span>
@@ -1508,10 +1495,10 @@ validation of the input <code class="docutils literal notranslate"><span class="
 </section>
 </section>
 <section id="custom-expression-planning">
-<h2>Custom Expression Planning<a class="headerlink" href="#custom-expression-planning" title="Link to this heading">¶</a></h2>
+<h2>Custom Expression Planning<a class="headerlink" href="#custom-expression-planning" title="Link to this heading">#</a></h2>
 <p>DataFusion provides native support for common SQL operators by default such as <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code>. However it does not provide support for other operators such as <code class="docutils literal notranslate"><span class="pre">&#64;&gt;</span></code>. To override DataFusion’s default handling or support unsupported operators, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion</p>
 <section id="implementing-custom-expression-planning">
-<h3>Implementing Custom Expression Planning<a class="headerlink" href="#implementing-custom-expression-planning" title="Link to this heading">¶</a></h3>
+<h3>Implementing Custom Expression Planning<a class="headerlink" href="#implementing-custom-expression-planning" title="Link to this heading">#</a></h3>
 <p>To extend DataFusion with support for custom operators not natively available, you need to:</p>
 <ol class="arabic">
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">ExprPlanner</span></code> trait: This allows you to define custom logic for planning expressions that DataFusion doesn’t natively recognize. The trait provides the necessary interface to translate SQL AST nodes into logical <code class="docutils literal notranslate"><span class="pre">Expr</span></code>.</p>
@@ -1575,50 +1562,129 @@ validation of the input <code class="docutils literal notranslate"><span class="
 </section>
 
 
-              </div>
+                </article>
               
               
-              <!-- Previous / next buttons -->
-<div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="index.html" title="previous page">
-        <i class="fas fa-angle-left"></i>
-        <div class="prev-next-info">
-            <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Functions</p>
-        </div>
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Functions</p>
+      </div>
     </a>
-    <a class='right-next' id="next-link" href="spark.html" title="next page">
-    <div class="prev-next-info">
+    <a class="right-next"
+       href="spark.html"
+       title="next page">
+      <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
         <p class="prev-next-title">Spark Compatible Functions</p>
-    </div>
-    <i class="fas fa-angle-right"></i>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
     </a>
 </div>
+                </footer>
               
-          </main>
-          
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
 
-      </div>
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-scalar-udf">Adding a Scalar UDF</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-by-impl-scalarudfimpl">Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">ScalarUDFImpl</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-scalar-udf-by-create-udf">Adding a Scalar UDF by <code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Adding a Scalar UDF</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-a-scalar-udf">Registering a Scalar UDF</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-async-scalar-udf">Adding a Async Scalar UDF</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-by-impl-asyncscalarudfimpl">Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">AsyncScalarUDFImpl</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-window-udf">Adding a Window UDF</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-a-window-udf">Registering a Window UDF</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-an-aggregate-udf">Adding an Aggregate UDF</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-an-aggregate-udf">Registering an Aggregate UDF</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#adding-a-user-defined-table-function">Adding a User-Defined Table Function</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-the-udtf">Writing the UDTF</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-and-using-the-udtf">Registering and Using the UDTF</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-expression-planning">Custom Expression Planning</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#implementing-custom-expression-planning">Implementing Custom Expression Planning</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/functions/adding-udfs.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/library-user-guide/functions/adding-udfs.md.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
     </div>
+  </div>
   
-    <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
-  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
 <!-- Based on pydata_sphinx_theme/footer.html -->
 <footer class="footer mt-5 mt-md-0">
   <div class="container">
-    
-    <div class="footer-item">
-      <p class="copyright">
-    &copy; Copyright 2019-2025, Apache Software Foundation.<br>
-</p>
-    </div>
-    
-    <div class="footer-item">
-      <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.2.3.<br>
-</p>
-    </div>
     
     <div class="footer-item">
       <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
