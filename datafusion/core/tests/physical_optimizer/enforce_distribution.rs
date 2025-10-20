@@ -2883,48 +2883,48 @@ fn parallelization_ignores_limit() -> Result<()> {
     let test_config = TestConfig::default();
 
     // Test: with parquet
-    let expected_parquet = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
-        "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-        "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        GlobalLimitExec: skip=0, fetch=100",
-        "          CoalescePartitionsExec",
-        "            LocalLimitExec: fetch=100",
-        "              FilterExec: c@2 = 0",
-        // repartition should happen prior to the filter to maximize parallelism
-        "                RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "                  GlobalLimitExec: skip=0, fetch=100",
-        // Limit doesn't benefit from input partitioning - no parallelism
-        "                    LocalLimitExec: fetch=100",
-        "                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(
-        expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config.run(expected_parquet, plan_parquet, &SORT_DISTRIB_DISTRIB)?;
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_parquet_distrib,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+            GlobalLimitExec: skip=0, fetch=100
+              CoalescePartitionsExec
+                LocalLimitExec: fetch=100
+                  FilterExec: c@2 = 0
+                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                      GlobalLimitExec: skip=0, fetch=100
+                        LocalLimitExec: fetch=100
+                          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    "
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let expected_csv = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
-        "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-        "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        GlobalLimitExec: skip=0, fetch=100",
-        "          CoalescePartitionsExec",
-        "            LocalLimitExec: fetch=100",
-        "              FilterExec: c@2 = 0",
-        // repartition should happen prior to the filter to maximize parallelism
-        "                RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "                  GlobalLimitExec: skip=0, fetch=100",
-        // Limit doesn't benefit from input partitioning - no parallelism
-        "                    LocalLimitExec: fetch=100",
-        "                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-    ];
-    test_config.run(expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected_csv, plan_csv, &SORT_DISTRIB_DISTRIB)?;
+    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_csv_distrib,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+            GlobalLimitExec: skip=0, fetch=100
+              CoalescePartitionsExec
+                LocalLimitExec: fetch=100
+                  FilterExec: c@2 = 0
+                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                      GlobalLimitExec: skip=0, fetch=100
+                        LocalLimitExec: fetch=100
+                          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+    "
+    );
+    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
 }
@@ -2991,22 +2991,22 @@ fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
     // parallelization is not beneficial for SortPreservingMerge
 
     // Test: with parquet
-    let expected_parquet = &[
-        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
-    test_config.run(
-        expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config.run(expected_parquet, plan_parquet, &SORT_DISTRIB_DISTRIB)?;
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_parquet_distrib,
+        @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet"
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let expected_csv = &[
-        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
-    ];
-    test_config.run(expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected_csv, plan_csv, &SORT_DISTRIB_DISTRIB)?;
+    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_csv_distrib,
+        @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false"
+    );
+    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
 }
@@ -3036,54 +3036,50 @@ fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
     // should not sort (as the data was already sorted)
 
     // Test: with parquet
-    let expected_parquet = &[
-        "SortPreservingMergeExec: [c@2 ASC]",
-        "  UnionExec",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
-    test_config.run(
-        expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    let expected_parquet_first_sort_enforcement = &[
-        // no SPM
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        // has coalesce
-        "  CoalescePartitionsExec",
-        "    UnionExec",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
-    test_config.run(
-        expected_parquet_first_sort_enforcement,
-        plan_parquet,
-        &SORT_DISTRIB_DISTRIB,
-    )?;
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_parquet_distrib,
+        @r"
+    SortPreservingMergeExec: [c@2 ASC]
+      UnionExec
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+    "
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(
+        plan_parquet_sort,
+        @r"
+    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+      CoalescePartitionsExec
+        UnionExec
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+    "
+    );
 
     // Test: with csv
-    let expected_csv = &[
-        "SortPreservingMergeExec: [c@2 ASC]",
-        "  UnionExec",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
-    ];
-    test_config.run(expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    let expected_csv_first_sort_enforcement = &[
-        // no SPM
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        // has coalesce
-        "  CoalescePartitionsExec",
-        "    UnionExec",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
-    ];
-    test_config.run(
-        expected_csv_first_sort_enforcement,
-        plan_csv.clone(),
-        &SORT_DISTRIB_DISTRIB,
-    )?;
+    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_csv_distrib,
+        @r"
+    SortPreservingMergeExec: [c@2 ASC]
+      UnionExec
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
+    "
+    );
+    let plan_csv_sort = test_config.run2(plan_csv.clone(), &SORT_DISTRIB_DISTRIB);
+    assert_plan!(
+        plan_csv_sort,
+        @r"
+    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+      CoalescePartitionsExec
+        UnionExec
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
+    "
+    );
 
     Ok(())
 }
@@ -3111,24 +3107,28 @@ fn parallelization_does_not_benefit() -> Result<()> {
     // no parallelization, because SortRequiredExec doesn't benefit from increased parallelism
 
     // Test: with parquet
-    let expected_parquet = &[
-        "SortRequiredExec: [c@2 ASC]",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
-    test_config.run(
-        expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config.run(expected_parquet, plan_parquet, &SORT_DISTRIB_DISTRIB)?;
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_parquet_distrib,
+        @r"
+    SortRequiredExec: [c@2 ASC]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
+    "
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let expected_csv = &[
-        "SortRequiredExec: [c@2 ASC]",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
-    ];
-    test_config.run(expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected_csv, plan_csv, &SORT_DISTRIB_DISTRIB)?;
+    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_csv_distrib,
+        @r"
+    SortRequiredExec: [c@2 ASC]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
+    "
+    );
+    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
 }
