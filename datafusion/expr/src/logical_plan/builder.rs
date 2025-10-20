@@ -54,7 +54,7 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, internal_datafusion_err, not_impl_err,
+    exec_err, get_target_functional_dependencies, internal_datafusion_err,
     plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
     NullEquality, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
@@ -178,12 +178,6 @@ impl LogicalPlanBuilder {
         recursive_term: LogicalPlan,
         is_distinct: bool,
     ) -> Result<Self> {
-        // TODO: we need to do a bunch of validation here. Maybe more.
-        if is_distinct {
-            return not_impl_err!(
-                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported"
-            );
-        }
         // Ensure that the static term and the recursive term have the same number of fields
         let static_fields_len = self.plan.schema().fields().len();
         let recursive_fields_len = recursive_term.schema().fields().len();

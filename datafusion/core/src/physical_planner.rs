@@ -64,10 +64,9 @@ use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::TableReference;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
-    ScalarValue,
+    NullEquality, ScalarValue, TableReference,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
@@ -85,7 +84,7 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
@@ -100,6 +99,7 @@ use datafusion_physical_plan::unnest::ListUnnest;
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
+use datafusion_physical_plan::result_table::ResultTableExec;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::debug;
@@ -1432,12 +1432,68 @@ impl DefaultPhysicalPlanner {
                 name, is_distinct, ..
             }) => {
                 let [static_term, recursive_term] = children.two()?;
-                Arc::new(RecursiveQueryExec::try_new(
-                    name.clone(),
-                    static_term,
-                    recursive_term,
-                    *is_distinct,
-                )?)
+                let inner_schema = static_term.schema();
+                let group_by = PhysicalGroupBy::new_single(
+                    inner_schema
+                        .fields()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| {
+                            (Arc::new(Column::new(f.name(), i)) as _, f.name().clone())
+                        })
+                        .collect(),
+                );
+                if *is_distinct {
+                    // We deduplicate each input to avoid duplicated values
+                    // And we remove from the recursive term the only emitted values i.e. the results table.
+                    Arc::new(RecursiveQueryExec::try_new(
+                        name.clone(),
+                        Arc::new(AggregateExec::try_new(
+                            AggregateMode::Final,
+                            group_by.clone(),
+                            Vec::new(),
+                            Vec::new(),
+                            static_term,
+                            Arc::clone(&inner_schema),
+                        )?),
+                        Arc::new(HashJoinExec::try_new(
+                            Arc::new(AggregateExec::try_new(
+                                AggregateMode::Final,
+                                group_by,
+                                Vec::new(),
+                                Vec::new(),
+                                recursive_term,
+                                Arc::clone(&inner_schema),
+                            )?),
+                            Arc::new(ResultTableExec::new(
+                                "union".into(),
+                                Arc::clone(&inner_schema),
+                            )),
+                            inner_schema
+                                .fields()
+                                .iter()
+                                .enumerate()
+                                .map(|(i, f)| {
+                                    let col = Arc::new(Column::new(f.name(), i)) as _;
+                                    (Arc::clone(&col), col)
+                                })
+                                .collect(),
+                            None,
+                            &JoinType::LeftAnti,
+                            None,
+                            PartitionMode::CollectLeft,
+                            NullEquality::NullEqualsNull,
+                        )?),
+                        true,
+                    )?)
+                } else {
+                    Arc::new(RecursiveQueryExec::try_new(
+                        name.clone(),
+                        static_term,
+                        recursive_term,
+                        false,
+                    )?)
+                }
             }
 
             // N Children

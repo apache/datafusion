@@ -18,11 +18,13 @@
 //! Defines the recursive query plan
 
 use std::any::Any;
+use std::mem::take;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::work_table::{ReservedBatches, WorkTable, WorkTableExec};
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::result_table::ResultTable;
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -64,8 +66,9 @@ pub struct RecursiveQueryExec {
     static_term: Arc<dyn ExecutionPlan>,
     /// The dynamic part (recursive term)
     recursive_term: Arc<dyn ExecutionPlan>,
-    /// Distinction
     is_distinct: bool,
+    /// If is_distinct is true, holds the result table that saves all previous results
+    result_table: Option<Arc<ResultTable>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
@@ -77,13 +80,22 @@ impl RecursiveQueryExec {
     pub fn try_new(
         name: String,
         static_term: Arc<dyn ExecutionPlan>,
-        recursive_term: Arc<dyn ExecutionPlan>,
+        mut recursive_term: Arc<dyn ExecutionPlan>,
         is_distinct: bool,
     ) -> Result<Self> {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new());
         // Use the same work table for both the WorkTableExec and the recursive term
-        let recursive_term = assign_work_table(recursive_term, Arc::clone(&work_table))?;
+        recursive_term = assign_work_table(recursive_term, Arc::clone(&work_table))?;
+        let result_table = if is_distinct {
+            let result_table = Arc::new(ResultTable::new());
+            // Use the same result table for both the ResultTableExec and the result term
+            recursive_term =
+                assign_work_table(recursive_term, Arc::clone(&result_table))?;
+            Some(result_table)
+        } else {
+            None
+        };
         let cache = Self::compute_properties(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
@@ -93,6 +105,7 @@ impl RecursiveQueryExec {
             work_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            result_table,
         })
     }
 
@@ -193,6 +206,7 @@ impl ExecutionPlan for RecursiveQueryExec {
         Ok(Box::pin(RecursiveQueryStream::new(
             context,
             Arc::clone(&self.work_table),
+            self.result_table.as_ref().map(Arc::clone),
             Arc::clone(&self.recursive_term),
             static_stream,
             baseline_metrics,
@@ -237,16 +251,16 @@ impl DisplayAs for RecursiveQueryExec {
 ///
 /// while batch := static_stream.next():
 ///    buffer.push(batch)
-///    yield buffer
+///    yield batch
 ///
 /// while buffer.len() > 0:
 ///    sender, receiver = Channel()
-///    register_continuation(handle_name, receiver)
+///    register_work_table(handle_name, receiver)
 ///    sender.send(buffer.drain())
 ///    recursive_stream = recursive_term.execute()
 ///    while batch := recursive_stream.next():
 ///        buffer.append(batch)
-///        yield buffer
+///        yield batch
 ///
 struct RecursiveQueryStream {
     /// The context to be used for managing handlers & executing new tasks
@@ -268,6 +282,8 @@ struct RecursiveQueryStream {
     buffer: Vec<RecordBatch>,
     /// Tracks the memory used by the buffer
     reservation: MemoryReservation,
+    /// The result table state, representing the table used for deduplication in case it is enabled
+    results_table: Option<Arc<ResultTable>>,
     // /// Metrics.
     _baseline_metrics: BaselineMetrics,
 }
@@ -277,6 +293,7 @@ impl RecursiveQueryStream {
     fn new(
         task_context: Arc<TaskContext>,
         work_table: Arc<WorkTable>,
+        results_table: Option<Arc<ResultTable>>,
         recursive_term: Arc<dyn ExecutionPlan>,
         static_stream: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
@@ -294,6 +311,7 @@ impl RecursiveQueryStream {
             buffer: vec![],
             reservation,
             _baseline_metrics: baseline_metrics,
+            results_table,
         }
     }
 
@@ -327,11 +345,21 @@ impl RecursiveQueryStream {
             return Poll::Ready(None);
         }
 
+        // Update the union table with the current buffer
+        if self.results_table.is_some() {
+            // Note it's fine to take the memory reservation here, we are not cloning the underlying data,
+            // and the result table is going to outlive the work table.
+            let buffer = self.buffer.clone();
+            let reservation = self.reservation.take();
+            self.results_table
+                .as_mut()
+                .unwrap()
+                .append(buffer, reservation);
+        }
+
         // Update the work table with the current buffer
-        let reserved_batches = ReservedBatches::new(
-            std::mem::take(&mut self.buffer),
-            self.reservation.take(),
-        );
+        let reserved_batches =
+            ReservedBatches::new(take(&mut self.buffer), self.reservation.take());
         self.work_table.update(reserved_batches);
 
         // We always execute (and re-execute iteratively) the first partition.
@@ -345,9 +373,9 @@ impl RecursiveQueryStream {
     }
 }
 
-fn assign_work_table(
+fn assign_work_table<T: Any + Send + Sync>(
     plan: Arc<dyn ExecutionPlan>,
-    work_table: Arc<WorkTable>,
+    work_table: Arc<T>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut work_table_refs = 0;
     plan.transform_down(|plan| {
@@ -380,7 +408,7 @@ fn assign_work_table(
 fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|plan| {
         // WorkTableExec's states have already been updated correctly.
-        if plan.as_any().is::<WorkTableExec>() {
+        if plan.as_any().is::<WorkTableExec>() || plan.as_any().is::<ResultTable>() {
             Ok(Transformed::no(plan))
         } else {
             let new_plan = Arc::clone(&plan).reset_state()?;
