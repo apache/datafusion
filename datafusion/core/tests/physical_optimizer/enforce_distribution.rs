@@ -66,7 +66,7 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    displayable, get_plan_string, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
+    displayable, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
     PlanProperties, Statistics,
 };
 use insta::Settings;
@@ -537,19 +537,6 @@ impl TestConfig {
     }
 }
 
-macro_rules! assert_plan_txt {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
-        let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
-        // Now format correctly
-        let actual_lines = get_plan_string(&$PLAN);
-
-        assert_eq!(
-            &expected_lines, &actual_lines,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected_lines, actual_lines
-        );
-    };
-}
 
 #[test]
 fn multi_hash_joins() -> Result<()> {
@@ -3506,30 +3493,29 @@ fn do_not_put_sort_when_input_is_invalid() -> Result<()> {
     .into();
     let input = parquet_exec();
     let physical_plan = sort_required_exec_with_req(filter_exec(input), sort_key);
-    let expected = &[
-        // Ordering requirement of sort required exec is NOT satisfied
-        // by existing ordering at the source.
-        "SortRequiredExec: [a@0 ASC]",
-        "  FilterExec: c@2 = 0",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    assert_plan_txt!(expected, physical_plan);
-
-    let expected = &[
-        "SortRequiredExec: [a@0 ASC]",
-        // Since at the start of the rule ordering requirement is not satisfied
-        // EnforceDistribution rule doesn't satisfy this requirement either.
-        "  FilterExec: c@2 = 0",
-        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
+    // Ordering requirement of sort required exec is NOT satisfied
+    // by existing ordering at the source.
+    assert_plan!(physical_plan, @r"
+SortRequiredExec: [a@0 ASC]
+  FilterExec: c@2 = 0
+    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
 
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
     let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
-    assert_plan_txt!(expected, dist_plan);
+    // Since at the start of the rule ordering requirement is not satisfied
+    // EnforceDistribution rule doesn't satisfy this requirement either.
+    assert_plan!(dist_plan, @r"
+SortRequiredExec: [a@0 ASC]
+  FilterExec: c@2 = 0
+    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
 
     Ok(())
 }
@@ -3545,29 +3531,28 @@ fn put_sort_when_input_is_valid() -> Result<()> {
     let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
     let physical_plan = sort_required_exec_with_req(filter_exec(input), sort_key);
 
-    let expected = &[
-        // Ordering requirement of sort required exec is satisfied
-        // by existing ordering at the source.
-        "SortRequiredExec: [a@0 ASC]",
-        "  FilterExec: c@2 = 0",
-        "    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
-    assert_plan_txt!(expected, physical_plan);
-
-    let expected = &[
-        // Since at the start of the rule ordering requirement is satisfied
-        // EnforceDistribution rule satisfy this requirement also.
-        "SortRequiredExec: [a@0 ASC]",
-        "  FilterExec: c@2 = 0",
-        "    DataSourceExec: file_groups={10 groups: [[x:0..20], [y:0..20], [x:20..40], [y:20..40], [x:40..60], [y:40..60], [x:60..80], [y:60..80], [x:80..100], [y:80..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
+    // Ordering requirement of sort required exec is satisfied
+    // by existing ordering at the source.
+    assert_plan!(physical_plan, @r"
+SortRequiredExec: [a@0 ASC]
+  FilterExec: c@2 = 0
+    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+"
+    );
 
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
     let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
-    assert_plan_txt!(expected, dist_plan);
+    // Since at the start of the rule ordering requirement is satisfied
+    // EnforceDistribution rule satisfy this requirement also.
+    assert_plan!(dist_plan, @r"
+SortRequiredExec: [a@0 ASC]
+  FilterExec: c@2 = 0
+    DataSourceExec: file_groups={10 groups: [[x:0..20], [y:0..20], [x:20..40], [y:20..40], [x:40..60], [y:40..60], [x:60..80], [y:60..80], [x:80..100], [y:80..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+"
+    );
 
     Ok(())
 }
