@@ -204,7 +204,7 @@ impl RepartitionExecState {
         let mut channels = HashMap::with_capacity(txs.len());
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
             let reservation = Arc::new(Mutex::new(
-                MemoryConsumer::new(format!("{name}[{partition}]"))
+                MemoryConsumer::new(format!("{name}[partition={partition}]"))
                     .register(context.memory_pool()),
             ));
             channels.insert(partition, (tx, rx, reservation));
