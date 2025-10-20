@@ -1,5 +1,5 @@
 use abi_stable::StableAbi;
-use datafusion_expr::ColumnarValue;
+use datafusion::logical_expr::ColumnarValue;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]

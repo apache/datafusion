@@ -107,6 +107,8 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
     drop(private_data);
 }
 
+// TODO(tsaucer) switch to Result<WrappedArray, DataFusionError>
+// and put the rresult handling to the caller
 pub fn record_batch_to_wrapped_array(
     record_batch: RecordBatch,
 ) -> RResult<WrappedArray, RString> {

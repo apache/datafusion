@@ -1,5 +1,5 @@
 use abi_stable::StableAbi;
-use datafusion_expr::statistics::Distribution;
+use datafusion::logical_expr::statistics::Distribution;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -7,14 +7,26 @@ use datafusion_expr::statistics::Distribution;
 pub struct FFI_Distribution {
 }
 
+impl From<&Distribution> for FFI_Distribution {
+    fn from(value: &Distribution) -> Self {
+        todo!()
+    }
+}
+
 impl From<Distribution> for FFI_Distribution {
     fn from(value: Distribution) -> Self {
+        FFI_Distribution::from(&value)
+    }
+}
+
+impl From<&FFI_Distribution> for Distribution {
+    fn from(value: &FFI_Distribution) -> Self {
         todo!()
     }
 }
 
 impl From<FFI_Distribution> for Distribution {
     fn from(value: FFI_Distribution) -> Self {
-        todo!()
+        Distribution::from(&value)
     }
 }
