@@ -2656,3 +2656,41 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
     assert_eq!(plan, new_plan);
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_mixed_case_table_reference() -> Result<()> {
+    // Prepare "client" database
+    let client_ctx = SessionContext::new_with_config(SessionConfig::new()
+        .set_bool("datafusion.sql_parser.enable_ident_normalization", false)
+    );
+    client_ctx.register_csv(
+                   "\"TestData\"",
+                   "tests/testdata/test.csv",
+                   CsvReadOptions::default()
+               )
+              .await?;
+
+    // Prepare "server" database
+    let server_ctx = SessionContext::new_with_config(SessionConfig::new()
+        .set_bool("datafusion.sql_parser.enable_ident_normalization", false)
+    );
+    server_ctx.register_csv(
+                   "\"TestData\"",
+                   "tests/testdata/test.csv",
+                   CsvReadOptions::default()
+               )
+              .await?;
+
+    // Create a logical plan, serialize it (client), then deserialize it (server)
+    let dataframe = client_ctx.sql("SELECT a FROM TestData WHERE TestData.a = 1").await?;
+    let client_logical_plan = dataframe.into_optimized_plan()?;
+    let plan_bytes = logical_plan_to_bytes(&client_logical_plan)?;
+    let server_logical_plan = logical_plan_from_bytes(&plan_bytes, &server_ctx)?;
+
+    assert_eq!(
+        format!("{}", client_logical_plan.display_indent_schema()),
+        format!("{}", server_logical_plan.display_indent_schema())
+    );
+
+    Ok(())
+}
