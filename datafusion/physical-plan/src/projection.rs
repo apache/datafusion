@@ -1964,8 +1964,7 @@ mod tests {
         let err_msg = result.err().unwrap().to_string();
         assert!(
             err_msg.contains("Internal error: Column index 5 out of bounds for projected expressions of length 2"),
-            "Unexpected error message: {}",
-            err_msg
+            "Unexpected error message: {err_msg}",
         );
     }
 
