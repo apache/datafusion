@@ -154,7 +154,7 @@ futures = "0.3"
 half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
-indexmap = "2.11.4"
+indexmap = "2.12.0"
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.4", default-features = false }
