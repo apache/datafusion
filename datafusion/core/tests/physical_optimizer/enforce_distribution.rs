@@ -1864,13 +1864,16 @@ fn merge_does_not_need_sort() -> Result<()> {
     //
     // The optimizer should not add an additional SortExec as the
     // data is already sorted
-    let expected = &[
-        "SortPreservingMergeExec: [a@0 ASC]",
-        "  CoalesceBatchesExec: target_batch_size=4096",
-        "    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
     let test_config = TestConfig::default();
-    test_config.run(expected, exec.clone(), &DISTRIB_DISTRIB_SORT)?;
+    let plan_distrib = test_config.run2(exec.clone(), &DISTRIB_DISTRIB_SORT);
+    assert_plan!(
+        plan_distrib,
+        @r"
+SortPreservingMergeExec: [a@0 ASC]
+  CoalesceBatchesExec: target_batch_size=4096
+    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+"
+    );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     //
@@ -1878,13 +1881,16 @@ fn merge_does_not_need_sort() -> Result<()> {
     // (according to flag: PREFER_EXISTING_SORT)
     // hence in this case ordering lost during CoalescePartitionsExec and re-introduced with
     // SortExec at the top.
-    let expected_first_sort_enforcement = &[
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "  CoalescePartitionsExec",
-        "    CoalesceBatchesExec: target_batch_size=4096",
-        "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
-    test_config.run(expected_first_sort_enforcement, exec, &SORT_DISTRIB_DISTRIB)?;
+    let plan_sort = test_config.run2(exec, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(
+        plan_sort,
+        @r"
+SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+  CoalescePartitionsExec
+    CoalesceBatchesExec: target_batch_size=4096
+      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+"
+    );
 
     Ok(())
 }
