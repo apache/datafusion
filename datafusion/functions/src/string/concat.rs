@@ -215,7 +215,7 @@ impl ScalarUDFImpl for ConcatFunc {
                         if scalar.is_null() {
                             // Skip null values
                         } else {
-                            result.push_str(&format!("{}", scalar));
+                            result.push_str(&format!("{scalar}"));
                         }
                     }
                 }
@@ -400,13 +400,13 @@ pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
             Expr::Literal(ScalarValue::Utf8(Some(v)), _) => {
-                contiguous_scalar += &v;
+                contiguous_scalar += v;
             }
             Expr::Literal(ScalarValue::LargeUtf8(Some(v)), _) => {
-                contiguous_scalar += &v;
+                contiguous_scalar += v;
             }
             Expr::Literal(ScalarValue::Utf8View(Some(v)), _) => {
-                contiguous_scalar += &v;
+                contiguous_scalar += v;
             }
 
             Expr::Literal(_x, _) => {
