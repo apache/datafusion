@@ -322,18 +322,30 @@ async fn test_create_physical_expr() {
 
 #[test]
 fn test_create_physical_expr_nvl2() {
+    #[rustfmt::skip]
     evaluate_expr_test(
         nvl2(col("i"), lit(1i64), lit(0i64)),
         vec![
-            "+------+", "| expr |", "+------+", "| 1    |", "| 0    |", "| 1    |",
+            "+------+", 
+            "| expr |", 
+            "+------+", 
+            "| 1    |", 
+            "| 0    |", 
+            "| 1    |",
             "+------+",
         ],
     );
 
+    #[rustfmt::skip]
     evaluate_expr_test(
         nvl2(lit(1i64), col("i"), lit(0i64)),
         vec![
-            "+------+", "| expr |", "+------+", "| 10   |", "|      |", "| 5    |",
+            "+------+", 
+            "| expr |", 
+            "+------+", 
+            "| 10   |", 
+            "|      |", 
+            "| 5    |",
             "+------+",
         ],
     );
