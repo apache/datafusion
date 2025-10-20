@@ -21,114 +21,114 @@
 query I
 SELECT ceil(3.14::float);
 ----
-4
+4.0
 
 query I
 SELECT ceil(2.1::float);
 ----
-3
+3.0
 
 query I
 SELECT ceil(5.9::float);
 ----
-6
+6.0
 
 # Test basic positive double values
 query I
 SELECT ceil(3.14159);
 ----
-4
+4.0
 
 query I
 SELECT ceil(2.1);
 ----
-3
+3.0
 
 query I
 SELECT ceil(5.999);
 ----
-6
+6.0
 
 # Test negative float values
 query I
 SELECT ceil(-3.14::float);
 ----
--3
+-3.0
 
 query I
 SELECT ceil(-2.1::float);
 ----
--2
+-2.0
 
 query I
 SELECT ceil(-5.9::float);
 ----
--5
+-5.0
 
 # Test negative double values
 query I
 SELECT ceil(-3.14159);
 ----
--3
+-3.0
 
 query I
 SELECT ceil(-2.1);
 ----
--2
+-2.0
 
 query I
 SELECT ceil(-5.999);
 ----
--5
+-5.0
 
 # Test integer values
 query I
 SELECT ceil(52);
 ----
-52
+52.0
 
 query I
 SELECT ceil(-39);
 ----
--39
+-39.0
 
 # Test zero values
 query I
 SELECT ceil(0.0);
 ----
-0
+0.0
 
 query I
 SELECT ceil(0.0::float);
 ----
-0
+0.0
 
 query I
 SELECT ceil(-3.0::float);
 ----
--3
+-3.0
 
 # Test very small decimal values
 query I
 SELECT ceil(0.0001);
 ----
-1
+1.0
 
 query I
 SELECT ceil(-0.0001);
 ----
-0
+0.0
 
 # Test large numbers
 query I
 SELECT ceil(123456.789);
 ----
-123457
+123457.0
 
 query I
 SELECT ceil(-98765.432);
 ----
--98765
+-98765.0
 
 # Test with NULL values
 query I
@@ -140,37 +140,37 @@ NULL
 query I
 SELECT ceil(column1) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(column1);
 ----
-2
-3
--1
+2.0
+3.0
+-1.0
 NULL
 
 query I
 SELECT ceil(column1::float) FROM (VALUES (1.5), (2.7), (-1.3), (NULL)) AS t(column1);
 ----
-2
-3
--1
+2.0
+3.0
+-1.0
 NULL
 
 # Test edge cases
 query I
 SELECT ceil(0.999999999999);
 ----
-1
+1.0
 
 query I
 SELECT ceil(-0.999999999999);
 ----
-0
+-0.0
 
 # Test boundary values
 query I
 SELECT ceil(9223372036854775807.0);
 ----
-9223372036854775807
+9223372036854775807.0
 
 query I
 SELECT ceil(-9223372036854775808.0);
 ----
--9223372036854775808
+-9223372036854775808.0

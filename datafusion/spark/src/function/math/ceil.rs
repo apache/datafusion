@@ -46,7 +46,7 @@ impl SparkCeil {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Float32, Float64, Int64, Decimal128(19, 10)],
+                vec![Float32, Float64, Int64, Decimal128(38, 10)],
                 Volatility::Immutable,
             ),
         }
@@ -67,7 +67,7 @@ impl ScalarUDFImpl for SparkCeil {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Int64)
+        Ok(Float64)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
