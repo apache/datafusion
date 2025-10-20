@@ -132,7 +132,8 @@ fn roundtrip_expr_test_with_codec(
 ) {
     let proto: protobuf::LogicalExprNode = serialize_expr(&initial_struct, codec)
         .unwrap_or_else(|e| panic!("Error serializing expression: {e:?}"));
-    let round_trip: Expr = from_proto::parse_expr(&proto, &ctx, codec).unwrap();
+    let round_trip: Expr =
+        from_proto::parse_expr(&proto, &ctx.task_ctx(), codec).unwrap();
 
     assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
 
@@ -2320,8 +2321,8 @@ fn roundtrip_scalar_udf_extension_codec() {
     let test_expr = udf.call(vec!["foo".lit()]);
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
-    let round_trip =
-        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+    let round_trip = from_proto::parse_expr(&proto, &ctx.task_ctx(), &UDFExtensionCodec)
+        .expect("parse expr");
 
     assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
@@ -2333,8 +2334,8 @@ fn roundtrip_aggregate_udf_extension_codec() {
     let test_expr = udf.call(vec![42.lit()]);
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
-    let round_trip =
-        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+    let round_trip = from_proto::parse_expr(&proto, &ctx.task_ctx(), &UDFExtensionCodec)
+        .expect("parse expr");
 
     assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
@@ -2802,5 +2803,28 @@ async fn roundtrip_arrow_scan() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_scalar_subquery_with_outer_reference_column() -> Result<()> {
+    let query = "SELECT t1.a, t1.b
+    FROM t1
+    WHERE t1.a + 1 = (
+        SELECT t2.a FROM t2 WHERE t1.a > 0 LIMIT 1
+    )";
+
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let dataframe = ctx.sql(query).await?;
+    let plan = dataframe.logical_plan();
+
+    let bytes = logical_plan_to_bytes(plan)?;
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, &logical_round_trip);
     Ok(())
 }

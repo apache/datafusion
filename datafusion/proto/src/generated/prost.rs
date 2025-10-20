@@ -195,8 +195,8 @@ pub mod projection_node {
 pub struct SelectionNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(message, optional, tag = "2")]
-    pub expr: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortNode {
@@ -378,8 +378,8 @@ pub struct JoinNode {
     pub right_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
     pub null_equality: i32,
-    #[prost(message, optional, tag = "8")]
-    pub filter: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, boxed, tag = "8")]
+    pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistinctNode {
@@ -562,7 +562,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -640,7 +640,25 @@ pub mod logical_expr_node {
         Placeholder(super::PlaceholderNode),
         #[prost(message, tag = "35")]
         Unnest(super::Unnest),
+        #[prost(message, tag = "36")]
+        ScalarSubquery(::prost::alloc::boxed::Box<super::ScalarSubquery>),
+        #[prost(message, tag = "37")]
+        OuterReferenceColumn(super::OuterReferenceColumn),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarSubquery {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub subquery: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub outer_ref_columns: ::prost::alloc::vec::Vec<LogicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OuterReferenceColumn {
+    #[prost(message, optional, tag = "1")]
+    pub field: ::core::option::Option<super::datafusion_common::Field>,
+    #[prost(message, optional, tag = "2")]
+    pub column: ::core::option::Option<super::datafusion_common::Column>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Wildcard {

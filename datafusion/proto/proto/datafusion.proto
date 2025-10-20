@@ -403,7 +403,19 @@ message LogicalExprNode {
 
     Unnest unnest = 35;
 
+    ScalarSubquery scalar_subquery = 36;
+    OuterReferenceColumn outer_reference_column = 37;
   }
+}
+
+message ScalarSubquery {
+  LogicalPlanNode subquery = 1;
+  repeated LogicalExprNode outer_ref_columns = 2;
+}
+
+message OuterReferenceColumn {
+  datafusion_common.Field field = 1;
+  datafusion_common.Column column = 2;
 }
 
 message Wildcard {

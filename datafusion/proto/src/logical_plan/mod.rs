@@ -1206,10 +1206,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(serialize_expr(
+                            expr: Some(Box::new(serialize_expr(
                                 &filter.predicate,
                                 extension_codec,
-                            )?),
+                            )?)),
                         },
                     ))),
                 })
@@ -1326,7 +1326,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filter = filter
                     .as_ref()
                     .map(|e| serialize_expr(e, extension_codec))
-                    .map_or(Ok(None), |v| v.map(Some))?;
+                    .map_or(Ok(None), |v| v.map(|v| Some(Box::new(v))))?;
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
                         protobuf::JoinNode {
