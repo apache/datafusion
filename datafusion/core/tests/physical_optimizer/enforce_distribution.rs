@@ -2880,40 +2880,44 @@ fn parallelization_limit_with_filter() -> Result<()> {
     let test_config = TestConfig::default();
 
     // Test: with parquet
-    let expected_parquet = &[
-        "GlobalLimitExec: skip=0, fetch=100",
-        "  CoalescePartitionsExec",
-        "    LocalLimitExec: fetch=100",
-        "      FilterExec: c@2 = 0",
-        // even though data is sorted, we can use repartition here. Since
-        // ordering is not used in subsequent stages anyway.
-        "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "          SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        // SortExec doesn't benefit from input partitioning
-        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-    ];
-    test_config.run(
-        expected_parquet,
-        plan_parquet.clone(),
-        &DISTRIB_DISTRIB_SORT,
-    )?;
-    test_config.run(expected_parquet, plan_parquet, &SORT_DISTRIB_DISTRIB)?;
+    let plan_parquet_distrib = test_config.run2(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
+    // even though data is sorted, we can use repartition here. Since
+    // ordering is not used in subsequent stages anyway.
+    // SortExec doesn't benefit from input partitioning
+    assert_plan!(
+        plan_parquet_distrib,
+        @r"
+GlobalLimitExec: skip=0, fetch=100
+  CoalescePartitionsExec
+    LocalLimitExec: fetch=100
+      FilterExec: c@2 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+"
+    );
+    let plan_parquet_sort = test_config.run2(plan_parquet, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
-    let expected_csv = &[
-        "GlobalLimitExec: skip=0, fetch=100",
-        "  CoalescePartitionsExec",
-        "    LocalLimitExec: fetch=100",
-        "      FilterExec: c@2 = 0",
-        // even though data is sorted, we can use repartition here. Since
-        // ordering is not used in subsequent stages anyway.
-        "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "          SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        // SortExec doesn't benefit from input partitioning
-        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
-    ];
-    test_config.run(expected_csv, plan_csv.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected_csv, plan_csv, &SORT_DISTRIB_DISTRIB)?;
+    let plan_csv_distrib = test_config.run2(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
+    // even though data is sorted, we can use repartition here. Since
+    // ordering is not used in subsequent stages anyway.
+    // SortExec doesn't benefit from input partitioning
+    assert_plan!(
+        plan_csv_distrib,
+        @r"
+GlobalLimitExec: skip=0, fetch=100
+  CoalescePartitionsExec
+    LocalLimitExec: fetch=100
+      FilterExec: c@2 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+"
+    );
+    let plan_csv_sort = test_config.run2(plan_csv, &SORT_DISTRIB_DISTRIB);
+    assert_plan!(plan_csv_distrib, plan_csv_sort);
 
     Ok(())
 }
