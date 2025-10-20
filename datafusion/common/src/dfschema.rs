@@ -1270,13 +1270,6 @@ pub trait SchemaExt {
     ///
     /// It is only used by insert into cases.
     fn logically_equivalent_names_and_types(&self, other: &Self) -> Result<()>;
-
-    /// Create a table schema from a file schema and partition columns.
-    /// Partition columns are always added to the end of the schema.
-    fn table_schema(
-        file_schema: &Self,
-        table_partition_cols: &[FieldRef],
-    ) -> Self;
 }
 
 impl SchemaExt for Schema {
@@ -1328,16 +1321,50 @@ impl SchemaExt for Schema {
                 })
         }
     }
+}
 
-    fn table_schema(
-        file_schema: &Self,
-        table_partition_cols: &[FieldRef],
-    ) -> Self {
-        let mut builder = SchemaBuilder::from(file_schema);
-        for field in table_partition_cols {
-            builder.push(Arc::clone(&field));
+/// Helper to hold table schema information.
+///
+/// A table schema consists of:
+/// - file schema: the schema of the data files
+/// - table partition columns: the columns used for partitioning the table
+///
+/// This struct also holds a full table schema to be able to cheaply hand out
+/// references to any one of the representations without needing to reconstruct them.
+#[derive(Debug, Clone)]
+pub struct TableSchema {
+    file_schema: SchemaRef,
+    table_partition_cols: Vec<FieldRef>,
+    table_schema: SchemaRef,
+}
+
+impl TableSchema {
+    /// Create a new TableSchema
+    pub fn new(file_schema: SchemaRef, table_partition_cols: Vec<FieldRef>) -> Self {
+        let mut builder = SchemaBuilder::from(file_schema.as_ref());
+        for field in &table_partition_cols {
+            builder.push(Arc::clone(field));
         }
-        builder.finish()
+        Self {
+            file_schema,
+            table_partition_cols,
+            table_schema: Arc::new(builder.finish()),
+        }
+    }
+
+    /// Get the file schema
+    pub fn file_schema(&self) -> &SchemaRef {
+        &self.file_schema
+    }
+
+    /// Get the table partition columns
+    pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
+        &self.table_partition_cols
+    }
+
+    /// Get the full table schema
+    pub fn table_schema(&self) -> &SchemaRef {
+        &self.table_schema
     }
 }
 
