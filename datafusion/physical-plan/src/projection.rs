@@ -208,7 +208,7 @@ impl ProjectionExpr {
     }
 
     /// Create a new projection expression from an expression and a schema using the expression' output field name as alias.
-    pub fn new_without_alias(
+    pub fn new_from_expression(
         expr: Arc<dyn PhysicalExpr>,
         schema: &Schema,
     ) -> Result<Self> {
@@ -362,10 +362,9 @@ impl Projection {
     /// if the input statistics has column statistics for columns `a`, `b`, and `c`, the output statistics would have column statistics for columns `x` and `y`.
     pub fn project_statistics(
         &self,
-        input_stats: &Statistics,
+        mut stats: Statistics,
         input_schema: &Schema,
     ) -> Result<Statistics> {
-        let mut stats = input_stats.clone();
         let mut primitive_row_size = 0;
         let mut primitive_row_size_possible = true;
         let mut column_statistics = vec![];
@@ -511,7 +510,7 @@ impl ExecutionPlan for ProjectionExec {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
         self.projection
-            .project_statistics(&input_stats, &self.input.schema())
+            .project_statistics(input_stats, &self.input.schema())
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -1473,7 +1472,7 @@ mod tests {
             },
         ]);
 
-        let result = projection.project_statistics(&source, &schema).unwrap();
+        let result = projection.project_statistics(source, &schema).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -1515,7 +1514,7 @@ mod tests {
             },
         ]);
 
-        let result = projection.project_statistics(&source, &schema).unwrap();
+        let result = projection.project_statistics(source, &schema).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -2089,7 +2088,7 @@ mod tests {
             },
         ]);
 
-        let output_stats = projection.project_statistics(&input_stats, &input_schema)?;
+        let output_stats = projection.project_statistics(input_stats, &input_schema)?;
 
         // Row count should be preserved
         assert_eq!(output_stats.num_rows, Precision::Exact(5));
@@ -2141,7 +2140,7 @@ mod tests {
             },
         ]);
 
-        let output_stats = projection.project_statistics(&input_stats, &input_schema)?;
+        let output_stats = projection.project_statistics(input_stats, &input_schema)?;
 
         // Row count should be preserved
         assert_eq!(output_stats.num_rows, Precision::Exact(5));
@@ -2185,7 +2184,7 @@ mod tests {
             },
         ]);
 
-        let output_stats = projection.project_statistics(&input_stats, &input_schema)?;
+        let output_stats = projection.project_statistics(input_stats, &input_schema)?;
 
         // Row count should be preserved
         assert_eq!(output_stats.num_rows, Precision::Exact(5));
@@ -2207,7 +2206,7 @@ mod tests {
 
         let projection = Projection::new(vec![]);
 
-        let output_stats = projection.project_statistics(&input_stats, &input_schema)?;
+        let output_stats = projection.project_statistics(input_stats, &input_schema)?;
 
         // Row count should be preserved
         assert_eq!(output_stats.num_rows, Precision::Exact(5));
