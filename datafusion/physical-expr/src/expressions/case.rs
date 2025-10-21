@@ -310,7 +310,7 @@ impl CaseExpr {
 
         // Fill in a result value already for rows where the base expression value is null
         // Since each when expression is tested against the base expression using the equality
-        // operator, null base values can never match any when expression. `x == NULL` is false,
+        // operator, null base values can never match any when expression. `x = NULL` is falsy,
         // for all possible values of `x`.
         let base_nulls = is_null(base_value.as_ref())?;
         if base_nulls.true_count() > 0 {
@@ -354,6 +354,12 @@ impl CaseExpr {
             if when_match_count == 0 {
                 continue;
             }
+
+            // Make sure 'NULL' is treated as false
+            let when_value = match when_value.null_count() {
+                0 => when_value,
+                _ => prep_null_mask_filter(&when_value),
+            };
 
             // Filter the remainder batch based on the 'when' value
             // This results in a batch containing only the rows that need to be evaluated
