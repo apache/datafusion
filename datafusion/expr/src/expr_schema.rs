@@ -431,25 +431,11 @@ impl ExprSchemable for Expr {
         let field = match self {
             Expr::Alias(Alias {
                 expr,
-                name,
+                name: _,
                 metadata,
                 ..
             }) => {
-                let field = match &**expr {
-                    Expr::Placeholder(Placeholder { field, .. }) => match &field {
-                        // TODO: This seems to be pulling metadata/types from the schema
-                        // based on the Alias destination. name? Is this correct?
-                        None => schema
-                            .field_from_column(&Column::from_name(name))
-                            .map(|f| f.clone().with_name(&schema_name)),
-                        Some(field) => Ok(field
-                            .as_ref()
-                            .clone()
-                            .with_name(&schema_name)
-                            .with_nullable(expr.nullable(schema)?)),
-                    },
-                    _ => expr.to_field(schema).map(|(_, f)| f.as_ref().clone()),
-                }?;
+                let field = expr.to_field(schema).map(|(_, f)| f.as_ref().clone())?;
 
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
