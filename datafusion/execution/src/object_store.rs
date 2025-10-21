@@ -20,7 +20,9 @@
 //! and query data inside these systems.
 
 use dashmap::DashMap;
-use datafusion_common::{exec_err, internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, Result,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
