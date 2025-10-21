@@ -78,10 +78,11 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{
-    Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
-    WindowFrameBound, WriteOp,
+    Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
+    FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
+    WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
@@ -91,6 +92,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
+use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
 use datafusion_physical_plan::metrics::MetricType;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
@@ -1133,8 +1135,42 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<join_utils::JoinOn>>()?;
 
+                // TODO: `num_range_filters` can be used later on for ASOF joins (`num_range_filters > 1`)
+                let mut num_range_filters = 0;
+                let mut range_filters: Vec<Expr> = Vec::new();
+                let mut total_filters = 0;
+
                 let join_filter = match filter {
                     Some(expr) => {
+                        let split_expr = split_conjunction(expr);
+                        for expr in split_expr.iter() {
+                            match *expr {
+                                Expr::BinaryExpr(BinaryExpr {
+                                    left: _,
+                                    right: _,
+                                    op,
+                                }) => {
+                                    if matches!(
+                                        op,
+                                        Operator::Lt
+                                            | Operator::LtEq
+                                            | Operator::Gt
+                                            | Operator::GtEq
+                                    ) {
+                                        range_filters.push((**expr).clone());
+                                        num_range_filters += 1;
+                                    }
+                                    total_filters += 1;
+                                }
+                                // TODO: Want to deal with `Expr::Between` for IEJoins, it counts as two range predicates
+                                // which is why it is not dealt with in PWMJ
+                                // Expr::Between(_) => {},
+                                _ => {
+                                    total_filters += 1;
+                                }
+                            }
+                        }
+
                         // Extract columns from filter expression and saved in a HashSet
                         let cols = expr.column_refs();
 
@@ -1190,6 +1226,7 @@ impl DefaultPhysicalPlanner {
                         )?;
                         let filter_schema =
                             Schema::new_with_metadata(filter_fields, metadata);
+
                         let filter_expr = create_physical_expr(
                             expr,
                             &filter_df_schema,
@@ -1212,10 +1249,125 @@ impl DefaultPhysicalPlanner {
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
 
+                // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
                     if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
                         // cross join if there is no join conditions and no join filter set
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
+                    } else if num_range_filters == 1
+                        && total_filters == 1
+                        && !matches!(
+                            join_type,
+                            JoinType::LeftSemi
+                                | JoinType::RightSemi
+                                | JoinType::LeftAnti
+                                | JoinType::RightAnti
+                                | JoinType::LeftMark
+                                | JoinType::RightMark
+                        )
+                        && session_state
+                            .config_options()
+                            .optimizer
+                            .enable_piecewise_merge_join
+                    {
+                        let Expr::BinaryExpr(be) = &range_filters[0] else {
+                            return plan_err!(
+                                "Unsupported expression for PWMJ: Expected `Expr::BinaryExpr`"
+                            );
+                        };
+
+                        let mut op = be.op;
+                        if !matches!(
+                            op,
+                            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+                        ) {
+                            return plan_err!(
+                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
+                                op
+                            );
+                        }
+
+                        fn reverse_ineq(op: Operator) -> Operator {
+                            match op {
+                                Operator::Lt => Operator::Gt,
+                                Operator::LtEq => Operator::GtEq,
+                                Operator::Gt => Operator::Lt,
+                                Operator::GtEq => Operator::LtEq,
+                                _ => op,
+                            }
+                        }
+
+                        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+                        enum Side {
+                            Left,
+                            Right,
+                            Both,
+                        }
+
+                        let side_of = |e: &Expr| -> Result<Side> {
+                            let cols = e.column_refs();
+                            let any_left = cols
+                                .iter()
+                                .any(|c| left_df_schema.index_of_column(c).is_ok());
+                            let any_right = cols
+                                .iter()
+                                .any(|c| right_df_schema.index_of_column(c).is_ok());
+
+                            Ok(match (any_left, any_right) {
+                                (true, false) => Side::Left,
+                                (false, true) => Side::Right,
+                                (true, true) => Side::Both,
+                                _ => unreachable!(),
+                            })
+                        };
+
+                        let mut lhs_logical = &be.left;
+                        let mut rhs_logical = &be.right;
+
+                        let left_side = side_of(lhs_logical)?;
+                        let right_side = side_of(rhs_logical)?;
+                        if matches!(left_side, Side::Both)
+                            || matches!(right_side, Side::Both)
+                        {
+                            return Ok(Arc::new(NestedLoopJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                join_filter,
+                                join_type,
+                                None,
+                            )?));
+                        }
+
+                        if left_side == Side::Right && right_side == Side::Left {
+                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
+                            op = reverse_ineq(op);
+                        } else if !(left_side == Side::Left && right_side == Side::Right)
+                        {
+                            return plan_err!(
+                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
+                                op
+                            );
+                        }
+
+                        let on_left = create_physical_expr(
+                            lhs_logical,
+                            left_df_schema,
+                            session_state.execution_props(),
+                        )?;
+                        let on_right = create_physical_expr(
+                            rhs_logical,
+                            right_df_schema,
+                            session_state.execution_props(),
+                        )?;
+
+                        Arc::new(PiecewiseMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            (on_left, on_right),
+                            op,
+                            *join_type,
+                            session_state.config().target_partitions(),
+                        )?)
                     } else {
                         // there is no equal join condition, use the nested loop join
                         Arc::new(NestedLoopJoinExec::try_new(
