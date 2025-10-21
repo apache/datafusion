@@ -202,8 +202,7 @@ unsafe extern "C" fn evaluate_fn_wrapper(
     batch: WrappedArray,
 ) -> FFIResult<FFI_ColumnarValue> {
     let batch = rresult_return!(wrapped_array_to_record_batch(batch));
-    let value = rresult_return!(expr.inner().evaluate(&batch));
-    RResult::ROk(value.into())
+    rresult!(expr.inner().evaluate(&batch).and_then(FFI_ColumnarValue::try_from))
 }
 
 unsafe extern "C" fn return_field_fn_wrapper(
@@ -229,8 +228,7 @@ unsafe extern "C" fn evaluate_selection_fn_wrapper(
         .as_any()
         .downcast_ref::<BooleanArray>()
         .ok_or(exec_datafusion_err!("Unexpected selection array type")));
-    let value = rresult_return!(expr.inner().evaluate_selection(&batch, selection));
-    RResult::ROk(value.into())
+    rresult!(expr.inner().evaluate_selection(&batch, selection).and_then(FFI_ColumnarValue::try_from))
 }
 
 unsafe extern "C" fn children_fn_wrapper(
@@ -510,7 +508,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         unsafe {
             let batch = df_result!(record_batch_to_wrapped_array(batch.clone()))?;
-            df_result!((self.expr.evaluate)(&self.expr, batch).map(|v| v.into()))
+            df_result!((self.expr.evaluate)(&self.expr, batch)).and_then(ColumnarValue::try_from)
         }
     }
 
@@ -534,8 +532,8 @@ impl PhysicalExpr for ForeignPhysicalExpr {
             // The other alternative is to modify the trait signature.
             let selection: ArrayRef = Arc::new(selection.clone());
             let selection = WrappedArray::try_from(&selection)?;
-            df_result!((self.expr.evaluate_selection)(&self.expr, batch, selection)
-                .map(|f| f.into()))
+            df_result!((self.expr.evaluate_selection)(&self.expr, batch, selection))
+                .and_then(ColumnarValue::try_from)
         }
     }
 
