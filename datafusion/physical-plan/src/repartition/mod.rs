@@ -1248,37 +1248,40 @@ impl Stream for RepartitionStream {
                 RepartitionStreamState::ReceivingFromChannel => {
                     let value = futures::ready!(self.input.recv().poll_unpin(cx));
                     match value {
-                        Some(Some(v)) => match v {
-                            Ok(RepartitionBatch::Memory(batch)) => {
-                                // Release memory and return
-                                self.reservation
-                                    .lock()
-                                    .shrink(batch.get_array_memory_size());
-                                return Poll::Ready(Some(Ok(batch)));
-                            }
-                            Ok(RepartitionBatch::Spilled) => {
-                                // Get next file from SpillPool and create a stream
-                                let next_file = self.spill_pool.lock().take_next_file()?;
-                                match next_file {
-                                    Some(spill_file) => {
-                                        // Create stream using SpillReaderStream + spawn_buffered
-                                        let stream = self
-                                            .spill_manager
-                                            .read_spill_as_stream(spill_file, None)?;
-                                        self.state =
+                        Some(Some(v)) => {
+                            match v {
+                                Ok(RepartitionBatch::Memory(batch)) => {
+                                    // Release memory and return
+                                    self.reservation
+                                        .lock()
+                                        .shrink(batch.get_array_memory_size());
+                                    return Poll::Ready(Some(Ok(batch)));
+                                }
+                                Ok(RepartitionBatch::Spilled) => {
+                                    // Get next file from SpillPool and create a stream
+                                    let next_file =
+                                        self.spill_pool.lock().take_next_file()?;
+                                    match next_file {
+                                        Some(spill_file) => {
+                                            // Create stream using SpillReaderStream + spawn_buffered
+                                            let stream = self
+                                                .spill_manager
+                                                .read_spill_as_stream(spill_file, None)?;
+                                            self.state =
                                             RepartitionStreamState::ReadingSpilledBatch(stream);
-                                        continue;
-                                    }
-                                    None => {
-                                        // No spilled files available, continue receiving from channel
-                                        continue;
+                                            continue;
+                                        }
+                                        None => {
+                                            // No spilled files available, continue receiving from channel
+                                            continue;
+                                        }
                                     }
                                 }
+                                Err(e) => {
+                                    return Poll::Ready(Some(Err(e)));
+                                }
                             }
-                            Err(e) => {
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                        },
+                        }
                         Some(None) => {
                             self.num_input_partitions_processed += 1;
 
@@ -1317,12 +1320,15 @@ impl Stream for RepartitionStream {
                                         .spill_manager
                                         .read_spill_as_stream(spill_file, None)?;
                                     self.state =
-                                        RepartitionStreamState::ReadingSpilledBatch(new_stream);
+                                        RepartitionStreamState::ReadingSpilledBatch(
+                                            new_stream,
+                                        );
                                     continue;
                                 }
                                 None => {
                                     // No more spilled files, go back to receiving from channel
-                                    self.state = RepartitionStreamState::ReceivingFromChannel;
+                                    self.state =
+                                        RepartitionStreamState::ReceivingFromChannel;
                                     continue;
                                 }
                             }
@@ -1378,37 +1384,40 @@ impl Stream for PerPartitionStream {
                 RepartitionStreamState::ReceivingFromChannel => {
                     let value = futures::ready!(self.receiver.recv().poll_unpin(cx));
                     match value {
-                        Some(Some(v)) => match v {
-                            Ok(RepartitionBatch::Memory(batch)) => {
-                                // Release memory and return
-                                self.reservation
-                                    .lock()
-                                    .shrink(batch.get_array_memory_size());
-                                return Poll::Ready(Some(Ok(batch)));
-                            }
-                            Ok(RepartitionBatch::Spilled) => {
-                                // Get next file from SpillPool and create a stream
-                                let next_file = self.spill_pool.lock().take_next_file()?;
-                                match next_file {
-                                    Some(spill_file) => {
-                                        // Create stream using SpillReaderStream + spawn_buffered
-                                        let stream = self
-                                            .spill_manager
-                                            .read_spill_as_stream(spill_file, None)?;
-                                        self.state =
+                        Some(Some(v)) => {
+                            match v {
+                                Ok(RepartitionBatch::Memory(batch)) => {
+                                    // Release memory and return
+                                    self.reservation
+                                        .lock()
+                                        .shrink(batch.get_array_memory_size());
+                                    return Poll::Ready(Some(Ok(batch)));
+                                }
+                                Ok(RepartitionBatch::Spilled) => {
+                                    // Get next file from SpillPool and create a stream
+                                    let next_file =
+                                        self.spill_pool.lock().take_next_file()?;
+                                    match next_file {
+                                        Some(spill_file) => {
+                                            // Create stream using SpillReaderStream + spawn_buffered
+                                            let stream = self
+                                                .spill_manager
+                                                .read_spill_as_stream(spill_file, None)?;
+                                            self.state =
                                             RepartitionStreamState::ReadingSpilledBatch(stream);
-                                        continue;
-                                    }
-                                    None => {
-                                        // No spilled files available, continue receiving from channel
-                                        continue;
+                                            continue;
+                                        }
+                                        None => {
+                                            // No spilled files available, continue receiving from channel
+                                            continue;
+                                        }
                                     }
                                 }
+                                Err(e) => {
+                                    return Poll::Ready(Some(Err(e)));
+                                }
                             }
-                            Err(e) => {
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                        },
+                        }
                         Some(None) => {
                             // Input partition has finished sending batches
                             return Poll::Ready(None);
@@ -1436,12 +1445,15 @@ impl Stream for PerPartitionStream {
                                         .spill_manager
                                         .read_spill_as_stream(spill_file, None)?;
                                     self.state =
-                                        RepartitionStreamState::ReadingSpilledBatch(new_stream);
+                                        RepartitionStreamState::ReadingSpilledBatch(
+                                            new_stream,
+                                        );
                                     continue;
                                 }
                                 None => {
                                     // No more spilled files, go back to receiving from channel
-                                    self.state = RepartitionStreamState::ReceivingFromChannel;
+                                    self.state =
+                                        RepartitionStreamState::ReceivingFromChannel;
                                     continue;
                                 }
                             }
