@@ -151,6 +151,64 @@ impl Projection {
     /// For example, if this projection is `SELECT c@2 AS x, b@1 AS y, a@0 as z` and the other projection is `SELECT x@0 + 1 AS c1, y@1 + z@2 as c2`,
     /// we return a projection equivalent to `SELECT c@2 + 1 AS c1, b@1 + a@0 as c2`.
     ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use datafusion_physical_expr::projection::{Projection, ProjectionExpr};
+    /// use datafusion_physical_expr::expressions::{Column, BinaryExpr, Literal};
+    /// use datafusion_common::{Result, ScalarValue};
+    /// use datafusion_expr::Operator;
+    ///
+    /// fn main() -> Result<()> {
+    ///     // Example from the docstring:
+    ///     // Base projection: SELECT c@2 AS x, b@1 AS y, a@0 AS z
+    ///     let base = Projection::new(vec![
+    ///         ProjectionExpr {
+    ///             expr: Arc::new(Column::new("c", 2)),
+    ///             alias: "x".to_string(),
+    ///         },
+    ///         ProjectionExpr {
+    ///             expr: Arc::new(Column::new("b", 1)),
+    ///             alias: "y".to_string(),
+    ///         },
+    ///         ProjectionExpr {
+    ///             expr: Arc::new(Column::new("a", 0)),
+    ///             alias: "z".to_string(),
+    ///         },
+    ///     ]);
+    ///
+    ///     // Top projection: SELECT x@0 + 1 AS c1, y@1 + z@2 AS c2
+    ///     let top = Projection::new(vec![
+    ///         ProjectionExpr {
+    ///             expr: Arc::new(BinaryExpr::new(
+    ///                 Arc::new(Column::new("x", 0)),
+    ///                 Operator::Plus,
+    ///                 Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+    ///             )),
+    ///             alias: "c1".to_string(),
+    ///         },
+    ///         ProjectionExpr {
+    ///             expr: Arc::new(BinaryExpr::new(
+    ///                 Arc::new(Column::new("y", 1)),
+    ///                 Operator::Plus,
+    ///                 Arc::new(Column::new("z", 2)),
+    ///             )),
+    ///             alias: "c2".to_string(),
+    ///         },
+    ///     ]);
+    ///
+    ///     // Expected result: SELECT c@2 + 1 AS c1, b@1 + a@0 AS c2
+    ///     let result = base.try_merge(&top)?;
+    ///
+    ///     assert_eq!(result.as_ref().len(), 2);
+    ///     assert_eq!(result.as_ref()[0].alias, "c1");
+    ///     assert_eq!(result.as_ref()[1].alias, "c2");
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
     /// # Errors
     /// This function returns an error if any expression in the `other` projection cannot be
     /// applied on top of this projection.
@@ -1830,55 +1888,6 @@ pub(crate) mod tests {
         // Check that the expressions are BinaryExpr (not just Column)
         assert!(merged.as_ref()[0].expr.as_any().is::<BinaryExpr>());
         assert!(merged.as_ref()[1].expr.as_any().is::<BinaryExpr>());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_merge_docstring_example() -> Result<()> {
-        // Example from the docstring:
-        // Base projection: SELECT c@2 AS x, b@1 AS y, a@0 AS z
-        let base = Projection::new(vec![
-            ProjectionExpr {
-                expr: Arc::new(Column::new("c", 2)),
-                alias: "x".to_string(),
-            },
-            ProjectionExpr {
-                expr: Arc::new(Column::new("b", 1)),
-                alias: "y".to_string(),
-            },
-            ProjectionExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                alias: "z".to_string(),
-            },
-        ]);
-
-        // Top projection: SELECT x@0 + 1 AS c1, y@1 + z@2 AS c2
-        let top = Projection::new(vec![
-            ProjectionExpr {
-                expr: Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("x", 0)),
-                    Operator::Plus,
-                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-                )),
-                alias: "c1".to_string(),
-            },
-            ProjectionExpr {
-                expr: Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("y", 1)),
-                    Operator::Plus,
-                    Arc::new(Column::new("z", 2)),
-                )),
-                alias: "c2".to_string(),
-            },
-        ]);
-
-        // Expected result: SELECT c@2 + 1 AS c1, b@1 + a@0 AS c2
-        let result = base.try_merge(&top)?;
-
-        assert_eq!(result.as_ref().len(), 2);
-        assert_eq!(result.as_ref()[0].alias, "c1");
-        assert_eq!(result.as_ref()[1].alias, "c2");
 
         Ok(())
     }
