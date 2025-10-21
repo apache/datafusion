@@ -25,7 +25,7 @@ use datafusion::{
 use datafusion_catalog::MemTable;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::{repartition::RepartitionExec, ExecutionPlanProperties};
 use futures::TryStreamExt;
 use itertools::Itertools;
 
@@ -47,9 +47,7 @@ async fn test_repartition_memory_limit() {
     let ctx = SessionContext::new_with_config_rt(config, Arc::new(runtime));
     let batches = vec![RecordBatch::try_from_iter(vec![(
         "c1",
-        Arc::new(Int32Array::from_iter_values(
-            (0..10).cycle().take(1_000_000),
-        )) as ArrayRef,
+        Arc::new(Int32Array::from_iter_values((0..10).cycle().take(100_000))) as ArrayRef,
     )])
     .unwrap()];
     let table = Arc::new(MemTable::try_new(batches[0].schema(), vec![batches]).unwrap());
@@ -60,6 +58,7 @@ async fn test_repartition_memory_limit() {
         .await
         .unwrap();
     let plan = ctx.state().create_physical_plan(&plan).await.unwrap();
+    assert_eq!(plan.output_partitioning().partition_count(), 2);
     // Execute partition 0, this should cause items going into the rest of the partitions to queue up and because
     // of the low memory limit should spill to disk.
     let batches0 = Arc::clone(&plan)
@@ -98,20 +97,20 @@ async fn test_repartition_memory_limit() {
         .collect_vec();
     #[rustfmt::skip]
     let expected = &[
-    "+----+--------+",
-    "| c1 | c      |",
-    "+----+--------+",
-    "| 0  | 100000 |",
-    "| 1  | 100000 |",
-    "| 2  | 100000 |",
-    "| 3  | 100000 |",
-    "| 4  | 100000 |",
-    "| 5  | 100000 |",
-    "| 6  | 100000 |",
-    "| 7  | 100000 |",
-    "| 8  | 100000 |",
-    "| 9  | 100000 |",
-    "+----+--------+",
+    "+----+-------+",
+    "| c1 | c     |",
+    "+----+-------+",
+    "| 0  | 10000 |",
+    "| 1  | 10000 |",
+    "| 2  | 10000 |",
+    "| 3  | 10000 |",
+    "| 4  | 10000 |",
+    "| 5  | 10000 |",
+    "| 6  | 10000 |",
+    "| 7  | 10000 |",
+    "| 8  | 10000 |",
+    "| 9  | 10000 |",
+    "+----+-------+",
     ];
     assert_batches_sorted_eq!(expected, &all_batches);
 }

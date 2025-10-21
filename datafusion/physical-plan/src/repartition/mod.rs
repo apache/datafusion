@@ -1231,34 +1231,31 @@ impl Stream for RepartitionStream {
         loop {
             match &mut self.state {
                 RepartitionStreamState::ReceivingFromChannel => {
-                    match self.input.recv().poll_unpin(cx) {
-                        Poll::Ready(Some(Some(v))) => {
-                            match v {
-                                Ok(RepartitionBatch::Memory(batch)) => {
-                                    // Release memory and return
-                                    self.reservation
-                                        .lock()
-                                        .shrink(batch.get_array_memory_size());
-                                    return Poll::Ready(Some(Ok(batch)));
-                                }
-                                Ok(RepartitionBatch::Spilled { spill_file, size }) => {
-                                    // Read from disk - SpillReaderStream uses tokio::fs internally
-                                    // Pass the original size for validation
-                                    let stream = self
-                                        .spill_manager
-                                        .read_spill_as_stream(spill_file, Some(size))?;
-                                    self.state =
-                                        RepartitionStreamState::ReadingSpilledBatch(
-                                            stream,
-                                        );
-                                    // Continue loop to poll the stream immediately
-                                }
-                                Err(e) => {
-                                    return Poll::Ready(Some(Err(e)));
-                                }
+                    let value = futures::ready!(self.input.recv().poll_unpin(cx));
+                    match value {
+                        Some(Some(v)) => match v {
+                            Ok(RepartitionBatch::Memory(batch)) => {
+                                // Release memory and return
+                                self.reservation
+                                    .lock()
+                                    .shrink(batch.get_array_memory_size());
+                                return Poll::Ready(Some(Ok(batch)));
                             }
-                        }
-                        Poll::Ready(Some(None)) => {
+                            Ok(RepartitionBatch::Spilled { spill_file, size }) => {
+                                // Read from disk - SpillReaderStream uses tokio::fs internally
+                                // Pass the original size for validation
+                                let stream = self
+                                    .spill_manager
+                                    .read_spill_as_stream(spill_file, Some(size))?;
+                                self.state =
+                                    RepartitionStreamState::ReadingSpilledBatch(stream);
+                                // Continue loop to poll the stream immediately
+                            }
+                            Err(e) => {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        },
+                        Some(None) => {
                             self.num_input_partitions_processed += 1;
 
                             if self.num_input_partitions
@@ -1271,11 +1268,8 @@ impl Stream for RepartitionStream {
                                 continue;
                             }
                         }
-                        Poll::Ready(None) => {
+                        None => {
                             return Poll::Ready(None);
-                        }
-                        Poll::Pending => {
-                            return Poll::Pending;
                         }
                     }
                 }
@@ -1340,39 +1334,35 @@ impl Stream for PerPartitionStream {
         loop {
             match &mut self.state {
                 RepartitionStreamState::ReceivingFromChannel => {
-                    match self.receiver.recv().poll_unpin(cx) {
-                        Poll::Ready(Some(Some(v))) => {
-                            match v {
-                                Ok(RepartitionBatch::Memory(batch)) => {
-                                    // Release memory and return
-                                    self.reservation
-                                        .lock()
-                                        .shrink(batch.get_array_memory_size());
-                                    return Poll::Ready(Some(Ok(batch)));
-                                }
-                                Ok(RepartitionBatch::Spilled { spill_file, size }) => {
-                                    // Read from disk - SpillReaderStream uses tokio::fs internally
-                                    // Pass the original size for validation
-                                    let stream = self
-                                        .spill_manager
-                                        .read_spill_as_stream(spill_file, Some(size))?;
-                                    self.state =
-                                        RepartitionStreamState::ReadingSpilledBatch(
-                                            stream,
-                                        );
-                                    // Continue loop to poll the stream immediately
-                                }
-                                Err(e) => {
-                                    return Poll::Ready(Some(Err(e)));
-                                }
+                    let value = futures::ready!(self.receiver.recv().poll_unpin(cx));
+                    match value {
+                        Some(Some(v)) => match v {
+                            Ok(RepartitionBatch::Memory(batch)) => {
+                                // Release memory and return
+                                self.reservation
+                                    .lock()
+                                    .shrink(batch.get_array_memory_size());
+                                return Poll::Ready(Some(Ok(batch)));
                             }
-                        }
-                        Poll::Ready(Some(None)) => {
+                            Ok(RepartitionBatch::Spilled { spill_file, size }) => {
+                                // Read from disk - SpillReaderStream uses tokio::fs internally
+                                // Pass the original size for validation
+                                let stream = self
+                                    .spill_manager
+                                    .read_spill_as_stream(spill_file, Some(size))?;
+                                self.state =
+                                    RepartitionStreamState::ReadingSpilledBatch(stream);
+                                // Continue loop to poll the stream immediately
+                            }
+                            Err(e) => {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        },
+                        Some(None) => {
                             // Input partition has finished sending batches
                             return Poll::Ready(None);
                         }
-                        Poll::Ready(None) => return Poll::Ready(None),
-                        Poll::Pending => return Poll::Pending,
+                        None => return Poll::Ready(None),
                     }
                 }
 
@@ -2091,6 +2081,46 @@ mod tests {
         );
 
         println!("No spilling occurred - all data processed in memory");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oom() -> Result<()> {
+        use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+
+        // Test that repartition fails with OOM when disk manager is disabled
+        let schema = test_schema();
+        let partition = create_vec_batches(50);
+        let input_partitions = vec![partition];
+        let partitioning = Partitioning::RoundRobinBatch(4);
+
+        // Setup context with memory limit but NO disk manager (explicitly disabled)
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
+            .build_arc()?;
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
+
+        // create physical plan
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        // Attempt to execute - should fail with ResourcesExhausted error
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            let err = stream.next().await.unwrap().unwrap_err();
+            let err = err.find_root();
+            assert!(
+                matches!(err, DataFusionError::ResourcesExhausted(_)),
+                "Wrong error type: {err}",
+            );
+        }
 
         Ok(())
     }
