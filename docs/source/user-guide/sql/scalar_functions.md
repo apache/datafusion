@@ -2413,12 +2413,6 @@ current_date()
     SELECT current_date();
 ```
 
-```sql
-(optional)
-SET datafusion.execution.time_zone = '+00:00'
-current_date()
-```
-
 #### Aliases
 
 - today
@@ -2433,12 +2427,6 @@ The `current_time()` return value is determined at query time and will return th
 current_time()
     (optional) SET datafusion.execution.time_zone = '+00:00';
     SELECT current_time();
-```
-
-```sql
-(optional)
-SET datafusion.execution.time_zone = '+00:00'
-current_time()
 ```
 
 ### `current_timestamp`
