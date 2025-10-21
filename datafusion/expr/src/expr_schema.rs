@@ -947,7 +947,6 @@ mod tests {
             ),
         ));
 
-        assert!(expr.nullable(&schema).unwrap());
         assert_eq!(
             expr.data_type_and_nullable(&schema).unwrap(),
             (DataType::Utf8, true)

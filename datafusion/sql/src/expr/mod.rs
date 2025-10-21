@@ -287,7 +287,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         schema,
                         planner_context,
                     )?),
-                    self.convert_data_type(&data_type)?.data_type().clone(),
+                    self.convert_data_type_to_field(&data_type)?
+                        .data_type()
+                        .clone(),
                 )))
             }
 
@@ -297,7 +299,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 uses_odbc_syntax: _,
             }) => Ok(Expr::Cast(Cast::new(
                 Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type(&data_type)?.data_type().clone(),
+                self.convert_data_type_to_field(&data_type)?
+                    .data_type()
+                    .clone(),
             ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
@@ -969,7 +973,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("CAST with format is not supported: {format}");
         }
 
-        let dt = self.convert_data_type(&data_type)?;
+        let dt = self.convert_data_type_to_field(&data_type)?;
         let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
 
         // numeric constants are treated as seconds (rather as nanoseconds)

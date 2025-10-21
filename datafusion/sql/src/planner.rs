@@ -428,7 +428,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
-            let data_type = self.convert_data_type(&column.data_type)?;
+            let data_type = self.convert_data_type_to_field(&column.data_type)?;
             let not_nullable = column
                 .options
                 .iter()
@@ -589,7 +589,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
-    pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<FieldRef> {
+    pub(crate) fn convert_data_type_to_field(
+        &self,
+        sql_type: &SQLDataType,
+    ) -> Result<FieldRef> {
         // First check if any of the registered type_planner can handle this type
         if let Some(type_planner) = self.context_provider.get_type_planner() {
             if let Some(data_type) = type_planner.plan_type(sql_type)? {
@@ -601,7 +604,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
-                let inner_data_type = self.convert_data_type(inner_sql_type)?;
+                let inner_data_type = self.convert_data_type_to_field(inner_sql_type)?;
 
                 // Lists are allowed to have an arbitrarily named field;
                 // however, a name other than 'item' will cause it to fail an
@@ -622,7 +625,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 inner_sql_type,
                 maybe_array_size,
             )) => {
-                let inner_data_type = self.convert_data_type(inner_sql_type)?;
+                let inner_data_type = self.convert_data_type_to_field(inner_sql_type)?;
                 if let Some(array_size) = maybe_array_size {
                     Ok(Field::new(
                         "",
@@ -763,7 +766,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .iter()
                     .enumerate()
                     .map(|(idx, field)| {
-                        let data_type = self.convert_data_type(&field.field_type)?;
+                        let data_type = self.convert_data_type_to_field(&field.field_type)?;
                         let field_name = match &field.field_name {
                             Some(ident) => ident.clone(),
                             None => Ident::new(format!("c{idx}")),

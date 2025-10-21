@@ -17,7 +17,11 @@
 
 use crate::logical_plan;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{assert_contains, metadata::Literal, ParamValues, ScalarValue};
+use datafusion_common::{
+    assert_contains,
+    metadata::{format_type_and_metadata, Literal},
+    ParamValues, ScalarValue,
+};
 use datafusion_expr::{LogicalPlan, Prepare, Statement};
 use insta::assert_snapshot;
 use itertools::Itertools as _;
@@ -82,9 +86,11 @@ impl ParameterTestWithMetadata<'_> {
 fn generate_prepare_stmt_and_data_types(sql: &str) -> (LogicalPlan, String) {
     let plan = logical_plan(sql).unwrap();
     let data_types = match &plan {
-        LogicalPlan::Statement(Statement::Prepare(Prepare { fields, .. })) => {
-            fields.iter().map(|f| f.data_type()).join(", ").to_string()
-        }
+        LogicalPlan::Statement(Statement::Prepare(Prepare { fields, .. })) => fields
+            .iter()
+            .map(|f| format_type_and_metadata(f.data_type(), Some(f.metadata())))
+            .join(", ")
+            .to_string(),
         _ => panic!("Expected a Prepare statement"),
     };
     (plan, data_types)

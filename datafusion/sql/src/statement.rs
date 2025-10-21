@@ -732,7 +732,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // Convert parser data types to DataFusion data types
                 let mut fields: Vec<FieldRef> = data_types
                     .into_iter()
-                    .map(|t| self.convert_data_type(&t))
+                    .map(|t| self.convert_data_type_to_field(&t))
                     .collect::<Result<_>>()?;
 
                 // Create planner context with parameters
@@ -1179,7 +1179,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 ..
             }) => {
                 let return_type = match return_type {
-                    Some(t) => Some(self.convert_data_type(&t)?),
+                    Some(t) => Some(self.convert_data_type_to_field(&t)?),
                     None => None,
                 };
                 let mut planner_context = PlannerContext::new();
@@ -1190,7 +1190,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         let function_args = function_args
                             .into_iter()
                             .map(|arg| {
-                                let data_type = self.convert_data_type(&arg.data_type)?;
+                                let data_type =
+                                    self.convert_data_type_to_field(&arg.data_type)?;
 
                                 let default_expr = match arg.default_expr {
                                     Some(expr) => Some(self.sql_to_expr(
