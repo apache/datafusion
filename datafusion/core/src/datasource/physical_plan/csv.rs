@@ -121,7 +121,7 @@ mod tests {
         .with_projection(Some(vec![0, 2, 4]))
         .build();
 
-        assert_eq!(13, config.file_schema.fields().len());
+        assert_eq!(13, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
 
         assert_eq!(3, csv.schema().fields().len());
@@ -185,7 +185,7 @@ mod tests {
         .with_file_compression_type(file_compression_type.to_owned())
         .with_projection(Some(vec![4, 0, 2]))
         .build();
-        assert_eq!(13, config.file_schema.fields().len());
+        assert_eq!(13, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
         assert_eq!(3, csv.schema().fields().len());
 
@@ -250,7 +250,7 @@ mod tests {
         .with_file_compression_type(file_compression_type.to_owned())
         .with_limit(Some(5))
         .build();
-        assert_eq!(13, config.file_schema.fields().len());
+        assert_eq!(13, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
         assert_eq!(13, csv.schema().fields().len());
 
@@ -313,7 +313,7 @@ mod tests {
         .with_file_compression_type(file_compression_type.to_owned())
         .with_limit(Some(5))
         .build();
-        assert_eq!(14, config.file_schema.fields().len());
+        assert_eq!(14, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
         assert_eq!(14, csv.schema().fields().len());
 
@@ -349,7 +349,7 @@ mod tests {
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
 
-        let file_groups = partitioned_file_groups(
+        let mut file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
@@ -357,30 +357,29 @@ mod tests {
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
+        // Add partition columns / values
+        file_groups[0][0].partition_values = vec![ScalarValue::from("2021-10-26")];
+
+        let num_file_schema_fields = file_schema.fields().len();
 
         let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let mut config = FileScanConfigBuilder::from(partitioned_csv_config(
+        let config = FileScanConfigBuilder::from(partitioned_csv_config(
             file_schema,
             file_groups,
             source,
         ))
         .with_newlines_in_values(false)
         .with_file_compression_type(file_compression_type.to_owned())
-        .build();
-
-        // Add partition columns
-        config.table_partition_cols =
-            vec![Arc::new(Field::new("date", DataType::Utf8, false))];
-        config.file_groups[0][0].partition_values = vec![ScalarValue::from("2021-10-26")];
-
+        .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
         // We should be able to project on the partition column
         // Which is supposed to be after the file fields
-        config.projection = Some(vec![0, config.file_schema.fields().len()]);
+        .with_projection(Some(vec![0, num_file_schema_fields]))
+        .build();
 
         // we don't have `/date=xx/` in the path but that is ok because
         // partitions are resolved during scan anyway
 
-        assert_eq!(13, config.file_schema.fields().len());
+        assert_eq!(13, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
         assert_eq!(2, csv.schema().fields().len());
 

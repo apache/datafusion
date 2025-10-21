@@ -154,7 +154,7 @@ futures = "0.3"
 half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
-indexmap = "2.11.4"
+indexmap = "2.12.0"
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.4", default-features = false }
@@ -178,7 +178,7 @@ sqlparser = { version = "0.59.0", default-features = false, features = ["std", "
 tempfile = "3"
 testcontainers = { version = "0.24", features = ["default"] }
 testcontainers-modules = { version = "0.12" }
-tokio = { version = "1.47", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
 
 [workspace.lints.clippy]
