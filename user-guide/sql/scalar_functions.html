@@ -3207,6 +3207,8 @@ Can be a constant, column, or function.</p></li>
 <p>Returns the current date in the session time zone.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">current_date()</span></code> return value is determined at query time and will return the same date, no matter when in the query plan the function executes.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">current_date</span><span class="p">()</span>
+<span class="w">    </span><span class="p">(</span><span class="n">optional</span><span class="p">)</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;+00:00&#39;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="k">current_date</span><span class="p">();</span>
 </pre></div>
 </div>
 <section id="id170">
@@ -3222,6 +3224,8 @@ Can be a constant, column, or function.</p></li>
 <p>The <code class="docutils literal notranslate"><span class="pre">current_time()</span></code> return value is determined at query time and will return the same time, no matter when in the query plan the function executes.</p>
 <p>The session time zone can be set using the statement ‘SET datafusion.execution.time_zone = desired time zone’. The time zone can be a value like +00:00, ‘Europe/London’ etc.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">current_time</span><span class="p">()</span>
+<span class="w">    </span><span class="p">(</span><span class="n">optional</span><span class="p">)</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;+00:00&#39;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="k">current_time</span><span class="p">();</span>
 </pre></div>
 </div>
 </section>
