@@ -425,8 +425,9 @@ impl CaseExpr {
             // Evaluate the 'when' predicate for the remainder batch
             // This results in a boolean array with the same length as the remaining number of rows
             let when_predicate = &self.when_then_expr[i].0;
-            let when_value = when_predicate.evaluate(&remainder_batch)?;
-            let when_value = when_value.into_array(remainder_batch.num_rows())?;
+            let when_value = when_predicate
+                .evaluate(&remainder_batch)?
+                .into_array(remainder_batch.num_rows())?;
             let when_value = as_boolean_array(&when_value).map_err(|_| {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
