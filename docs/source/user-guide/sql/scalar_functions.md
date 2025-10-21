@@ -2409,6 +2409,8 @@ The `current_date()` return value is determined at query time and will return th
 
 ```sql
 current_date()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_date();
 ```
 
 #### Aliases
@@ -2425,6 +2427,8 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 
 ```sql
 current_time()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_time();
 ```
 
 ### `current_timestamp`

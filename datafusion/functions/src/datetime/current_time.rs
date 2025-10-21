@@ -38,7 +38,9 @@ The `current_time()` return value is determined at query time and will return th
 
 The session time zone can be set using the statement 'SET datafusion.execution.time_zone = desired time zone'. The time zone can be a value like +00:00, 'Europe/London' etc.
 "#,
-    syntax_example = "current_time()"
+    syntax_example = r#"current_time()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_time();"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentTimeFunc {

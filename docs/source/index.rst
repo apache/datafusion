@@ -15,8 +15,13 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
-.. image:: _static/images/2x_bgwhite_original.png
-  :alt: DataFusion Logo
+.. image:: _static/images/original.svg
+   :alt: DataFusion Logo
+   :class: light-logo
+
+.. image:: _static/images/original_dark.svg
+   :alt: DataFusion Logo
+   :class: dark-logo
 
 =================
 Apache DataFusion
