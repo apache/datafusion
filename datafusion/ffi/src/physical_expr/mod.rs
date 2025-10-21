@@ -345,11 +345,11 @@ unsafe extern "C" fn get_properties_fn_wrapper(
     children: &RVec<FFI_ExprProperties>,
 ) -> FFIResult<FFI_ExprProperties> {
     let expr = expr.inner();
-    let children = children
+    let children = rresult_return!(children
         .iter()
-        .map(|child| child.into())
-        .collect::<Vec<_>>();
-    rresult!(expr.get_properties(&children).map(Into::into))
+        .map(ExprProperties::try_from)
+        .collect::<Result<Vec<_>>>());
+    rresult!(expr.get_properties(&children).and_then(|p| FFI_ExprProperties::try_from(&p)))
 }
 
 unsafe extern "C" fn fmt_sql_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFIResult<RString> {
@@ -650,8 +650,8 @@ impl PhysicalExpr for ForeignPhysicalExpr {
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         unsafe {
-            let children = children.iter().map(Into::into).collect::<RVec<_>>();
-            df_result!((self.expr.get_properties)(&self.expr, &children).map(Into::into))
+            let children = children.into_iter().map(FFI_ExprProperties::try_from).collect::<Result<RVec<_>>>()?;
+            df_result!((self.expr.get_properties)(&self.expr, &children)).and_then(|p| ExprProperties::try_from(&p))
         }
     }
 
