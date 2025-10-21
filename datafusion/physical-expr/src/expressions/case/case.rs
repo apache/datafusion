@@ -26,17 +26,15 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{arrow_datafusion_err, exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 use super::super::{Column, Literal};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
-use crate::expressions::case::literal_values::LookupTable;
+use crate::expressions::case::literal_values::{try_creating_lookup_table, LookupTable};
 
-type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
+pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 enum EvalMethod {
@@ -110,7 +108,7 @@ enum EvalMethod {
     /// END
     /// ```
     ///
-    WithExpressionOnlyScalarValuesAndResults(ScalarsOrNullLookup)
+    WithExprScalarLookupTable(ScalarsOrNullLookup)
 }
 
 #[derive(Debug)]
@@ -118,7 +116,118 @@ struct ScalarsOrNullLookup {
     /// The lookup table to use for evaluating the CASE expression
     lookup: Arc<dyn LookupTable>,
 
+    /// ArrayRef where array[i] = then_literals[i]
+    /// the last value in the array is the else_expr
     values_to_take_from: ArrayRef,
+}
+
+impl ScalarsOrNullLookup {
+    pub fn maybe_new(
+        when_then_expr: &Vec<WhenThen>, else_expr: &Option<Arc<dyn PhysicalExpr>>
+    ) -> Option<Self> {
+        // We can't use the optimization if we don't have any when then pairs
+        if when_then_expr.is_empty() {
+            return None;
+        }
+
+        // If we only have 1 than this optimization is not useful
+        if when_then_expr.len() == 1 {
+            return None;
+        }
+
+        let when_then_exprs_maybe_literals = when_then_expr
+          .iter()
+          .map(|(when, then)| {
+              let when_maybe_literal = when.as_any().downcast_ref::<Literal>();
+              let then_maybe_literal = then.as_any().downcast_ref::<Literal>();
+
+              when_maybe_literal.zip(then_maybe_literal)
+          })
+          .collect::<Vec<_>>();
+
+        // If not all the when/then expressions are literals we cannot use this optimization
+        if when_then_exprs_maybe_literals.contains(&None) {
+            return None;
+        }
+
+        let (when_literals, then_literals): (Vec<ScalarValue>, Vec<ScalarValue>) = when_then_exprs_maybe_literals
+          .iter()
+          // Unwrap the options as we have already checked they are all Some
+          .flatten()
+          .map(|(when_lit, then_lit)| (when_lit.value().clone(), then_lit.value().clone()))
+          .unzip();
+
+
+        let else_expr: ScalarValue = if let Some(else_expr) = else_expr {
+            let literal = else_expr.as_any().downcast_ref::<Literal>()?;
+
+            literal.value().clone()
+        } else {
+            let Ok(null_scalar) = ScalarValue::try_new_null(&then_literals[0].data_type())
+            else {
+                return None;
+            };
+
+            null_scalar
+        };
+
+        {
+            let data_type = when_literals[0].data_type();
+
+            // If not all the when literals are the same data type we cannot use this optimization
+            if when_literals.iter().any(|l| l.data_type() != data_type) {
+                return None;
+            }
+        }
+
+        {
+            let data_type = then_literals[0].data_type();
+
+            // If not all the then and the else literals are the same data type we cannot use this optimization
+            if then_literals.iter().any(|l| l.data_type() != data_type) {
+                return None;
+            }
+
+            if else_expr.data_type() != data_type {
+                return None;
+            }
+        }
+
+
+        let output_array = ScalarValue::iter_to_array(
+            then_literals.iter()
+              // The else is in the end
+              .chain(std::iter::once(&else_expr))
+              .cloned()
+        ).ok()?;
+
+        let lookup = try_creating_lookup_table(
+            when_literals,
+            
+            // The else expression is in the end
+            output_array.len() as i32 - 1,
+        ).ok()?;
+
+        Some(Self {
+            lookup,
+            values_to_take_from: output_array,
+        })
+    }
+
+    fn create_output(&self, expr_array: &ArrayRef) -> Result<ArrayRef> {
+        let take_indices = self.lookup.match_values(&expr_array)?;
+
+        // Zero-copy conversion
+        let take_indices = Int32Array::from(take_indices);
+
+        // An optimize version would depend on the type of the values_to_take_from
+        // For example, if the type is view we can just keep pointing to the same value (similar to dictionary)
+        // if the type is dictionary we can just use the indices as is (or cast them to the key type) and create a new dictionary array
+        let output = arrow::compute::take(&self.values_to_take_from, &take_indices, None)
+          .map_err(|e| arrow_datafusion_err!(e))?;
+
+        Ok(output)
+    }
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -195,24 +304,7 @@ impl CaseExpr {
         if when_then_expr.is_empty() {
             exec_err!("There must be at least one WHEN clause")
         } else {
-            let eval_method = if expr.is_some() {
-                EvalMethod::WithExpression
-            } else if when_then_expr.len() == 1
-                && is_cheap_and_infallible(&(when_then_expr[0].1))
-                && else_expr.is_none()
-            {
-                EvalMethod::InfallibleExprOrNull
-            } else if when_then_expr.len() == 1
-                && when_then_expr[0].1.as_any().is::<Literal>()
-                && else_expr.is_some()
-                && else_expr.as_ref().unwrap().as_any().is::<Literal>()
-            {
-                EvalMethod::ScalarOrScalar
-            } else if when_then_expr.len() == 1 && else_expr.is_some() {
-                EvalMethod::ExpressionOrExpression
-            } else {
-                EvalMethod::NoExpression
-            };
+            let eval_method = Self::find_best_eval_method(&expr, &when_then_expr, &else_expr);
 
             Ok(Self {
                 expr,
@@ -220,6 +312,33 @@ impl CaseExpr {
                 else_expr,
                 eval_method,
             })
+        }
+    }
+
+    fn find_best_eval_method(expr: &Option<Arc<dyn PhysicalExpr>>, when_then_expr: &Vec<WhenThen>, else_expr: &Option<Arc<dyn PhysicalExpr>>) -> EvalMethod {
+        if expr.is_some() {
+            if let Some(mapping) = ScalarsOrNullLookup::maybe_new(when_then_expr, else_expr) {
+                return EvalMethod::WithExprScalarLookupTable(mapping);
+            }
+
+            return EvalMethod::WithExpression
+        }
+
+        if when_then_expr.len() == 1
+          && is_cheap_and_infallible(&(when_then_expr[0].1))
+          && else_expr.is_none()
+        {
+            EvalMethod::InfallibleExprOrNull
+        } else if when_then_expr.len() == 1
+          && when_then_expr[0].1.as_any().is::<Literal>()
+          && else_expr.is_some()
+          && else_expr.as_ref().unwrap().as_any().is::<Literal>()
+        {
+            EvalMethod::ScalarOrScalar
+        } else if when_then_expr.len() == 1 && else_expr.is_some() {
+            EvalMethod::ExpressionOrExpression
+        } else {
+            EvalMethod::NoExpression
         }
     }
 
@@ -526,18 +645,14 @@ impl CaseExpr {
         Ok(ColumnarValue::Array(zip(&remainder, &else_, &then_value)?))
     }
 
-    fn with_expression_scalars_values_and_results(&self, batch: &RecordBatch, scalars_or_null_lookup: &ScalarsOrNullLookup) -> Result<ColumnarValue> {
+    fn with_lookup_table(&self, batch: &RecordBatch, scalars_or_null_lookup: &ScalarsOrNullLookup) -> Result<ColumnarValue> {
         let expr = self.expr.as_ref().unwrap();
         let evaluated_expression = expr.evaluate(batch)?;
+        
         let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
         let evaluated_expression = evaluated_expression.to_array(1)?;
 
-        let take_indices = scalars_or_null_lookup.lookup.match_values(&evaluated_expression)?;
-
-        // Zero-copy conversion
-        let take_indices = Int32Array::from(take_indices);
-
-        let output = arrow::compute::take(&scalars_or_null_lookup.values_to_take_from, &take_indices, None)?;
+        let output = scalars_or_null_lookup.create_output(&evaluated_expression)?;
 
         let result = if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(output.as_ref(), 0)?)
@@ -611,7 +726,7 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression => self.expr_or_expr(batch),
-            EvalMethod::WithExpressionOnlyScalarValuesAndResults(ref e) => self.with_expression_scalars_values_and_results(batch, e),
+            EvalMethod::WithExprScalarLookupTable(ref e) => self.with_lookup_table(batch, e),
         }
     }
 

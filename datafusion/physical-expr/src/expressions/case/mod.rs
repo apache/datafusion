@@ -1,4 +1,4 @@
 mod case;
-mod literal_values;
+mod literal_lookup_table;
 
 pub use case::*;
