@@ -20,7 +20,7 @@
 //! and query data inside these systems.
 
 use dashmap::DashMap;
-use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, not_impl_err, DataFusionError, Result};
 #[cfg(not(target_arch = "wasm32"))]
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
@@ -156,7 +156,10 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 
     /// Deregister the store previously registered with the same key. Returns the
     /// deregistered store if it existed.
-    fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
+    #[allow(unused_variables)]
+    fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        not_impl_err!("ObjectStoreRegistry::deregister_store is not implemented for this ObjectStoreRegistry")
+    }
 
     /// Get a suitable store for the provided URL. For example:
     ///
