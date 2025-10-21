@@ -1649,8 +1649,7 @@ mod tests {
         }]);
 
         // Attempt to merge and expect an error
-        let result = base.try_merge(&top);
-        let err_msg = result.unwrap_err().to_string();
+        let err_msg = base.try_merge(&top).unwrap_err().to_string();
         assert!(
             err_msg.contains("Internal error: Column index 5 out of bounds for projected expressions of length 2"),
             "Unexpected error message: {err_msg}",
