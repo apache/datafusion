@@ -208,10 +208,26 @@ impl InterleaveBuilder {
         Ok(())
     }
 
-    fn finish(self) -> Result<ColumnarValue> {
-        let array_refs = self.arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-        let interleaved_result = interleave(&array_refs, &self.indices)?;
-        Ok(ColumnarValue::Array(interleaved_result))
+    fn finish(mut self) -> Result<ColumnarValue> {
+        if self.arrays.len() == 1 {
+            // The first array is always a single null value.
+            if self.indices.len() == 1 {
+                // If there's only a single row, reuse the array
+                Ok(ColumnarValue::Array(self.arrays.remove(0)))
+            } else {
+                // Otherwise make a new null array with the correct type and length
+                Ok(ColumnarValue::Array(new_null_array(self.arrays[0].data_type(), self.indices.len())))
+            }
+        } else if self.arrays.len() == 2 && !self.indices.iter().any(|(array_ix, _)| *array_ix == 0) && self.arrays[1].len() == self.indices.len() {
+            // There's only a single non-null array and no references to the null array.
+            // We can take a shortcut and return the non-null array directly.
+            Ok(ColumnarValue::Array(self.arrays.remove(1)))
+        } else {
+            // Interleave arrays
+            let array_refs = self.arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+            let interleaved_result = interleave(&array_refs, &self.indices)?;
+            Ok(ColumnarValue::Array(interleaved_result))
+        }
     }
 }
 
