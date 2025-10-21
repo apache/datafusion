@@ -32,21 +32,20 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
-use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
+use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
 use std::any::Any;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{internal_datafusion_err, internal_err, JoinSide, Result};
+use datafusion_common::{internal_err, JoinSide, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
@@ -54,7 +53,6 @@ use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use futures::stream::{Stream, StreamExt};
-use itertools::Itertools;
 use log::trace;
 
 /// [`ExecutionPlan`] for a projection
@@ -134,13 +132,7 @@ impl ProjectionExec {
         let schema = Arc::new(projection.project_schema(&input_schema)?);
 
         // Construct a map from the input expressions to the output expression of the Projection
-        let projection_mapping = ProjectionMapping::try_new(
-            projection
-                .as_ref()
-                .iter()
-                .map(|p| (Arc::clone(&p.expr), p.alias.clone())),
-            &input_schema,
-        )?;
+        let projection_mapping = projection.projection_mapping(&input_schema)?;
         let cache =
             Self::compute_properties(&input, &projection_mapping, Arc::clone(&schema))?;
         Ok(Self {
@@ -185,213 +177,8 @@ impl ProjectionExec {
     }
 }
 
-/// A projection expression as used by [`ProjectionExec`].
-///
-/// The expression is evaluated and the result is stored in a column
-/// with the name specified by `alias`.
-///
-/// For example, the SQL expression `a + b AS sum_ab` would be represented
-/// as a `ProjectionExpr` where `expr` is the expression `a + b`
-/// and `alias` is the string `sum_ab`.
-#[derive(Debug, Clone)]
-pub struct ProjectionExpr {
-    /// The expression that will be evaluated.
-    pub expr: Arc<dyn PhysicalExpr>,
-    /// The name of the output column for use an output schema.
-    pub alias: String,
-}
-
-impl std::fmt::Display for ProjectionExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.expr.to_string() == self.alias {
-            write!(f, "{}", self.alias)
-        } else {
-            write!(f, "{} AS {}", self.expr, self.alias)
-        }
-    }
-}
-
-impl ProjectionExpr {
-    /// Create a new projection expression
-    pub fn new(expr: Arc<dyn PhysicalExpr>, alias: String) -> Self {
-        Self { expr, alias }
-    }
-
-    /// Create a new projection expression from an expression and a schema using the expression's output field name as alias.
-    pub fn new_from_expression(
-        expr: Arc<dyn PhysicalExpr>,
-        schema: &Schema,
-    ) -> Result<Self> {
-        let field = expr.return_field(schema)?;
-        Ok(Self {
-            expr,
-            alias: field.name().to_string(),
-        })
-    }
-}
-
-impl From<(Arc<dyn PhysicalExpr>, String)> for ProjectionExpr {
-    fn from(value: (Arc<dyn PhysicalExpr>, String)) -> Self {
-        Self::new(value.0, value.1)
-    }
-}
-
-impl From<&(Arc<dyn PhysicalExpr>, String)> for ProjectionExpr {
-    fn from(value: &(Arc<dyn PhysicalExpr>, String)) -> Self {
-        Self::new(Arc::clone(&value.0), value.1.clone())
-    }
-}
-
-impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
-    fn from(value: ProjectionExpr) -> Self {
-        (value.expr, value.alias)
-    }
-}
-
-/// A collection of projection expressions.
-///
-/// This struct encapsulates multiple `ProjectionExpr` instances,
-/// representing a complete projection operation and provides
-/// methods to manipulate and analyze the projection as a whole.
-#[derive(Debug, Clone)]
-pub struct Projection {
-    exprs: Vec<ProjectionExpr>,
-}
-
-impl From<Vec<ProjectionExpr>> for Projection {
-    fn from(value: Vec<ProjectionExpr>) -> Self {
-        Self { exprs: value }
-    }
-}
-
-impl From<&[ProjectionExpr]> for Projection {
-    fn from(value: &[ProjectionExpr]) -> Self {
-        Self {
-            exprs: value.to_vec(),
-        }
-    }
-}
-
-impl AsRef<[ProjectionExpr]> for Projection {
-    fn as_ref(&self) -> &[ProjectionExpr] {
-        &self.exprs
-    }
-}
-
-impl Projection {
-    pub fn new(exprs: Vec<ProjectionExpr>) -> Self {
-        Self { exprs }
-    }
-
-    /// Apply another projection on top of this projection, returning the combined projection.
-    /// For example, if this projection is `SELECT c@2 AS x, b@1 AS y, a@0 as z` and the other projection is `SELECT x@0 + 1 AS c1, y@1 + z@2 as c2`,
-    /// we return a projection equivalent to `SELECT c@2 + 1 AS c1, b@1 + a@0 as c2`.
-    ///
-    /// # Errors
-    /// This function returns an error if any expression in the `other` projection cannot be
-    /// applied on top of this projection.
-    pub fn try_merge(&self, other: &Projection) -> Result<Projection> {
-        let mut new_exprs = Vec::with_capacity(other.exprs.len());
-        for proj_expr in &other.exprs {
-            let new_expr = update_expr(&proj_expr.expr, &self.exprs, true)?
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Failed to combine projections: expression {} could not be applied on top of existing projections {}",
-                        proj_expr.expr,
-                        self.exprs.iter().map(|e| format!("{e}")).join(", ")
-                    )
-                })?;
-            new_exprs.push(ProjectionExpr {
-                expr: new_expr,
-                alias: proj_expr.alias.clone(),
-            });
-        }
-        Ok(Projection::new(new_exprs))
-    }
-
-    /// Extract the column indices used in this projection.
-    /// For example, for a projection `SELECT a AS x, b + 1 AS y`, where `a` is at index 0 and `b` is at index 1,
-    /// this function would return `[0, 1]`.
-    /// Repeated indices are returned only once, and the order is ascending.
-    pub fn column_indices(&self) -> Vec<usize> {
-        self.exprs
-            .iter()
-            .flat_map(|e| collect_columns(&e.expr).into_iter().map(|col| col.index()))
-            .sorted_unstable()
-            .dedup()
-            .collect_vec()
-    }
-
-    /// Project a schema according to this projection.
-    /// For example, for a projection `SELECT a AS x, b + 1 AS y`, where `a` is at index 0 and `b` is at index 1,
-    /// if the input schema is `[a: Int32, b: Int32, c: Int32]`, the output schema would be `[x: Int32, y: Int32]`.
-    /// Fields' metadata are preserved from the input schema.
-    pub fn project_schema(&self, input_schema: &Schema) -> Result<Schema> {
-        let fields: Result<Vec<Field>> = self
-            .exprs
-            .iter()
-            .map(|proj_expr| {
-                let metadata = proj_expr
-                    .expr
-                    .return_field(input_schema)?
-                    .metadata()
-                    .clone();
-
-                let field = Field::new(
-                    &proj_expr.alias,
-                    proj_expr.expr.data_type(input_schema)?,
-                    proj_expr.expr.nullable(input_schema)?,
-                )
-                .with_metadata(metadata);
-
-                Ok(field)
-            })
-            .collect();
-
-        Ok(Schema::new_with_metadata(
-            fields?,
-            input_schema.metadata().clone(),
-        ))
-    }
-
-    /// Project statistics according to this projection.
-    /// For example, for a projection `SELECT a AS x, b + 1 AS y`, where `a` is at index 0 and `b` is at index 1,
-    /// if the input statistics has column statistics for columns `a`, `b`, and `c`, the output statistics would have column statistics for columns `x` and `y`.
-    pub fn project_statistics(
-        &self,
-        mut stats: Statistics,
-        input_schema: &Schema,
-    ) -> Result<Statistics> {
-        let mut primitive_row_size = 0;
-        let mut primitive_row_size_possible = true;
-        let mut column_statistics = vec![];
-
-        for proj_expr in &self.exprs {
-            let expr = &proj_expr.expr;
-            let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                stats.column_statistics[col.index()].clone()
-            } else {
-                // TODO stats: estimate more statistics from expressions
-                // (expressions should compute their statistics themselves)
-                ColumnStatistics::new_unknown()
-            };
-            column_statistics.push(col_stats);
-            let data_type = expr.data_type(input_schema)?;
-            if let Some(value) = data_type.primitive_width() {
-                primitive_row_size += value;
-                continue;
-            }
-            primitive_row_size_possible = false;
-        }
-
-        if primitive_row_size_possible {
-            stats.total_byte_size =
-                Precision::Exact(primitive_row_size).multiply(&stats.num_rows);
-        }
-        stats.column_statistics = column_statistics;
-        Ok(stats)
-    }
-}
+// Re-exported from datafusion-physical-expr for backwards compatibility
+pub use datafusion_physical_expr::projection::{update_expr, Projection, ProjectionExpr};
 
 impl DisplayAs for ProjectionExec {
     fn fmt_as(
@@ -483,17 +270,16 @@ impl ExecutionPlan for ProjectionExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        Ok(Box::pin(ProjectionStream {
-            schema: Arc::clone(&self.schema),
-            expr: self
-                .projection
+        Ok(Box::pin(ProjectionStream::new(
+            Arc::clone(&self.schema),
+            self.projection
                 .as_ref()
                 .iter()
                 .map(|x| Arc::clone(&x.expr))
                 .collect(),
-            input: self.input.execute(partition, context)?,
-            baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
-        }))
+            self.input.execute(partition, context)?,
+            BaselineMetrics::new(&self.metrics, partition),
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -554,6 +340,21 @@ impl ExecutionPlan for ProjectionExec {
 }
 
 impl ProjectionStream {
+    /// Create a new projection stream
+    fn new(
+        schema: SchemaRef,
+        expr: Vec<Arc<dyn PhysicalExpr>>,
+        input: SendableRecordBatchStream,
+        baseline_metrics: BaselineMetrics,
+    ) -> Self {
+        Self {
+            schema,
+            expr,
+            input,
+            baseline_metrics,
+        }
+    }
+
     fn batch_project(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         // Records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
@@ -583,23 +384,6 @@ struct ProjectionStream {
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
-}
-
-impl ProjectionStream {
-    /// Create a new projection stream
-    pub fn new(
-        schema: SchemaRef,
-        expr: Vec<Arc<dyn PhysicalExpr>>,
-        input: SendableRecordBatchStream,
-        baseline_metrics: BaselineMetrics,
-    ) -> Self {
-        Self {
-            schema,
-            expr,
-            input,
-            baseline_metrics,
-        }
-    }
 }
 
 impl Stream for ProjectionStream {
@@ -850,101 +634,6 @@ pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
     exprs
         .iter()
         .all(|proj_expr| proj_expr.expr.as_any().is::<Column>())
-}
-
-/// The function operates in two modes:
-///
-/// 1) When `sync_with_child` is `true`:
-///
-///    The function updates the indices of `expr` if the expression resides
-///    in the input plan. For instance, given the expressions `a@1 + b@2`
-///    and `c@0` with the input schema `c@2, a@0, b@1`, the expressions are
-///    updated to `a@0 + b@1` and `c@2`.
-///
-/// 2) When `sync_with_child` is `false`:
-///
-///    The function determines how the expression would be updated if a projection
-///    was placed before the plan associated with the expression. If the expression
-///    cannot be rewritten after the projection, it returns `None`. For example,
-///    given the expressions `c@0`, `a@1` and `b@2`, and the [`ProjectionExec`] with
-///    an output schema of `a, c_new`, then `c@0` becomes `c_new@1`, `a@1` becomes
-///    `a@0`, but `b@2` results in `None` since the projection does not include `b`.
-///
-/// # Errors
-/// This function returns an error if `sync_with_child` is `true` and if any expression references
-/// an index that is out of bounds for `projected_exprs`.
-/// For example:
-///
-/// - `expr` is `a@3`
-/// - `projected_exprs` is \[`a@0`, `b@1`\]
-///
-/// In this case, `a@3` references index 3, which is out of bounds for `projected_exprs` (which has length 2).
-pub fn update_expr(
-    expr: &Arc<dyn PhysicalExpr>,
-    projected_exprs: &[ProjectionExpr],
-    sync_with_child: bool,
-) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    #[derive(Debug, PartialEq)]
-    enum RewriteState {
-        /// The expression is unchanged.
-        Unchanged,
-        /// Some part of the expression has been rewritten
-        RewrittenValid,
-        /// Some part of the expression has been rewritten, but some column
-        /// references could not be.
-        RewrittenInvalid,
-    }
-
-    let mut state = RewriteState::Unchanged;
-
-    let new_expr = Arc::clone(expr)
-        .transform_up(|expr| {
-            if state == RewriteState::RewrittenInvalid {
-                return Ok(Transformed::no(expr));
-            }
-
-            let Some(column) = expr.as_any().downcast_ref::<Column>() else {
-                return Ok(Transformed::no(expr));
-            };
-            if sync_with_child {
-                state = RewriteState::RewrittenValid;
-                // Update the index of `column`:
-                let projected_expr = projected_exprs.get(column.index()).ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Column index {} out of bounds for projected expressions of length {}",
-                        column.index(),
-                        projected_exprs.len()
-                    )
-                })?;
-                Ok(Transformed::yes(Arc::clone(&projected_expr.expr)))
-            } else {
-                // default to invalid, in case we can't find the relevant column
-                state = RewriteState::RewrittenInvalid;
-                // Determine how to update `column` to accommodate `projected_exprs`
-                projected_exprs
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, proj_expr)| {
-                        proj_expr.expr.as_any().downcast_ref::<Column>().and_then(
-                            |projected_column| {
-                                (column.name().eq(projected_column.name())
-                                    && column.index() == projected_column.index())
-                                .then(|| {
-                                    state = RewriteState::RewrittenValid;
-                                    Arc::new(Column::new(&proj_expr.alias, index)) as _
-                                })
-                            },
-                        )
-                    })
-                    .map_or_else(
-                        || Ok(Transformed::no(expr)),
-                        |c| Ok(Transformed::yes(c)),
-                    )
-            }
-        })
-        .data()?;
-
-    Ok((state == RewriteState::RewrittenValid).then_some(new_expr))
 }
 
 /// Updates the given lexicographic ordering according to given projected
@@ -1694,20 +1383,22 @@ mod tests {
 
     #[test]
     fn test_column_indices_multiple_columns() -> Result<()> {
+        // Test with reversed column order to ensure proper reordering
         let projection = Projection::new(vec![
             ProjectionExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                alias: "a".to_string(),
+                expr: Arc::new(Column::new("c", 5)),
+                alias: "c".to_string(),
             },
             ProjectionExpr {
                 expr: Arc::new(Column::new("b", 2)),
                 alias: "b".to_string(),
             },
             ProjectionExpr {
-                expr: Arc::new(Column::new("c", 5)),
-                alias: "c".to_string(),
+                expr: Arc::new(Column::new("a", 0)),
+                alias: "a".to_string(),
             },
         ]);
+        // Should return sorted indices regardless of projection order
         assert_eq!(projection.column_indices(), vec![0, 2, 5]);
         Ok(())
     }
@@ -1959,9 +1650,7 @@ mod tests {
 
         // Attempt to merge and expect an error
         let result = base.try_merge(&top);
-        assert!(result.is_err());
-
-        let err_msg = result.err().unwrap().to_string();
+        let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("Internal error: Column index 5 out of bounds for projected expressions of length 2"),
             "Unexpected error message: {err_msg}",
@@ -2066,25 +1755,6 @@ mod tests {
         let output_schema = projection.project_schema(&input_schema)?;
 
         assert_eq!(output_schema.fields().len(), 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_project_schema_single_column() -> Result<()> {
-        let input_schema = get_schema();
-
-        // Projection: SELECT col1 AS text
-        let projection = Projection::new(vec![ProjectionExpr {
-            expr: Arc::new(Column::new("col1", 1)),
-            alias: "text".to_string(),
-        }]);
-
-        let output_schema = projection.project_schema(&input_schema)?;
-
-        assert_eq!(output_schema.fields().len(), 1);
-        assert_eq!(output_schema.field(0).name(), "text");
-        assert_eq!(output_schema.field(0).data_type(), &DataType::Utf8);
 
         Ok(())
     }
