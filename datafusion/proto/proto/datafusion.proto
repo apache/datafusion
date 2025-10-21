@@ -865,6 +865,10 @@ message PhysicalExprNode {
 
     UnknownColumn unknown_column = 20;
   }
+
+  // Optional ID for caching during deserialization.
+  // Set to the Arc pointer address during serialization to enable deduplication.
+  optional uint64 id = 21;
 }
 
 message PhysicalScalarUdfNode {

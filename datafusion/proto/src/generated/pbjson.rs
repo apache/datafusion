@@ -15711,10 +15711,18 @@ impl serde::Serialize for PhysicalExprNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
+        if self.id.is_some() {
+            len += 1;
+        }
         if self.expr_type.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExprNode", len)?;
+        if let Some(v) = self.id.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("id", ToString::to_string(&v).as_str())?;
+        }
         if let Some(v) = self.expr_type.as_ref() {
             match v {
                 physical_expr_node::ExprType::Column(v) => {
@@ -15783,6 +15791,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "id",
             "column",
             "literal",
             "binary_expr",
@@ -15817,6 +15826,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            Id,
             Column,
             Literal,
             BinaryExpr,
@@ -15856,6 +15866,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                         E: serde::de::Error,
                     {
                         match value {
+                            "id" => Ok(GeneratedField::Id),
                             "column" => Ok(GeneratedField::Column),
                             "literal" => Ok(GeneratedField::Literal),
                             "binaryExpr" | "binary_expr" => Ok(GeneratedField::BinaryExpr),
@@ -15893,9 +15904,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
+                let mut id__ = None;
                 let mut expr_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                         GeneratedField::Column => {
                             if expr_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("column"));
@@ -16025,6 +16045,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                     }
                 }
                 Ok(PhysicalExprNode {
+                    id: id__,
                     expr_type: expr_type__,
                 })
             }

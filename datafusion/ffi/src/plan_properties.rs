@@ -38,7 +38,7 @@ use datafusion_proto::{
     physical_plan::{
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
         to_proto::{serialize_partitioning, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
+        DecodeContext, DefaultPhysicalExtensionCodec,
     },
     protobuf::{Partitioning, PhysicalSortExprNodeCollection},
 };
@@ -183,6 +183,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let default_ctx = SessionContext::new();
         let task_context = default_ctx.task_ctx();
         let codex = DefaultPhysicalExtensionCodec {};
+        let decode_context = DecodeContext::new(&task_context);
 
         let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
 
@@ -191,7 +192,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let sort_exprs = parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
-            &task_context,
+            &decode_context,
             &schema,
             &codex,
         )?;
@@ -203,7 +204,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let partitioning = parse_protobuf_partitioning(
             Some(&proto_output_partitioning),
-            &task_context,
+            &decode_context,
             &schema,
             &codex,
         )?

@@ -35,7 +35,7 @@ use datafusion_proto::{
     physical_plan::{
         from_proto::{parse_physical_exprs, parse_physical_sort_exprs},
         to_proto::{serialize_physical_exprs, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
+        DecodeContext, DefaultPhysicalExtensionCodec,
     },
     protobuf::PhysicalAggregateExprNode,
 };
@@ -121,16 +121,17 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
 
         let default_ctx = SessionContext::new();
         let task_ctx = default_ctx.task_ctx();
+        let decode_ctx = DecodeContext::new(&task_ctx);
         let codex = DefaultPhysicalExtensionCodec {};
 
         let order_bys = parse_physical_sort_exprs(
             &proto_def.ordering_req,
-            &task_ctx,
+            &decode_ctx,
             &schema,
             &codex,
         )?;
 
-        let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
+        let exprs = parse_physical_exprs(&proto_def.expr, &decode_ctx, &schema, &codex)?;
 
         Ok(Self {
             return_field,
