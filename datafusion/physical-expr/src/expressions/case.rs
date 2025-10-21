@@ -216,9 +216,15 @@ impl InterleaveBuilder {
                 Ok(ColumnarValue::Array(self.arrays.remove(0)))
             } else {
                 // Otherwise make a new null array with the correct type and length
-                Ok(ColumnarValue::Array(new_null_array(self.arrays[0].data_type(), self.indices.len())))
+                Ok(ColumnarValue::Array(new_null_array(
+                    self.arrays[0].data_type(),
+                    self.indices.len(),
+                )))
             }
-        } else if self.arrays.len() == 2 && !self.indices.iter().any(|(array_ix, _)| *array_ix == 0) && self.arrays[1].len() == self.indices.len() {
+        } else if self.arrays.len() == 2
+            && !self.indices.iter().any(|(array_ix, _)| *array_ix == 0)
+            && self.arrays[1].len() == self.indices.len()
+        {
             // There's only a single non-null array and no references to the null array.
             // We can take a shortcut and return the non-null array directly.
             Ok(ColumnarValue::Array(self.arrays.remove(1)))
