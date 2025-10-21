@@ -204,12 +204,20 @@ impl SpillPool {
 
     /// Returns the number of files currently in the pool
     pub fn file_count(&self) -> usize {
-        self.files.len() + if self.current_write_file.is_some() { 1 } else { 0 }
+        self.files.len()
+            + if self.current_write_file.is_some() {
+                1
+            } else {
+                0
+            }
     }
 
     /// Returns the total number of unread batches across all files
     pub fn batch_count(&self) -> usize {
-        self.files.iter().map(|f| f.remaining_batches()).sum::<usize>()
+        self.files
+            .iter()
+            .map(|f| f.remaining_batches())
+            .sum::<usize>()
             + self.current_batch_count
     }
 
@@ -385,7 +393,8 @@ mod tests {
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let schema = create_test_schema();
-        let spill_manager = Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
+        let spill_manager =
+            Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
 
         SpillPool::new(max_file_size, spill_manager, schema)
     }

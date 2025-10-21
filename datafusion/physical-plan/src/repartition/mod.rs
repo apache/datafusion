@@ -82,6 +82,14 @@ type MaybeBatch = Option<Result<RepartitionBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
 
+/// Output channel with its associated memory reservation and spill pool
+#[derive(Clone)]
+struct OutputChannel {
+    sender: DistributionSender<MaybeBatch>,
+    reservation: SharedMemoryReservation,
+    spill_pool: Arc<Mutex<SpillPool>>,
+}
+
 /// Channels and resources for a single output partition
 struct PartitionChannels {
     /// Senders for each input partition to send data to this output partition
@@ -242,12 +250,13 @@ impl RepartitionExecState {
             ));
 
             // Create SpillPool with configured max file size
-            let max_file_size = context.session_config().options().execution.max_spill_file_size_bytes;
-            let spill_pool = SpillPool::new(
-                max_file_size,
-                Arc::clone(&spill_manager),
-                input.schema(),
-            );
+            let max_file_size = context
+                .session_config()
+                .options()
+                .execution
+                .max_spill_file_size_bytes;
+            let spill_pool =
+                SpillPool::new(max_file_size, Arc::clone(&spill_manager), input.schema());
 
             channels.insert(
                 partition,
@@ -270,11 +279,11 @@ impl RepartitionExecState {
                 .map(|(partition, channels)| {
                     (
                         *partition,
-                        (
-                            channels.tx[i].clone(),
-                            Arc::clone(&channels.reservation),
-                            Arc::clone(&channels.spill_pool),
-                        ),
+                        OutputChannel {
+                            sender: channels.tx[i].clone(),
+                            reservation: Arc::clone(&channels.reservation),
+                            spill_pool: Arc::clone(&channels.spill_pool),
+                        },
                     )
                 })
                 .collect();
@@ -291,9 +300,7 @@ impl RepartitionExecState {
             let wait_for_task = SpawnedTask::spawn(RepartitionExec::wait_for_task(
                 input_task,
                 txs.into_iter()
-                    .map(|(partition, (tx, _reservation, _spill_manager))| {
-                        (partition, tx)
-                    })
+                    .map(|(partition, channel)| (partition, channel.sender))
                     .collect(),
             ));
             spawned_tasks.push(wait_for_task);
@@ -758,12 +765,7 @@ impl ExecutionPlan for RepartitionExec {
                     .remove(&partition)
                     .expect("partition not used yet");
 
-                (
-                    rx,
-                    reservation,
-                    spill_pool,
-                    Arc::clone(&state.abort_helper),
-                )
+                (rx, reservation, spill_pool, Arc::clone(&state.abort_helper))
             };
 
             trace!(
@@ -1051,14 +1053,7 @@ impl RepartitionExec {
     /// txs hold the output sending channels for each output partition
     async fn pull_from_input(
         mut stream: SendableRecordBatchStream,
-        mut output_channels: HashMap<
-            usize,
-            (
-                DistributionSender<MaybeBatch>,
-                SharedMemoryReservation,
-                Arc<Mutex<SpillPool>>,
-            ),
-        >,
+        mut output_channels: HashMap<usize, OutputChannel>,
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
     ) -> Result<()> {
@@ -1090,11 +1085,9 @@ impl RepartitionExec {
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
-                if let Some((tx, reservation, spill_pool)) =
-                    output_channels.get_mut(&partition)
-                {
+                if let Some(channel) = output_channels.get_mut(&partition) {
                     let (batch_to_send, is_memory_batch) =
-                        match reservation.lock().try_grow(size) {
+                        match channel.reservation.lock().try_grow(size) {
                             Ok(_) => {
                                 // Memory available - send in-memory batch
                                 (RepartitionBatch::Memory(batch), true)
@@ -1102,18 +1095,18 @@ impl RepartitionExec {
                             Err(_) => {
                                 // We're memory limited - spill to SpillPool
                                 // SpillPool handles file handle reuse and rotation
-                                spill_pool.lock().push_batch(&batch)?;
+                                channel.spill_pool.lock().push_batch(&batch)?;
 
                                 // Send marker indicating batch was spilled
                                 (RepartitionBatch::Spilled, false)
                             }
                         };
 
-                    if tx.send(Some(Ok(batch_to_send))).await.is_err() {
+                    if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         // Only shrink memory if it was a memory batch
                         if is_memory_batch {
-                            reservation.lock().shrink(size);
+                            channel.reservation.lock().shrink(size);
                         }
                         output_channels.remove(&partition);
                     }
