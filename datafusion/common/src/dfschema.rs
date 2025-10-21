@@ -1323,55 +1323,6 @@ impl SchemaExt for Schema {
     }
 }
 
-/// Helper to hold table schema information.
-///
-/// A table schema consists of:
-/// - file schema: the schema stored in the actual data file
-/// - table partition columns: partitioning columns that are part of the table schema
-///   For example a listing table stored in `/data/date=2025-10-10/raw.csv`) would have 
-///   a `date` partitioning column.
-/// - table schema: the schema of the target table. 
-#[derive(Debug, Clone)]
-pub struct TableSchema {
-    /// The file schema is the schema before any `projection` is applied. It contains
-    /// all columns that may appear in the files, but does not include table
-    /// partition columns.
-    file_schema: SchemaRef,
-    table_partition_cols: Vec<FieldRef>,
-    /// Note that the table schema is **not** the schema of the physical files.
-    /// This is the schema that the physical file schema will be mapped onto,
-    /// and the schema that the [`DataSourceExec`] will return.
-    table_schema: SchemaRef,
-}
-
-impl TableSchema {
-    /// Create a new TableSchema
-    pub fn new(file_schema: SchemaRef, table_partition_cols: Vec<FieldRef>) -> Self {
-        let mut builder = SchemaBuilder::from(file_schema.as_ref());
-        builder.extend(table_partition_cols.iter().cloned());
-        Self {
-            file_schema,
-            table_partition_cols,
-            table_schema: Arc::new(builder.finish()),
-        }
-    }
-
-    /// Get the file schema
-    pub fn file_schema(&self) -> &SchemaRef {
-        &self.file_schema
-    }
-
-    /// Get the table partition columns
-    pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
-        &self.table_partition_cols
-    }
-
-    /// Get the full table schema
-    pub fn table_schema(&self) -> &SchemaRef {
-        &self.table_schema
-    }
-}
-
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
     match qualifier {
         Some(q) => format!("{q}.{name}"),

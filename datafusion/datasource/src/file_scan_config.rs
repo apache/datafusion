@@ -24,7 +24,7 @@ use crate::schema_adapter::SchemaAdapterFactory;
 use crate::{
     display::FileGroupsDisplay, file::FileSource,
     file_compression_type::FileCompressionType, file_stream::FileStream,
-    source::DataSource, statistics::MinMaxStatistics, PartitionedFile,
+    source::DataSource, statistics::MinMaxStatistics, PartitionedFile, TableSchema,
 };
 use arrow::datatypes::FieldRef;
 use arrow::{
@@ -38,7 +38,7 @@ use arrow::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_datafusion_err, ColumnStatistics,
-    Constraints, Result, ScalarValue, Statistics, TableSchema,
+    Constraints, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
