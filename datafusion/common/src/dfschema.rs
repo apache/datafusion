@@ -1326,11 +1326,11 @@ impl SchemaExt for Schema {
 /// Helper to hold table schema information.
 ///
 /// A table schema consists of:
-/// - file schema: the schema of the data files
-/// - table partition columns: the columns used for partitioning the table
-///
-/// This struct also holds a full table schema to be able to cheaply hand out
-/// references to any one of the representations without needing to reconstruct them.
+/// - file schema: the schema stored in the actual data file
+/// - table partition columns: partitioning columns that are part of the table schema
+///   For example a listing table stored in `/data/date=2025-10-10/raw.csv`) would have 
+///   a `date` partitioning column.
+/// - table schema: the schema of the target table. 
 #[derive(Debug, Clone)]
 pub struct TableSchema {
     file_schema: SchemaRef,
