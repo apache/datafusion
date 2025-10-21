@@ -26,6 +26,8 @@ use crate::opener::ParquetOpener;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use arrow::datatypes::Field;
+use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -288,6 +290,7 @@ pub struct ParquetSource {
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
     pub(crate) projected_statistics: Option<Statistics>,
+    pub(crate) table_partition_cols: Vec<Arc<Field>>,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
 }
@@ -319,6 +322,11 @@ impl ParquetSource {
         let mut conf = self.clone();
         conf.predicate = Some(Arc::clone(&predicate));
         conf
+    }
+
+    pub fn with_table_partition_cols(mut self, partition_cols: Vec<Arc<Field>>) -> Self {
+        self.table_partition_cols = partition_cols;
+        self
     }
 
     /// Set the encryption factory to use to generate file decryption properties
@@ -721,8 +729,20 @@ impl FileSource for ParquetSource {
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {
+                let schema_with_partition_cols = Arc::new(Schema::new(
+                    file_schema
+                        .fields()
+                        .iter()
+                        .cloned()
+                        .chain(self.table_partition_cols.iter().cloned())
+                        .collect_vec(),
+                ));
+
                 if is_dynamic_physical_expr(&filter)
-                    || can_expr_be_pushed_down_with_schemas(&filter, &file_schema)
+                    || can_expr_be_pushed_down_with_schemas(
+                        &filter,
+                        &schema_with_partition_cols,
+                    )
                 {
                     PushedDownPredicate::supported(filter)
                 } else {
