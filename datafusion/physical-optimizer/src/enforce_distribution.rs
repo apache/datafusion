@@ -36,6 +36,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_execution::config::SessionConfig;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
@@ -193,9 +194,11 @@ impl PhysicalOptimizerRule for EnforceDistribution {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
+        let config_options = config.options();
+        let top_down_join_key_reordering =
+            config_options.optimizer.top_down_join_key_reordering;
 
         let adjusted = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
@@ -216,7 +219,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context = distribution_context
             .transform_up(|distribution_context| {
-                ensure_distribution(distribution_context, config)
+                ensure_distribution(distribution_context, config_options)
             })
             .data()?;
         Ok(distribution_context.plan)

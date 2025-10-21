@@ -43,12 +43,12 @@ use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_datafusion_err, internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties, PhysicalExpr};
 
+use datafusion_execution::config::SessionConfig;
 use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
@@ -359,7 +359,7 @@ impl ExecutionPlan for UnionExec {
         &self,
         _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
     }

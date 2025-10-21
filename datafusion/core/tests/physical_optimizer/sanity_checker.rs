@@ -28,7 +28,6 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{col, Literal};
 use datafusion_physical_expr::Partitioning;
@@ -39,6 +38,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{displayable, ExecutionPlan};
 
 use async_trait::async_trait;
+use datafusion_execution::config::SessionConfig;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -393,7 +393,7 @@ fn create_test_schema2() -> SchemaRef {
 /// Check if sanity checker should accept or reject plans.
 fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
     let sanity_checker = SanityCheckPlan::new();
-    let opts = ConfigOptions::default();
+    let opts = SessionConfig::default();
     assert_eq!(
         sanity_checker.optimize(plan.clone(), &opts).is_ok(),
         is_sane

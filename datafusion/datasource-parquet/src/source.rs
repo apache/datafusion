@@ -26,7 +26,6 @@ use crate::opener::ParquetOpener;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
-use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
@@ -54,6 +53,7 @@ use datafusion_physical_plan::DisplayFormatType;
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::map_config_decryption_to_decryption;
+use datafusion_execution::config::SessionConfig;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use itertools::Itertools;
@@ -698,7 +698,7 @@ impl FileSource for ParquetSource {
     fn try_pushdown_filters(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         let Some(file_schema) = self.file_schema.clone() else {
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
@@ -712,7 +712,7 @@ impl FileSource for ParquetSource {
         // By default they are both disabled.
         // Regardless of pushdown, we will update the predicate to include the filters
         // because even if scan pushdown is disabled we can still use the filters for stats pruning.
-        let config_pushdown_enabled = config.execution.parquet.pushdown_filters;
+        let config_pushdown_enabled = config.options().execution.parquet.pushdown_filters;
         let table_pushdown_enabled = self.pushdown_filters();
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 

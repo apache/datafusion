@@ -22,8 +22,8 @@ use crate::PhysicalOptimizerRule;
 
 use std::sync::Arc;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
     coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
@@ -47,13 +47,14 @@ impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !config.execution.coalesce_batches {
+        let config_options = config.options();
+        if !config_options.execution.coalesce_batches {
             return Ok(plan);
         }
 
-        let target_batch_size = config.execution.batch_size;
+        let target_batch_size = config_options.execution.batch_size;
         plan.transform_up(|plan| {
             let plan_any = plan.as_any();
             // The goal here is to detect operators that could produce small batches and only

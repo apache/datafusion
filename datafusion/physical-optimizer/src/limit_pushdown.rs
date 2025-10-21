@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::combine_limit;
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -63,7 +63,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let global_state = GlobalRequirements {
             fetch: None,

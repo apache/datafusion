@@ -38,8 +38,8 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
 use crate::coalesce_async_exec_input::CoalesceAsyncExecInput;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
@@ -54,7 +54,7 @@ pub trait PhysicalOptimizerRule: Debug {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// A human readable name for this optimizer rule

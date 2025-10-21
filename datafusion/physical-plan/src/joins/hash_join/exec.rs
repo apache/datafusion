@@ -60,7 +60,6 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::DataType;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality, Result,
@@ -76,6 +75,7 @@ use datafusion_physical_expr::expressions::{lit, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
@@ -1112,7 +1112,7 @@ impl ExecutionPlan for HashJoinExec {
         &self,
         phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> Result<FilterDescription> {
         // Other types of joins can support *some* filters, but restrictions are complex and error prone.
         // For now we don't support them.
@@ -1137,7 +1137,10 @@ impl ExecutionPlan for HashJoinExec {
 
         // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
-            && config.optimizer.enable_join_dynamic_filter_pushdown
+            && config
+                .options()
+                .optimizer
+                .enable_join_dynamic_filter_pushdown
         {
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
@@ -1153,7 +1156,7 @@ impl ExecutionPlan for HashJoinExec {
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
         // non-inner joins in `gather_filters_for_pushdown`.

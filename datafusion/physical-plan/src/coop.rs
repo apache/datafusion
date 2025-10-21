@@ -65,7 +65,6 @@
 //! The optimizer rule currently checks the plan for exchange-like operators and leave operators
 //! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::PhysicalExpr;
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
@@ -90,6 +89,7 @@ use datafusion_execution::TaskContext;
 
 use crate::execution_plan::SchedulingType;
 use crate::stream::RecordBatchStreamAdapter;
+use datafusion_execution::config::SessionConfig;
 use futures::{Stream, StreamExt};
 
 /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
@@ -300,7 +300,7 @@ impl ExecutionPlan for CooperativeExec {
         &self,
         _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
     }
@@ -309,7 +309,7 @@ impl ExecutionPlan for CooperativeExec {
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }

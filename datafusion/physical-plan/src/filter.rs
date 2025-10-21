@@ -45,7 +45,6 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
@@ -61,6 +60,7 @@ use datafusion_physical_expr::{
     ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -449,7 +449,7 @@ impl ExecutionPlan for FilterExec {
         &self,
         phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterDescription> {
         if !matches!(phase, FilterPushdownPhase::Pre) {
             // For non-pre phase, filters pass through unchanged
@@ -478,7 +478,7 @@ impl ExecutionPlan for FilterExec {
         &self,
         phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         if !matches!(phase, FilterPushdownPhase::Pre) {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));

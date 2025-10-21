@@ -29,12 +29,12 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{ColumnStatistics, JoinType, NullEquality, Result, Statistics};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
@@ -641,7 +641,7 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
 }
 
 pub fn get_optimized_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
-    let config = ConfigOptions::new();
+    let config = SessionConfig::new();
 
     let optimized =
         LimitedDistinctAggregation::new().optimize(Arc::clone(plan), &config)?;

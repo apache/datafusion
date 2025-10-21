@@ -26,9 +26,9 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
@@ -306,7 +306,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match self.mode {
             RuleMode::Add => require_top_ordering(plan),

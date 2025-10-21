@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::ScalarValue;
+use datafusion_execution::config::SessionConfig;
 use datafusion_expr::{LimitEffect, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::window::{
     PlainAggregateWindowExpr, SlidingAggregateWindowExpr, StandardWindowExpr,
@@ -74,9 +74,9 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
     fn optimize(
         &self,
         original: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        config: &SessionConfig,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        if !config.optimizer.enable_window_limits {
+        if !config.options().optimizer.enable_window_limits {
             return Ok(original);
         }
         let mut ctx = TraverseState::default();

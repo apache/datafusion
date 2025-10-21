@@ -27,8 +27,8 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::ExecutionPlan;
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
 
@@ -51,7 +51,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(|plan| {
             // Check if the plan is AggregateExec
