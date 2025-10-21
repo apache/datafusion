@@ -101,6 +101,8 @@ struct PartitionChannels {
     /// SpillPool for batched spilling with file handle reuse (FIFO semantics)
     /// Wrapped in Arc so it can be shared between input tasks and output streams
     spill_pool: Arc<Mutex<SpillPool>>,
+    /// SpillManager for creating streams from spill files
+    spill_manager: Arc<SpillManager>,
 }
 
 struct ConsumingInputStreamsState {
@@ -265,6 +267,7 @@ impl RepartitionExecState {
                     rx,
                     reservation,
                     spill_pool: Arc::new(Mutex::new(spill_pool)),
+                    spill_manager,
                 },
             );
         }
@@ -741,7 +744,7 @@ impl ExecutionPlan for RepartitionExec {
             let num_input_partitions = input.output_partitioning().partition_count();
 
             // lock scope
-            let (mut rx, reservation, spill_pool, abort_helper) = {
+            let (mut rx, reservation, spill_pool, spill_manager, abort_helper) = {
                 // lock mutexes
                 let mut state = state.lock();
                 let state = state.consume_input_streams(
@@ -759,13 +762,20 @@ impl ExecutionPlan for RepartitionExec {
                     rx,
                     reservation,
                     spill_pool,
+                    spill_manager,
                     ..
                 } = state
                     .channels
                     .remove(&partition)
                     .expect("partition not used yet");
 
-                (rx, reservation, spill_pool, Arc::clone(&state.abort_helper))
+                (
+                    rx,
+                    reservation,
+                    spill_pool,
+                    spill_manager,
+                    Arc::clone(&state.abort_helper),
+                )
             };
 
             trace!(
@@ -784,6 +794,7 @@ impl ExecutionPlan for RepartitionExec {
                             _drop_helper: Arc::clone(&abort_helper),
                             reservation: Arc::clone(&reservation),
                             spill_pool: Arc::clone(&spill_pool),
+                            spill_manager: Arc::clone(&spill_manager),
                             state: RepartitionStreamState::ReceivingFromChannel,
                         }) as SendableRecordBatchStream
                     })
@@ -814,6 +825,7 @@ impl ExecutionPlan for RepartitionExec {
                     _drop_helper: abort_helper,
                     reservation,
                     spill_pool,
+                    spill_manager,
                     state: RepartitionStreamState::ReceivingFromChannel,
                 }) as SendableRecordBatchStream)
             }
@@ -1191,6 +1203,8 @@ impl RepartitionExec {
 enum RepartitionStreamState {
     /// Waiting for next item from channel
     ReceivingFromChannel,
+    /// Reading a spilled batch from disk via SpillReaderStream (spawned blocking tasks)
+    ReadingSpilledBatch(SendableRecordBatchStream),
 }
 
 struct RepartitionStream {
@@ -1214,6 +1228,9 @@ struct RepartitionStream {
 
     /// SpillPool for batched spilling with FIFO semantics
     spill_pool: Arc<Mutex<SpillPool>>,
+
+    /// SpillManager for creating streams from spill files
+    spill_manager: Arc<SpillManager>,
 
     /// Current state of the stream
     state: RepartitionStreamState,
@@ -1240,13 +1257,20 @@ impl Stream for RepartitionStream {
                                 return Poll::Ready(Some(Ok(batch)));
                             }
                             Ok(RepartitionBatch::Spilled) => {
-                                // Read from SpillPool (FIFO order)
-                                match self.spill_pool.lock().pop_batch()? {
-                                    Some(batch) => {
-                                        return Poll::Ready(Some(Ok(batch)));
+                                // Get next file from SpillPool and create a stream
+                                let next_file = self.spill_pool.lock().take_next_file()?;
+                                match next_file {
+                                    Some(spill_file) => {
+                                        // Create stream using SpillReaderStream + spawn_buffered
+                                        let stream = self
+                                            .spill_manager
+                                            .read_spill_as_stream(spill_file, None)?;
+                                        self.state =
+                                            RepartitionStreamState::ReadingSpilledBatch(stream);
+                                        continue;
                                     }
                                     None => {
-                                        // No spilled batches available, continue receiving
+                                        // No spilled files available, continue receiving from channel
                                         continue;
                                     }
                                 }
@@ -1270,6 +1294,38 @@ impl Stream for RepartitionStream {
                         }
                         None => {
                             return Poll::Ready(None);
+                        }
+                    }
+                }
+                RepartitionStreamState::ReadingSpilledBatch(stream) => {
+                    match futures::ready!(stream.poll_next_unpin(cx)) {
+                        Some(Ok(batch)) => {
+                            // Return batch and stay in ReadingSpilledBatch state
+                            return Poll::Ready(Some(Ok(batch)));
+                        }
+                        Some(Err(e)) => {
+                            // Error reading spilled batch
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                        None => {
+                            // Current spill file exhausted, check if there are more
+                            let next_file = self.spill_pool.lock().take_next_file()?;
+                            match next_file {
+                                Some(spill_file) => {
+                                    // Create stream for next file
+                                    let new_stream = self
+                                        .spill_manager
+                                        .read_spill_as_stream(spill_file, None)?;
+                                    self.state =
+                                        RepartitionStreamState::ReadingSpilledBatch(new_stream);
+                                    continue;
+                                }
+                                None => {
+                                    // No more spilled files, go back to receiving from channel
+                                    self.state = RepartitionStreamState::ReceivingFromChannel;
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
@@ -1303,6 +1359,9 @@ struct PerPartitionStream {
     /// SpillPool for batched spilling with FIFO semantics (shared across streams)
     spill_pool: Arc<Mutex<SpillPool>>,
 
+    /// SpillManager for creating streams from spill files
+    spill_manager: Arc<SpillManager>,
+
     /// Current state of the stream
     state: RepartitionStreamState,
 }
@@ -1328,13 +1387,20 @@ impl Stream for PerPartitionStream {
                                 return Poll::Ready(Some(Ok(batch)));
                             }
                             Ok(RepartitionBatch::Spilled) => {
-                                // Read from SpillPool (FIFO order)
-                                match self.spill_pool.lock().pop_batch()? {
-                                    Some(batch) => {
-                                        return Poll::Ready(Some(Ok(batch)));
+                                // Get next file from SpillPool and create a stream
+                                let next_file = self.spill_pool.lock().take_next_file()?;
+                                match next_file {
+                                    Some(spill_file) => {
+                                        // Create stream using SpillReaderStream + spawn_buffered
+                                        let stream = self
+                                            .spill_manager
+                                            .read_spill_as_stream(spill_file, None)?;
+                                        self.state =
+                                            RepartitionStreamState::ReadingSpilledBatch(stream);
+                                        continue;
                                     }
                                     None => {
-                                        // No spilled batches available, continue receiving
+                                        // No spilled files available, continue receiving from channel
                                         continue;
                                     }
                                 }
@@ -1348,6 +1414,38 @@ impl Stream for PerPartitionStream {
                             return Poll::Ready(None);
                         }
                         None => return Poll::Ready(None),
+                    }
+                }
+                RepartitionStreamState::ReadingSpilledBatch(stream) => {
+                    match futures::ready!(stream.poll_next_unpin(cx)) {
+                        Some(Ok(batch)) => {
+                            // Return batch and stay in ReadingSpilledBatch state
+                            return Poll::Ready(Some(Ok(batch)));
+                        }
+                        Some(Err(e)) => {
+                            // Error reading spilled batch
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                        None => {
+                            // Current spill file exhausted, check if there are more
+                            let next_file = self.spill_pool.lock().take_next_file()?;
+                            match next_file {
+                                Some(spill_file) => {
+                                    // Create stream for next file
+                                    let new_stream = self
+                                        .spill_manager
+                                        .read_spill_as_stream(spill_file, None)?;
+                                    self.state =
+                                        RepartitionStreamState::ReadingSpilledBatch(new_stream);
+                                    continue;
+                                }
+                                None => {
+                                    // No more spilled files, go back to receiving from channel
+                                    self.state = RepartitionStreamState::ReceivingFromChannel;
+                                    continue;
+                                }
+                            }
+                        }
                     }
                 }
             }

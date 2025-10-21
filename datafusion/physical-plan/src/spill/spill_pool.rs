@@ -315,6 +315,27 @@ impl SpillPool {
         }
     }
 
+    /// Takes the next spill file from the pool for reading.
+    ///
+    /// Returns the oldest unread file, or None if the pool is empty.
+    /// The file is removed from the pool and should be read using
+    /// `SpillManager::read_spill_as_stream()`.
+    ///
+    /// This method flushes any pending writes before returning a file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if flushing pending writes fails.
+    pub fn take_next_file(&mut self) -> Result<Option<RefCountedTempFile>> {
+        // Ensure any pending writes are flushed first
+        if self.current_write_file.is_some() {
+            self.flush()?;
+        }
+
+        // Take the oldest file from the queue
+        Ok(self.files.pop_front().map(|spill_file| spill_file.file))
+    }
+
     /// Finalizes the current write file and adds it to the files queue.
     ///
     /// Called automatically by `push_batch` when rotating files, but can
