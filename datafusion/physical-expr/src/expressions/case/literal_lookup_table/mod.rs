@@ -79,7 +79,7 @@ pub(in super::super) struct LiteralLookupTable {
     /// The lookup table to use for evaluating the CASE expression
     lookup: Arc<dyn WhenLiteralIndexMap>,
 
-    /// ArrayRef where array[i] = then_literals[i]
+    /// [`ArrayRef`] where `array[i] = then_literals[i]`
     /// the last value in the array is the else_expr
     values_to_take_from: ArrayRef,
 }
