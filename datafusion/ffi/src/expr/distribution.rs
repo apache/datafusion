@@ -2,13 +2,11 @@ use crate::expr::interval::FFI_Interval;
 use crate::expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8};
 use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
-use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::statistics::{
     BernoulliDistribution, Distribution, ExponentialDistribution, GaussianDistribution,
     GenericDistribution, UniformDistribution,
 };
-use datafusion_common::{DataFusionError, ScalarValue};
-use prost::Message;
+use datafusion_common::DataFusionError;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -41,10 +39,10 @@ impl TryFrom<&FFI_Distribution> for Distribution {
     fn try_from(value: &FFI_Distribution) -> Result<Self, Self::Error> {
         match value {
             FFI_Distribution::Uniform(d) => d.try_into(),
-            FFI_Distribution::Exponential(d) =>  d.try_into(),
-            FFI_Distribution::Gaussian(d) =>  d.try_into(),
-            FFI_Distribution::Bernoulli(d) =>  d.try_into(),
-            FFI_Distribution::Generic(d) =>  d.try_into(),
+            FFI_Distribution::Exponential(d) => d.try_into(),
+            FFI_Distribution::Gaussian(d) => d.try_into(),
+            FFI_Distribution::Bernoulli(d) => d.try_into(),
+            FFI_Distribution::Generic(d) => d.try_into(),
         }
     }
 }
@@ -147,8 +145,6 @@ impl TryFrom<&GenericDistribution> for FFI_GenericDistribution {
         })
     }
 }
-
-
 
 impl TryFrom<&FFI_UniformDistribution> for Distribution {
     type Error = DataFusionError;

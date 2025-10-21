@@ -1,9 +1,8 @@
+use crate::expr::interval::FFI_Interval;
 use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
-use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_common::DataFusionError;
-use crate::expr::interval::FFI_Interval;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -41,7 +40,6 @@ impl TryFrom<&FFI_ExprProperties> for ExprProperties {
     }
 }
 
-
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
@@ -70,7 +68,6 @@ impl From<&FFI_SortProperties> for SortProperties {
         }
     }
 }
-
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]

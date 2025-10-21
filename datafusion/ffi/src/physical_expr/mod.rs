@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::arrow_wrappers::WrappedArray;
-use crate::execution_plan::ExecutionPlanPrivateData;
 use crate::expr::columnar_value::FFI_ColumnarValue;
 use crate::expr::distribution::FFI_Distribution;
 use crate::expr::expr_properties::FFI_ExprProperties;
@@ -24,18 +23,8 @@ use crate::expr::interval::FFI_Interval;
 use crate::record_batch_stream::{
     record_batch_to_wrapped_array, wrapped_array_to_record_batch,
 };
-use crate::table_provider::FFI_TableProvider;
-use crate::udaf::ForeignAggregateUDF;
 use crate::util::FFIResult;
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    df_result,
-    execution_plan::{FFI_ExecutionPlan, ForeignExecutionPlan},
-    insert_op::FFI_InsertOp,
-    rresult, rresult_return,
-    table_source::FFI_TableType,
-};
-use abi_stable::pmr::RSlice;
+use crate::{arrow_wrappers::WrappedSchema, df_result, rresult, rresult_return};
 use abi_stable::std_types::RResult;
 use abi_stable::{
     std_types::{ROption, RString, RVec},
@@ -43,32 +32,19 @@ use abi_stable::{
 };
 use arrow::array::{ArrayRef, BooleanArray, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use arrow::ffi::FFI_ArrowArray;
 use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{DataType, Field, FieldRef, Schema};
-use async_ffi::{FfiFuture, FutureExt};
-use async_trait::async_trait;
-use datafusion::logical_expr::expr_rewriter::unalias;
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::logical_expr_common::interval_arithmetic::Interval;
 use datafusion::logical_expr_common::sort_properties::ExprProperties;
 use datafusion::logical_expr_common::statistics::Distribution;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr_common::physical_expr::{fmt_sql, DynEq};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_expr_common::physical_expr::fmt_sql;
+use datafusion_common::exec_datafusion_err;
 use datafusion_common::Result;
-use datafusion_common::{exec_datafusion_err, DataFusionError};
-use datafusion_proto::{
-    logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
-    },
-    protobuf::LogicalExprList,
-};
-use prost::Message;
 use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{any::Any, ffi::c_void, sync::Arc};
-use tokio::runtime::Handle;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -180,7 +156,7 @@ unsafe extern "C" fn data_type_fn_wrapper(
     input_schema: WrappedSchema,
 ) -> FFIResult<WrappedSchema> {
     let expr = expr.inner();
-    let schema: SchemaRef = rresult_return!(input_schema.try_into());
+    let schema: SchemaRef = input_schema.into();
     let data_type = expr
         .data_type(&schema)
         .and_then(|dt| FFI_ArrowSchema::try_from(dt).map_err(Into::into))
@@ -193,7 +169,7 @@ unsafe extern "C" fn nullable_fn_wrapper(
     input_schema: WrappedSchema,
 ) -> FFIResult<bool> {
     let expr = expr.inner();
-    let schema: SchemaRef = rresult_return!(input_schema.try_into());
+    let schema: SchemaRef = input_schema.into();
     rresult!(expr.nullable(&schema))
 }
 
@@ -213,7 +189,7 @@ unsafe extern "C" fn return_field_fn_wrapper(
     input_schema: WrappedSchema,
 ) -> FFIResult<WrappedSchema> {
     let expr = expr.inner();
-    let schema: SchemaRef = rresult_return!(input_schema.try_into());
+    let schema: SchemaRef = input_schema.into();
     rresult!(expr
         .return_field(&schema)
         .and_then(|f| FFI_ArrowSchema::try_from(&f).map_err(Into::into))
@@ -313,7 +289,9 @@ unsafe extern "C" fn evaluate_statistics_fn_wrapper(
         .map(Distribution::try_from)
         .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
-    rresult!(expr.evaluate_statistics(&children_borrowed).and_then(|dist| FFI_Distribution::try_from(&dist)))
+    rresult!(expr
+        .evaluate_statistics(&children_borrowed)
+        .and_then(|dist| FFI_Distribution::try_from(&dist)))
 }
 
 unsafe extern "C" fn propagate_statistics_fn_wrapper(
@@ -349,7 +327,9 @@ unsafe extern "C" fn get_properties_fn_wrapper(
         .iter()
         .map(ExprProperties::try_from)
         .collect::<Result<Vec<_>>>());
-    rresult!(expr.get_properties(&children).and_then(|p| FFI_ExprProperties::try_from(&p)))
+    rresult!(expr
+        .get_properties(&children)
+        .and_then(|p| FFI_ExprProperties::try_from(&p)))
 }
 
 unsafe extern "C" fn fmt_sql_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFIResult<RString> {
@@ -382,7 +362,7 @@ unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> RString {
 }
 
 unsafe extern "C" fn hash_fn_wrapper(expr: &FFI_PhysicalExpr) -> u64 {
-    let mut expr = expr.inner();
+    let expr = expr.inner();
     let mut hasher = DefaultHasher::new();
     expr.hash(&mut hasher);
     hasher.finish()
@@ -560,10 +540,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         unsafe {
-            let children = children
-                .into_iter()
-                .map(|expr| FFI_PhysicalExpr::from(expr))
-                .collect();
+            let children = children.into_iter().map(FFI_PhysicalExpr::from).collect();
             df_result!((self.expr.new_with_children)(&self.expr, &children)
                 .map(|expr| Arc::new(ForeignPhysicalExpr::from(expr))))
         }
@@ -650,8 +627,12 @@ impl PhysicalExpr for ForeignPhysicalExpr {
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         unsafe {
-            let children = children.into_iter().map(FFI_ExprProperties::try_from).collect::<Result<RVec<_>>>()?;
-            df_result!((self.expr.get_properties)(&self.expr, &children)).and_then(|p| ExprProperties::try_from(&p))
+            let children = children
+                .iter()
+                .map(FFI_ExprProperties::try_from)
+                .collect::<Result<RVec<_>>>()?;
+            df_result!((self.expr.get_properties)(&self.expr, &children))
+                .and_then(|p| ExprProperties::try_from(&p))
         }
     }
 

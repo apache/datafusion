@@ -1,11 +1,8 @@
+use crate::expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8};
 use abi_stable::std_types::RVec;
 use abi_stable::StableAbi;
-use arrow::ffi::FFI_ArrowArray;
-use arrow_schema::ArrowError;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion_common::DataFusionError;
-use prost::Message;
-use crate::expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
