@@ -17,6 +17,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::sync::Arc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use crate::expressions::case::case::WhenThen;
@@ -64,6 +65,30 @@ pub(in super::super) struct LiteralLookupTable {
   /// ArrayRef where array[i] = then_literals[i]
   /// the last value in the array is the else_expr
   values_to_take_from: ArrayRef,
+}
+
+impl Hash for LiteralLookupTable {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    // Hashing the pointer as this is the best we can do here
+
+    let lookup_ptr = Arc::as_ptr(&self.lookup);
+    lookup_ptr.hash(state);
+
+    let values_ptr = Arc::as_ptr(&self.lookup);
+    values_ptr.hash(state);
+  }
+}
+
+impl PartialEq for LiteralLookupTable {
+  fn eq(&self, other: &Self) -> bool {
+    // Comparing the pointers as this is the best we can do here
+    Arc::ptr_eq(&self.lookup, &other.lookup) &&
+      &self.values_to_take_from == &other.values_to_take_from
+  }
+}
+
+impl Eq for LiteralLookupTable {
+
 }
 
 impl LiteralLookupTable {

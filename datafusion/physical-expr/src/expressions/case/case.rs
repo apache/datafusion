@@ -72,7 +72,6 @@ enum EvalMethod {
     WithExprScalarLookupTable(LiteralLookupTable)
 }
 
-
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with
 /// corresponding "then" expressions, and an optional "else" expression.
