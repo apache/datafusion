@@ -18,6 +18,8 @@
 use std::sync::Arc;
 
 use crate::arrow_wrappers::WrappedSchema;
+use crate::physical_expr::sort::FFI_PhysicalSortExpr;
+use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
 use abi_stable::{
     std_types::{RString, RVec},
     StableAbi,
@@ -28,18 +30,7 @@ use datafusion::{
     error::DataFusionError,
     logical_expr::function::AccumulatorArgs,
     physical_expr::{PhysicalExpr, PhysicalSortExpr},
-    prelude::SessionContext,
 };
-use datafusion_common::exec_datafusion_err;
-use datafusion_proto::{
-    physical_plan::{
-        from_proto::{parse_physical_exprs, parse_physical_sort_exprs},
-        to_proto::{serialize_physical_exprs, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
-    },
-    protobuf::PhysicalAggregateExprNode,
-};
-use prost::Message;
 
 /// A stable struct for sharing [`AccumulatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding field
@@ -50,9 +41,12 @@ use prost::Message;
 pub struct FFI_AccumulatorArgs {
     return_field: WrappedSchema,
     schema: WrappedSchema,
+    ignore_nulls: bool,
+    is_distinct: bool,
     is_reversed: bool,
     name: RString,
-    physical_expr_def: RVec<u8>,
+    order_bys: RVec<FFI_PhysicalSortExpr>,
+    exprs: RVec<FFI_PhysicalExpr>,
 }
 
 impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
@@ -63,29 +57,28 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
             WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
-        let codec = DefaultPhysicalExtensionCodec {};
-        let ordering_req =
-            serialize_physical_sort_exprs(args.order_bys.to_owned(), &codec)?;
+        let exprs = args
+            .exprs
+            .iter()
+            .map(Arc::clone)
+            .map(FFI_PhysicalExpr::from)
+            .collect();
 
-        let expr = serialize_physical_exprs(args.exprs, &codec)?;
-
-        let physical_expr_def = PhysicalAggregateExprNode {
-            expr,
-            ordering_req,
-            distinct: args.is_distinct,
-            ignore_nulls: args.ignore_nulls,
-            fun_definition: None,
-            aggregate_function: None,
-            human_display: args.name.to_string(),
-        };
-        let physical_expr_def = physical_expr_def.encode_to_vec().into();
+        let order_bys = args
+            .order_bys
+            .iter()
+            .map(FFI_PhysicalSortExpr::from)
+            .collect();
 
         Ok(Self {
             return_field,
             schema,
             is_reversed: args.is_reversed,
+            ignore_nulls: args.ignore_nulls,
+            is_distinct: args.is_distinct,
             name: args.name.into(),
-            physical_expr_def,
+            order_bys,
+            exprs,
         })
     }
 }
@@ -110,28 +103,18 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_AccumulatorArgs) -> Result<Self, Self::Error> {
-        let proto_def = PhysicalAggregateExprNode::decode(
-            value.physical_expr_def.as_ref(),
-        )
-        .map_err(|e| {
-            exec_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {e}")
-        })?;
+        let exprs = value
+            .exprs
+            .into_iter()
+            .map(|expr| {
+                Arc::new(ForeignPhysicalExpr::from(expr)) as Arc<dyn PhysicalExpr>
+            })
+            .collect();
 
         let return_field = Arc::new((&value.return_field.0).try_into()?);
         let schema = Schema::try_from(&value.schema.0)?;
 
-        let default_ctx = SessionContext::new();
-        let task_ctx = default_ctx.task_ctx();
-        let codex = DefaultPhysicalExtensionCodec {};
-
-        let order_bys = parse_physical_sort_exprs(
-            &proto_def.ordering_req,
-            &task_ctx,
-            &schema,
-            &codex,
-        )?;
-
-        let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
+        let order_bys = value.order_bys.iter().map(PhysicalSortExpr::from).collect();
 
         let expr_fields = exprs
             .iter()
@@ -142,11 +125,11 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
             return_field,
             schema,
             expr_fields,
-            ignore_nulls: proto_def.ignore_nulls,
+            ignore_nulls: value.ignore_nulls,
             order_bys,
             is_reversed: value.is_reversed,
             name: value.name.to_string(),
-            is_distinct: proto_def.distinct,
+            is_distinct: value.is_distinct,
             exprs,
         })
     }
