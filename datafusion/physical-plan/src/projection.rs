@@ -240,7 +240,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        let all_simple_exprs = self.projection.as_ref().iter().all(|proj_expr| {
+        let all_simple_exprs = self.projection.iter().all(|proj_expr| {
             proj_expr.expr.as_any().is::<Column>()
                 || proj_expr.expr.as_any().is::<Literal>()
         });
@@ -257,11 +257,8 @@ impl ExecutionPlan for ProjectionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        ProjectionExec::try_new(
-            self.projection.as_ref().to_vec(),
-            children.swap_remove(0),
-        )
-        .map(|p| Arc::new(p) as _)
+        ProjectionExec::try_new(self.projection.clone(), children.swap_remove(0))
+            .map(|p| Arc::new(p) as _)
     }
 
     fn execute(
@@ -272,11 +269,7 @@ impl ExecutionPlan for ProjectionExec {
         trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         Ok(Box::pin(ProjectionStream::new(
             Arc::clone(&self.schema),
-            self.projection
-                .as_ref()
-                .iter()
-                .map(|x| Arc::clone(&x.expr))
-                .collect(),
+            self.projection.expr_iter().collect(),
             self.input.execute(partition, context)?,
             BaselineMetrics::new(&self.metrics, partition),
         )))

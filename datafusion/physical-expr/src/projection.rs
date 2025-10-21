@@ -104,6 +104,13 @@ pub struct Projection {
     exprs: Vec<ProjectionExpr>,
 }
 
+impl std::fmt::Display for Projection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let exprs: Vec<String> = self.exprs.iter().map(|e| e.to_string()).collect();
+        write!(f, "Projection[{}]", exprs.join(", "))
+    }
+}
+
 impl From<Vec<ProjectionExpr>> for Projection {
     fn from(value: Vec<ProjectionExpr>) -> Self {
         Self { exprs: value }
@@ -145,6 +152,11 @@ impl Projection {
                 .map(|p| (Arc::clone(&p.expr), p.alias.clone())),
             input_schema,
         )
+    }
+
+    /// Iterate over a clone of the projection expressions.
+    pub fn expr_iter(&self) -> impl Iterator<Item = Arc<dyn PhysicalExpr>> + '_ {
+        self.exprs.iter().map(|e| Arc::clone(&e.expr))
     }
 
     /// Apply another projection on top of this projection, returning the combined projection.
@@ -663,6 +675,7 @@ pub(crate) mod tests {
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{ScalarValue, Statistics};
     use datafusion_expr::{Operator, ScalarUDF};
+    use insta::assert_snapshot;
 
     pub(crate) fn output_schema(
         mapping: &ProjectionMapping,
@@ -1685,16 +1698,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_column_indices_single_column() -> Result<()> {
-        let projection = Projection::new(vec![ProjectionExpr {
-            expr: Arc::new(Column::new("a", 3)),
-            alias: "a".to_string(),
-        }]);
-        assert_eq!(projection.column_indices(), vec![3]);
-        Ok(())
-    }
-
-    #[test]
     fn test_column_indices_multiple_columns() -> Result<()> {
         // Test with reversed column order to ensure proper reordering
         let projection = Projection::new(vec![
@@ -1806,37 +1809,21 @@ pub(crate) mod tests {
             },
         ]);
 
-        // Second projection: SELECT x@0 AS col1, y@1 AS col2
+        // Second projection: SELECT y@1 AS col2, x@0 AS col1
         let top_projection = Projection::new(vec![
-            ProjectionExpr {
-                expr: Arc::new(Column::new("x", 0)),
-                alias: "col1".to_string(),
-            },
             ProjectionExpr {
                 expr: Arc::new(Column::new("y", 1)),
                 alias: "col2".to_string(),
             },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("x", 0)),
+                alias: "col1".to_string(),
+            },
         ]);
 
-        // Merge should produce: SELECT c@2 AS col1, b@1 AS col2
+        // Merge should produce: SELECT b@1 AS col2, c@2 AS col1
         let merged = base_projection.try_merge(&top_projection)?;
-        assert_eq!(merged.as_ref().len(), 2);
-
-        // Check first expression (col1 should reference c@2)
-        let col1_expr = merged.as_ref()[0].expr.as_any().downcast_ref::<Column>();
-        assert!(col1_expr.is_some());
-        let col1 = col1_expr.unwrap();
-        assert_eq!(col1.name(), "c");
-        assert_eq!(col1.index(), 2);
-        assert_eq!(merged.as_ref()[0].alias, "col1");
-
-        // Check second expression (col2 should reference b@1)
-        let col2_expr = merged.as_ref()[1].expr.as_any().downcast_ref::<Column>();
-        assert!(col2_expr.is_some());
-        let col2 = col2_expr.unwrap();
-        assert_eq!(col2.name(), "b");
-        assert_eq!(col2.index(), 1);
-        assert_eq!(merged.as_ref()[1].alias, "col2");
+        assert_snapshot!(format!("{merged}"), @"Projection[b@1 AS col2, c@2 AS col1]");
 
         Ok(())
     }
@@ -1859,16 +1846,8 @@ pub(crate) mod tests {
             },
         ]);
 
-        // Second projection: SELECT x@0 + 1 AS c1, y@1 + z@2 AS c2
+        // Second projection: SELECT y@1 + z@2 AS c2, x@0 + 1 AS c1
         let top_projection = Projection::new(vec![
-            ProjectionExpr {
-                expr: Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("x", 0)),
-                    Operator::Plus,
-                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-                )),
-                alias: "c1".to_string(),
-            },
             ProjectionExpr {
                 expr: Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("y", 1)),
@@ -1877,17 +1856,19 @@ pub(crate) mod tests {
                 )),
                 alias: "c2".to_string(),
             },
+            ProjectionExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("x", 0)),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                )),
+                alias: "c1".to_string(),
+            },
         ]);
 
-        // Merge should produce: SELECT c@2 + 1 AS c1, b@1 + a@0 AS c2
+        // Merge should produce: SELECT b@1 + a@0 AS c2, c@2 + 1 AS c1
         let merged = base_projection.try_merge(&top_projection)?;
-        assert_eq!(merged.as_ref().len(), 2);
-        assert_eq!(merged.as_ref()[0].alias, "c1");
-        assert_eq!(merged.as_ref()[1].alias, "c2");
-
-        // Check that the expressions are BinaryExpr (not just Column)
-        assert!(merged.as_ref()[0].expr.as_any().is::<BinaryExpr>());
-        assert!(merged.as_ref()[1].expr.as_any().is::<BinaryExpr>());
+        assert_snapshot!(format!("{merged}"), @"Projection[b@1 + a@0 AS c2, c@2 + 1 AS c1]");
 
         Ok(())
     }
