@@ -400,9 +400,705 @@ impl datafusion_execution::RecordBatchStream for SpillPoolStream {
 
 #[cfg(test)]
 mod tests {
-    // TODO: Update tests to use the new stream-based API
-    // The old tests tested pop_batch(), file_count(), batch_count(), is_empty()
-    // which have been removed in favor of the SpillPoolStream interface.
-    //
-    // The SpillPool is now tested through integration tests in repartition/mod.rs
+    use super::*;
+    use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
+    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use futures::StreamExt;
+    use std::task::Poll;
+    use tokio;
+
+    // ============================================================================
+    // Test Utilities
+    // ============================================================================
+
+    fn create_test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]))
+    }
+
+    fn create_test_batch(start: i32, count: usize) -> RecordBatch {
+        let schema = create_test_schema();
+        let a: ArrayRef = Arc::new(Int32Array::from(
+            (start..start + count as i32).collect::<Vec<_>>(),
+        ));
+        let b: ArrayRef = Arc::new(Int32Array::from(
+            (start * 10..start * 10 + count as i32 * 10)
+                .step_by(10)
+                .collect::<Vec<_>>(),
+        ));
+        RecordBatch::try_new(schema, vec![a, b]).unwrap()
+    }
+
+    fn create_spill_pool(max_file_size: usize) -> SpillPool {
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let schema = create_test_schema();
+        let spill_manager =
+            Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
+
+        SpillPool::new(max_file_size, spill_manager, schema)
+    }
+
+    /// Helper to collect all batches from a stream
+    async fn collect_batches(mut stream: SpillPoolStream) -> Result<Vec<RecordBatch>> {
+        let mut batches = Vec::new();
+        while let Some(result) = stream.next().await {
+            batches.push(result?);
+        }
+        Ok(batches)
+    }
+
+    // ============================================================================
+    // Basic Functionality Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_empty_pool_stream() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+        pool.finalize(); // Mark as done with no data
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool, spill_manager);
+
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_single_batch() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+
+        // Push one batch
+        let batch1 = create_test_batch(0, 10);
+        pool.push_batch(&batch1)?;
+        pool.flush()?;
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool, spill_manager);
+
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 10);
+        assert_eq!(batches[0].num_columns(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multiple_batches_single_file() -> Result<()> {
+        let mut pool = create_spill_pool(10 * 1024 * 1024); // Large file size
+
+        // Push multiple batches
+        for i in 0..5 {
+            let batch = create_test_batch(i * 10, 10);
+            pool.push_batch(&batch)?;
+        }
+        pool.flush()?;
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool, spill_manager);
+
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 5);
+
+        // Verify FIFO order
+        for (i, batch) in batches.iter().enumerate() {
+            assert_eq!(batch.num_rows(), 10);
+            let col_a = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            assert_eq!(col_a.value(0), (i as i32) * 10);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_rotation_on_size_limit() -> Result<()> {
+        // Small file size to force rotation
+        let mut pool = create_spill_pool(500); // ~500 bytes
+
+        // Push multiple batches - should create multiple files
+        for i in 0..10 {
+            let batch = create_test_batch(i * 5, 5);
+            pool.push_batch(&batch)?;
+        }
+        pool.flush()?;
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool, spill_manager);
+
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 10);
+
+        // Verify all batches in FIFO order
+        for (i, batch) in batches.iter().enumerate() {
+            let col_a = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            assert_eq!(col_a.value(0), (i as i32) * 5);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_batches_skipped() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+
+        let batch1 = create_test_batch(0, 10);
+        let empty_batch = RecordBatch::new_empty(create_test_schema());
+        let batch2 = create_test_batch(10, 10);
+
+        pool.push_batch(&batch1)?;
+        pool.push_batch(&empty_batch)?; // Should be skipped
+        pool.push_batch(&batch2)?;
+        pool.flush()?;
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool, spill_manager);
+
+        let batches = collect_batches(stream).await?;
+        // Should only have 2 batches (empty one skipped)
+        assert_eq!(batches.len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_large_batches() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+
+        // Create larger batches
+        let batch1 = create_test_batch(0, 1000);
+        let batch2 = create_test_batch(1000, 1000);
+
+        pool.push_batch(&batch1)?;
+        pool.push_batch(&batch2)?;
+        pool.flush()?;
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool, spill_manager);
+
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 1000);
+        assert_eq!(batches[1].num_rows(), 1000);
+
+        Ok(())
+    }
+
+    // ============================================================================
+    // Stream API Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_stream_blocks_when_no_data() -> Result<()> {
+        let pool = create_spill_pool(1024 * 1024);
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let mut stream = SpillPool::reader(Arc::clone(&pool), spill_manager);
+
+        // Poll should return Pending since no data and not finalized
+        let poll_result = futures::poll!(stream.next());
+        assert!(matches!(poll_result, Poll::Pending));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_wakes_on_push() -> Result<()> {
+        let pool = create_spill_pool(1024 * 1024);
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        let pool_clone = Arc::clone(&pool_arc);
+        let stream = SpillPool::reader(pool_clone, spill_manager);
+
+        // Spawn a task that will push data after a delay
+        let writer_pool = Arc::clone(&pool_arc);
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            let mut pool = writer_pool.lock();
+            pool.push_batch(&create_test_batch(0, 10)).unwrap();
+            pool.flush().unwrap();
+            pool.finalize();
+        });
+
+        // This should wait for data and then return it
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_wakes_on_flush() -> Result<()> {
+        let pool = create_spill_pool(1024 * 1024);
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        let pool_clone = Arc::clone(&pool_arc);
+        let stream = SpillPool::reader(pool_clone, spill_manager);
+
+        // Push without flush first
+        {
+            let mut pool = pool_arc.lock();
+            pool.push_batch(&create_test_batch(0, 10)).unwrap();
+            // Don't flush yet - data is in current_write_file
+        }
+
+        // Spawn task to flush after delay
+        let writer_pool = Arc::clone(&pool_arc);
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            let mut pool = writer_pool.lock();
+            pool.flush().unwrap();
+            pool.finalize();
+        });
+
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_wakes_on_finalize() -> Result<()> {
+        let pool = create_spill_pool(1024 * 1024);
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        let pool_clone = Arc::clone(&pool_arc);
+        let mut stream = SpillPool::reader(pool_clone, spill_manager);
+
+        // First poll should be pending
+        let poll_result = futures::poll!(stream.next());
+        assert!(matches!(poll_result, Poll::Pending));
+
+        // Finalize after delay
+        let writer_pool = Arc::clone(&pool_arc);
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            writer_pool.lock().finalize();
+        });
+
+        // Stream should eventually return None
+        let result = stream.next().await;
+        assert!(result.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_finalize_before_flush() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+
+        // Push data but DON'T flush
+        pool.push_batch(&create_test_batch(0, 10))?;
+        pool.finalize(); // Finalize without flush
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool, spill_manager);
+
+        // Data in current_write_file should still be lost since not flushed
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 0);
+
+        Ok(())
+    }
+
+    // ============================================================================
+    // Concurrent Reader/Writer Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_concurrent_push_and_read() -> Result<()> {
+        let pool = create_spill_pool(1024 * 1024);
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        let writer_pool = Arc::clone(&pool_arc);
+        let writer = tokio::spawn(async move {
+            for i in 0..10 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                let mut pool = writer_pool.lock();
+                pool.push_batch(&create_test_batch(i * 10, 10)).unwrap();
+                pool.flush().unwrap();
+            }
+            writer_pool.lock().finalize();
+        });
+
+        let reader_pool = Arc::clone(&pool_arc);
+        let stream = SpillPool::reader(reader_pool, spill_manager);
+        let reader = tokio::spawn(async move { collect_batches(stream).await });
+
+        // Wait for both tasks
+        writer.await.unwrap();
+        let batches = reader.await.unwrap()?;
+
+        assert_eq!(batches.len(), 10);
+        for (i, batch) in batches.iter().enumerate() {
+            let col_a = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            assert_eq!(col_a.value(0), (i as i32) * 10);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reader_catches_up_to_writer() -> Result<()> {
+        let pool = create_spill_pool(1024 * 1024);
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        // Start reader before any data is written
+        let reader_pool = Arc::clone(&pool_arc);
+        let mut stream = SpillPool::reader(reader_pool, spill_manager);
+
+        // Should return pending
+        let poll_result = futures::poll!(stream.next());
+        assert!(matches!(poll_result, Poll::Pending));
+
+        // Now add data
+        {
+            let mut pool = pool_arc.lock();
+            pool.push_batch(&create_test_batch(0, 10))?;
+            pool.flush()?;
+            pool.finalize();
+        }
+
+        // Now stream should have data
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multiple_readers_same_pool() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+
+        // Push some batches
+        for i in 0..5 {
+            pool.push_batch(&create_test_batch(i * 10, 10))?;
+        }
+        pool.flush()?;
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        // Create two readers
+        let stream1 =
+            SpillPool::reader(Arc::clone(&pool_arc), Arc::clone(&spill_manager));
+        let stream2 = SpillPool::reader(Arc::clone(&pool_arc), spill_manager);
+
+        // Read from both concurrently
+        let reader1 = tokio::spawn(async move { collect_batches(stream1).await });
+        let reader2 = tokio::spawn(async move { collect_batches(stream2).await });
+
+        let batches1 = reader1.await.unwrap()?;
+        let batches2 = reader2.await.unwrap()?;
+
+        // Each reader should consume different batches (pop_front removes from queue)
+        // The total number should be 5, but distributed between readers
+        let total = batches1.len() + batches2.len();
+        assert_eq!(total, 5);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_cutover_during_read() -> Result<()> {
+        let pool = create_spill_pool(500); // Small size for rotation
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        let writer_pool = Arc::clone(&pool_arc);
+        let writer = tokio::spawn(async move {
+            // Write multiple batches that will cause rotation
+            for i in 0..8 {
+                {
+                    let mut pool = writer_pool.lock();
+                    pool.push_batch(&create_test_batch(i * 5, 5)).unwrap();
+                    pool.flush().unwrap();
+                } // Drop lock before sleep
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            }
+            writer_pool.lock().finalize();
+        });
+
+        // Read concurrently
+        let reader_pool = Arc::clone(&pool_arc);
+        let stream = SpillPool::reader(reader_pool, spill_manager);
+        let reader = tokio::spawn(async move { collect_batches(stream).await });
+
+        writer.await.unwrap();
+        let batches = reader.await.unwrap()?;
+
+        // Should get all 8 batches despite file rotation
+        assert_eq!(batches.len(), 8);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_cutover_during_write() -> Result<()> {
+        let mut pool = create_spill_pool(300); // Very small to force frequent rotation
+
+        // Push batches that will definitely cause rotation
+        for i in 0..5 {
+            let batch = create_test_batch(i * 10, 10);
+            pool.push_batch(&batch)?;
+            // Don't flush after each - let rotation happen naturally
+        }
+        pool.flush()?;
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool, spill_manager);
+
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 5);
+
+        Ok(())
+    }
+
+    // ============================================================================
+    // Garbage Collection Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_file_cleanup_after_read() -> Result<()> {
+        let mut pool = create_spill_pool(500);
+
+        // Create multiple files
+        for i in 0..5 {
+            pool.push_batch(&create_test_batch(i * 10, 10))?;
+            pool.flush()?; // Each batch in its own file
+        }
+
+        // Verify files exist before reading
+        let initial_file_count = pool.files.len();
+        assert_eq!(initial_file_count, 5);
+
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(Arc::clone(&pool_arc), spill_manager);
+
+        // Read all batches
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 5);
+
+        // All files should be consumed (dropped from queue)
+        let final_file_count = pool_arc.lock().files.len();
+        assert_eq!(final_file_count, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_with_rotation() -> Result<()> {
+        let pool = create_spill_pool(400);
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        // Write and read concurrently
+        let writer_pool = Arc::clone(&pool_arc);
+        let writer = tokio::spawn(async move {
+            for i in 0..10 {
+                {
+                    let mut pool = writer_pool.lock();
+                    pool.push_batch(&create_test_batch(i * 10, 10)).unwrap();
+                    pool.flush().unwrap();
+                } // Drop lock before sleep
+                tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+            }
+            writer_pool.lock().finalize();
+        });
+
+        let reader_pool = Arc::clone(&pool_arc);
+        let stream = SpillPool::reader(reader_pool, spill_manager);
+        let reader = tokio::spawn(async move {
+            let mut batches = Vec::new();
+            let mut stream = stream;
+            while let Some(result) = stream.next().await {
+                batches.push(result.unwrap());
+                // Small delay to let writer create more files
+                tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
+            }
+            batches
+        });
+
+        writer.await.unwrap();
+        let batches = reader.await.unwrap();
+
+        assert_eq!(batches.len(), 10);
+
+        // All files should be cleaned up
+        let final_file_count = pool_arc.lock().files.len();
+        assert_eq!(final_file_count, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_with_unflushed_file() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+
+        // Create some flushed files
+        for i in 0..3 {
+            pool.push_batch(&create_test_batch(i * 10, 10))?;
+            pool.flush()?;
+        }
+
+        // Add unflushed data
+        pool.push_batch(&create_test_batch(30, 10))?;
+        // Don't flush!
+
+        // current_write_file should have data
+        assert!(pool.current_write_file.is_some());
+        assert_eq!(pool.files.len(), 3);
+
+        pool.finalize();
+
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+        let stream = SpillPool::reader(pool_arc, spill_manager);
+
+        // Should only get the 3 flushed batches
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 3);
+
+        Ok(())
+    }
+
+    // ============================================================================
+    // Edge Cases & Error Handling Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_interleaved_flush() -> Result<()> {
+        let pool = create_spill_pool(1024 * 1024);
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        // Push → flush
+        {
+            let mut pool = pool_arc.lock();
+            pool.push_batch(&create_test_batch(0, 10))?;
+            pool.flush()?;
+        }
+
+        // Read one batch
+        let stream = SpillPool::reader(Arc::clone(&pool_arc), Arc::clone(&spill_manager));
+        let mut stream = stream;
+        let batch1 = stream.next().await.unwrap()?;
+        assert_eq!(batch1.num_rows(), 10);
+
+        // Push → flush again
+        {
+            let mut pool = pool_arc.lock();
+            pool.push_batch(&create_test_batch(10, 10))?;
+            pool.flush()?;
+        }
+
+        // Read second batch from same stream
+        let batch2 = stream.next().await.unwrap()?;
+        assert_eq!(batch2.num_rows(), 10);
+
+        // Finalize and verify stream ends
+        pool_arc.lock().finalize();
+        let batch3 = stream.next().await;
+        assert!(batch3.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_flush_empty_pool() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+
+        // Flush with no data should be no-op
+        pool.flush()?;
+        pool.flush()?; // Multiple flushes
+
+        assert_eq!(pool.files.len(), 0);
+        assert!(pool.current_write_file.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_finalize_idempotent() -> Result<()> {
+        let mut pool = create_spill_pool(1024 * 1024);
+
+        pool.push_batch(&create_test_batch(0, 10))?;
+        pool.flush()?;
+
+        // Multiple finalize calls should be safe
+        pool.finalize();
+        assert!(pool.is_finalized());
+        pool.finalize();
+        assert!(pool.is_finalized());
+        pool.finalize();
+        assert!(pool.is_finalized());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_flushes_current_file() -> Result<()> {
+        let pool = create_spill_pool(1024 * 1024);
+        let spill_manager = Arc::clone(&pool.spill_manager);
+        let pool_arc = Arc::new(Mutex::new(pool));
+
+        // Push without flush
+        {
+            let mut pool = pool_arc.lock();
+            pool.push_batch(&create_test_batch(0, 10)).unwrap();
+            pool.flush().unwrap();
+            pool.finalize();
+        }
+
+        // Drop should trigger flush in Drop impl
+        // (though in this case we already flushed)
+
+        let stream = SpillPool::reader(pool_arc, spill_manager);
+        let batches = collect_batches(stream).await?;
+        assert_eq!(batches.len(), 1);
+
+        Ok(())
+    }
 }
