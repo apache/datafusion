@@ -19,6 +19,7 @@ use arrow::datatypes::{
 use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use indexmap::IndexMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -96,15 +97,28 @@ impl LiteralLookupTable {
             return None;
         }
 
-        let (when_literals, then_literals): (Vec<ScalarValue>, Vec<ScalarValue>) =
-            when_then_exprs_maybe_literals
-                .iter()
-                // Unwrap the options as we have already checked they are all Some
-                .flatten()
-                .map(|(when_lit, then_lit)| {
-                    (when_lit.value().clone(), then_lit.value().clone())
-                })
-                .unzip();
+        let when_then_exprs_scalars = when_then_exprs_maybe_literals
+            .into_iter()
+            // Unwrap the options as we have already checked they are all Some
+            .flatten()
+            .map(|(when_lit, then_lit)| {
+                (when_lit.value().clone(), then_lit.value().clone())
+            })
+            .collect::<Vec<_>>();
+
+        // Keep only the first occurrence of each when literal
+        let (when_literals, then_literals): (Vec<ScalarValue>, Vec<ScalarValue>) = {
+            let mut map = IndexMap::with_capacity(when_then_expr.len());
+
+            for (when, then) in when_then_exprs_scalars.into_iter() {
+                // Don't overwrite existing entries to keep the first occurrence
+                if !map.contains_key(&when) {
+                    map.insert(when, then);
+                }
+            }
+
+            map.into_iter().unzip()
+        };
 
         let else_expr: ScalarValue = if let Some(else_expr) = else_expr {
             let literal = else_expr.as_any().downcast_ref::<Literal>()?;
