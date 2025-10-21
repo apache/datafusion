@@ -147,7 +147,7 @@ macro_rules! ansi_compute_op {
                     Ok(res) => Ok(ColumnarValue::Array(
                         Arc::<PrimitiveArray<$RESULT>>::new(res),
                     )),
-                    Err(_) => Err(arithmetic_overflow_error($FROM_TYPE).into()),
+                    Err(_) => Err(arithmetic_overflow_error($FROM_TYPE)),
                 }
             }
             _ => Err(DataFusionError::Internal("Invalid data type".to_string())),
@@ -158,8 +158,7 @@ macro_rules! ansi_compute_op {
 fn arithmetic_overflow_error(from_type: &str) -> DataFusionError {
     ArrowError(
         Box::from(arrow::error::ArrowError::ComputeError(format!(
-            "arithmetic overflow from {}",
-            from_type
+            "arithmetic overflow from {from_type}",
         ))),
         None,
     )
@@ -270,7 +269,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                     )),
                                 ))),
                                 Err(_) => {
-                                    Err(arithmetic_overflow_error("Decimal128").into())
+                                    Err(arithmetic_overflow_error("Decimal128"))
                                 }
                             }
                         }
@@ -313,7 +312,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                     )),
                                 ))),
                                 Err(_) => {
-                                    Err(arithmetic_overflow_error("Decimal256").into())
+                                    Err(arithmetic_overflow_error("Decimal256"))
                                 }
                             }
                         }
@@ -367,7 +366,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                 // return the original value
                                 Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(v))))
                             } else {
-                                Err(arithmetic_overflow_error("Int8").into())
+                                Err(arithmetic_overflow_error("Int8"))
                             }
                         }
                     })
@@ -382,7 +381,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                 // return the original value
                                 Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(v))))
                             } else {
-                                Err(arithmetic_overflow_error("Int16").into())
+                                Err(arithmetic_overflow_error("Int16"))
                             }
                         }
                     })
@@ -397,7 +396,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                 // return the original value
                                 Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(v))))
                             } else {
-                                Err(arithmetic_overflow_error("Int32").into())
+                                Err(arithmetic_overflow_error("Int32"))
                             }
                         }
                     })
@@ -412,7 +411,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                 // return the original value
                                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(v))))
                             } else {
-                                Err(arithmetic_overflow_error("Int64").into())
+                                Err(arithmetic_overflow_error("Int64"))
                             }
                         }
                     })
@@ -437,7 +436,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                     *scale,
                                 )))
                             } else {
-                                Err(arithmetic_overflow_error("Decimal128").into())
+                                Err(arithmetic_overflow_error("Decimal128"))
                             }
                         }
                     })
@@ -456,7 +455,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                     *scale,
                                 )))
                             } else {
-                                Err(arithmetic_overflow_error("Decimal256").into())
+                                Err(arithmetic_overflow_error("Decimal256"))
                             }
                         }
                     })
