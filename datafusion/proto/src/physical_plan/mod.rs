@@ -133,8 +133,15 @@ impl<'a> DecodeContext<'a> {
     }
 
     /// Insert a physical expression into the cache with the given ID.
-    pub fn insert_cached_expr(&self, id: u64, expr: Arc<dyn PhysicalExpr>) {
-        self.cache.lock().unwrap().insert(id, expr);
+    /// Returns the inserted expression or an existing one if the ID was already present.
+    #[must_use]
+    pub fn insert_cached_expr(
+        &self,
+        id: u64,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        let mut cache = self.cache.lock().unwrap();
+        Arc::clone(cache.entry(id).or_insert(expr))
     }
 }
 

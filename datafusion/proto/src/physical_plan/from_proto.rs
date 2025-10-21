@@ -424,10 +424,10 @@ pub fn parse_physical_expr(
 
     // Insert into cache if an ID is present
     if let Some(id) = proto.id {
-        decode_ctx.insert_cached_expr(id, Arc::clone(&pexpr));
+        Ok(decode_ctx.insert_cached_expr(id, Arc::clone(&pexpr)))
+    } else {
+        Ok(pexpr)
     }
-
-    Ok(pexpr)
 }
 
 fn parse_required_physical_expr(
