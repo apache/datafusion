@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use crate::expressions::case::case::WhenThen;
+use crate::expressions::case::WhenThen;
 use crate::expressions::Literal;
 
 /// Optimization for CASE expressions with literal WHEN and THEN clauses
@@ -83,7 +83,7 @@ impl PartialEq for LiteralLookupTable {
   fn eq(&self, other: &Self) -> bool {
     // Comparing the pointers as this is the best we can do here
     Arc::ptr_eq(&self.lookup, &other.lookup) &&
-      &self.values_to_take_from == &other.values_to_take_from
+      self.values_to_take_from.as_ref() == other.values_to_take_from.as_ref()
   }
 }
 
@@ -185,7 +185,7 @@ impl LiteralLookupTable {
   }
 
   pub(in super::super) fn create_output(&self, expr_array: &ArrayRef) -> datafusion_common::Result<ArrayRef> {
-    let take_indices = self.lookup.match_values(&expr_array)?;
+    let take_indices = self.lookup.match_values(expr_array)?;
 
     // Zero-copy conversion
     let take_indices = Int32Array::from(take_indices);

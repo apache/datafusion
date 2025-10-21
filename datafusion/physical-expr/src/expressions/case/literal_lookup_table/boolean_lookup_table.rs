@@ -20,7 +20,7 @@ impl WhenLiteralIndexMap for BooleanIndexMap {
     ) -> Option<i32> {
       literals
         .iter()
-        .position(|literal| matches!(literal, ScalarValue::Boolean(target)))
+        .position(|literal| matches!(literal, ScalarValue::Boolean(v) if v == &target))
         .map(|pos| pos as i32)
     }
 

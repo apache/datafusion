@@ -69,7 +69,7 @@ where
 
 /// Trait that help convert a value to a key that is hashable and equatable
 /// This is needed as some types like f16/f32/f64 do not implement Hash/Eq directly
-trait ToHashableKey: ArrowNativeTypeOp {
+pub(super) trait ToHashableKey: ArrowNativeTypeOp {
   /// The type that is hashable and equatable
   /// It must be an Arrow native type but it NOT GUARANTEED to be the same as Self
   /// this is just a helper trait so you can reuse the same code for all arrow native types

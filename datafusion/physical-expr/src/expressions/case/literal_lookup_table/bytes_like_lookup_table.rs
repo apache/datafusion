@@ -10,7 +10,7 @@ use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 pub(super) trait BytesMapHelperWrapperTrait: Send + Sync {
   /// Iterator over byte slices that will return
   type IntoIter<'a>: Iterator<Item=Option<&'a [u8]>> + 'a;
-  
+
   /// Convert the array to an iterator over byte slices
   fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>>;
 }
@@ -151,16 +151,16 @@ where
 }
 
 /// Map from byte-like literal values to their first occurrence index
-/// 
+///
 /// This is a wrapper for handling different kinds of literal maps
 #[derive(Clone)]
 pub(super) struct BytesLikeIndexMap<Helper: BytesMapHelperWrapperTrait> {
   /// Map from non-null literal value the first occurrence index in the literals
   map: HashMap<Vec<u8>, i32>,
-  
+
   /// The index for null literal value (when no null value this will equal to `else_index`)
   null_index: i32,
-  
+
   /// The index to return when no match is found
   else_index: i32,
 
@@ -192,10 +192,8 @@ impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap for BytesLikeIndexM
     for (map_index, value) in bytes_iter.enumerate() {
       match value {
         Some(value) => {
-          let slice_value: &[u8] = value.as_ref();
-
           // Insert only the first occurrence
-          map.entry(slice_value.to_vec()).or_insert(map_index as i32);
+          map.entry(value.to_vec()).or_insert(map_index as i32);
         }
         None => {
           // Only set the null index once
@@ -220,8 +218,7 @@ impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap for BytesLikeIndexM
       .map(|value| {
         match value {
           Some(value) => {
-            let slice_value: &[u8] = value.as_ref();
-            self.map.get(slice_value).copied().unwrap_or(self.else_index)
+            self.map.get(value).copied().unwrap_or(self.else_index)
           }
           None => {
             self.null_index
