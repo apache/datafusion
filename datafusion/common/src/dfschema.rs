@@ -1335,6 +1335,9 @@ impl SchemaExt for Schema {
 pub struct TableSchema {
     file_schema: SchemaRef,
     table_partition_cols: Vec<FieldRef>,
+    /// Note that the table schema is **not** the schema of the physical files.
+    /// This is the schema that the physical file schema will be mapped onto,
+    /// and the schema that the [`DataSourceExec`] will return.
     table_schema: SchemaRef,
 }
 
