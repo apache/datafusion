@@ -578,7 +578,7 @@ impl ProjectionStream {
 }
 
 /// Projection iterator
-pub struct ProjectionStream {
+struct ProjectionStream {
     schema: SchemaRef,
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,
