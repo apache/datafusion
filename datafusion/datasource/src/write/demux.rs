@@ -40,9 +40,9 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::TaskContext;
 
 use chrono::NaiveDate;
+use datafusion_execution::TaskContext;
 use futures::StreamExt;
 use object_store::path::Path;
 use rand::distr::SampleString;
@@ -67,6 +67,11 @@ pub type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 /// A path with an extension will force only a single file to
 /// be written with the extension from the path. Otherwise the default extension
 /// will be used and the output will be split into multiple files.
+///
+/// Output file guarantees:
+///  - Partitioned files: Files are created only for non-empty partitions.
+///  - Single-file output: 1 file is always written, even when the stream is empty.
+///  - Multi-file output: Depending on the number of record batches, 0 or more files are written.
 ///
 /// Examples of `base_output_path`
 ///  * `tmp/dataset/` -> is a folder since it ends in `/`
@@ -170,6 +175,21 @@ async fn row_count_demuxer(
     } else {
         max_rows_per_file
     };
+
+    if single_file_output {
+        // ensure we have one file open, even when the input stream is empty
+        open_file_streams.push(create_new_file_stream(
+            &base_output_path,
+            &write_id,
+            part_idx,
+            &file_extension,
+            single_file_output,
+            max_buffered_batches,
+            &mut tx,
+        )?);
+        row_counts.push(0);
+        part_idx += 1;
+    }
 
     while let Some(rb) = input.next().await.transpose()? {
         // ensure we have at least minimum_parallel_files open

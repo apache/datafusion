@@ -497,7 +497,7 @@ impl FileSource for ParquetSource {
     ) -> Arc<dyn FileOpener> {
         let projection = base_config
             .file_column_projection_indices()
-            .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
+            .unwrap_or_else(|| (0..base_config.file_schema().fields().len()).collect());
 
         let (expr_adapter_factory, schema_adapter_factory) = match (
             base_config.expr_adapter_factory.as_ref(),
@@ -566,8 +566,8 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            logical_file_schema: Arc::clone(&base_config.file_schema),
-            partition_fields: base_config.table_partition_cols.clone(),
+            logical_file_schema: Arc::clone(base_config.file_schema()),
+            partition_fields: base_config.table_partition_cols().clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
