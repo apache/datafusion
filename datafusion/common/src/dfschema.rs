@@ -1333,6 +1333,9 @@ impl SchemaExt for Schema {
 /// - table schema: the schema of the target table. 
 #[derive(Debug, Clone)]
 pub struct TableSchema {
+    /// The file schema is the schema before any `projection` is applied. It contains
+    /// all columns that may appear in the files, but does not include table
+    /// partition columns.
     file_schema: SchemaRef,
     table_partition_cols: Vec<FieldRef>,
     /// Note that the table schema is **not** the schema of the physical files.
