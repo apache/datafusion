@@ -4,16 +4,20 @@ use std::marker::PhantomData;
 use arrow::array::{ArrayIter, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryIter, GenericByteArray, GenericByteViewArray, TypedDictionaryArray};
 use arrow::datatypes::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
 use datafusion_common::{exec_datafusion_err, HashMap, ScalarValue};
-use crate::expressions::case::literal_lookup_table::LookupTable;
+use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 
-trait BytesMapHelperWrapperTrait: Send + Sync {
+/// Helper trait to convert various byte-like array types to iterator over byte slices
+pub(super) trait BytesMapHelperWrapperTrait: Send + Sync {
+  /// Iterator over byte slices that will return
   type IntoIter<'a>: Iterator<Item=Option<&'a [u8]>> + 'a;
+  
+  /// Convert the array to an iterator over byte slices
   fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>>;
 }
 
 
 #[derive(Debug, Clone, Default)]
-struct GenericBytesHelper<T: ByteArrayType>(PhantomData<T>);
+pub(super) struct GenericBytesHelper<T: ByteArrayType>(PhantomData<T>);
 
 impl<T: ByteArrayType> BytesMapHelperWrapperTrait for GenericBytesHelper<T> {
   type IntoIter<'a> = Map<ArrayIter<&'a GenericByteArray<T>>, fn(Option<&'a <T as ByteArrayType>::Native>) -> Option<&[u8]>>;
@@ -33,7 +37,7 @@ impl<T: ByteArrayType> BytesMapHelperWrapperTrait for GenericBytesHelper<T> {
 }
 
 #[derive(Debug, Clone, Default)]
-struct FixedBinaryHelper;
+pub(super) struct FixedBinaryHelper;
 
 impl BytesMapHelperWrapperTrait for FixedBinaryHelper {
   type IntoIter<'a> = FixedSizeBinaryIter<'a>;
@@ -45,7 +49,7 @@ impl BytesMapHelperWrapperTrait for FixedBinaryHelper {
 
 
 #[derive(Debug, Clone, Default)]
-struct GenericBytesViewHelper<T: ByteViewType>(PhantomData<T>);
+pub(super) struct GenericBytesViewHelper<T: ByteViewType>(PhantomData<T>);
 impl<T: ByteViewType> BytesMapHelperWrapperTrait for GenericBytesViewHelper<T> {
   type IntoIter<'a> = Map<ArrayIter<&'a GenericByteViewArray<T>>, fn(Option<&'a <T as ByteViewType>::Native>) -> Option<&[u8]>>;
 
@@ -60,9 +64,8 @@ impl<T: ByteViewType> BytesMapHelperWrapperTrait for GenericBytesViewHelper<T> {
   }
 }
 
-
 #[derive(Debug, Clone, Default)]
-struct BytesDictionaryHelper<Key: ArrowDictionaryKeyType, Value: ByteArrayType>(PhantomData<(Key, Value)>);
+pub(super) struct BytesDictionaryHelper<Key: ArrowDictionaryKeyType, Value: ByteArrayType>(PhantomData<(Key, Value)>);
 
 impl<Key, Value> BytesMapHelperWrapperTrait for BytesDictionaryHelper<Key, Value>
 where
@@ -93,7 +96,7 @@ where
 }
 
 #[derive(Debug, Clone, Default)]
-struct FixedBytesDictionaryHelper<Key: ArrowDictionaryKeyType>(PhantomData<Key>);
+pub(super) struct FixedBytesDictionaryHelper<Key: ArrowDictionaryKeyType>(PhantomData<Key>);
 
 impl<Key> BytesMapHelperWrapperTrait for FixedBytesDictionaryHelper<Key>
 where
@@ -117,7 +120,7 @@ where
 }
 
 #[derive(Debug, Clone, Default)]
-struct BytesViewDictionaryHelper<Key: ArrowDictionaryKeyType, Value: ByteViewType>(PhantomData<(Key, Value)>);
+pub(super) struct BytesViewDictionaryHelper<Key: ArrowDictionaryKeyType, Value: ByteViewType>(PhantomData<(Key, Value)>);
 
 impl<Key, Value> BytesMapHelperWrapperTrait for BytesViewDictionaryHelper<Key, Value>
 where
@@ -147,17 +150,24 @@ where
   }
 }
 
+/// Map from byte-like literal values to their first occurrence index
+/// 
+/// This is a wrapper for handling different kinds of literal maps
 #[derive(Clone)]
-pub(super) struct BytesLookupTable<Helper: BytesMapHelperWrapperTrait> {
+pub(super) struct BytesLikeIndexMap<Helper: BytesMapHelperWrapperTrait> {
   /// Map from non-null literal value the first occurrence index in the literals
   map: HashMap<Vec<u8>, i32>,
+  
+  /// The index for null literal value (when no null value this will equal to `else_index`)
   null_index: i32,
+  
+  /// The index to return when no match is found
   else_index: i32,
 
   _phantom_data: PhantomData<Helper>,
 }
 
-impl<T: BytesMapHelperWrapperTrait> Debug for BytesLookupTable<T> {
+impl<T: BytesMapHelperWrapperTrait> Debug for BytesLikeIndexMap<T> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("BytesMapHelper")
       .field("map", &self.map)
@@ -167,7 +177,7 @@ impl<T: BytesMapHelperWrapperTrait> Debug for BytesLookupTable<T> {
   }
 }
 
-impl<Helper: BytesMapHelperWrapperTrait> LookupTable for BytesLookupTable<Helper> {
+impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap for BytesLikeIndexMap<Helper> {
   fn try_new(literals: Vec<ScalarValue>, else_index: i32) -> datafusion_common::Result<Self>
   where
     Self: Sized,

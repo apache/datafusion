@@ -4,10 +4,10 @@ use arrow::array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray};
 use arrow::datatypes::{i256, IntervalDayTime, IntervalMonthDayNano};
 use half::f16;
 use datafusion_common::{HashMap, ScalarValue};
-use crate::expressions::case::literal_lookup_table::LookupTable;
+use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 
 #[derive(Clone)]
-struct PrimitiveArrayMapHolder<T>
+pub(super) struct PrimitiveArrayMapHolder<T>
 where
   T: ArrowPrimitiveType,
   T::Native: ToHashableKey,
@@ -19,9 +19,20 @@ where
   else_index: i32,
 }
 
+impl<T> Debug for PrimitiveArrayMapHolder<T>
+where
+  T: ArrowPrimitiveType,
+  T::Native: ToHashableKey,
+{
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("PrimitiveArrayMapHolder")
+      .field("map", &self.map)
+      .field("else_index", &self.else_index)
+      .finish()
+  }
+}
 
-
-impl<T> LookupTable for PrimitiveArrayMapHolder<T>
+impl<T> WhenLiteralIndexMap for PrimitiveArrayMapHolder<T>
 where
   T: ArrowPrimitiveType,
   T::Native: ToHashableKey,

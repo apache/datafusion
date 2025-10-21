@@ -1,15 +1,15 @@
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, AsArray};
 use datafusion_common::ScalarValue;
-use crate::expressions::case::literal_lookup_table::LookupTable;
+use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 
 #[derive(Clone, Debug)]
-pub(super) struct BooleanLookupMap {
+pub(super) struct BooleanIndexMap {
   true_index: i32,
   false_index: i32,
   null_index: i32,
 }
 
-impl LookupTable for BooleanLookupMap {
+impl WhenLiteralIndexMap for BooleanIndexMap {
   fn try_new(literals: Vec<ScalarValue>, else_index: i32) -> datafusion_common::Result<Self>
   where
     Self: Sized,
