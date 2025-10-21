@@ -18,6 +18,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::arrow_wrappers::WrappedSchema;
+use crate::physical_expr::{FFI_PhysicalExpr, ForeignPhysicalExpr};
 use abi_stable::{std_types::RVec, StableAbi};
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -29,17 +30,7 @@ use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::function::PartitionEvaluatorArgs,
     physical_plan::{expressions::Column, PhysicalExpr},
-    prelude::SessionContext,
 };
-use datafusion_common::exec_datafusion_err;
-use datafusion_proto::{
-    physical_plan::{
-        from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,
-        DefaultPhysicalExtensionCodec,
-    },
-    protobuf::PhysicalExprNode,
-};
-use prost::Message;
 
 /// A stable struct for sharing [`PartitionEvaluatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -48,7 +39,7 @@ use prost::Message;
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_PartitionEvaluatorArgs {
-    input_exprs: RVec<RVec<u8>>,
+    input_exprs: RVec<FFI_PhysicalExpr>,
     input_fields: RVec<WrappedSchema>,
     is_reversed: bool,
     ignore_nulls: bool,
@@ -96,10 +87,11 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
 
         let schema = Arc::new(Schema::new(fields));
 
-        let codec = DefaultPhysicalExtensionCodec {};
-        let input_exprs = serialize_physical_exprs(args.input_exprs(), &codec)?
-            .into_iter()
-            .map(|expr_node| expr_node.encode_to_vec().into())
+        let input_exprs = args
+            .input_exprs()
+            .iter()
+            .map(Arc::clone)
+            .map(FFI_PhysicalExpr::from)
             .collect();
 
         let input_fields = args
@@ -136,22 +128,15 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_PartitionEvaluatorArgs) -> Result<Self> {
-        let default_ctx = SessionContext::new();
-        let codec = DefaultPhysicalExtensionCodec {};
-
         let schema: SchemaRef = value.schema.into();
 
         let input_exprs = value
             .input_exprs
             .into_iter()
-            .map(|input_expr_bytes| PhysicalExprNode::decode(input_expr_bytes.as_ref()))
-            .collect::<std::result::Result<Vec<_>, prost::DecodeError>>()
-            .map_err(|e| exec_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
-            .iter()
-            .map(|expr_node| {
-                parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)
+            .map(|expr| {
+                Arc::new(ForeignPhysicalExpr::from(expr)) as Arc<dyn PhysicalExpr>
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
 
         let input_fields = input_exprs
             .iter()
