@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use arrow::array::{
     Array, ArrayRef, Int32Array, Int32Builder,
     StringArray,
@@ -247,6 +248,13 @@ struct Options<T> {
     number_of_rows: usize,
     range_of_values: Vec<T>,
     in_range_probability: f32,
+
+    /// (value index, probability)
+    /// Used to weight the selection of in-range values
+    /// If empty, all in-range values are equally likely
+    /// the rest of the in-range values will have equal probability
+    /// the sum of all probabilities must be less than or equal to 1.0
+    value_probability: Vec<(usize, f32)>,
     null_probability: f32,
 }
 
@@ -313,6 +321,15 @@ where
         "Percentages must sum to 1.0 or less"
     );
 
+    let total_value_probability: f32 = options
+        .value_probability
+        .iter()
+        .map(|(_, p)| *p)
+        .sum();
+    assert!(total_value_probability <= 1.0, "Value probabilities must sum to 1.0 or less");
+    options.value_probability.into_iter().collect::<HashMap<usize, f32>>()
+    let filled_value_probability =
+
     let rng = &mut seedable_rng();
 
     let in_range_probability = 0.0..options.in_range_probability;
@@ -326,6 +343,10 @@ where
 
             match roll {
                 v if out_range_probability.contains(&v) => {
+                    if options.value_probability.is_empty() {
+                        // No values in range, generate any value
+                        Some(generate_other_value(rng, &[]))
+                    }
                     let index = rng.random_range(0..options.range_of_values.len());
                     // Generate value in range
                     Some(options.range_of_values[index].clone())
