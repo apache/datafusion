@@ -90,9 +90,9 @@ fn make_batch(row_count: usize, column_count: usize) -> RecordBatch {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    run_benchmarks(c, &make_batch(8192, 3));
-    run_benchmarks(c, &make_batch(8192, 50));
-    run_benchmarks(c, &make_batch(8192, 100));
+    // run_benchmarks(c, &make_batch(8192, 3));
+    // run_benchmarks(c, &make_batch(8192, 50));
+    // run_benchmarks(c, &make_batch(8192, 100));
 
     benchmark_lookup_table_case_when(c, 8192);
 }
@@ -241,27 +241,6 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
         );
         b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
     });
-
-    // Lookup table with literal values
-    // when(col("platform_type") === 1, "Desktop")
-    //             .when(col("platform_type") === 2, "iPhone")
-    //             .when(col("platform_type") === 3, "iPad")
-    //             .when(col("platform_type") === 4, "Android")
-    //             .when(col("platform_type") === 5, "iPod")
-    //             .when(col("platform_type") === 6, "Mobile-Other")
-    //             .when(col("platform_type") === 7, "Android-Tablet")
-    //             .when(col("platform_type") === 30, "Email")
-    //             .when(col("platform_type") === 31, "Email")
-    //             .when(col("platform_type") === 90, "Facebook")
-    //             .when(col("platform_type") === 91, "Facebook")
-    //             .when(col("platform_type") === 92, "Facebook")
-    //             .when(col("platform_type") === 93, "Facebook")
-    //             .when(col("platform_type") === 120, "API-Feed")
-    //             .when(col("platform_type") === 240, "Web-group")
-    //             .when(col("platform_type") === 241, "Mobile")
-    //             .when(col("platform_type") === 244, "Facebook-group")
-    //             .otherwise("Else")
-    //             .alias("platform_type"),
 }
 
 struct Options<T> {
