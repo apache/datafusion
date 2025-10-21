@@ -1,111 +1,125 @@
+use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
+use arrow::array::{
+    ArrayIter, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryIter,
+    GenericByteArray, GenericByteViewArray, TypedDictionaryArray,
+};
+use arrow::datatypes::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
+use datafusion_common::{exec_datafusion_err, HashMap, ScalarValue};
 use std::fmt::Debug;
 use std::iter::Map;
 use std::marker::PhantomData;
-use arrow::array::{ArrayIter, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryIter, GenericByteArray, GenericByteViewArray, TypedDictionaryArray};
-use arrow::datatypes::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
-use datafusion_common::{exec_datafusion_err, HashMap, ScalarValue};
-use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 
 /// Helper trait to convert various byte-like array types to iterator over byte slices
 pub(super) trait BytesMapHelperWrapperTrait: Send + Sync {
-  /// Iterator over byte slices that will return
-  type IntoIter<'a>: Iterator<Item=Option<&'a [u8]>> + 'a;
+    /// Iterator over byte slices that will return
+    type IntoIter<'a>: Iterator<Item = Option<&'a [u8]>> + 'a;
 
-  /// Convert the array to an iterator over byte slices
-  fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>>;
+    /// Convert the array to an iterator over byte slices
+    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>>;
 }
-
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct GenericBytesHelper<T: ByteArrayType>(PhantomData<T>);
 
 impl<T: ByteArrayType> BytesMapHelperWrapperTrait for GenericBytesHelper<T> {
-  type IntoIter<'a> = Map<ArrayIter<&'a GenericByteArray<T>>, fn(Option<&'a <T as ByteArrayType>::Native>) -> Option<&[u8]>>;
+    type IntoIter<'a> = Map<
+        ArrayIter<&'a GenericByteArray<T>>,
+        fn(Option<&'a <T as ByteArrayType>::Native>) -> Option<&[u8]>,
+    >;
 
-  fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-    Ok(array
-      .as_bytes::<T>()
-      .into_iter()
-      .map(|item| {
-        item.map(|v| {
-          let bytes: &[u8] = v.as_ref();
+    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
+        Ok(array.as_bytes::<T>().into_iter().map(|item| {
+            item.map(|v| {
+                let bytes: &[u8] = v.as_ref();
 
-          bytes
-        })
-      }))
-  }
+                bytes
+            })
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct FixedBinaryHelper;
 
 impl BytesMapHelperWrapperTrait for FixedBinaryHelper {
-  type IntoIter<'a> = FixedSizeBinaryIter<'a>;
+    type IntoIter<'a> = FixedSizeBinaryIter<'a>;
 
-  fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-    Ok(array.as_fixed_size_binary().into_iter())
-  }
+    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
+        Ok(array.as_fixed_size_binary().into_iter())
+    }
 }
-
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct GenericBytesViewHelper<T: ByteViewType>(PhantomData<T>);
 impl<T: ByteViewType> BytesMapHelperWrapperTrait for GenericBytesViewHelper<T> {
-  type IntoIter<'a> = Map<ArrayIter<&'a GenericByteViewArray<T>>, fn(Option<&'a <T as ByteViewType>::Native>) -> Option<&[u8]>>;
+    type IntoIter<'a> = Map<
+        ArrayIter<&'a GenericByteViewArray<T>>,
+        fn(Option<&'a <T as ByteViewType>::Native>) -> Option<&[u8]>,
+    >;
 
-  fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-    Ok(array.as_byte_view::<T>().into_iter().map(|item| {
-      item.map(|v| {
-        let bytes: &[u8] = v.as_ref();
+    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
+        Ok(array.as_byte_view::<T>().into_iter().map(|item| {
+            item.map(|v| {
+                let bytes: &[u8] = v.as_ref();
 
-        bytes
-      })
-    }))
-  }
+                bytes
+            })
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct BytesDictionaryHelper<Key: ArrowDictionaryKeyType, Value: ByteArrayType>(PhantomData<(Key, Value)>);
+pub(super) struct BytesDictionaryHelper<Key: ArrowDictionaryKeyType, Value: ByteArrayType>(
+    PhantomData<(Key, Value)>,
+);
 
 impl<Key, Value> BytesMapHelperWrapperTrait for BytesDictionaryHelper<Key, Value>
 where
-  Key: ArrowDictionaryKeyType + Send + Sync,
-  Value: ByteArrayType,
-  for<'a> TypedDictionaryArray<'a, Key, GenericByteArray<Value>>:
-  IntoIterator<Item=Option<&'a Value::Native>> {
-  type IntoIter<'a> = Map<<TypedDictionaryArray<'a, Key, GenericByteArray<Value>> as IntoIterator>::IntoIter, fn(Option<&'a <Value as ByteArrayType>::Native>) -> Option<&[u8]>>;
+    Key: ArrowDictionaryKeyType + Send + Sync,
+    Value: ByteArrayType,
+    for<'a> TypedDictionaryArray<'a, Key, GenericByteArray<Value>>:
+        IntoIterator<Item = Option<&'a Value::Native>>,
+{
+    type IntoIter<'a> = Map<<TypedDictionaryArray<'a, Key, GenericByteArray<Value>> as IntoIterator>::IntoIter, fn(Option<&'a <Value as ByteArrayType>::Native>) -> Option<&[u8]>>;
 
-  fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-    let dict_array = array
-      .as_dictionary::<Key>()
-      .downcast_dict::<GenericByteArray<Value>>()
-      .ok_or_else(|| {
-        exec_datafusion_err!(
+    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
+        let dict_array = array
+            .as_dictionary::<Key>()
+            .downcast_dict::<GenericByteArray<Value>>()
+            .ok_or_else(|| {
+                exec_datafusion_err!(
           "Failed to downcast dictionary array {} to expected dictionary value {}",
           array.data_type(),
           Value::DATA_TYPE
         )
-      })?;
+            })?;
 
-    Ok(dict_array.into_iter().map(|item| item.map(|v| {
-      let bytes: &[u8] = v.as_ref();
+        Ok(dict_array.into_iter().map(|item| {
+            item.map(|v| {
+                let bytes: &[u8] = v.as_ref();
 
-      bytes
-    })))
-  }
+                bytes
+            })
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct FixedBytesDictionaryHelper<Key: ArrowDictionaryKeyType>(PhantomData<Key>);
+pub(super) struct FixedBytesDictionaryHelper<Key: ArrowDictionaryKeyType>(
+    PhantomData<Key>,
+);
 
 impl<Key> BytesMapHelperWrapperTrait for FixedBytesDictionaryHelper<Key>
 where
-  Key: ArrowDictionaryKeyType + Send + Sync,
-  for<'a> TypedDictionaryArray<'a, Key, FixedSizeBinaryArray>: IntoIterator<Item=Option<&'a [u8]>> {
-  type IntoIter<'a> = <TypedDictionaryArray<'a, Key, FixedSizeBinaryArray> as IntoIterator>::IntoIter;
+    Key: ArrowDictionaryKeyType + Send + Sync,
+    for<'a> TypedDictionaryArray<'a, Key, FixedSizeBinaryArray>:
+        IntoIterator<Item = Option<&'a [u8]>>,
+{
+    type IntoIter<'a> =
+        <TypedDictionaryArray<'a, Key, FixedSizeBinaryArray> as IntoIterator>::IntoIter;
 
-  fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-    let dict_array = array
+    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
+        let dict_array = array
       .as_dictionary::<Key>()
       .downcast_dict::<FixedSizeBinaryArray>()
       .ok_or_else(|| {
@@ -115,39 +129,45 @@ where
         )
       })?;
 
-    Ok(dict_array.into_iter())
-  }
+        Ok(dict_array.into_iter())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct BytesViewDictionaryHelper<Key: ArrowDictionaryKeyType, Value: ByteViewType>(PhantomData<(Key, Value)>);
+pub(super) struct BytesViewDictionaryHelper<
+    Key: ArrowDictionaryKeyType,
+    Value: ByteViewType,
+>(PhantomData<(Key, Value)>);
 
 impl<Key, Value> BytesMapHelperWrapperTrait for BytesViewDictionaryHelper<Key, Value>
 where
-  Key: ArrowDictionaryKeyType + Send + Sync,
-  Value: ByteViewType,
-  for<'a> TypedDictionaryArray<'a, Key, GenericByteViewArray<Value>>:
-  IntoIterator<Item=Option<&'a Value::Native>> {
-  type IntoIter<'a> = Map<<TypedDictionaryArray<'a, Key, GenericByteViewArray<Value>> as IntoIterator>::IntoIter, fn(Option<&'a <Value as ByteViewType>::Native>) -> Option<&[u8]>>;
+    Key: ArrowDictionaryKeyType + Send + Sync,
+    Value: ByteViewType,
+    for<'a> TypedDictionaryArray<'a, Key, GenericByteViewArray<Value>>:
+        IntoIterator<Item = Option<&'a Value::Native>>,
+{
+    type IntoIter<'a> = Map<<TypedDictionaryArray<'a, Key, GenericByteViewArray<Value>> as IntoIterator>::IntoIter, fn(Option<&'a <Value as ByteViewType>::Native>) -> Option<&[u8]>>;
 
-  fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-    let dict_array = array
-      .as_dictionary::<Key>()
-      .downcast_dict::<GenericByteViewArray<Value>>()
-      .ok_or_else(|| {
-        exec_datafusion_err!(
+    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
+        let dict_array = array
+            .as_dictionary::<Key>()
+            .downcast_dict::<GenericByteViewArray<Value>>()
+            .ok_or_else(|| {
+                exec_datafusion_err!(
           "Failed to downcast dictionary array {} to expected dictionary value {}",
           array.data_type(),
           Value::DATA_TYPE
         )
-      })?;
+            })?;
 
-    Ok(dict_array.into_iter().map(|item| item.map(|v| {
-      let bytes: &[u8] = v.as_ref();
+        Ok(dict_array.into_iter().map(|item| {
+            item.map(|v| {
+                let bytes: &[u8] = v.as_ref();
 
-      bytes
-    })))
-  }
+                bytes
+            })
+        }))
+    }
 }
 
 /// Map from byte-like literal values to their first occurrence index
@@ -155,78 +175,77 @@ where
 /// This is a wrapper for handling different kinds of literal maps
 #[derive(Clone)]
 pub(super) struct BytesLikeIndexMap<Helper: BytesMapHelperWrapperTrait> {
-  /// Map from non-null literal value the first occurrence index in the literals
-  map: HashMap<Vec<u8>, i32>,
+    /// Map from non-null literal value the first occurrence index in the literals
+    map: HashMap<Vec<u8>, i32>,
 
-  /// The index for null literal value (when no null value this will equal to `else_index`)
-  null_index: i32,
+    /// The index for null literal value (when no null value this will equal to `else_index`)
+    null_index: i32,
 
-  /// The index to return when no match is found
-  else_index: i32,
+    /// The index to return when no match is found
+    else_index: i32,
 
-  _phantom_data: PhantomData<Helper>,
+    _phantom_data: PhantomData<Helper>,
 }
 
 impl<T: BytesMapHelperWrapperTrait> Debug for BytesLikeIndexMap<T> {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("BytesMapHelper")
-      .field("map", &self.map)
-      .field("null_index", &self.null_index)
-      .field("else_index", &self.else_index)
-      .finish()
-  }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BytesMapHelper")
+            .field("map", &self.map)
+            .field("null_index", &self.null_index)
+            .field("else_index", &self.else_index)
+            .finish()
+    }
 }
 
-impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap for BytesLikeIndexMap<Helper> {
-  fn try_new(literals: Vec<ScalarValue>, else_index: i32) -> datafusion_common::Result<Self>
-  where
-    Self: Sized,
-  {
-    let input = ScalarValue::iter_to_array(literals)?;
-    let bytes_iter = Helper::array_to_iter(&input)?;
+impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
+    for BytesLikeIndexMap<Helper>
+{
+    fn try_new(
+        literals: Vec<ScalarValue>,
+        else_index: i32,
+    ) -> datafusion_common::Result<Self>
+    where
+        Self: Sized,
+    {
+        let input = ScalarValue::iter_to_array(literals)?;
+        let bytes_iter = Helper::array_to_iter(&input)?;
 
-    let mut null_index = None;
+        let mut null_index = None;
 
-    let mut map: HashMap<Vec<u8>, i32> = HashMap::new();
+        let mut map: HashMap<Vec<u8>, i32> = HashMap::new();
 
-    for (map_index, value) in bytes_iter.enumerate() {
-      match value {
-        Some(value) => {
-          // Insert only the first occurrence
-          map.entry(value.to_vec()).or_insert(map_index as i32);
+        for (map_index, value) in bytes_iter.enumerate() {
+            match value {
+                Some(value) => {
+                    // Insert only the first occurrence
+                    map.entry(value.to_vec()).or_insert(map_index as i32);
+                }
+                None => {
+                    // Only set the null index once
+                    if null_index.is_none() {
+                        null_index = Some(map_index as i32);
+                    }
+                }
+            }
         }
-        None => {
-          // Only set the null index once
-          if null_index.is_none() {
-            null_index = Some(map_index as i32);
-          }
-        }
-      }
+
+        Ok(Self {
+            map,
+            null_index: null_index.unwrap_or(else_index),
+            else_index,
+            _phantom_data: Default::default(),
+        })
     }
 
-    Ok(Self {
-      map,
-      null_index: null_index.unwrap_or(else_index),
-      else_index,
-      _phantom_data: Default::default(),
-    })
-  }
+    fn match_values(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<i32>> {
+        let bytes_iter = Helper::array_to_iter(array)?;
+        let indices = bytes_iter
+            .map(|value| match value {
+                Some(value) => self.map.get(value).copied().unwrap_or(self.else_index),
+                None => self.null_index,
+            })
+            .collect::<Vec<i32>>();
 
-  fn match_values(&self, array: &ArrayRef) -> datafusion_common::Result<Vec<i32>> {
-    let bytes_iter = Helper::array_to_iter(array)?;
-    let indices = bytes_iter
-      .map(|value| {
-        match value {
-          Some(value) => {
-            self.map.get(value).copied().unwrap_or(self.else_index)
-          }
-          None => {
-            self.null_index
-          }
-        }
-      })
-      .collect::<Vec<i32>>();
-
-    Ok(indices)
-  }
+        Ok(indices)
+    }
 }
