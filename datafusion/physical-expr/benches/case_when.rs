@@ -396,8 +396,7 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
             for num_entries in [5, 10, 20] {
                 for (name, values_range) in [
                     ("all equally true", 0..num_entries),
-
-                  // Test when early termination is beneficial
+                    // Test when early termination is beneficial
                     ("only first 2 are true", 0..2),
                 ] {
                     let when_thens_primitive_to_string =
