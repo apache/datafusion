@@ -24,12 +24,12 @@ use crate::{error::_plan_err, DataFusionError, ScalarValue};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
 #[derive(Debug, Clone)]
-pub struct ScalarAndMetadata {
+pub struct LiteralValue {
     pub value: ScalarValue,
     pub metadata: Option<FieldMetadata>,
 }
 
-impl ScalarAndMetadata {
+impl LiteralValue {
     /// Create a new Literal from a scalar value with optional [`FieldMetadata`]
     pub fn new(value: ScalarValue, metadata: Option<FieldMetadata>) -> Self {
         Self { value, metadata }
@@ -60,7 +60,7 @@ impl ScalarAndMetadata {
         target_type: &DataType,
     ) -> Result<Self, DataFusionError> {
         let new_value = self.value().cast_to(target_type)?;
-        Ok(ScalarAndMetadata::new(new_value, self.metadata.clone()))
+        Ok(LiteralValue::new(new_value, self.metadata.clone()))
     }
 }
 

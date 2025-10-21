@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::error::{_plan_datafusion_err, _plan_err};
-use crate::metadata::{check_metadata_with_storage_equal, ScalarAndMetadata};
+use crate::metadata::{check_metadata_with_storage_equal, LiteralValue};
 use crate::{Result, ScalarValue};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use std::collections::HashMap;
@@ -25,9 +25,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub enum ParamValues {
     /// For positional query parameters, like `SELECT * FROM test WHERE a > $1 AND b = $2`
-    List(Vec<ScalarAndMetadata>),
+    List(Vec<LiteralValue>),
     /// For named query parameters, like `SELECT * FROM test WHERE a > $foo AND b = $goo`
-    Map(HashMap<String, ScalarAndMetadata>),
+    Map(HashMap<String, LiteralValue>),
 }
 
 impl ParamValues {
@@ -81,7 +81,7 @@ impl ParamValues {
         }
     }
 
-    pub fn get_placeholders_with_values(&self, id: &str) -> Result<ScalarAndMetadata> {
+    pub fn get_placeholders_with_values(&self, id: &str) -> Result<LiteralValue> {
         match self {
             ParamValues::List(list) => {
                 if id.is_empty() {
@@ -118,7 +118,7 @@ impl From<Vec<ScalarValue>> for ParamValues {
         Self::List(
             value
                 .into_iter()
-                .map(|v| ScalarAndMetadata::new(v, None))
+                .map(|v| LiteralValue::new(v, None))
                 .collect(),
         )
     }
@@ -129,9 +129,9 @@ where
     K: Into<String>,
 {
     fn from(value: Vec<(K, ScalarValue)>) -> Self {
-        let value: HashMap<String, ScalarAndMetadata> = value
+        let value: HashMap<String, LiteralValue> = value
             .into_iter()
-            .map(|(k, v)| (k.into(), ScalarAndMetadata::new(v, None)))
+            .map(|(k, v)| (k.into(), LiteralValue::new(v, None)))
             .collect();
         Self::Map(value)
     }
@@ -142,9 +142,9 @@ where
     K: Into<String>,
 {
     fn from(value: HashMap<K, ScalarValue>) -> Self {
-        let value: HashMap<String, ScalarAndMetadata> = value
+        let value: HashMap<String, LiteralValue> = value
             .into_iter()
-            .map(|(k, v)| (k.into(), ScalarAndMetadata::new(v, None)))
+            .map(|(k, v)| (k.into(), LiteralValue::new(v, None)))
             .collect();
         Self::Map(value)
     }
