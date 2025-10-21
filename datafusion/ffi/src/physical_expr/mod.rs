@@ -202,7 +202,10 @@ unsafe extern "C" fn evaluate_fn_wrapper(
     batch: WrappedArray,
 ) -> FFIResult<FFI_ColumnarValue> {
     let batch = rresult_return!(wrapped_array_to_record_batch(batch));
-    rresult!(expr.inner().evaluate(&batch).and_then(FFI_ColumnarValue::try_from))
+    rresult!(expr
+        .inner()
+        .evaluate(&batch)
+        .and_then(FFI_ColumnarValue::try_from))
 }
 
 unsafe extern "C" fn return_field_fn_wrapper(
@@ -228,7 +231,10 @@ unsafe extern "C" fn evaluate_selection_fn_wrapper(
         .as_any()
         .downcast_ref::<BooleanArray>()
         .ok_or(exec_datafusion_err!("Unexpected selection array type")));
-    rresult!(expr.inner().evaluate_selection(&batch, selection).and_then(FFI_ColumnarValue::try_from))
+    rresult!(expr
+        .inner()
+        .evaluate_selection(&batch, selection)
+        .and_then(FFI_ColumnarValue::try_from))
 }
 
 unsafe extern "C" fn children_fn_wrapper(
@@ -260,13 +266,15 @@ unsafe extern "C" fn evaluate_bounds_fn_wrapper(
     children: &RVec<FFI_Interval>,
 ) -> FFIResult<FFI_Interval> {
     let expr = expr.inner();
-    let children = rresult_return!( children
+    let children = rresult_return!(children
         .iter()
         .map(Interval::try_from)
         .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
 
-    rresult!(expr.evaluate_bounds(&children_borrowed).and_then(FFI_Interval::try_from))
+    rresult!(expr
+        .evaluate_bounds(&children_borrowed)
+        .and_then(FFI_Interval::try_from))
 }
 
 unsafe extern "C" fn propagate_constraints_fn_wrapper(
@@ -300,12 +308,12 @@ unsafe extern "C" fn evaluate_statistics_fn_wrapper(
     children: &RVec<FFI_Distribution>,
 ) -> FFIResult<FFI_Distribution> {
     let expr = expr.inner();
-    let children = children
+    let children = rresult_return!(children
         .iter()
-        .map(|child| child.into())
-        .collect::<Vec<_>>();
+        .map(Distribution::try_from)
+        .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
-    rresult!(expr.evaluate_statistics(&children_borrowed).map(Into::into))
+    rresult!(expr.evaluate_statistics(&children_borrowed).and_then(|dist| FFI_Distribution::try_from(&dist)))
 }
 
 unsafe extern "C" fn propagate_statistics_fn_wrapper(
@@ -314,17 +322,22 @@ unsafe extern "C" fn propagate_statistics_fn_wrapper(
     children: &RVec<FFI_Distribution>,
 ) -> FFIResult<ROption<RVec<FFI_Distribution>>> {
     let expr = expr.inner();
-    let parent = parent.into();
-    let children = children.iter().map(Distribution::from).collect::<Vec<_>>();
+    let parent = rresult_return!(Distribution::try_from(parent));
+    let children = rresult_return!(children
+        .iter()
+        .map(Distribution::try_from)
+        .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
 
     let result = rresult_return!(expr.propagate_statistics(&parent, &children_borrowed));
+    let result = rresult_return!(result
+        .map(|dists| dists
+            .iter()
+            .map(FFI_Distribution::try_from)
+            .collect::<Result<RVec<_>>>())
+        .transpose());
 
-    RResult::ROk(
-        result
-            .map(|v| v.into_iter().map(Into::into).collect())
-            .into(),
-    )
+    RResult::ROk(result.into())
 }
 
 unsafe extern "C" fn get_properties_fn_wrapper(
@@ -508,7 +521,8 @@ impl PhysicalExpr for ForeignPhysicalExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         unsafe {
             let batch = df_result!(record_batch_to_wrapped_array(batch.clone()))?;
-            df_result!((self.expr.evaluate)(&self.expr, batch)).and_then(ColumnarValue::try_from)
+            df_result!((self.expr.evaluate)(&self.expr, batch))
+                .and_then(ColumnarValue::try_from)
         }
     }
 
@@ -597,11 +611,12 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         unsafe {
             let children = children
                 .iter()
-                .map(|dist| FFI_Distribution::from(*dist))
-                .collect::<RVec<_>>();
-            df_result!(
-                (self.expr.evaluate_statistics)(&self.expr, &children).map(Into::into)
-            )
+                .map(|dist| FFI_Distribution::try_from(*dist))
+                .collect::<Result<RVec<_>>>()?;
+
+            let result =
+                df_result!((self.expr.evaluate_statistics)(&self.expr, &children))?;
+            Distribution::try_from(&result)
         }
     }
 
@@ -611,18 +626,25 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         children: &[&Distribution],
     ) -> Result<Option<Vec<Distribution>>> {
         unsafe {
-            let parent = parent.into();
+            let parent = FFI_Distribution::try_from(parent)?;
             let children = children
                 .iter()
-                .map(|dist| FFI_Distribution::from(*dist))
-                .collect::<RVec<_>>();
+                .map(|dist| FFI_Distribution::try_from(*dist))
+                .collect::<Result<RVec<_>>>()?;
             let result = df_result!((self.expr.propagate_statistics)(
                 &self.expr, &parent, &children
             ))?;
 
-            Ok(result
-                .map(|dists| dists.into_iter().map(Into::into).collect())
-                .into())
+            let result: Option<Result<Vec<Distribution>>> = result
+                .map(|dists| {
+                    dists
+                        .iter()
+                        .map(Distribution::try_from)
+                        .collect::<Result<Vec<_>>>()
+                })
+                .into();
+
+            result.transpose()
         }
     }
 

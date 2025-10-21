@@ -6,6 +6,7 @@ use arrow_schema::ArrowError;
 use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::DataFusionError;
 use prost::Message;
+use crate::expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -23,8 +24,7 @@ impl TryFrom<ColumnarValue> for FFI_ColumnarValue {
                 FFI_ColumnarValue::Array({ WrappedArray::try_from(&v)? })
             }
             ColumnarValue::Scalar(v) => FFI_ColumnarValue::Scalar({
-                let v: datafusion_proto_common::ScalarValue = (&v).try_into()?;
-                v.encode_to_vec().into()
+                scalar_value_to_rvec_u8(&v)?
             }),
         })
     }
@@ -36,9 +36,7 @@ impl TryFrom<FFI_ColumnarValue> for ColumnarValue {
         Ok(match value {
             FFI_ColumnarValue::Array(v) => ColumnarValue::Array({ v.try_into()? }),
             FFI_ColumnarValue::Scalar(v) => ColumnarValue::Scalar({
-                let v = datafusion_proto_common::ScalarValue::decode(v.as_ref())
-                    .map_err(|err| DataFusionError::Execution(err.to_string()))?;
-                (&v).try_into()?
+                rvec_u8_to_scalar_value(&v)?
             }),
         })
     }

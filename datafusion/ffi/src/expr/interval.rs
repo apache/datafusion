@@ -5,6 +5,7 @@ use arrow_schema::ArrowError;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion_common::DataFusionError;
 use prost::Message;
+use crate::expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -17,11 +18,8 @@ pub struct FFI_Interval {
 impl TryFrom<&Interval> for FFI_Interval {
     type Error = DataFusionError;
     fn try_from(value: &Interval) -> Result<Self, Self::Error> {
-        let upper: datafusion_proto_common::ScalarValue = value.upper().try_into()?;
-        let lower: datafusion_proto_common::ScalarValue = value.lower().try_into()?;
-
-        let upper = upper.encode_to_vec().into();
-        let lower = lower.encode_to_vec().into();
+        let upper = scalar_value_to_rvec_u8(value.upper())?;
+        let lower = scalar_value_to_rvec_u8(value.lower())?;
 
         Ok(FFI_Interval { upper, lower })
     }
@@ -36,13 +34,8 @@ impl TryFrom<Interval> for FFI_Interval {
 impl TryFrom<&FFI_Interval> for Interval {
     type Error = DataFusionError;
     fn try_from(value: &FFI_Interval) -> Result<Self, Self::Error> {
-        let upper = datafusion_proto_common::ScalarValue::decode(value.upper.as_ref())
-            .map_err(|err| DataFusionError::Execution(err.to_string()))?;
-        let lower = datafusion_proto_common::ScalarValue::decode(value.lower.as_ref())
-            .map_err(|err| DataFusionError::Execution(err.to_string()))?;
-
-        let upper = (&upper).try_into()?;
-        let lower = (&lower).try_into()?;
+        let upper = rvec_u8_to_scalar_value(&value.upper)?;
+        let lower = rvec_u8_to_scalar_value(&value.lower)?;
 
         Interval::try_new(lower, upper)
     }
