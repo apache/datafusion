@@ -75,16 +75,14 @@ enum EvalMethod {
     WithExprScalarLookupTable(LiteralLookupTable),
 }
 
-
 // Implement empty hash as the data is derived from PhysicalExprs which are already hashed
 impl Hash for LiteralLookupTable {
-    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {
-    }
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
 }
 
 // Implement always equal as the data is derived from PhysicalExprs which are already compared
 impl PartialEq for LiteralLookupTable {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, _other: &Self) -> bool {
         true
     }
 }

@@ -20,7 +20,6 @@ use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::sync::Arc;
 
 /// Optimization for CASE expressions with literal WHEN and THEN clauses

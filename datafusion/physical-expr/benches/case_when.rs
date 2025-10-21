@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    Array, ArrayRef, Int32Array, Int32Builder,
-    StringArray,
-};
+use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
 use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::seedable_rng;
@@ -90,9 +87,9 @@ fn make_batch(row_count: usize, column_count: usize) -> RecordBatch {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // run_benchmarks(c, &make_batch(8192, 3));
-    // run_benchmarks(c, &make_batch(8192, 50));
-    // run_benchmarks(c, &make_batch(8192, 100));
+    run_benchmarks(c, &make_batch(8192, 3));
+    run_benchmarks(c, &make_batch(8192, 50));
+    run_benchmarks(c, &make_batch(8192, 100));
 
     benchmark_lookup_table_case_when(c, 8192);
 }
@@ -263,9 +260,7 @@ fn generate_other_primitive_value<T: ArrowNativeTypeOp + SampleUniform>(
         }
     }
 
-    panic!(
-        "Could not generate out of range value after {retry_limit} attempts"
-    );
+    panic!("Could not generate out of range value after {retry_limit} attempts");
 }
 
 fn create_random_string_generator(
@@ -288,9 +283,7 @@ fn create_random_string_generator(
             }
         }
 
-        panic!(
-            "Could not generate out of range value after {retry_limit} attempts"
-        );
+        panic!("Could not generate out of range value after {retry_limit} attempts");
     }
 }
 
@@ -316,8 +309,8 @@ where
     let rng = &mut seedable_rng();
 
     let in_range_probability = 0.0..options.in_range_probability;
-    let null_range_probability = in_range_probability.start
-        ..in_range_probability.start + options.null_probability;
+    let null_range_probability =
+        in_range_probability.start..in_range_probability.start + options.null_probability;
     let out_range_probability = null_range_probability.end..1.0;
 
     (0..options.number_of_rows)
@@ -401,21 +394,21 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                 .collect_vec();
 
             for num_entries in [5, 10, 20] {
-
                 for (name, values_range) in [
                     ("all equally true", 0..num_entries),
                     ("only first 2 are true", 0..2),
                 ] {
-
                     let when_thens_primitive_to_string =
-                      when_thens_primitive_to_string[values_range.clone()].to_vec();
+                        when_thens_primitive_to_string[values_range.clone()].to_vec();
 
                     let when_thens_string_to_primitive =
-                      when_thens_string_to_primitive[values_range].to_vec();
+                        when_thens_string_to_primitive[values_range].to_vec();
 
                     case_when_lookup.bench_with_input(
                         BenchmarkId::new(
-                            format!("case when i32 -> utf8, {num_entries} entries, {name}"),
+                            format!(
+                                "case when i32 -> utf8, {num_entries} entries, {name}"
+                            ),
                             input,
                         ),
                         &input,
@@ -424,9 +417,9 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                                 Options::<i32> {
                                     number_of_rows: batch_size,
                                     range_of_values: when_thens_primitive_to_string
-                                      .iter()
-                                      .map(|(key, _)| *key)
-                                      .collect(),
+                                        .iter()
+                                        .map(|(key, _)| *key)
+                                        .collect(),
                                     in_range_probability: input.in_range_probability,
                                     null_probability: input.null_probability,
                                 },
@@ -442,12 +435,12 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                                 )])),
                                 vec![Arc::new(array)],
                             )
-                              .unwrap();
+                            .unwrap();
 
                             let when_thens = when_thens_primitive_to_string
-                              .iter()
-                              .map(|&(key, value)| (lit(key), lit(value)))
-                              .collect();
+                                .iter()
+                                .map(|&(key, value)| (lit(key), lit(value)))
+                                .collect();
 
                             let expr = Arc::new(
                                 case(
@@ -455,16 +448,20 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                                     when_thens,
                                     Some(lit("whatever")),
                                 )
-                                  .unwrap(),
+                                .unwrap(),
                             );
 
-                            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+                            b.iter(|| {
+                                black_box(expr.evaluate(black_box(&batch)).unwrap())
+                            })
                         },
                     );
 
                     case_when_lookup.bench_with_input(
                         BenchmarkId::new(
-                            format!("case when utf8 -> i32, {num_entries} entries, {name}"),
+                            format!(
+                                "case when utf8 -> i32, {num_entries} entries, {name}"
+                            ),
                             input,
                         ),
                         &input,
@@ -473,9 +470,9 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                                 Options::<String> {
                                     number_of_rows: batch_size,
                                     range_of_values: when_thens_string_to_primitive
-                                      .iter()
-                                      .map(|(key, _)| (*key).to_string())
-                                      .collect(),
+                                        .iter()
+                                        .map(|(key, _)| (*key).to_string())
+                                        .collect(),
                                     in_range_probability: input.in_range_probability,
                                     null_probability: input.null_probability,
                                 },
@@ -491,12 +488,12 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                                 )])),
                                 vec![Arc::new(array)],
                             )
-                              .unwrap();
+                            .unwrap();
 
                             let when_thens = when_thens_string_to_primitive
-                              .iter()
-                              .map(|&(key, value)| (lit(key), lit(value)))
-                              .collect();
+                                .iter()
+                                .map(|&(key, value)| (lit(key), lit(value)))
+                                .collect();
 
                             let expr = Arc::new(
                                 case(
@@ -504,14 +501,15 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                                     when_thens,
                                     Some(lit(1000)),
                                 )
-                                  .unwrap(),
+                                .unwrap(),
                             );
 
-                            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+                            b.iter(|| {
+                                black_box(expr.evaluate(black_box(&batch)).unwrap())
+                            })
                         },
                     );
                 }
-
             }
         }
     }
