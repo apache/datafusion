@@ -609,13 +609,13 @@ fn multi_hash_joins() -> Result<()> {
                 );
 
                 let test_config = TestConfig::default();
-                let plan_distrub = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+                let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
                 match join_type {
                     // Should include 3 RepartitionExecs
                     JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
 
-                                assert_plan!(plan_distrub, @r"
+                                assert_plan!(plan_distrib, @r"
                                 HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, c@2)]
                                   HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, b1@1)]
                                     RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
@@ -632,7 +632,7 @@ fn multi_hash_joins() -> Result<()> {
                             },
                     // Should include 4 RepartitionExecs
                     _ => {
-                                assert_plan!(plan_distrub, @r"
+                                assert_plan!(plan_distrib, @r"
                                 HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, c@2)]
                                   RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
                                     HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, b1@1)]
@@ -652,7 +652,7 @@ fn multi_hash_joins() -> Result<()> {
 
 
                 let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
-                assert_plan!(plan_distrub, plan_sort);
+                assert_plan!(plan_distrib, plan_sort);
             }
             JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {}
         }
@@ -678,7 +678,7 @@ fn multi_hash_joins() -> Result<()> {
                     hash_join_exec(join, parquet_exec(), &top_join_on, &join_type);
 
                 let test_config = TestConfig::default();
-                let plan_distrub = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+                let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
                 match join_type {
                     // Should include 3 RepartitionExecs
@@ -687,7 +687,7 @@ fn multi_hash_joins() -> Result<()> {
                             },
                     // Should include 3 RepartitionExecs but have a different "on"
                             JoinType::RightSemi | JoinType::RightAnti => {
-                            assert_plan!(plan_distrub, @r"
+                            assert_plan!(plan_distrib, @r"
                             HashJoinExec: mode=Partitioned, join_type=..., on=[(b1@1, c@2)]
                               HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, b1@1)]
                                 RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
@@ -706,7 +706,7 @@ fn multi_hash_joins() -> Result<()> {
 
                     // Should include 4 RepartitionExecs
                     _ => {
-                            assert_plan!(plan_distrub, @r"
+                            assert_plan!(plan_distrib, @r"
                             HashJoinExec: mode=Partitioned, join_type=..., on=[(b1@6, c@2)]
                               RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10
                                 HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, b1@1)]
@@ -727,7 +727,7 @@ fn multi_hash_joins() -> Result<()> {
 
 
                 let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
-                        assert_plan!(plan_distrub, plan_sort);
+                        assert_plan!(plan_distrib, plan_sort);
             }
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {}
         }
@@ -1220,21 +1220,21 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
     ];
 
     insta::allow_duplicates! {
-            for join_type in join_types {
-                let top_join = hash_join_exec(
-                    bottom_left_projection.clone(),
-                    bottom_right_join.clone(),
-                    &top_join_on,
-                    &join_type,
-                );
+                for join_type in join_types {
+                    let top_join = hash_join_exec(
+                        bottom_left_projection.clone(),
+                        bottom_right_join.clone(),
+                        &top_join_on,
+                        &join_type,
+                    );
 
-                let reordered = reorder_join_keys_to_inputs(top_join).unwrap();
+                    let reordered = reorder_join_keys_to_inputs(top_join).unwrap();
 
-                // The top joins' join key ordering is adjusted based on the children inputs.
-                let (captured_join_type, modified_plan) = hide_first(reordered.as_ref(), r"join_type=(\w+)", "join_type=...");
-                assert_eq!(captured_join_type, join_type.to_string());
+                    // The top joins' join key ordering is adjusted based on the children inputs.
+                    let (captured_join_type, modified_plan) = hide_first(reordered.as_ref(), r"join_type=(\w+)", "join_type=...");
+                    assert_eq!(captured_join_type, join_type.to_string());
 
-                insta::assert_snapshot!(modified_plan, @r"
+                    insta::assert_snapshot!(modified_plan, @r"
 HashJoinExec: mode=Partitioned, join_type=..., on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]
   ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1), (c@2, c1@2)]
@@ -1254,9 +1254,9 @@ HashJoinExec: mode=Partitioned, join_type=..., on=[(AA@1, a1@5), (B@2, b1@6), (C
         ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                );
+                    );
+                }
             }
-        }
 
     Ok(())
 }
@@ -1356,19 +1356,19 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
     ];
 
     insta::allow_duplicates! {
-            for join_type in join_types {
-                let top_join = hash_join_exec(
-                    bottom_left_projection.clone(),
-                    bottom_right_join.clone(),
-                    &top_join_on,
-                    &join_type,
-                );
+                for join_type in join_types {
+                    let top_join = hash_join_exec(
+                        bottom_left_projection.clone(),
+                        bottom_right_join.clone(),
+                        &top_join_on,
+                        &join_type,
+                    );
 
-                let reordered = reorder_join_keys_to_inputs(top_join).unwrap();
+                    let reordered = reorder_join_keys_to_inputs(top_join).unwrap();
 
-                // The top joins' join key ordering is adjusted based on the children inputs.
-                let (_, plan_str) = hide_first(reordered.as_ref(), r"join_type=(\w+)", "join_type=...");
-                insta::assert_snapshot!(plan_str, @r"
+                    // The top joins' join key ordering is adjusted based on the children inputs.
+                    let (_, plan_str) = hide_first(reordered.as_ref(), r"join_type=(\w+)", "join_type=...");
+                    insta::assert_snapshot!(plan_str, @r"
 HashJoinExec: mode=Partitioned, join_type=..., on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)]
   ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1)]
@@ -1388,9 +1388,9 @@ HashJoinExec: mode=Partitioned, join_type=..., on=[(C@3, c@2), (B@2, b1@6), (AA@
         ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                );
+                    );
+                }
             }
-        }
 
     Ok(())
 }
@@ -1427,27 +1427,27 @@ fn multi_smj_joins() -> Result<()> {
     )];
 
     insta::allow_duplicates! {
-            for join_type in join_types {
-                let join =
-                    sort_merge_join_exec(left.clone(), right.clone(), &join_on, &join_type);
+                for join_type in join_types {
+                    let join =
+                        sort_merge_join_exec(left.clone(), right.clone(), &join_on, &join_type);
 
-                // Top join on (a == c)
-                let top_join_on = vec![(
-                    Arc::new(Column::new_with_schema("a", &join.schema()).unwrap()) as _,
-                    Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
-                )];
-                let top_join =
-                    sort_merge_join_exec(join.clone(), parquet_exec(), &top_join_on, &join_type);
+                    // Top join on (a == c)
+                    let top_join_on = vec![(
+                        Arc::new(Column::new_with_schema("a", &join.schema()).unwrap()) as _,
+                        Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                    )];
+                    let top_join =
+                        sort_merge_join_exec(join.clone(), parquet_exec(), &top_join_on, &join_type);
 
-                let mut settings = Settings::clone_current();
-                settings.add_filter(&format!("join_type={join_type}"), "join_type=...");
-                settings.bind(|| {
-                    let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+                    let mut settings = Settings::clone_current();
+                    settings.add_filter(&format!("join_type={join_type}"), "join_type=...");
+                    settings.bind(|| {
+                        let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
-                    match join_type {
-                        // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
-                        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-                            assert_plan!(plan_distrib, @r"
+                        match join_type {
+                            // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
+                            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+                                assert_plan!(plan_distrib, @r"
 SortMergeJoin: join_type=..., on=[(a@0, c@2)]
   SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
     SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
@@ -1464,19 +1464,19 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                            );
-                        }
-                        // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
-                        // Since ordering of the left child is not preserved after SortMergeJoin
-                        // when mode is Right, RightSemi, RightAnti, Full
-                        // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
-                        //   when mode is Inner, Left, LeftSemi, LeftAnti
-                        // Similarly, since partitioning of the left side is not preserved
-                        // when mode is Right, RightSemi, RightAnti, Full
-                        // - We need to add one additional Hash Repartition after SortMergeJoin in contrast the test
-                        //   cases when mode is Inner, Left, LeftSemi, LeftAnti
-                        _ => {
-                            assert_plan!(plan_distrib, @r"
+                                );
+                            }
+                            // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
+                            // Since ordering of the left child is not preserved after SortMergeJoin
+                            // when mode is Right, RightSemi, RightAnti, Full
+                            // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
+                            //   when mode is Inner, Left, LeftSemi, LeftAnti
+                            // Similarly, since partitioning of the left side is not preserved
+                            // when mode is Right, RightSemi, RightAnti, Full
+                            // - We need to add one additional Hash Repartition after SortMergeJoin in contrast the test
+                            //   cases when mode is Inner, Left, LeftSemi, LeftAnti
+                            _ => {
+                                assert_plan!(plan_distrib, @r"
 SortMergeJoin: join_type=..., on=[(a@0, c@2)]
   SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
     RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
@@ -1495,17 +1495,17 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                            );
+                                );
+                            }
                         }
-                    }
 
-                    let plan_sort = test_config.run(top_join.clone(), &SORT_DISTRIB_DISTRIB);
+                        let plan_sort = test_config.run(top_join.clone(), &SORT_DISTRIB_DISTRIB);
 
-                    match join_type {
-                        // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
-                        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-                            // TODO(wiedld): show different test result if enforce distribution first.
-                            assert_plan!(plan_sort, @r"
+                        match join_type {
+                            // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
+                            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+                                // TODO(wiedld): show different test result if enforce distribution first.
+                                assert_plan!(plan_sort, @r"
 SortMergeJoin: join_type=..., on=[(a@0, c@2)]
   SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
     RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
@@ -1522,20 +1522,20 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
       SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                            );
-                        }
-                        // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
-                        // Since ordering of the left child is not preserved after SortMergeJoin
-                        // when mode is Right, RightSemi, RightAnti, Full
-                        // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
-                        //   when mode is Inner, Left, LeftSemi, LeftAnti
-                        // Similarly, since partitioning of the left side is not preserved
-                        // when mode is Right, RightSemi, RightAnti, Full
-                        // - We need to add one additional Hash Repartition and Roundrobin repartition after
-                        //   SortMergeJoin in contrast the test cases when mode is Inner, Left, LeftSemi, LeftAnti
-                        _ => {
-                            // TODO(wiedld): show different test result if enforce distribution first.
-                            assert_plan!(plan_sort, @r"
+                                );
+                            }
+                            // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
+                            // Since ordering of the left child is not preserved after SortMergeJoin
+                            // when mode is Right, RightSemi, RightAnti, Full
+                            // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
+                            //   when mode is Inner, Left, LeftSemi, LeftAnti
+                            // Similarly, since partitioning of the left side is not preserved
+                            // when mode is Right, RightSemi, RightAnti, Full
+                            // - We need to add one additional Hash Repartition and Roundrobin repartition after
+                            //   SortMergeJoin in contrast the test cases when mode is Inner, Left, LeftSemi, LeftAnti
+                            _ => {
+                                // TODO(wiedld): show different test result if enforce distribution first.
+                                assert_plan!(plan_sort, @r"
 SortMergeJoin: join_type=..., on=[(a@0, c@2)]
   RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
@@ -1556,28 +1556,28 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
       SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                            );
+                                );
+                            }
                         }
-                    }
 
-                    match join_type {
-                        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-                            // This time we use (b1 == c) for top join
-                            // Join on (b1 == c)
-                            let top_join_on = vec![(
-                                Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap()) as _,
-                                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
-                            )];
-                            let top_join =
-                                sort_merge_join_exec(join, parquet_exec(), &top_join_on, &join_type);
+                        match join_type {
+                            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                                // This time we use (b1 == c) for top join
+                                // Join on (b1 == c)
+                                let top_join_on = vec![(
+                                    Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap()) as _,
+                                    Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                                )];
+                                let top_join =
+                                    sort_merge_join_exec(join, parquet_exec(), &top_join_on, &join_type);
 
-                            let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
+                                let plan_distrib = test_config.run(top_join.clone(), &DISTRIB_DISTRIB_SORT);
 
-                            match join_type {
-                                // Should include 6 RepartitionExecs(3 hash, 3 round-robin) and 3 SortExecs
-                                JoinType::Inner | JoinType::Right => {
-                                    // TODO(wiedld): show different test result if enforce sorting first.
-                                    assert_plan!(plan_distrib, @r"
+                                match join_type {
+                                    // Should include 6 RepartitionExecs(3 hash, 3 round-robin) and 3 SortExecs
+                                    JoinType::Inner | JoinType::Right => {
+                                        // TODO(wiedld): show different test result if enforce sorting first.
+                                        assert_plan!(plan_distrib, @r"
 SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
   SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
     SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
@@ -1594,12 +1594,12 @@ SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                                    );
-                                }
-                                // Should include 7 RepartitionExecs (4 hash, 3 round-robin) and 4 SortExecs
-                                JoinType::Left | JoinType::Full => {
-                                    // TODO(wiedld): show different test result if enforce sorting first.
-                                    assert_plan!(plan_distrib, @r"
+                                        );
+                                    }
+                                    // Should include 7 RepartitionExecs (4 hash, 3 round-robin) and 4 SortExecs
+                                    JoinType::Left | JoinType::Full => {
+                                        // TODO(wiedld): show different test result if enforce sorting first.
+                                        assert_plan!(plan_distrib, @r"
 SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
   SortExec: expr=[b1@6 ASC], preserve_partitioning=[true]
     RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10
@@ -1618,19 +1618,19 @@ SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                                    );
+                                        );
+                                    }
+                                    // this match arm cannot be reached
+                                    _ => unreachable!()
                                 }
-                                // this match arm cannot be reached
-                                _ => unreachable!()
-                            }
 
-                            let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
+                                let plan_sort = test_config.run(top_join, &SORT_DISTRIB_DISTRIB);
 
-                            match join_type {
-                                // Should include 6 RepartitionExecs (3 of them preserves order) and 3 SortExecs
-                                JoinType::Inner | JoinType::Right => {
-                                    // TODO(wiedld): show different test result if enforce distribution first.
-                                    assert_plan!(plan_sort, @r"
+                                match join_type {
+                                    // Should include 6 RepartitionExecs (3 of them preserves order) and 3 SortExecs
+                                    JoinType::Inner | JoinType::Right => {
+                                        // TODO(wiedld): show different test result if enforce distribution first.
+                                        assert_plan!(plan_sort, @r"
 SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
   SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
     RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
@@ -1647,12 +1647,12 @@ SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
       SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                                    );
-                                }
-                                // Should include 8 RepartitionExecs (4 of them preserves order) and 4 SortExecs
-                                JoinType::Left | JoinType::Full => {
-                                    // TODO(wiedld): show different test result if enforce distribution first.
-                                    assert_plan!(plan_sort, @r"
+                                        );
+                                    }
+                                    // Should include 8 RepartitionExecs (4 of them preserves order) and 4 SortExecs
+                                    JoinType::Left | JoinType::Full => {
+                                        // TODO(wiedld): show different test result if enforce distribution first.
+                                        assert_plan!(plan_sort, @r"
 SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
   RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10, preserve_order=true, sort_exprs=b1@6 ASC
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
@@ -1673,17 +1673,17 @@ SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
       SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-                                    );
+                                        );
+                                    }
+                                    // this match arm cannot be reached
+                                    _ => unreachable!()
                                 }
-                                // this match arm cannot be reached
-                                _ => unreachable!()
                             }
+                            _ => {}
                         }
-                        _ => {}
-                    }
-                });
+                    });
+                }
             }
-        }
 
     Ok(())
 }
@@ -1742,8 +1742,8 @@ fn smj_join_key_ordering() -> Result<()> {
     // Only two RepartitionExecs added
     let plan_distrib = test_config.run(join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-            plan_distrib,
-            @r"
+                plan_distrib,
+                @r"
 SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
   SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]
     ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
@@ -1761,13 +1761,13 @@ SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.run(join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-            plan_sort,
-            @r"
+                plan_sort,
+                @r"
 SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
   RepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=10, preserve_order=true, sort_exprs=b3@1 ASC, a3@0 ASC
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
@@ -1791,7 +1791,7 @@ SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
                   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
 
     Ok(())
 }
@@ -1823,13 +1823,13 @@ fn merge_does_not_need_sort() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(exec.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-            plan_distrib,
-            @r"
+                plan_distrib,
+                @r"
 SortPreservingMergeExec: [a@0 ASC]
   CoalesceBatchesExec: target_batch_size=4096
     DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
-        );
+            );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     //
@@ -1839,14 +1839,14 @@ SortPreservingMergeExec: [a@0 ASC]
     // SortExec at the top.
     let plan_sort = test_config.run(exec, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-            plan_sort,
-            @r"
+                plan_sort,
+                @r"
 SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     CoalesceBatchesExec: target_batch_size=4096
       DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
-        );
+            );
 
     Ok(())
 }
@@ -2031,14 +2031,14 @@ fn repartition_sorted_limit() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 GlobalLimitExec: skip=0, fetch=100
   LocalLimitExec: fetch=100
     SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2061,15 +2061,15 @@ fn repartition_sorted_limit_with_filter() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortRequiredExec: [c@2 ASC]
   FilterExec: c@2 = 0
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
       SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2087,8 +2087,8 @@ fn repartition_ignores_limit() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
@@ -2102,7 +2102,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
                     LocalLimitExec: fetch=100
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2116,8 +2116,8 @@ fn repartition_ignores_union() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -2125,7 +2125,7 @@ UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2146,12 +2146,12 @@ fn repartition_through_sort_preserving_merge() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2175,23 +2175,23 @@ fn repartition_ignores_sort_preserving_merge() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortPreservingMergeExec: [c@2 ASC]
   DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-                plan_sort,
-                @r"
+                    plan_sort,
+                    @r"
 SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
 
     Ok(())
 }
@@ -2214,27 +2214,27 @@ fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortPreservingMergeExec: [c@2 ASC]
   UnionExec
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
 
     // test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-                plan_sort,
-                @r"
+                    plan_sort,
+                    @r"
 SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     UnionExec
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
 
     Ok(())
 }
@@ -2260,14 +2260,14 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
 
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortRequiredExec: [d@3 ASC]
   FilterExec: c@2 = 0
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2301,8 +2301,8 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 UnionExec
   SortRequiredExec: [c@2 ASC]
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
@@ -2310,7 +2310,7 @@ UnionExec
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2340,28 +2340,28 @@ fn repartition_transitively_with_projection() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortPreservingMergeExec: [sum@0 ASC]
   SortExec: expr=[sum@0 ASC], preserve_partitioning=[true]
     ProjectionExec: expr=[a@0 + b@1 as sum]
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-                plan_sort,
-                @r"
+                    plan_sort,
+                    @r"
 SortExec: expr=[sum@0 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     ProjectionExec: expr=[a@0 + b@1 as sum]
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     Ok(())
 }
@@ -2391,13 +2391,13 @@ fn repartition_ignores_transitively_with_projection() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortRequiredExec: [c@2 ASC]
   ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
     DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2428,13 +2428,13 @@ fn repartition_transitively_past_sort_with_projection() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
   ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -2454,28 +2454,28 @@ fn repartition_transitively_past_sort_with_filter() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortPreservingMergeExec: [a@0 ASC]
   SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
     FilterExec: c@2 = 0
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-                plan_sort,
-                @r"
+                    plan_sort,
+                    @r"
 SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     FilterExec: c@2 = 0
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     Ok(())
 }
@@ -2504,8 +2504,8 @@ fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()>
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortPreservingMergeExec: [a@0 ASC]
   SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
     ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
@@ -2513,13 +2513,13 @@ SortPreservingMergeExec: [a@0 ASC]
         RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-                plan_sort,
-                @r"
+                    plan_sort,
+                    @r"
 SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]
@@ -2527,7 +2527,7 @@ SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
         RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     Ok(())
 }
@@ -2546,28 +2546,28 @@ fn parallelization_single_partition() -> Result<()> {
     let plan_parquet_distrib =
         test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_parquet_distrib,
-                @r"
+                    plan_parquet_distrib,
+                    @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
     let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_csv_distrib,
-                @r"
+                    plan_csv_distrib,
+                    @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
-            );
+                );
     let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
@@ -2598,13 +2598,13 @@ fn parallelization_multiple_files() -> Result<()> {
     let plan_3_distrib =
         test_config_concurrency_3.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_3_distrib,
-                @r"
+                    plan_3_distrib,
+                    @r"
 SortRequiredExec: [a@0 ASC]
   FilterExec: c@2 = 0
     DataSourceExec: file_groups={3 groups: [[x:0..50], [y:0..100], [x:50..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
-            );
+                );
     let plan_3_sort = test_config_concurrency_3.run(plan.clone(), &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_3_distrib, plan_3_sort);
 
@@ -2612,13 +2612,13 @@ SortRequiredExec: [a@0 ASC]
     let plan_8_distrib =
         test_config_concurrency_8.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_8_distrib,
-                @r"
+                    plan_8_distrib,
+                    @r"
 SortRequiredExec: [a@0 ASC]
   FilterExec: c@2 = 0
     DataSourceExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
-            );
+                );
     let plan_8_sort = test_config_concurrency_8.run(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_8_distrib, plan_8_sort);
 
@@ -2638,54 +2638,54 @@ fn parallelization_compressed_csv() -> Result<()> {
     ];
 
     insta::allow_duplicates! {
-            for compression_type in compression_types {
-                let plan = aggregate_exec_with_alias(
-                    DataSourceExec::from_data_source(
-                        FileScanConfigBuilder::new(
-                            ObjectStoreUrl::parse("test:///").unwrap(),
-                            schema(),
-                            Arc::new(CsvSource::new(false, b',', b'"')),
-                        )
-                        .with_file(PartitionedFile::new("x".to_string(), 100))
-                        .with_file_compression_type(compression_type)
-                        .build(),
-                    ),
-                    vec![("a".to_string(), "a".to_string())],
-                );
-                let test_config = TestConfig::default()
-                    .with_query_execution_partitions(2)
-                    .with_prefer_repartition_file_scans(10);
+                for compression_type in compression_types {
+                    let plan = aggregate_exec_with_alias(
+                        DataSourceExec::from_data_source(
+                            FileScanConfigBuilder::new(
+                                ObjectStoreUrl::parse("test:///").unwrap(),
+                                schema(),
+                                Arc::new(CsvSource::new(false, b',', b'"')),
+                            )
+                            .with_file(PartitionedFile::new("x".to_string(), 100))
+                            .with_file_compression_type(compression_type)
+                            .build(),
+                        ),
+                        vec![("a".to_string(), "a".to_string())],
+                    );
+                    let test_config = TestConfig::default()
+                        .with_query_execution_partitions(2)
+                        .with_prefer_repartition_file_scans(10);
 
-                let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
-                if compression_type.is_compressed() {
-                    // Compressed files cannot be partitioned
-                    assert_plan!(
-                        plan_distrib,
-                        @r"
+                    let plan_distrib = test_config.run(plan.clone(), &DISTRIB_DISTRIB_SORT);
+                    if compression_type.is_compressed() {
+                        // Compressed files cannot be partitioned
+                        assert_plan!(
+                            plan_distrib,
+                            @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
-                    );
-                } else {
-                    // Uncompressed files can be partitioned
-                    assert_plan!(
-                        plan_distrib,
-                        @r"
+                        );
+                    } else {
+                        // Uncompressed files can be partitioned
+                        assert_plan!(
+                            plan_distrib,
+                            @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
-                    );
-                }
+                        );
+                    }
 
-                let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
-                assert_plan!(plan_distrib, plan_sort);
+                    let plan_sort = test_config.run(plan, &SORT_DISTRIB_DISTRIB);
+                    assert_plan!(plan_distrib, plan_sort);
+                }
             }
-        }
     Ok(())
 }
 
@@ -2703,28 +2703,28 @@ fn parallelization_two_partitions() -> Result<()> {
     let plan_parquet_distrib =
         test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-            plan_parquet_distrib,
-            @r"
+                plan_parquet_distrib,
+                @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
     let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
     // Test: with csv
     let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-            plan_csv_distrib,
-            @r"
+                plan_csv_distrib,
+                @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
-        );
+            );
     let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
@@ -2746,14 +2746,14 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
         test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     // Multiple source files split across partitions
     assert_plan!(
-            plan_parquet_distrib,
-            @r"
+                plan_parquet_distrib,
+                @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
     let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
@@ -2761,14 +2761,14 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
     let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     // Multiple source files split across partitions
     assert_plan!(
-            plan_csv_distrib,
-            @r"
+                plan_csv_distrib,
+                @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
       DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
-        );
+            );
     let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
@@ -2794,14 +2794,14 @@ fn parallelization_sorted_limit() -> Result<()> {
     // data is sorted so can't repartition here
     // Doesn't parallelize for SortExec without preserve_partitioning
     assert_plan!(
-            plan_parquet_distrib,
-            @r"
+                plan_parquet_distrib,
+                @r"
 GlobalLimitExec: skip=0, fetch=100
   LocalLimitExec: fetch=100
     SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
     let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
@@ -2810,14 +2810,14 @@ GlobalLimitExec: skip=0, fetch=100
     // data is sorted so can't repartition here
     // Doesn't parallelize for SortExec without preserve_partitioning
     assert_plan!(
-            plan_csv_distrib,
-            @r"
+                plan_csv_distrib,
+                @r"
 GlobalLimitExec: skip=0, fetch=100
   LocalLimitExec: fetch=100
     SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
-        );
+            );
     let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
@@ -2845,8 +2845,8 @@ fn parallelization_limit_with_filter() -> Result<()> {
     // ordering is not used in subsequent stages anyway.
     // SortExec doesn't benefit from input partitioning
     assert_plan!(
-            plan_parquet_distrib,
-            @r"
+                plan_parquet_distrib,
+                @r"
 GlobalLimitExec: skip=0, fetch=100
   CoalescePartitionsExec
     LocalLimitExec: fetch=100
@@ -2855,7 +2855,7 @@ GlobalLimitExec: skip=0, fetch=100
           SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
     let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
@@ -2865,8 +2865,8 @@ GlobalLimitExec: skip=0, fetch=100
     // ordering is not used in subsequent stages anyway.
     // SortExec doesn't benefit from input partitioning
     assert_plan!(
-            plan_csv_distrib,
-            @r"
+                plan_csv_distrib,
+                @r"
 GlobalLimitExec: skip=0, fetch=100
   CoalescePartitionsExec
     LocalLimitExec: fetch=100
@@ -2875,7 +2875,7 @@ GlobalLimitExec: skip=0, fetch=100
           SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
-        );
+            );
     let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
@@ -2954,8 +2954,8 @@ fn parallelization_union_inputs() -> Result<()> {
         test_config.run(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     // Union doesn't benefit from input partitioning - no parallelism
     assert_plan!(
-            plan_parquet_distrib,
-            @r"
+                plan_parquet_distrib,
+                @r"
 UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -2963,7 +2963,7 @@ UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
     let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
@@ -2971,8 +2971,8 @@ UnionExec
     let plan_csv_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     // Union doesn't benefit from input partitioning - no parallelism
     assert_plan!(
-            plan_csv_distrib,
-            @r"
+                plan_csv_distrib,
+                @r"
 UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
@@ -2980,7 +2980,7 @@ UnionExec
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 "
-        );
+            );
     let plan_csv_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
@@ -3196,12 +3196,12 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
     // Expected Outcome:
     // data should not be repartitioned / resorted
     assert_plan!(
-            plan_parquet_distrib,
-            @r"
+                plan_parquet_distrib,
+                @r"
 ProjectionExec: expr=[a@0 as a2, c@2 as c2]
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-        );
+            );
     let plan_parquet_sort = test_config.run(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
@@ -3233,23 +3233,23 @@ fn parallelization_ignores_transitively_with_projection_csv() -> Result<()> {
     .into();
     let plan_csv = sort_preserving_merge_exec(sort_key_after_projection, proj_csv);
     assert_plan!(
-                plan_csv,
-                @r"
+                    plan_csv,
+                    @r"
 SortPreservingMergeExec: [c2@1 ASC]
   ProjectionExec: expr=[a@0 as a2, c@2 as c2]
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
 "
-            );
+                );
 
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 ProjectionExec: expr=[a@0 as a2, c@2 as c2]
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false
 "
-            );
+                );
     let plan_sort = test_config.run(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3262,26 +3262,26 @@ fn remove_redundant_roundrobins() -> Result<()> {
     let repartition = repartition_exec(repartition_exec(input));
     let physical_plan = repartition_exec(filter_exec(repartition));
     assert_plan!(
-                physical_plan,
-                @r"
+                    physical_plan,
+                    @r"
 RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10
   FilterExec: c@2 = 0
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 FilterExec: c@2 = 0
   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3305,14 +3305,14 @@ fn remove_unnecessary_spm_after_filter() -> Result<()> {
 
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 CoalescePartitionsExec
   FilterExec: c@2 = 0
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC
       DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3336,14 +3336,14 @@ fn preserve_ordering_through_repartition() -> Result<()> {
 
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortPreservingMergeExec: [d@3 ASC]
   FilterExec: c@2 = 0
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC
       DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3365,28 +3365,28 @@ fn do_not_preserve_ordering_through_repartition() -> Result<()> {
 
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortPreservingMergeExec: [a@0 ASC]
   SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
     FilterExec: c@2 = 0
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
         DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
-            );
+                );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-                plan_sort,
-                @r"
+                    plan_sort,
+                    @r"
 SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     FilterExec: c@2 = 0
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
         DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
-            );
+                );
 
     Ok(())
 }
@@ -3405,14 +3405,14 @@ fn no_need_for_sort_after_filter() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 CoalescePartitionsExec
   FilterExec: c@2 = 0
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
       DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3440,21 +3440,21 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
 
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 SortPreservingMergeExec: [a@0 ASC]
   SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
     FilterExec: c@2 = 0
       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
         DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(
-                plan_sort,
-                @r"
+                    plan_sort,
+                    @r"
 SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
@@ -3462,7 +3462,7 @@ SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
         RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
           DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
 
     Ok(())
 }
@@ -3481,13 +3481,13 @@ fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 FilterExec: c@2 = 0
   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2
     DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3511,7 +3511,7 @@ SortRequiredExec: [a@0 ASC]
   FilterExec: c@2 = 0
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
 
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 10;
@@ -3526,7 +3526,7 @@ SortRequiredExec: [a@0 ASC]
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-        );
+            );
 
     Ok(())
 }
@@ -3549,7 +3549,7 @@ SortRequiredExec: [a@0 ASC]
   FilterExec: c@2 = 0
     DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
-        );
+            );
 
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 10;
@@ -3563,7 +3563,7 @@ SortRequiredExec: [a@0 ASC]
   FilterExec: c@2 = 0
     DataSourceExec: file_groups={10 groups: [[x:0..20], [y:0..20], [x:20..40], [y:20..40], [x:40..60], [y:40..60], [x:60..80], [y:60..80], [x:80..100], [y:80..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
 "
-        );
+            );
 
     Ok(())
 }
@@ -3586,13 +3586,13 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
 
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3618,8 +3618,8 @@ fn do_not_add_unnecessary_hash2() -> Result<()> {
 
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
     AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
@@ -3628,7 +3628,7 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
             DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3639,22 +3639,22 @@ AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
 fn optimize_away_unnecessary_repartition() -> Result<()> {
     let physical_plan = coalesce_partitions_exec(repartition_exec(parquet_exec()));
     assert_plan!(
-                physical_plan,
-                @r"
+                    physical_plan,
+                    @r"
 CoalescePartitionsExec
   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3667,8 +3667,8 @@ fn optimize_away_unnecessary_repartition2() -> Result<()> {
         filter_exec(repartition_exec(parquet_exec())),
     )));
     assert_plan!(
-                physical_plan,
-                @r"
+                    physical_plan,
+                    @r"
 FilterExec: c@2 = 0
   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
     CoalescePartitionsExec
@@ -3676,19 +3676,19 @@ FilterExec: c@2 = 0
         RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     let test_config = TestConfig::default();
     let plan_distrib = test_config.run(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(
-                plan_distrib,
-                @r"
+                    plan_distrib,
+                    @r"
 FilterExec: c@2 = 0
   FilterExec: c@2 = 0
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     let plan_sort = test_config.run(physical_plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
 
@@ -3711,34 +3711,34 @@ async fn test_distribute_sort_parquet() -> Result<()> {
 
     // prior to optimization, this is the starting plan
     assert_plan!(
-                physical_plan,
-                @r"
+                    physical_plan,
+                    @r"
 SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     // what the enforce distribution run does.
     let plan_distribution = test_config.run(physical_plan.clone(), &[Run::Distribution]);
     assert_plan!(
-                plan_distribution,
-                @r"
+                    plan_distribution,
+                    @r"
 SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
   CoalescePartitionsExec
     DataSourceExec: file_groups={10 groups: [[x:0..8192000], [x:8192000..16384000], [x:16384000..24576000], [x:24576000..32768000], [x:32768000..40960000], [x:40960000..49152000], [x:49152000..57344000], [x:57344000..65536000], [x:65536000..73728000], [x:73728000..81920000]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
 
     // what the sort parallelization (in enforce sorting), does after the enforce distribution changes
     let plan_both = test_config.run(physical_plan, &[Run::Distribution, Run::Sorting]);
     assert_plan!(
-                plan_both,
-                @r"
+                    plan_both,
+                    @r"
 SortPreservingMergeExec: [c@2 ASC]
   SortExec: expr=[c@2 ASC], preserve_partitioning=[true]
     DataSourceExec: file_groups={10 groups: [[x:0..8192000], [x:8192000..16384000], [x:16384000..24576000], [x:24576000..32768000], [x:32768000..40960000], [x:40960000..49152000], [x:49152000..57344000], [x:57344000..65536000], [x:65536000..73728000], [x:73728000..81920000]]}, projection=[a, b, c, d, e], file_type=parquet
 "
-            );
+                );
     Ok(())
 }
 
@@ -3764,13 +3764,13 @@ async fn test_distribute_sort_memtable() -> Result<()> {
 
     // this is the final, optimized plan
     assert_plan!(
-                physical_plan,
-                @r"
+                    physical_plan,
+                    @r"
 SortPreservingMergeExec: [id@0 ASC NULLS LAST]
   SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
     DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]
 "
-            );
+                );
 
     Ok(())
 }
