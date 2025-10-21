@@ -4251,7 +4251,7 @@ mod tests {
         binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
         GroupingSet,
     };
-    use datafusion_common::metadata::Literal;
+    use datafusion_common::metadata::ScalarAndMetadata;
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
@@ -4813,7 +4813,7 @@ mod tests {
         // Attempt to bind a parameter with metadata
         let mut scalar_meta = HashMap::new();
         scalar_meta.insert("some_key".to_string(), "some_value".to_string());
-        let param_values = ParamValues::List(vec![Literal::new(
+        let param_values = ParamValues::List(vec![ScalarAndMetadata::new(
             ScalarValue::Int32(Some(42)),
             Some(scalar_meta.into()),
         )]);
