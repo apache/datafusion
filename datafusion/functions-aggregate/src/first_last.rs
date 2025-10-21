@@ -1501,7 +1501,7 @@ mod tests {
     use std::iter::repeat_with;
 
     use arrow::{
-        array::{Int64Array, ListArray},
+        array::{BooleanArray, Int64Array, ListArray, StringArray, StringViewArray},
         compute::SortOptions,
         datatypes::Schema,
     };
@@ -1911,6 +1911,24 @@ mod tests {
         let size1 = size_after_batch(&[Arc::new(batch1)])?;
         let size2 = size_after_batch(&[Arc::new(batch2)])?;
         assert_eq!(size1, size2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_value_merge_with_is_set_nulls() -> Result<()> {
+        let mut accumulator =
+            TrivialFirstValueAccumulator::try_new(&DataType::Utf8, false)?;
+
+        let value1 = Arc::new(StringArray::from(vec![Some("first_string")])) as ArrayRef;
+        let corrupted_flag = Arc::new(BooleanArray::from(vec![None])) as ArrayRef;
+
+        let states = vec![value1, corrupted_flag];
+        let result = accumulator.merge_batch(&states);
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("is_set flags contain nulls"));
 
         Ok(())
     }
