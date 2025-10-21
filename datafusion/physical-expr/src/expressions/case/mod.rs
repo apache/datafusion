@@ -75,6 +75,22 @@ enum EvalMethod {
     WithExprScalarLookupTable(LiteralLookupTable),
 }
 
+
+// Implement empty hash as the data is derived from PhysicalExprs which are already hashed
+impl Hash for LiteralLookupTable {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {
+    }
+}
+
+// Implement always equal as the data is derived from PhysicalExprs which are already compared
+impl PartialEq for LiteralLookupTable {
+    fn eq(&self, other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LiteralLookupTable {}
+
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with
 /// corresponding "then" expressions, and an optional "else" expression.

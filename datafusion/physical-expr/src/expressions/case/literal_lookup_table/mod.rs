@@ -67,28 +67,6 @@ pub(in super::super) struct LiteralLookupTable {
     values_to_take_from: ArrayRef,
 }
 
-impl Hash for LiteralLookupTable {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Hashing the pointer as this is the best we can do here
-
-        let lookup_ptr = Arc::as_ptr(&self.lookup);
-        lookup_ptr.hash(state);
-
-        let values_ptr = Arc::as_ptr(&self.lookup);
-        values_ptr.hash(state);
-    }
-}
-
-impl PartialEq for LiteralLookupTable {
-    fn eq(&self, other: &Self) -> bool {
-        // Comparing the pointers as this is the best we can do here
-        Arc::ptr_eq(&self.lookup, &other.lookup)
-            && self.values_to_take_from.as_ref() == other.values_to_take_from.as_ref()
-    }
-}
-
-impl Eq for LiteralLookupTable {}
-
 impl LiteralLookupTable {
     pub(in super::super) fn maybe_new(
         when_then_expr: &Vec<WhenThen>,

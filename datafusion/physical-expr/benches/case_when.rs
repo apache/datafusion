@@ -414,6 +414,7 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                 (244, "please"),
                 (246, "thank"),
                 (250, "you"),
+                (252, "!"),
             ];
             let when_thens_string_to_primitive = when_thens_primitive_to_string
                 .iter()
