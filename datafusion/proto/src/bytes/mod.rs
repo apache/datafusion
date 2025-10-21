@@ -313,7 +313,8 @@ pub fn physical_plan_from_json(
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    back.try_into_physical_plan(&ctx, &extension_codec)
+    let decode_ctx = DecodeContext::new(ctx);
+    back.try_into_physical_plan(&decode_ctx, &extension_codec)
 }
 
 /// Deserialize a PhysicalPlan from bytes

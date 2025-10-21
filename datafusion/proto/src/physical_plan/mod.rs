@@ -180,133 +180,130 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         })?;
         match plan {
             PhysicalPlanType::Explain(explain) => {
-                self.try_into_explain_physical_plan(explain, &decode_ctx, extension_codec)
+                self.try_into_explain_physical_plan(explain, decode_ctx, extension_codec)
             }
             PhysicalPlanType::Projection(projection) => self
                 .try_into_projection_physical_plan(
                     projection,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::Filter(filter) => {
-                self.try_into_filter_physical_plan(filter, &decode_ctx, extension_codec)
+                self.try_into_filter_physical_plan(filter, decode_ctx, extension_codec)
             }
             PhysicalPlanType::CsvScan(scan) => {
-                self.try_into_csv_scan_physical_plan(scan, &decode_ctx, extension_codec)
+                self.try_into_csv_scan_physical_plan(scan, decode_ctx, extension_codec)
             }
             PhysicalPlanType::JsonScan(scan) => {
-                self.try_into_json_scan_physical_plan(scan, &decode_ctx, extension_codec)
+                self.try_into_json_scan_physical_plan(scan, decode_ctx, extension_codec)
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => self
-                .try_into_parquet_scan_physical_plan(scan, &decode_ctx, extension_codec),
+                .try_into_parquet_scan_physical_plan(scan, decode_ctx, extension_codec),
             #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
             PhysicalPlanType::AvroScan(scan) => {
-                self.try_into_avro_scan_physical_plan(scan, &decode_ctx, extension_codec)
+                self.try_into_avro_scan_physical_plan(scan, decode_ctx, extension_codec)
             }
-            PhysicalPlanType::MemoryScan(scan) => self
-                .try_into_memory_scan_physical_plan(scan, &decode_ctx, extension_codec),
+            PhysicalPlanType::MemoryScan(scan) => {
+                self.try_into_memory_scan_physical_plan(scan, decode_ctx, extension_codec)
+            }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => self
                 .try_into_coalesce_batches_physical_plan(
                     coalesce_batches,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::Merge(merge) => {
-                self.try_into_merge_physical_plan(merge, &decode_ctx, extension_codec)
+                self.try_into_merge_physical_plan(merge, decode_ctx, extension_codec)
             }
             PhysicalPlanType::Repartition(repart) => self
-                .try_into_repartition_physical_plan(repart, &decode_ctx, extension_codec),
+                .try_into_repartition_physical_plan(repart, decode_ctx, extension_codec),
             PhysicalPlanType::GlobalLimit(limit) => self
-                .try_into_global_limit_physical_plan(limit, &decode_ctx, extension_codec),
+                .try_into_global_limit_physical_plan(limit, decode_ctx, extension_codec),
             PhysicalPlanType::LocalLimit(limit) => self
-                .try_into_local_limit_physical_plan(limit, &decode_ctx, extension_codec),
+                .try_into_local_limit_physical_plan(limit, decode_ctx, extension_codec),
             PhysicalPlanType::Window(window_agg) => self.try_into_window_physical_plan(
                 window_agg,
-                &decode_ctx,
+                decode_ctx,
                 extension_codec,
             ),
             PhysicalPlanType::Aggregate(hash_agg) => self
-                .try_into_aggregate_physical_plan(hash_agg, &decode_ctx, extension_codec),
+                .try_into_aggregate_physical_plan(hash_agg, decode_ctx, extension_codec),
             PhysicalPlanType::HashJoin(hashjoin) => self
-                .try_into_hash_join_physical_plan(hashjoin, &decode_ctx, extension_codec),
+                .try_into_hash_join_physical_plan(hashjoin, decode_ctx, extension_codec),
             PhysicalPlanType::SymmetricHashJoin(sym_join) => self
                 .try_into_symmetric_hash_join_physical_plan(
                     sym_join,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::Union(union) => {
-                self.try_into_union_physical_plan(union, &decode_ctx, extension_codec)
+                self.try_into_union_physical_plan(union, decode_ctx, extension_codec)
             }
             PhysicalPlanType::Interleave(interleave) => self
                 .try_into_interleave_physical_plan(
                     interleave,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::CrossJoin(crossjoin) => self
                 .try_into_cross_join_physical_plan(
                     crossjoin,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::Empty(empty) => {
-                self.try_into_empty_physical_plan(empty, &decode_ctx, extension_codec)
+                self.try_into_empty_physical_plan(empty, decode_ctx, extension_codec)
             }
             PhysicalPlanType::PlaceholderRow(placeholder) => self
                 .try_into_placeholder_row_physical_plan(
                     placeholder,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::Sort(sort) => {
-                self.try_into_sort_physical_plan(sort, &decode_ctx, extension_codec)
+                self.try_into_sort_physical_plan(sort, decode_ctx, extension_codec)
             }
             PhysicalPlanType::SortPreservingMerge(sort) => self
                 .try_into_sort_preserving_merge_physical_plan(
                     sort,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::Extension(extension) => self
-                .try_into_extension_physical_plan(
-                    extension,
-                    &decode_ctx,
-                    extension_codec,
-                ),
+                .try_into_extension_physical_plan(extension, decode_ctx, extension_codec),
             PhysicalPlanType::NestedLoopJoin(join) => self
                 .try_into_nested_loop_join_physical_plan(
                     join,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::Analyze(analyze) => {
-                self.try_into_analyze_physical_plan(analyze, &decode_ctx, extension_codec)
+                self.try_into_analyze_physical_plan(analyze, decode_ctx, extension_codec)
             }
             PhysicalPlanType::JsonSink(sink) => {
-                self.try_into_json_sink_physical_plan(sink, &decode_ctx, extension_codec)
+                self.try_into_json_sink_physical_plan(sink, decode_ctx, extension_codec)
             }
             PhysicalPlanType::CsvSink(sink) => {
-                self.try_into_csv_sink_physical_plan(sink, &decode_ctx, extension_codec)
+                self.try_into_csv_sink_physical_plan(sink, decode_ctx, extension_codec)
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetSink(sink) => self
-                .try_into_parquet_sink_physical_plan(sink, &decode_ctx, extension_codec),
+                .try_into_parquet_sink_physical_plan(sink, decode_ctx, extension_codec),
             PhysicalPlanType::Unnest(unnest) => {
-                self.try_into_unnest_physical_plan(unnest, &decode_ctx, extension_codec)
+                self.try_into_unnest_physical_plan(unnest, decode_ctx, extension_codec)
             }
             PhysicalPlanType::Cooperative(cooperative) => self
                 .try_into_cooperative_physical_plan(
                     cooperative,
-                    &decode_ctx,
+                    decode_ctx,
                     extension_codec,
                 ),
             PhysicalPlanType::GenerateSeries(generate_series) => {
                 self.try_into_generate_series_physical_plan(generate_series)
             }
             PhysicalPlanType::SortMergeJoin(sort_join) => {
-                self.try_into_sort_join(sort_join, &decode_ctx, extension_codec)
+                self.try_into_sort_join(sort_join, decode_ctx, extension_codec)
             }
         }
     }
