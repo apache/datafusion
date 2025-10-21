@@ -2410,7 +2410,11 @@ The `current_date()` return value is determined at query time and will return th
 ```sql
 current_date()
 ```
-
+```sql
+(optional)
+SET datafusion.execution.time_zone = '+00:00'
+current_date()
+```
 #### Aliases
 
 - today
@@ -2422,6 +2426,11 @@ Returns the current UTC time.
 The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
 
 ```sql
+current_time()
+```
+```sql
+(optional)
+SET datafusion.execution.time_zone = '+00:00'
 current_time()
 ```
 
