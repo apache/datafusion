@@ -156,14 +156,6 @@ pub struct FileScanConfig {
     /// Schema information including the file schema, table partition columns,
     /// and the combined table schema.
     ///
-    /// The file schema is the schema before `projection` is applied. It contains
-    /// all columns that may appear in the files, but does not include table
-    /// partition columns.
-    ///
-    /// Note that the file schema is **not** the schema of the physical files.
-    /// This is the schema that the physical file schema will be mapped onto,
-    /// and the schema that the [`DataSourceExec`] will return.
-    ///
     /// [`DataSourceExec`]: crate::source::DataSourceExec
     pub table_schema: TableSchema,
     /// List of files to be processed, grouped into partitions
