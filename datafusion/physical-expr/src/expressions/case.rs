@@ -326,6 +326,11 @@ impl CaseExpr {
                 interleave_builder.add_result(&nulls_rows, nulls_value)?;
             }
 
+            // All base values were null, so we can return early
+            if base_nulls.true_count() == remainder_batch.num_rows() {
+                return interleave_builder.finish();
+            }
+
             // Remove the null rows from the remainder batch
             let not_null_filter = create_filter(&not(&base_nulls)?, optimize_filters);
             remainder_batch =
