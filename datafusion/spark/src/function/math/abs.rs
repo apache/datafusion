@@ -268,9 +268,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                         *precision, *scale,
                                     )),
                                 ))),
-                                Err(_) => {
-                                    Err(arithmetic_overflow_error("Decimal128"))
-                                }
+                                Err(_) => Err(arithmetic_overflow_error("Decimal128")),
                             }
                         }
                         _ => Err(DataFusionError::Internal(
@@ -311,9 +309,7 @@ pub fn spark_abs(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                                         *precision, *scale,
                                     )),
                                 ))),
-                                Err(_) => {
-                                    Err(arithmetic_overflow_error("Decimal256"))
-                                }
+                                Err(_) => Err(arithmetic_overflow_error("Decimal256")),
                             }
                         }
                         _ => Err(DataFusionError::Internal(
