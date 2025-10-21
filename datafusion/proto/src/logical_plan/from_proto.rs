@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use arrow::datatypes::Field;
-use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, NullEquality,
     RecursionUnnestOption, Result, ScalarValue, TableReference, UnnestOptions,

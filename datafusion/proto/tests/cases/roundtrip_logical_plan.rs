@@ -1099,7 +1099,7 @@ async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()>
         .clone();
 
     let bytes = logical_plan_to_bytes(&prepared)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{prepared}"), format!("{logical_round_trip}"));
     // Also check exact equality in case metadata isn't reflected in the display string
     assert_eq!(&prepared, &logical_round_trip);

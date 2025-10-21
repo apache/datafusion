@@ -34,27 +34,6 @@ use crate::{
 
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
-use datafusion::datasource::cte_worktable::CteWorkTable;
-use datafusion::datasource::file_format::arrow::ArrowFormat;
-#[cfg(feature = "avro")]
-use datafusion::datasource::file_format::avro::AvroFormat;
-#[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::{
-    file_type_to_format, format_as_file_type, FileFormatFactory,
-};
-use datafusion::{
-    datasource::{
-        file_format::{
-            csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat, FileFormat,
-        },
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
-        view::ViewTable,
-        TableProvider,
-    },
-    datasource::{provider_as_source, source_as_provider},
-    prelude::SessionContext,
-};
 use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
