@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use arrow::array::{
     Array, ArrayRef, Int32Array, Int32Builder,
     StringArray,
@@ -248,13 +247,6 @@ struct Options<T> {
     number_of_rows: usize,
     range_of_values: Vec<T>,
     in_range_probability: f32,
-
-    /// (value index, probability)
-    /// Used to weight the selection of in-range values
-    /// If empty, all in-range values are equally likely
-    /// the rest of the in-range values will have equal probability
-    /// the sum of all probabilities must be less than or equal to 1.0
-    value_probability: Vec<(usize, f32)>,
     null_probability: f32,
 }
 
@@ -321,15 +313,6 @@ where
         "Percentages must sum to 1.0 or less"
     );
 
-    let total_value_probability: f32 = options
-        .value_probability
-        .iter()
-        .map(|(_, p)| *p)
-        .sum();
-    assert!(total_value_probability <= 1.0, "Value probabilities must sum to 1.0 or less");
-    options.value_probability.into_iter().collect::<HashMap<usize, f32>>()
-    let filled_value_probability =
-
     let rng = &mut seedable_rng();
 
     let in_range_probability = 0.0..options.in_range_probability;
@@ -343,10 +326,6 @@ where
 
             match roll {
                 v if out_range_probability.contains(&v) => {
-                    if options.value_probability.is_empty() {
-                        // No values in range, generate any value
-                        Some(generate_other_value(rng, &[]))
-                    }
                     let index = rng.random_range(0..options.range_of_values.len());
                     // Generate value in range
                     Some(options.range_of_values[index].clone())
@@ -422,109 +401,117 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                 .collect_vec();
 
             for num_entries in [5, 10, 20] {
-                let when_thens_primitive_to_string =
-                    when_thens_primitive_to_string[..num_entries].to_vec();
 
-                case_when_lookup.bench_with_input(
-                    BenchmarkId::new(
-                        format!("case when i32 -> utf8, {num_entries} entries"),
-                        input,
-                    ),
-                    &input,
-                    |b, input| {
-                        let array: Int32Array = generate_values_for_lookup(
-                            Options::<i32> {
-                                number_of_rows: batch_size,
-                                range_of_values: when_thens_primitive_to_string
-                                    .iter()
-                                    .map(|(key, _)| *key)
-                                    .collect(),
-                                in_range_probability: input.in_range_probability,
-                                null_probability: input.null_probability,
-                            },
-                            |rng, exclude| {
-                                generate_other_primitive_value::<i32>(rng, exclude)
-                            },
-                        );
-                        let batch = RecordBatch::try_new(
-                            Arc::new(Schema::new(vec![Field::new(
-                                "col1",
-                                array.data_type().clone(),
-                                true,
-                            )])),
-                            vec![Arc::new(array)],
-                        )
-                        .unwrap();
+                for (name, values_range) in [
+                    ("all equally true", 0..num_entries),
+                    ("only first 2 are true", 0..2),
+                ] {
 
-                        let when_thens = when_thens_primitive_to_string
-                            .iter()
-                            .map(|&(key, value)| (lit(key), lit(value)))
-                            .collect();
+                    let when_thens_primitive_to_string =
+                      when_thens_primitive_to_string[values_range.clone()].to_vec();
 
-                        let expr = Arc::new(
-                            case(
-                                Some(col("col1", batch.schema_ref()).unwrap()),
-                                when_thens,
-                                Some(lit("whatever")),
+                    let when_thens_string_to_primitive =
+                      when_thens_string_to_primitive[values_range].to_vec();
+
+                    case_when_lookup.bench_with_input(
+                        BenchmarkId::new(
+                            format!("case when i32 -> utf8, {num_entries} entries, {name}"),
+                            input,
+                        ),
+                        &input,
+                        |b, input| {
+                            let array: Int32Array = generate_values_for_lookup(
+                                Options::<i32> {
+                                    number_of_rows: batch_size,
+                                    range_of_values: when_thens_primitive_to_string
+                                      .iter()
+                                      .map(|(key, _)| *key)
+                                      .collect(),
+                                    in_range_probability: input.in_range_probability,
+                                    null_probability: input.null_probability,
+                                },
+                                |rng, exclude| {
+                                    generate_other_primitive_value::<i32>(rng, exclude)
+                                },
+                            );
+                            let batch = RecordBatch::try_new(
+                                Arc::new(Schema::new(vec![Field::new(
+                                    "col1",
+                                    array.data_type().clone(),
+                                    true,
+                                )])),
+                                vec![Arc::new(array)],
                             )
-                            .unwrap(),
-                        );
+                              .unwrap();
 
-                        b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
-                    },
-                );
+                            let when_thens = when_thens_primitive_to_string
+                              .iter()
+                              .map(|&(key, value)| (lit(key), lit(value)))
+                              .collect();
 
-                let when_thens_string_to_primitive =
-                    when_thens_string_to_primitive[..num_entries].to_vec();
+                            let expr = Arc::new(
+                                case(
+                                    Some(col("col1", batch.schema_ref()).unwrap()),
+                                    when_thens,
+                                    Some(lit("whatever")),
+                                )
+                                  .unwrap(),
+                            );
 
-                case_when_lookup.bench_with_input(
-                    BenchmarkId::new(
-                        format!("case when utf8 -> i32, {num_entries} entries"),
-                        input,
-                    ),
-                    &input,
-                    |b, input| {
-                        let array: StringArray = generate_values_for_lookup(
-                            Options::<String> {
-                                number_of_rows: batch_size,
-                                range_of_values: when_thens_string_to_primitive
-                                    .iter()
-                                    .map(|(key, _)| (*key).to_string())
-                                    .collect(),
-                                in_range_probability: input.in_range_probability,
-                                null_probability: input.null_probability,
-                            },
-                            |rng, exclude| {
-                                create_random_string_generator(3..10)(rng, exclude)
-                            },
-                        );
-                        let batch = RecordBatch::try_new(
-                            Arc::new(Schema::new(vec![Field::new(
-                                "col1",
-                                array.data_type().clone(),
-                                true,
-                            )])),
-                            vec![Arc::new(array)],
-                        )
-                        .unwrap();
+                            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+                        },
+                    );
 
-                        let when_thens = when_thens_string_to_primitive
-                            .iter()
-                            .map(|&(key, value)| (lit(key), lit(value)))
-                            .collect();
-
-                        let expr = Arc::new(
-                            case(
-                                Some(col("col1", batch.schema_ref()).unwrap()),
-                                when_thens,
-                                Some(lit(1000)),
+                    case_when_lookup.bench_with_input(
+                        BenchmarkId::new(
+                            format!("case when utf8 -> i32, {num_entries} entries, {name}"),
+                            input,
+                        ),
+                        &input,
+                        |b, input| {
+                            let array: StringArray = generate_values_for_lookup(
+                                Options::<String> {
+                                    number_of_rows: batch_size,
+                                    range_of_values: when_thens_string_to_primitive
+                                      .iter()
+                                      .map(|(key, _)| (*key).to_string())
+                                      .collect(),
+                                    in_range_probability: input.in_range_probability,
+                                    null_probability: input.null_probability,
+                                },
+                                |rng, exclude| {
+                                    create_random_string_generator(3..10)(rng, exclude)
+                                },
+                            );
+                            let batch = RecordBatch::try_new(
+                                Arc::new(Schema::new(vec![Field::new(
+                                    "col1",
+                                    array.data_type().clone(),
+                                    true,
+                                )])),
+                                vec![Arc::new(array)],
                             )
-                            .unwrap(),
-                        );
+                              .unwrap();
 
-                        b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
-                    },
-                );
+                            let when_thens = when_thens_string_to_primitive
+                              .iter()
+                              .map(|&(key, value)| (lit(key), lit(value)))
+                              .collect();
+
+                            let expr = Arc::new(
+                                case(
+                                    Some(col("col1", batch.schema_ref()).unwrap()),
+                                    when_thens,
+                                    Some(lit(1000)),
+                                )
+                                  .unwrap(),
+                            );
+
+                            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+                        },
+                    );
+                }
+
             }
         }
     }
