@@ -51,6 +51,9 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+// Re-exported from datafusion-physical-expr for backwards compatibility
+// We recommend updating your imports to use datafusion-physical-expr directly
+pub use datafusion_physical_expr::projection::{update_expr, Projection, ProjectionExpr};
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -176,9 +179,6 @@ impl ProjectionExec {
         ))
     }
 }
-
-// Re-exported from datafusion-physical-expr for backwards compatibility
-pub use datafusion_physical_expr::projection::{update_expr, Projection, ProjectionExpr};
 
 impl DisplayAs for ProjectionExec {
     fn fmt_as(
