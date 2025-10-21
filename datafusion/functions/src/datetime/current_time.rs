@@ -34,7 +34,9 @@ Returns the current UTC time.
 
 The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
 "#,
-    syntax_example = "current_time()"
+    syntax_example = r#"current_time()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_time();"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentTimeFunc {
