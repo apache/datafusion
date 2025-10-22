@@ -27,12 +27,11 @@ DataFusion operators expose runtime metrics so you can understand where time is 
 
 `BaselineMetrics` are available in most physical operators to capture common measurements.
 
-| Metric             | Description                                               |
-| ------------------ | --------------------------------------------------------- |
-| elapsed_compute    | CPU time the operator actively spends processing work.    |
-| output_rows        | Total number of rows the operator produces.               |
+| Metric          | Description                                            |
+| --------------- | ------------------------------------------------------ |
+| elapsed_compute | CPU time the operator actively spends processing work. |
+| output_rows     | Total number of rows the operator produces.            |
 
 ## Operator-specific Metrics
 
 TODO
-
