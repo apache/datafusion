@@ -387,11 +387,11 @@ mod tests {
 
     use super::*;
     use crate::equivalence::tests::{
-        convert_to_sort_reqs, create_test_params, create_test_schema, output_schema,
-        parse_sort_expr,
+        convert_to_sort_reqs, create_test_params, create_test_schema, parse_sort_expr,
     };
     use crate::equivalence::{convert_to_sort_exprs, ProjectionMapping};
     use crate::expressions::{col, BinaryExpr, CastExpr, Column};
+    use crate::projection::tests::output_schema;
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
