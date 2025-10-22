@@ -620,7 +620,7 @@ config_namespace! {
         /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and
         /// another to fetch the metadata length encoded in the footer
-        /// Default setting to 512 KB, which should be sufficient for most parquet files,
+        /// Default setting to 512 KiB, which should be sufficient for most parquet files,
         /// it can reduce one I/O operation per parquet file. If the metadata is larger than
         /// the hint, two reads will still be performed.
         pub metadata_size_hint: Option<usize>, default = Some(512 * 1024)
