@@ -39,6 +39,7 @@ pub mod alias;
 pub mod cast;
 pub mod config;
 pub mod cse;
+pub mod datatype;
 pub mod diagnostic;
 pub mod display;
 pub mod encryption;

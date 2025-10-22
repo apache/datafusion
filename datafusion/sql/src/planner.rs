@@ -21,8 +21,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
 
+use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
 use datafusion_common::config::SqlParserOptions;
+use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::TableReference;
 use datafusion_common::{
@@ -31,14 +33,12 @@ use datafusion_common::{
 };
 use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
+pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
-
-use crate::utils::make_decimal_type;
-pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
@@ -596,7 +596,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // First check if any of the registered type_planner can handle this type
         if let Some(type_planner) = self.context_provider.get_type_planner() {
             if let Some(data_type) = type_planner.plan_type(sql_type)? {
-                return Ok(Field::new("", data_type, true).into());
+                return Ok(data_type.into_nullable_field_ref());
             }
         }
 
@@ -604,47 +604,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
-                let inner_data_type = self.convert_data_type_to_field(inner_sql_type)?;
-
-                // Lists are allowed to have an arbitrarily named field;
-                // however, a name other than 'item' will cause it to fail an
-                // == check against a more idiomatically created list in
-                // arrow-rs which causes issues. We use the low-level
-                // constructor here to preserve extension metadata from the
-                // child type.
-                Ok(Field::new(
-                    "",
-                    DataType::List(
-                        inner_data_type.as_ref().clone().with_name("item").into(),
-                    ),
-                    true,
-                )
-                .into())
+                Ok(self.convert_data_type_to_field(inner_sql_type)?.into_list())
             }
             SQLDataType::Array(ArrayElemTypeDef::SquareBracket(
                 inner_sql_type,
                 maybe_array_size,
             )) => {
-                let inner_data_type = self.convert_data_type_to_field(inner_sql_type)?;
+                let inner_field = self.convert_data_type_to_field(inner_sql_type)?;
                 if let Some(array_size) = maybe_array_size {
-                    Ok(Field::new(
-                        "",
-                        DataType::FixedSizeList(
-                            inner_data_type.as_ref().clone().with_name("item").into(),
-                            *array_size as i32,
-                        ),
-                        true,
-                    )
-                    .into())
+                    let array_size: i32 = (*array_size).try_into().map_err(|_| {
+                        plan_datafusion_err!(
+                            "Array size must be a positive 32 bit integer, got {array_size}"
+                        )
+                    })?;
+                    Ok(inner_field.into_fixed_size_list(array_size))
                 } else {
-                    Ok(Field::new(
-                        "",
-                        DataType::List(
-                            inner_data_type.as_ref().clone().with_name("item").into(),
-                        ),
-                        true,
-                    )
-                    .into())
+                    Ok(inner_field.into_list())
                 }
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
