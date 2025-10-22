@@ -425,37 +425,31 @@ async fn drop_columns() -> Result<()> {
 
 #[tokio::test]
 async fn drop_columns_join_left_mark_ambiguous_field_names() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_batch("t1", record_batch!(("id", Int32, [1, 2, 3]))?)?;
-    ctx.register_batch("t2", record_batch!(("id", Int32, [1, 4]))?)?;
-    ctx.register_batch("t3", record_batch!(("id", Int32, [2, 4]))?)?;
-
-    let join_res = ctx
-        .table("t1")
+    let t1 = test_table_with_name("t1")
         .await?
-        .join(
-            ctx.table("t2").await?,
-            JoinType::LeftMark,
-            &["id"],
-            &["id"],
-            None,
-        )?
-        .join(
-            ctx.table("t3").await?,
-            JoinType::LeftMark,
-            &["id"],
-            &["id"],
-            None,
-        )?;
+        .select_columns(&["c1"])?
+        .limit(0, Some(3))?;
+    let t2 = test_table_with_name("t2")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(3, Some(3))?;
+    let t3 = test_table_with_name("t3")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(6, Some(3))?;
+
+    let join_res = t1
+        .join(t2, JoinType::LeftMark, &["c1"], &["c1"], None)?
+        .join(t3, JoinType::LeftMark, &["c1"], &["c1"], None)?;
     assert_snapshot!(
         batches_to_string(&join_res.clone().collect().await.unwrap()),
         @r"
     +----+-------+-------+
-    | id | mark  | mark  |
+    | c1 | mark  | mark  |
     +----+-------+-------+
-    | 1  | true  | false |
-    | 2  | false | true  |
-    | 3  | false | false |
+    | c  | false | false |
+    | d  | false | true  |
+    | b  | true  | false |
     +----+-------+-------+
     "
     );
@@ -465,11 +459,11 @@ async fn drop_columns_join_left_mark_ambiguous_field_names() -> Result<()> {
         batches_to_string(&drop_res.clone().collect().await.unwrap()),
         @r"
     +----+
-    | id |
+    | c1 |
     +----+
-    | 1  |
-    | 2  |
-    | 3  |
+    | c  |
+    | d  |
+    | b  |
     +----+
     "
     );
