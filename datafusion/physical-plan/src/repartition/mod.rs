@@ -1383,8 +1383,8 @@ impl Stream for PerPartitionStream {
                     return Poll::Ready(Some(Err(e)));
                 }
                 Poll::Ready(None) => {
-                    // Spill stream never ends, this shouldn't happen
-                    unreachable!("SpillPoolStream should never end");
+                    // Spill stream ended - all spilled data has been read
+                    return Poll::Ready(None);
                 }
                 Poll::Pending => {
                     // No spilled data available

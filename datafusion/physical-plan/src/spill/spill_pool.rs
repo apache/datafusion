@@ -404,6 +404,7 @@ mod tests {
     use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::StreamExt;
     use std::task::Poll;
@@ -639,7 +640,7 @@ mod tests {
 
         // Spawn a task that will push data after a delay
         let writer_pool = Arc::clone(&pool_arc);
-        tokio::spawn(async move {
+        SpawnedTask::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             let mut pool = writer_pool.lock();
             pool.push_batch(&create_test_batch(0, 10)).unwrap();
@@ -672,7 +673,7 @@ mod tests {
 
         // Spawn task to flush after delay
         let writer_pool = Arc::clone(&pool_arc);
-        tokio::spawn(async move {
+        SpawnedTask::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             let mut pool = writer_pool.lock();
             pool.flush().unwrap();
@@ -700,7 +701,7 @@ mod tests {
 
         // Finalize after delay
         let writer_pool = Arc::clone(&pool_arc);
-        tokio::spawn(async move {
+        SpawnedTask::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             writer_pool.lock().finalize();
         });
@@ -742,7 +743,7 @@ mod tests {
         let pool_arc = Arc::new(Mutex::new(pool));
 
         let writer_pool = Arc::clone(&pool_arc);
-        let writer = tokio::spawn(async move {
+        let writer = SpawnedTask::spawn(async move {
             for i in 0..10 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 let mut pool = writer_pool.lock();
@@ -754,7 +755,7 @@ mod tests {
 
         let reader_pool = Arc::clone(&pool_arc);
         let stream = SpillPool::reader(reader_pool, spill_manager);
-        let reader = tokio::spawn(async move { collect_batches(stream).await });
+        let reader = SpawnedTask::spawn(async move { collect_batches(stream).await });
 
         // Wait for both tasks
         writer.await.unwrap();
@@ -822,8 +823,8 @@ mod tests {
         let stream2 = SpillPool::reader(Arc::clone(&pool_arc), spill_manager);
 
         // Read from both concurrently
-        let reader1 = tokio::spawn(async move { collect_batches(stream1).await });
-        let reader2 = tokio::spawn(async move { collect_batches(stream2).await });
+        let reader1 = SpawnedTask::spawn(async move { collect_batches(stream1).await });
+        let reader2 = SpawnedTask::spawn(async move { collect_batches(stream2).await });
 
         let batches1 = reader1.await.unwrap()?;
         let batches2 = reader2.await.unwrap()?;
@@ -843,7 +844,7 @@ mod tests {
         let pool_arc = Arc::new(Mutex::new(pool));
 
         let writer_pool = Arc::clone(&pool_arc);
-        let writer = tokio::spawn(async move {
+        let writer = SpawnedTask::spawn(async move {
             // Write multiple batches that will cause rotation
             for i in 0..8 {
                 {
@@ -859,7 +860,7 @@ mod tests {
         // Read concurrently
         let reader_pool = Arc::clone(&pool_arc);
         let stream = SpillPool::reader(reader_pool, spill_manager);
-        let reader = tokio::spawn(async move { collect_batches(stream).await });
+        let reader = SpawnedTask::spawn(async move { collect_batches(stream).await });
 
         writer.await.unwrap();
         let batches = reader.await.unwrap()?;
@@ -936,7 +937,7 @@ mod tests {
 
         // Write and read concurrently
         let writer_pool = Arc::clone(&pool_arc);
-        let writer = tokio::spawn(async move {
+        let writer = SpawnedTask::spawn(async move {
             for i in 0..10 {
                 {
                     let mut pool = writer_pool.lock();
@@ -950,7 +951,7 @@ mod tests {
 
         let reader_pool = Arc::clone(&pool_arc);
         let stream = SpillPool::reader(reader_pool, spill_manager);
-        let reader = tokio::spawn(async move {
+        let reader = SpawnedTask::spawn(async move {
             let mut batches = Vec::new();
             let mut stream = stream;
             while let Some(result) = stream.next().await {
