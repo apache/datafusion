@@ -54,7 +54,7 @@ mod tests {
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
-    use datafusion_datasource::{FileRange, PartitionedFile};
+    use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
@@ -186,7 +186,7 @@ mod tests {
                 source = source.with_bloom_filter_on_read(false);
             }
 
-            source.with_schema(Arc::clone(&table_schema))
+            source.with_schema(TableSchema::new(Arc::clone(&table_schema), vec![]))
         }
 
         fn build_parquet_exec(
