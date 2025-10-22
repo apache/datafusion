@@ -17,39 +17,61 @@
 
 use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 use arrow::array::{ArrayRef, AsArray};
-use datafusion_common::ScalarValue;
+use datafusion_common::{internal_err, ScalarValue};
 
 #[derive(Clone, Debug)]
 pub(super) struct BooleanIndexMap {
     true_index: i32,
     false_index: i32,
-    null_index: i32,
+    else_index: i32,
 }
 
 impl WhenLiteralIndexMap for BooleanIndexMap {
     fn try_new(
-        literals: Vec<ScalarValue>,
+        unique_non_null_literals: Vec<ScalarValue>,
         else_index: i32,
     ) -> datafusion_common::Result<Self>
     where
         Self: Sized,
     {
-        fn get_first_index(
-            literals: &[ScalarValue],
-            target: Option<bool>,
-        ) -> Option<i32> {
-            literals
-                .iter()
-                .position(
-                    |literal| matches!(literal, ScalarValue::Boolean(v) if v == &target),
-                )
-                .map(|pos| pos as i32)
+        let mut true_index: Option<i32> = None;
+        let mut false_index: Option<i32> = None;
+
+        for (index, literal) in unique_non_null_literals.into_iter().enumerate() {
+            match literal {
+                ScalarValue::Boolean(Some(true)) => {
+                    if true_index.is_some() {
+                        return internal_err!(
+                            "Duplicate true literal found in literals for BooleanIndexMap"
+                        );
+                    }
+                    true_index = Some(index as i32);
+                }
+                ScalarValue::Boolean(Some(false)) => {
+                    if false_index.is_some() {
+                        return internal_err!(
+                            "Duplicate false literal found in literals for BooleanIndexMap"
+                        );
+                    }
+                    false_index = Some(index as i32);
+                }
+                ScalarValue::Boolean(None) => {
+                    return internal_err!(
+                        "Null literal found in non-null literals for BooleanIndexMap"
+                    )
+                }
+                _ => {
+                    return internal_err!(
+                        "Non-boolean literal found in literals for BooleanIndexMap"
+                    )
+                }
+            }
         }
 
         Ok(Self {
-            false_index: get_first_index(&literals, Some(false)).unwrap_or(else_index),
-            true_index: get_first_index(&literals, Some(true)).unwrap_or(else_index),
-            null_index: get_first_index(&literals, None).unwrap_or(else_index),
+            true_index: true_index.unwrap_or(else_index),
+            false_index: false_index.unwrap_or(else_index),
+            else_index,
         })
     }
 
@@ -60,7 +82,7 @@ impl WhenLiteralIndexMap for BooleanIndexMap {
             .map(|value| match value {
                 Some(true) => self.true_index,
                 Some(false) => self.false_index,
-                None => self.null_index,
+                None => self.else_index,
             })
             .collect::<Vec<i32>>())
     }

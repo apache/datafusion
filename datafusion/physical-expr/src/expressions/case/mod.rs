@@ -1522,6 +1522,4 @@ mod tests {
 
         Ok(())
     }
-
-    // TODO - add tests for case when with lookup table specialization
 }

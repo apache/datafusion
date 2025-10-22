@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
-use arrow::array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray};
+use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray};
 use arrow::datatypes::{i256, IntervalDayTime, IntervalMonthDayNano};
-use datafusion_common::{HashMap, ScalarValue};
+use datafusion_common::{internal_err, HashMap, ScalarValue};
 use half::f16;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -32,7 +32,7 @@ where
     /// Literal value to map index
     ///
     /// If searching this map becomes a bottleneck consider using linear map implementations for small hashmaps
-    map: HashMap<Option<<T::Native as ToHashableKey>::HashableKey>, i32>,
+    map: HashMap<<T::Native as ToHashableKey>::HashableKey, i32>,
     else_index: i32,
 }
 
@@ -55,21 +55,26 @@ where
     T::Native: ToHashableKey,
 {
     fn try_new(
-        literals: Vec<ScalarValue>,
+        unique_non_null_literals: Vec<ScalarValue>,
         else_index: i32,
     ) -> datafusion_common::Result<Self>
     where
         Self: Sized,
     {
-        let input = ScalarValue::iter_to_array(literals)?;
+        let input = ScalarValue::iter_to_array(unique_non_null_literals)?;
+
+        // Literals are guaranteed to not contain nulls
+        if input.null_count() > 0 {
+            return internal_err!("Literal values for WHEN clauses cannot contain nulls");
+        }
 
         let map = input
             .as_primitive::<T>()
-            .into_iter()
+            .values()
+            .iter()
             .enumerate()
-            .map(|(map_index, value)| {
-                (value.map(|v| v.into_hashable_key()), map_index as i32)
-            })
+            // Because literals are unique we can collect directly, and we can avoid only inserting the first occurrence
+            .map(|(map_index, value)| (value.into_hashable_key(), map_index as i32))
             .collect();
 
         Ok(Self { map, else_index })
@@ -79,11 +84,14 @@ where
         let indices = array
             .as_primitive::<T>()
             .into_iter()
-            .map(|value| {
-                self.map
-                    .get(&value.map(|item| item.into_hashable_key()))
+            .map(|value| match value {
+                Some(value) => self
+                    .map
+                    .get(&value.into_hashable_key())
                     .copied()
-                    .unwrap_or(self.else_index)
+                    .unwrap_or(self.else_index),
+
+                None => self.else_index,
             })
             .collect::<Vec<i32>>();
 
