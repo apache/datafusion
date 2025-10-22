@@ -598,8 +598,38 @@ impl DataSource for FileScanConfig {
         SchedulingType::Cooperative
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_stats())
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition) = partition {
+            // Get statistics for a specific partition
+            if let Some(file_group) = self.file_groups.get(partition) {
+                if let Some(stat) = file_group.file_statistics(None) {
+                    // Project the statistics based on the projection
+                    let table_cols_stats = self
+                        .projection_indices()
+                        .into_iter()
+                        .map(|idx| {
+                            if idx < self.file_schema().fields().len() {
+                                stat.column_statistics[idx].clone()
+                            } else {
+                                // TODO provide accurate stat for partition column (#1186)
+                                ColumnStatistics::new_unknown()
+                            }
+                        })
+                        .collect();
+
+                    return Ok(Statistics {
+                        num_rows: stat.num_rows,
+                        total_byte_size: stat.total_byte_size,
+                        column_statistics: table_cols_stats,
+                    });
+                }
+            }
+            // If no statistics available for this partition, return unknown
+            Ok(Statistics::new_unknown(&self.projected_schema()))
+        } else {
+            // Return aggregate statistics across all partitions
+            Ok(self.projected_stats())
+        }
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
@@ -1603,7 +1633,7 @@ mod tests {
         );
 
         let source_statistics = conf.file_source.statistics().unwrap();
-        let conf_stats = conf.statistics().unwrap();
+        let conf_stats = conf.partition_statistics(None).unwrap();
 
         // projection should be reflected in the file source statistics
         assert_eq!(conf_stats.num_rows, Precision::Inexact(3));
