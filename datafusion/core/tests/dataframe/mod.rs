@@ -424,6 +424,60 @@ async fn drop_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn drop_columns_join_left_mark_ambiguous_field_names() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_batch("t1", record_batch!(("id", Int32, [1, 2, 3]))?)?;
+    ctx.register_batch("t2", record_batch!(("id", Int32, [1, 4]))?)?;
+    ctx.register_batch("t3", record_batch!(("id", Int32, [2, 4]))?)?;
+
+    let join_res = ctx
+        .table("t1")
+        .await?
+        .join(
+            ctx.table("t2").await?,
+            JoinType::LeftMark,
+            &["id"],
+            &["id"],
+            None,
+        )?
+        .join(
+            ctx.table("t3").await?,
+            JoinType::LeftMark,
+            &["id"],
+            &["id"],
+            None,
+        )?;
+    assert_snapshot!(
+        batches_to_string(&join_res.clone().collect().await.unwrap()),
+        @r"
+    +----+-------+-------+
+    | id | mark  | mark  |
+    +----+-------+-------+
+    | 1  | true  | false |
+    | 2  | false | true  |
+    | 3  | false | false |
+    +----+-------+-------+
+    "
+    );
+
+    let drop_res = join_res.drop_columns(&["mark"])?;
+    assert_snapshot!(
+        batches_to_string(&drop_res.clone().collect().await.unwrap()),
+        @r"
+    +----+
+    | id |
+    +----+
+    | 1  |
+    | 2  |
+    | 3  |
+    +----+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn drop_columns_with_duplicates() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
