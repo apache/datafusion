@@ -306,6 +306,55 @@ async fn select_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_columns_with_ambiguous_names() -> Result<()> {
+    let t1 = test_table_with_name("t1")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(0, Some(3))?;
+    let t2 = test_table_with_name("t2")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(3, Some(3))?;
+    let t3 = test_table_with_name("t3")
+        .await?
+        .select_columns(&["c1"])?
+        .limit(6, Some(3))?;
+
+    let join_res = t1
+        .join(t2, JoinType::Left, &["t1.c1"], &["t2.c1"], None)?
+        .join(t3, JoinType::Left, &["t1.c1"], &["t3.c1"], None)?;
+    assert_snapshot!(
+        batches_to_string(&join_res.clone().collect().await.unwrap()),
+        @r"
+    +----+----+----+
+    | c1 | c1 | c1 |
+    +----+----+----+
+    | d  |    | d  |
+    | c  |    |    |
+    | b  | b  |    |
+    | b  | b  |    |
+    +----+----+----+
+    "
+    );
+
+    let select_res = join_res.select_columns(&["c1"])?;
+    assert_snapshot!(
+        batches_to_string(&select_res.clone().collect().await.unwrap()),
+        @r"
+    +----+----+----+
+    | c1 | c1 | c1 |
+    +----+----+----+
+    | d  |    | d  |
+    | c  |    |    |
+    | b  | b  |    |
+    | b  | b  |    |
+    +----+----+----+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn select_expr() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;

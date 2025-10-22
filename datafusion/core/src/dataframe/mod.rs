@@ -308,9 +308,10 @@ impl DataFrame {
             .map(|name| {
                 self.plan
                     .schema()
-                    .qualified_field_with_unqualified_name(name)
+                    .qualified_fields_with_unqualified_name(name)
             })
-            .collect::<Result<Vec<_>>>()?;
+            .flatten()
+            .collect::<Vec<_>>();
         let expr: Vec<Expr> = fields
             .into_iter()
             .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
