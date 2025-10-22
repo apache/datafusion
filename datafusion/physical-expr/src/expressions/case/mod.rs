@@ -500,7 +500,6 @@ impl CaseExpr {
         // evaluate else expression on the values not covered by when_value
         let remainder = not(&when_value)?;
         let e = self.else_expr.as_ref().unwrap();
-
         // keep `else_expr`'s data type and return type consistent
         let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
             .unwrap_or_else(|_| Arc::clone(e));
@@ -1441,26 +1440,26 @@ mod tests {
         let coerce_type =
             get_case_common_type(&when_thens, else_expr.clone(), input_schema);
         let (when_thens, else_expr) = match coerce_type {
-      None => plan_err!(
+            None => plan_err!(
                 "Can't get a common type for then {when_thens:?} and else {else_expr:?} expression"
             ),
-      Some(data_type) => {
-        // cast then expr
-        let left = when_thens
-          .into_iter()
-          .map(|(when, then)| {
-            let then = try_cast(then, input_schema, data_type.clone())?;
-            Ok((when, then))
-          })
-          .collect::<Result<Vec<_>>>()?;
-        let right = match else_expr {
-          None => None,
-          Some(expr) => Some(try_cast(expr, input_schema, data_type.clone())?),
-        };
+            Some(data_type) => {
+                // cast then expr
+                let left = when_thens
+                    .into_iter()
+                    .map(|(when, then)| {
+                        let then = try_cast(then, input_schema, data_type.clone())?;
+                        Ok((when, then))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let right = match else_expr {
+                    None => None,
+                    Some(expr) => Some(try_cast(expr, input_schema, data_type.clone())?),
+                };
 
-        Ok((left, right))
-      }
-    }?;
+                Ok((left, right))
+            }
+        }?;
         case(expr, when_thens, else_expr)
     }
 
