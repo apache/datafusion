@@ -460,7 +460,7 @@ impl FileFormat for ParquetFormat {
         }
 
         let mut source = ParquetSource::new(self.options.clone())
-            .with_table_partition_cols(conf.table_partition_cols.clone());
+            .with_table_partition_cols(conf.table_partition_cols().clone());
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
