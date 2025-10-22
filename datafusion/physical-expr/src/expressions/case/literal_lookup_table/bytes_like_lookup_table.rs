@@ -105,10 +105,10 @@ where
             .downcast_dict::<GenericByteArray<Value>>()
             .ok_or_else(|| {
                 exec_datafusion_err!(
-          "Failed to downcast dictionary array {} to expected dictionary value {}",
-          array.data_type(),
-          Value::DATA_TYPE
-        )
+              "Failed to downcast dictionary array {} to expected dictionary value {}",
+              array.data_type(),
+              Value::DATA_TYPE
+            )
             })?;
 
         Ok(dict_array.into_iter().map(|item| {
@@ -137,14 +137,12 @@ where
 
     fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
         let dict_array = array
-      .as_dictionary::<Key>()
-      .downcast_dict::<FixedSizeBinaryArray>()
-      .ok_or_else(|| {
-        exec_datafusion_err!(
-          "Failed to downcast dictionary array {} to expected dictionary fixed size binary values",
-          array.data_type()
-        )
-      })?;
+          .as_dictionary::<Key>()
+          .downcast_dict::<FixedSizeBinaryArray>()
+          .ok_or_else(|| exec_datafusion_err!(
+              "Failed to downcast dictionary array {} to expected dictionary fixed size binary values",
+              array.data_type()
+          ))?;
 
         Ok(dict_array.into_iter())
     }
@@ -171,10 +169,10 @@ where
             .downcast_dict::<GenericByteViewArray<Value>>()
             .ok_or_else(|| {
                 exec_datafusion_err!(
-          "Failed to downcast dictionary array {} to expected dictionary value {}",
-          array.data_type(),
-          Value::DATA_TYPE
-        )
+                "Failed to downcast dictionary array {} to expected dictionary value {}",
+                array.data_type(),
+                Value::DATA_TYPE
+            )
             })?;
 
         Ok(dict_array.into_iter().map(|item| {
