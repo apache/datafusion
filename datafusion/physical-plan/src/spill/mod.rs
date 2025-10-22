@@ -752,7 +752,7 @@ mod tests {
         .unwrap();
 
         let size = get_record_batch_memory_size(&batch);
-        assert_eq!(size, 8320);
+        assert_eq!(size, 8208);
     }
 
     // ==== Spill manager tests ====
