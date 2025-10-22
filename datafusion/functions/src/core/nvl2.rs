@@ -139,14 +139,7 @@ impl ScalarUDFImpl for NVL2Func {
         args: Vec<Expr>,
         _info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        if args.len() != 3 {
-            return plan_err!("nvl2 must have exactly three arguments");
-        }
-
-        let mut args = args.into_iter();
-        let test = args.next().unwrap();
-        let if_non_null = args.next().unwrap();
-        let if_null = args.next().unwrap();
+        let [test, if_non_null, if_null] = take_function_args(self.name(), args)?;
 
         let expr = CaseBuilder::new(
             None,
