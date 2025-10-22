@@ -45,7 +45,6 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_expr_common::physical_expr::is_dynamic_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::PushedDown;
 use datafusion_physical_plan::filter_pushdown::{
@@ -738,12 +737,10 @@ impl FileSource for ParquetSource {
                         .collect_vec(),
                 ));
 
-                if is_dynamic_physical_expr(&filter)
-                    || can_expr_be_pushed_down_with_schemas(
-                        &filter,
-                        &schema_with_partition_cols,
-                    )
-                {
+                if can_expr_be_pushed_down_with_schemas(
+                    &filter,
+                    &schema_with_partition_cols,
+                ) {
                     PushedDownPredicate::supported(filter)
                 } else {
                     PushedDownPredicate::unsupported(filter)
