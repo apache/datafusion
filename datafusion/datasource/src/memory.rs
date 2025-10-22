@@ -21,6 +21,7 @@ use std::collections::BinaryHeap;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Deref;
+use std::slice::from_ref;
 use std::sync::Arc;
 
 use crate::sink::DataSink;
@@ -197,7 +198,7 @@ impl DataSource for MemorySourceConfig {
             // Compute statistics for a specific partition
             if let Some(batches) = self.partitions.get(partition) {
                 Ok(common::compute_record_batch_statistics(
-                    &[batches.clone()],
+                    from_ref(&batches),
                     &self.schema,
                     self.projection.clone(),
                 ))
