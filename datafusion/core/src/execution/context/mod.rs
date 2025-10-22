@@ -64,7 +64,7 @@ use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::LiteralValue;
+use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
@@ -1266,11 +1266,11 @@ impl SessionContext {
         })?;
 
         // Only allow literals as parameters for now.
-        let mut params: Vec<LiteralValue> = parameters
+        let mut params: Vec<ScalarAndMetadata> = parameters
             .into_iter()
             .map(|e| match e {
                 Expr::Literal(scalar, metadata) => {
-                    Ok(LiteralValue::new(scalar, metadata))
+                    Ok(ScalarAndMetadata::new(scalar, metadata))
                 }
                 _ => not_impl_err!("Unsupported parameter type: {}", e),
             })

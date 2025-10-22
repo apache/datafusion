@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use super::*;
 use datafusion::assert_batches_eq;
-use datafusion_common::{metadata::LiteralValue, ParamValues, ScalarValue};
+use datafusion_common::{metadata::ScalarAndMetadata, ParamValues, ScalarValue};
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -332,11 +332,11 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
 
     let df_with_params_replaced = df
         .with_param_values(ParamValues::List(vec![
-            LiteralValue::new(
+            ScalarAndMetadata::new(
                 ScalarValue::UInt32(Some(1)),
                 Some(metadata1.clone().into()),
             ),
-            LiteralValue::new(
+            ScalarAndMetadata::new(
                 ScalarValue::Utf8(Some("two".to_string())),
                 Some(metadata2.clone().into()),
             ),

@@ -19,7 +19,7 @@ use crate::logical_plan;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{
     assert_contains,
-    metadata::{format_type_and_metadata, LiteralValue},
+    metadata::{format_type_and_metadata, ScalarAndMetadata},
     ParamValues, ScalarValue,
 };
 use datafusion_expr::{LogicalPlan, Prepare, Statement};
@@ -58,7 +58,7 @@ impl ParameterTest<'_> {
 pub struct ParameterTestWithMetadata<'a> {
     pub sql: &'a str,
     pub expected_types: Vec<(&'a str, Option<FieldRef>)>,
-    pub param_values: Vec<LiteralValue>,
+    pub param_values: Vec<ScalarAndMetadata>,
 }
 
 impl ParameterTestWithMetadata<'_> {
@@ -754,8 +754,8 @@ fn test_update_infer_with_metadata() {
         ("$2", Some(uuid_field.clone().with_name("id").into())),
     ];
     let param_values = vec![
-        LiteralValue::new(ScalarValue::from("Turing"), None),
-        LiteralValue::new(
+        ScalarAndMetadata::new(ScalarValue::from("Turing"), None),
+        ScalarAndMetadata::new(
             ScalarValue::FixedSizeBinary(16, Some(uuid_bytes)),
             Some(uuid_field.metadata().into()),
         ),
@@ -827,12 +827,12 @@ fn test_insert_infer_with_metadata() {
         ),
     ];
     let param_values = vec![
-        LiteralValue::new(
+        ScalarAndMetadata::new(
             ScalarValue::FixedSizeBinary(16, Some(uuid_bytes)),
             Some(uuid_field.metadata().into()),
         ),
-        LiteralValue::new(ScalarValue::from("Alan"), None),
-        LiteralValue::new(ScalarValue::from("Turing"), None),
+        ScalarAndMetadata::new(ScalarValue::from("Alan"), None),
+        ScalarAndMetadata::new(ScalarValue::from("Turing"), None),
     ];
 
     // Check a normal insert
