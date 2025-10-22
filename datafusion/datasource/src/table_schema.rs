@@ -127,31 +127,12 @@ impl TableSchema {
     }
 
     /// Set the table partition columns and rebuild the table schema.
-    ///
-    /// This is a convenience method for constructing a TableSchema with builder-style syntax.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use std::sync::Arc;
-    /// # use arrow::datatypes::{Schema, Field, DataType};
-    /// # use datafusion_datasource::TableSchema;
-    /// let file_schema = Arc::new(Schema::new(vec![
-    ///     Field::new("user_id", DataType::Int64, false),
-    /// ]));
-    ///
-    /// let table_schema = TableSchema::from_file_schema(file_schema)
-    ///     .with_table_partition_cols(vec![
-    ///         Arc::new(Field::new("date", DataType::Utf8, false)),
-    ///     ]);
-    ///
-    /// assert_eq!(table_schema.table_schema().fields().len(), 2);
-    /// ```
     pub fn with_table_partition_cols(
-        self,
+        mut self,
         table_partition_cols: Vec<FieldRef>,
     ) -> TableSchema {
-        Self::new(self.file_schema, table_partition_cols)
+        self.table_partition_cols = table_partition_cols;
+        self
     }
 
     /// Get the file schema (without partition columns).

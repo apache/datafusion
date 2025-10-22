@@ -155,10 +155,10 @@ pub struct FileScanConfig {
     pub object_store_url: ObjectStoreUrl,
     /// Schema information including the file schema, table partition columns,
     /// and the combined table schema.
-    /// 
+    ///
     /// The table schema (file schema + partition columns) is the schema exposed
     /// upstream of [`FileScanConfig`] (e.g. in [`DataSourceExec`]).
-    /// 
+    ///
     /// See [`TableSchema`] for more information.
     ///
     /// [`DataSourceExec`]: crate::source::DataSourceExec
