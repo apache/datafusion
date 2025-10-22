@@ -1079,6 +1079,26 @@ impl SessionContext {
         } else {
             let mut state = self.state.write();
             state.config_mut().options_mut().set(&variable, &value)?;
+
+            // Re-initialize any UDFs that depend on configuration
+            // This allows both built-in and custom functions to respond to configuration changes
+            let config_options = state.config().options();
+
+            // Collect updated UDFs in a separate vector
+            let udfs_to_update: Vec<_> = state
+                .scalar_functions()
+                .values()
+                .filter_map(|udf| {
+                    udf.inner()
+                        .with_updated_config(config_options)
+                        .map(Arc::new)
+                })
+                .collect();
+
+            for udf in udfs_to_update {
+                state.register_udf(udf)?;
+            }
+
             drop(state);
         }
 
