@@ -611,7 +611,8 @@ impl DataSource for FileScanConfig {
                             if idx < self.file_schema().fields().len() {
                                 stat.column_statistics[idx].clone()
                             } else {
-                                // TODO provide accurate stat for partition column (#1186)
+                                // TODO provide accurate stat for partition column
+                                // See https://github.com/apache/datafusion/issues/1186
                                 ColumnStatistics::new_unknown()
                             }
                         })
