@@ -1278,7 +1278,16 @@ impl Stream for RepartitionStream {
                 Poll::Pending => {
                     // No spilled data available right now
                     if self.all_inputs_finished {
-                        // All inputs finished, wait for spill stream to have more data or finish
+                        // All inputs finished, verify pool is finalized before waiting
+                        // If not finalized, we may hang indefinitely
+                        if !self.spill_pool.lock().is_finalized() {
+                            return Poll::Ready(Some(Err(
+                                datafusion_common::internal_err!(
+                                "Spill pool not finalized despite all inputs finishing"
+                            ),
+                            )));
+                        }
+                        // Pool is finalized, wait for spill stream to have more data or finish
                         return Poll::Pending;
                     }
                     // Otherwise check the channel
@@ -1325,7 +1334,9 @@ impl Stream for RepartitionStream {
                         // Flush and finalize the SpillPool
                         {
                             let mut pool = self.spill_pool.lock();
-                            pool.flush().ok();
+                            if let Err(e) = pool.flush() {
+                                return Poll::Ready(Some(Err(e)));
+                            }
                             pool.finalize();
                         } // Drop the lock before continuing
                         self.all_inputs_finished = true;
@@ -1411,7 +1422,7 @@ impl Stream for PerPartitionStream {
 
             // If input is finished, don't poll channel anymore
             if self.input_finished {
-                continue;
+                return Poll::Pending;
             }
 
             // Try to get next item from channel
@@ -1446,7 +1457,9 @@ impl Stream for PerPartitionStream {
                     // Flush and finalize the SpillPool
                     {
                         let mut pool = self.spill_pool.lock();
-                        pool.flush().ok();
+                        if let Err(e) = pool.flush() {
+                            return Poll::Ready(Some(Err(e)));
+                        }
                         pool.finalize();
                     } // Drop the lock before continuing
                     self.input_finished = true;

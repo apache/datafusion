@@ -72,7 +72,7 @@ struct SpillFile {
 }
 
 impl SpillFile {
-    fn new(file: RefCountedTempFile, _total_batches: usize, _total_size: usize) -> Self {
+    fn new(file: RefCountedTempFile) -> Self {
         Self { file }
     }
 }
@@ -255,12 +255,8 @@ impl SpillPool {
             let finished_file = file.finish()?;
 
             if let Some(temp_file) = finished_file {
-                // Get actual file size
-                let actual_size = temp_file.current_disk_usage() as usize;
-
                 // Create SpillFile and add to queue
-                let spill_file =
-                    SpillFile::new(temp_file, self.current_batch_count, actual_size);
+                let spill_file = SpillFile::new(temp_file);
                 self.files.push_back(spill_file);
             }
 
