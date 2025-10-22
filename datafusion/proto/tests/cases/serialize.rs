@@ -139,7 +139,7 @@ fn roundtrip_qualified_alias() {
 
 #[test]
 fn roundtrip_placeholder_with_metadata() {
-    let expr = Expr::Placeholder(Placeholder::new_with_metadata(
+    let expr = Expr::Placeholder(Placeholder::new_with_field(
         "placeholder_id".to_string(),
         Some(
             Field::new("", DataType::Utf8, false)

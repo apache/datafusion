@@ -32,7 +32,6 @@ use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
-use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -45,6 +44,9 @@ use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     RenameSelectItem, ReplaceSelectElement,
 };
+
+// Moved in 51.0.0 to datafusion_common
+pub use datafusion_common::metadata::FieldMetadata;
 
 // This mirrors sqlparser::ast::NullTreatment but we need our own variant
 // for when the sql feature is disabled.
@@ -1147,6 +1149,7 @@ pub struct Placeholder {
 
 impl Placeholder {
     /// Create a new Placeholder expression
+    #[deprecated(since = "51.0.0", note = "Use new_with_field instead")]
     pub fn new(id: String, data_type: Option<DataType>) -> Self {
         Self {
             id,
@@ -1155,7 +1158,7 @@ impl Placeholder {
     }
 
     /// Create a new Placeholder expression from a Field
-    pub fn new_with_metadata(id: String, field: Option<FieldRef>) -> Self {
+    pub fn new_with_field(id: String, field: Option<FieldRef>) -> Self {
         Self { id, field }
     }
 }

@@ -35,7 +35,7 @@ impl ParamValues {
     ///
     /// Use [`ParamValues::verify_fields`] to ensure field metadata is considered when
     /// computing type equality.
-    #[deprecated]
+    #[deprecated(since = "51.0.0", note = "Use verifiy_fields instead")]
     pub fn verify(&self, expect: &[DataType]) -> Result<()> {
         // make dummy Fields
         let expect = expect

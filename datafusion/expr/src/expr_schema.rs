@@ -924,7 +924,7 @@ mod tests {
         placeholder_meta.insert("bar".to_string(), "buzz".to_string());
         let placeholder_meta = FieldMetadata::from(placeholder_meta);
 
-        let expr = Expr::Placeholder(Placeholder::new_with_metadata(
+        let expr = Expr::Placeholder(Placeholder::new_with_field(
             "".to_string(),
             Some(
                 Field::new("", DataType::Utf8, true)
@@ -947,7 +947,7 @@ mod tests {
         assert_eq!(placeholder_meta, expr_alias.metadata(&schema).unwrap());
 
         // Non-nullable placeholder field should remain non-nullable
-        let expr = Expr::Placeholder(Placeholder::new_with_metadata(
+        let expr = Expr::Placeholder(Placeholder::new_with_field(
             "".to_string(),
             Some(Field::new("", DataType::Utf8, false).into()),
         ));

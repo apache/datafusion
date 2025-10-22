@@ -635,12 +635,15 @@ pub fn parse_expr(
             nullable,
             metadata,
         }) => match data_type {
-            None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
+            None => Ok(Expr::Placeholder(Placeholder::new_with_field(
+                id.clone(),
+                None,
+            ))),
             Some(data_type) => {
                 let field =
                     Field::new("", data_type.try_into()?, nullable.unwrap_or(true))
                         .with_metadata(metadata.clone());
-                Ok(Expr::Placeholder(Placeholder::new_with_metadata(
+                Ok(Expr::Placeholder(Placeholder::new_with_field(
                     id.clone(),
                     Some(field.into()),
                 )))

@@ -625,9 +625,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Array(ArrayElemTypeDef::None) => {
                 not_impl_err!("Arrays with unspecified type is not supported")
             }
-            other => {
-                Ok(Field::new("", self.convert_simple_data_type(other)?, true).into())
-            }
+            other => Ok(self
+                .convert_simple_data_type(other)?
+                .into_nullable_field_ref()),
         }
     }
 
