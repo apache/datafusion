@@ -98,9 +98,9 @@ struct PartitionChannels {
     rx: InputPartitionsToCurrentPartitionReceiver,
     /// Memory reservation for this output partition
     reservation: SharedMemoryReservation,
-    /// SpillPool for batched spilling with file handle reuse (FIFO semantics)
-    /// Wrapped in Arc so it can be shared between input tasks and output streams
-    spill_pool: Arc<Mutex<SpillPool>>,
+    /// SpillPools for batched spilling - one per input partition (FIFO semantics)
+    /// Each (input, output) pair gets its own SpillPool to maintain proper ordering
+    spill_pools: Vec<Arc<Mutex<SpillPool>>>,
     /// SpillManager for creating streams from spill files
     spill_manager: Arc<SpillManager>,
 }
@@ -251,14 +251,23 @@ impl RepartitionExecState {
                 input.schema(),
             ));
 
-            // Create SpillPool with configured max file size
+            // Create one SpillPool per input partition for this output partition
+            // This ensures proper FIFO ordering within each (input, output) pair
             let max_file_size = context
                 .session_config()
                 .options()
                 .execution
                 .max_spill_file_size_bytes;
-            let spill_pool =
-                SpillPool::new(max_file_size, Arc::clone(&spill_manager), input.schema());
+            let spill_pools: Vec<_> = (0..num_input_partitions)
+                .map(|_| {
+                    let spill_pool = SpillPool::new(
+                        max_file_size,
+                        Arc::clone(&spill_manager),
+                        input.schema(),
+                    );
+                    Arc::new(Mutex::new(spill_pool))
+                })
+                .collect();
 
             channels.insert(
                 partition,
@@ -266,7 +275,7 @@ impl RepartitionExecState {
                     tx,
                     rx,
                     reservation,
-                    spill_pool: Arc::new(Mutex::new(spill_pool)),
+                    spill_pools,
                     spill_manager,
                 },
             );
@@ -285,7 +294,7 @@ impl RepartitionExecState {
                         OutputChannel {
                             sender: channels.tx[i].clone(),
                             reservation: Arc::clone(&channels.reservation),
-                            spill_pool: Arc::clone(&channels.spill_pool),
+                            spill_pool: Arc::clone(&channels.spill_pools[i]),
                         },
                     )
                 })
@@ -744,7 +753,7 @@ impl ExecutionPlan for RepartitionExec {
             let num_input_partitions = input.output_partitioning().partition_count();
 
             // lock scope
-            let (mut rx, reservation, spill_pool, spill_manager, abort_helper) = {
+            let (mut rx, reservation, spill_pools, spill_manager, abort_helper) = {
                 // lock mutexes
                 let mut state = state.lock();
                 let state = state.consume_input_streams(
@@ -761,7 +770,7 @@ impl ExecutionPlan for RepartitionExec {
                 let PartitionChannels {
                     rx,
                     reservation,
-                    spill_pool,
+                    spill_pools,
                     spill_manager,
                     ..
                 } = state
@@ -772,7 +781,7 @@ impl ExecutionPlan for RepartitionExec {
                 (
                     rx,
                     reservation,
-                    spill_pool,
+                    spill_pools,
                     spill_manager,
                     Arc::clone(&state.abort_helper),
                 )
@@ -784,10 +793,12 @@ impl ExecutionPlan for RepartitionExec {
 
             if preserve_order {
                 // Store streams from all the input partitions:
-                // All streams share the same SpillPool from PartitionChannels
+                // Each input partition gets its own SpillPool to maintain proper FIFO ordering
                 let input_streams = rx
                     .into_iter()
-                    .map(|receiver| {
+                    .enumerate()
+                    .map(|(idx, receiver)| {
+                        let spill_pool = Arc::clone(&spill_pools[idx]);
                         let spill_stream = SpillPool::reader(
                             Arc::clone(&spill_pool),
                             Arc::clone(&spill_manager),
@@ -798,7 +809,7 @@ impl ExecutionPlan for RepartitionExec {
                             receiver,
                             _drop_helper: Arc::clone(&abort_helper),
                             reservation: Arc::clone(&reservation),
-                            spill_pool: Arc::clone(&spill_pool),
+                            spill_pool,
                             spill_stream,
                             input_finished: false,
                         }) as SendableRecordBatchStream
@@ -822,6 +833,8 @@ impl ExecutionPlan for RepartitionExec {
                     .with_reservation(merge_reservation)
                     .build()
             } else {
+                // Non-preserve-order case: single input stream, so use the first SpillPool
+                let spill_pool = Arc::clone(&spill_pools[0]);
                 let spill_stream = SpillPool::reader(
                     Arc::clone(&spill_pool),
                     Arc::clone(&spill_manager),
