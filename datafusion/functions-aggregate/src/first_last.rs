@@ -810,6 +810,18 @@ impl Accumulator for TrivialFirstValueAccumulator {
         // Second index contains is_set flag.
         if !self.is_set {
             let flags = states[1].as_boolean();
+
+            // Check for null values in boolean flags - this should never happen
+            if flags
+                .nulls()
+                .map(|nulls| nulls.null_count() > 0)
+                .unwrap_or_default()
+            {
+                return Err(DataFusionError::Internal(
+                    "first_value: is_set flags contain nulls".to_string(),
+                ));
+            }
+
             let filtered_states =
                 filter_states_according_to_is_set(&states[0..1], flags)?;
             if let Some(first) = filtered_states.first() {
