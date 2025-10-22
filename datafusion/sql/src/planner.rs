@@ -605,17 +605,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 let inner_data_type = self.convert_data_type_to_field(inner_sql_type)?;
-
-                // Lists are allowed to have an arbitrarily named field;
-                // however, a name other than 'item' will cause it to fail an
-                // == check against a more idiomatically created list in
-                // arrow-rs which causes issues. We use the low-level
-                // constructor here to preserve extension metadata from the
-                // child type.
                 Ok(Field::new(
                     "",
                     DataType::List(
-                        inner_data_type.as_ref().clone().with_name("item").into(),
+                        inner_data_type
+                            .as_ref()
+                            .clone()
+                            .with_name(Field::LIST_FIELD_DEFAULT_NAME)
+                            .into(),
                     ),
                     true,
                 )
@@ -630,7 +627,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(Field::new(
                         "",
                         DataType::FixedSizeList(
-                            inner_data_type.as_ref().clone().with_name("item").into(),
+                            inner_data_type
+                                .as_ref()
+                                .clone()
+                                .with_name(Field::LIST_FIELD_DEFAULT_NAME)
+                                .into(),
                             *array_size as i32,
                         ),
                         true,
@@ -640,7 +641,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(Field::new(
                         "",
                         DataType::List(
-                            inner_data_type.as_ref().clone().with_name("item").into(),
+                            inner_data_type
+                                .as_ref()
+                                .clone()
+                                .with_name(Field::LIST_FIELD_DEFAULT_NAME)
+                                .into(),
                         ),
                         true,
                     )
