@@ -1788,6 +1788,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
+            LogicalPlan::LateralTableFunction(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for LateralTableFunction",
+            )),
         }
     }
 }

@@ -291,6 +291,10 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// Table function invocation with arguments that reference outer query columns.
+    /// Used to implement LATERAL table functions where arguments cannot be evaluated
+    /// at planning time because they depend on runtime row values.
+    LateralTableFunction(LateralTableFunction),
 }
 
 impl Default for LogicalPlan {
@@ -355,6 +359,9 @@ impl LogicalPlan {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
             }
+            LogicalPlan::LateralTableFunction(LateralTableFunction {
+                schema, ..
+            }) => schema,
         }
     }
 
@@ -477,6 +484,9 @@ impl LogicalPlan {
                 recursive_term,
                 ..
             }) => vec![static_term, recursive_term],
+            LogicalPlan::LateralTableFunction(LateralTableFunction { input, .. }) => {
+                vec![input]
+            }
             LogicalPlan::Statement(stmt) => stmt.inputs(),
             // plans without inputs
             LogicalPlan::TableScan { .. }
@@ -585,6 +595,9 @@ impl LogicalPlan {
                     .map_or(Ok(None), |v| v.map(Some))
             }
             LogicalPlan::Subquery(_) => Ok(None),
+            LogicalPlan::LateralTableFunction(lateral) => Ok(Some(Expr::Column(
+                Column::from(lateral.schema.qualified_field(0)),
+            ))),
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
@@ -737,6 +750,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Distinct(distinct))
             }
             LogicalPlan::RecursiveQuery(_) => Ok(self),
+            LogicalPlan::LateralTableFunction(_) => Ok(self),
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
@@ -1133,6 +1147,22 @@ impl LogicalPlan {
                 self.assert_no_inputs(inputs)?;
                 Ok(self.clone())
             }
+            LogicalPlan::LateralTableFunction(LateralTableFunction {
+                function_name,
+                args: _,
+                schema,
+                table_function_schema,
+                ..
+            }) => {
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::LateralTableFunction(LateralTableFunction {
+                    input: Arc::new(input),
+                    function_name: function_name.clone(),
+                    args: expr,
+                    schema: Arc::clone(schema),
+                    table_function_schema: Arc::clone(table_function_schema),
+                }))
+            }
             LogicalPlan::Unnest(Unnest {
                 exec_columns: columns,
                 options,
@@ -1372,6 +1402,7 @@ impl LogicalPlan {
             ) => input.max_rows(),
             LogicalPlan::Values(v) => Some(v.values.len()),
             LogicalPlan::Unnest(_) => None,
+            LogicalPlan::LateralTableFunction(_) => None,
             LogicalPlan::Ddl(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
@@ -1731,6 +1762,16 @@ impl LogicalPlan {
                         is_distinct, ..
                     }) => {
                         write!(f, "RecursiveQuery: is_distinct={is_distinct}")
+                    }
+                    LogicalPlan::LateralTableFunction(LateralTableFunction {
+                        ref function_name,
+                        ref args,
+                        ..
+                    }) => {
+                        write!(f, "LateralTableFunction: {}({})",
+                            function_name,
+                            expr_vec_fmt!(args)
+                        )
                     }
                     LogicalPlan::Values(Values { ref values, .. }) => {
                         let str_values: Vec<_> = values
@@ -2101,6 +2142,44 @@ pub struct RecursiveQuery {
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
+}
+
+/// Table function call with arguments that reference outer query columns.
+/// Used in LATERAL joins where table function arguments depend on values
+/// from the outer query that are only available at execution time.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct LateralTableFunction {
+    /// Input from outer query
+    pub input: Arc<LogicalPlan>,
+    /// Name of the table function
+    pub function_name: String,
+    /// Arguments to the table function (may contain OuterReferenceColumn)
+    pub args: Vec<Expr>,
+    /// Complete output schema (input columns + table function columns)
+    pub schema: DFSchemaRef,
+    /// Table function output schema only (excludes input columns)
+    pub table_function_schema: DFSchemaRef,
+}
+
+impl Debug for LateralTableFunction {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("LateralTableFunction")
+            .field("function_name", &self.function_name)
+            .field("args", &self.args)
+            .field("schema", &self.schema)
+            .finish()
+    }
+}
+
+impl PartialOrd for LateralTableFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // Compare by function name and args, skip schema comparison
+        match self.function_name.partial_cmp(&other.function_name) {
+            Some(Ordering::Equal) => {}
+            other => return other,
+        }
+        self.args.partial_cmp(&other.args)
+    }
 }
 
 /// Values expression. See

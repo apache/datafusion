@@ -1,0 +1,162 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for LATERAL table functions
+# LATERAL allows table-valued functions to reference columns from outer queries
+
+####
+# Setup test data
+####
+
+statement ok
+CREATE TABLE orders(order_id BIGINT, quantity BIGINT, customer_id BIGINT) AS VALUES
+(1, 3, 100),
+(2, 2, 101),
+(3, 5, 100),
+(4, 1, 102);
+
+####
+# Basic LATERAL tests with generate_series
+####
+
+# Basic LATERAL with generate_series
+query III rowsort
+SELECT order_id, quantity, s.value
+FROM orders o
+CROSS JOIN LATERAL generate_series(1, o.quantity) AS s(value);
+----
+1 3 1
+1 3 2
+1 3 3
+2 2 1
+2 2 2
+3 5 1
+3 5 2
+3 5 3
+3 5 4
+3 5 5
+4 1 1
+
+# LATERAL with WHERE clause on outer table
+query III rowsort
+SELECT order_id, quantity, s.value
+FROM orders o
+CROSS JOIN LATERAL generate_series(1, o.quantity) AS s(value)
+WHERE o.customer_id = 100;
+----
+1 3 1
+1 3 2
+1 3 3
+3 5 1
+3 5 2
+3 5 3
+3 5 4
+3 5 5
+
+# LATERAL with range function (exclusive end)
+query III rowsort
+SELECT order_id, quantity, s.value
+FROM orders o
+CROSS JOIN LATERAL range(0, o.quantity) AS s(value);
+----
+1 3 0
+1 3 1
+1 3 2
+2 2 0
+2 2 1
+3 5 0
+3 5 1
+3 5 2
+3 5 3
+3 5 4
+4 1 0
+
+# LATERAL with aggregation
+query II
+SELECT customer_id, SUM(s.value) as total
+FROM orders o
+CROSS JOIN LATERAL generate_series(1, o.quantity) AS s(value)
+GROUP BY customer_id
+ORDER BY customer_id;
+----
+100 21
+101 3
+102 1
+
+# LATERAL with multiple outer references
+statement ok
+CREATE TABLE products(product_id BIGINT, min_qty BIGINT, max_qty BIGINT) AS VALUES
+(1, 1, 3),
+(2, 2, 4);
+
+query III rowsort
+SELECT product_id, min_qty, s.value
+FROM products p
+CROSS JOIN LATERAL generate_series(p.min_qty, p.max_qty) AS s(value);
+----
+1 1 1
+1 1 2
+1 1 3
+2 2 2
+2 2 3
+2 2 4
+
+# LATERAL with projected columns only
+query I rowsort
+SELECT s.value
+FROM orders o
+CROSS JOIN LATERAL generate_series(1, o.quantity) AS s(value)
+WHERE order_id = 2;
+----
+1
+2
+
+# Multiple LATERAL joins - sequential application
+query IIII rowsort
+SELECT o1.order_id, o1.quantity, s1.value as series1, s2.value as series2
+FROM orders o1
+CROSS JOIN LATERAL generate_series(1, o1.quantity) AS s1(value)
+CROSS JOIN LATERAL generate_series(1, s1.value) AS s2(value)
+WHERE o1.order_id = 2;
+----
+2 2 1 1
+2 2 2 1
+2 2 2 2
+
+# LATERAL with ORDER BY
+query III
+SELECT order_id, quantity, s.value
+FROM orders o
+CROSS JOIN LATERAL generate_series(1, o.quantity) AS s(value)
+ORDER BY order_id, s.value
+LIMIT 5;
+----
+1 3 1
+1 3 2
+1 3 3
+2 2 1
+2 2 2
+
+####
+# Cleanup
+####
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE products;

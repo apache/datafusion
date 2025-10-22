@@ -40,9 +40,9 @@
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
     Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
-    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    LateralTableFunction, Limit, LogicalPlan, Partitioning, Prepare, Projection,
+    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan,
+    Union, Unnest, UserDefinedLogicalNode, Values, Window,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -337,6 +337,21 @@ impl TreeNode for LogicalPlan {
                     })
                 },
             ),
+            LogicalPlan::LateralTableFunction(LateralTableFunction {
+                input,
+                function_name,
+                args,
+                schema,
+                table_function_schema,
+            }) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::LateralTableFunction(LateralTableFunction {
+                    input,
+                    function_name,
+                    args,
+                    schema,
+                    table_function_schema,
+                })
+            }),
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Prepare(p) => p
                     .input
@@ -454,6 +469,9 @@ impl LogicalPlan {
             })) => (on_expr, select_expr, sort_expr).apply_ref_elements(f),
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
                 (skip, fetch).apply_ref_elements(f)
+            }
+            LogicalPlan::LateralTableFunction(LateralTableFunction { args, .. }) => {
+                args.apply_elements(f)
             }
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Execute(Execute { parameters, .. }) => {
@@ -631,6 +649,21 @@ impl LogicalPlan {
                     LogicalPlan::Limit(Limit { skip, fetch, input })
                 })
             }
+            LogicalPlan::LateralTableFunction(LateralTableFunction {
+                input,
+                function_name,
+                args,
+                schema,
+                table_function_schema,
+            }) => args.map_elements(f)?.update_data(|args| {
+                LogicalPlan::LateralTableFunction(LateralTableFunction {
+                    input,
+                    function_name,
+                    args,
+                    schema,
+                    table_function_schema,
+                })
+            }),
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Execute(e) => {
                     e.parameters.map_elements(f)?.update_data(|parameters| {

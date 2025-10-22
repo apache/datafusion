@@ -22,9 +22,9 @@ use std::fmt;
 
 use crate::{
     expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr,
-    Filter, Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery,
-    Repartition, Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan,
-    Unnest, Values, Window,
+    Filter, Join, LateralTableFunction, Limit, LogicalPlan, Partitioning, Projection,
+    RecursiveQuery, Repartition, Sort, Subquery, SubqueryAlias,
+    TableProviderFilterPushDown, TableScan, Unnest, Values, Window,
 };
 
 use crate::dml::CopyTo;
@@ -317,6 +317,17 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 json!({
                     "Node Type": "RecursiveQuery",
                     "Is Distinct": is_distinct,
+                })
+            }
+            LogicalPlan::LateralTableFunction(LateralTableFunction {
+                ref function_name,
+                ref args,
+                ..
+            }) => {
+                json!({
+                    "Node Type": "LateralTableFunction",
+                    "Function": function_name,
+                    "Args": expr_vec_fmt!(args)
                 })
             }
             LogicalPlan::Values(Values { ref values, .. }) => {

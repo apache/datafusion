@@ -27,6 +27,7 @@ use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::{source_as_provider, DefaultTableSource};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
+use crate::execution::lateral_table_function::LateralTableFunctionExec;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
@@ -65,8 +66,8 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::TableReference;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
-    ScalarValue,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
+    plan_err, DFSchema, ScalarValue,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
@@ -1359,6 +1360,43 @@ impl DefaultPhysicalPlanner {
                 return internal_err!(
                     "Unsupported logical plan: Analyze must be root of the plan"
                 )
+            }
+            LogicalPlan::LateralTableFunction(lateral_tf) => {
+                let input = children.one()?;
+
+                let physical_args = lateral_tf
+                    .args
+                    .iter()
+                    .map(|expr| {
+                        self.create_physical_expr(
+                            expr,
+                            lateral_tf.input.schema(),
+                            session_state,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let table_function = Arc::clone(
+                    session_state
+                        .table_functions()
+                        .get(&lateral_tf.function_name)
+                        .ok_or_else(|| {
+                            plan_datafusion_err!(
+                                "Table function '{}' not found",
+                                lateral_tf.function_name
+                            )
+                        })?,
+                );
+
+                Arc::new(LateralTableFunctionExec::new(
+                    input,
+                    lateral_tf.function_name.clone(),
+                    table_function,
+                    physical_args,
+                    Arc::clone(lateral_tf.schema.inner()),
+                    Arc::clone(lateral_tf.table_function_schema.inner()),
+                    Arc::new(session_state.clone()),
+                ))
             }
         };
         Ok(exec_node)
