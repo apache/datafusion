@@ -17,18 +17,23 @@
 
 //! [DataTypeExt] extension trait for converting DataTypes to Fields
 
-use crate::arrow::datatypes::{DataType, Field};
+use crate::arrow::datatypes::{DataType, Field, FieldRef};
 use std::sync::Arc;
 
 /// DataFusion extension methods for Arrow [`DataType`]
 pub trait DataTypeExt {
-    /// convert the type to field with nullable type and "" name
+    /// Convert the type to field with nullable type and "" name
+    ///
+    /// This is used to track the places where we convert a [`DataType`]
+    /// into a nameless field to interact with an API that is
+    /// capable of representing an extension type and/or nullability.
     fn into_nullable_field(self) -> Field;
 
-    /// convert the type to field ref with nullable type and "" name
-    fn into_nullable_field_ref(self) -> Arc<Field>;
-
-    //
+    /// Convert the type to field ref with nullable type and "" name
+    ///
+    /// Concise wrapper around [`DataTypeExt::into_nullable_field`] that
+    /// constructs a [`FieldRef`]
+    fn into_nullable_field_ref(self) -> FieldRef;
 }
 
 impl DataTypeExt for DataType {
@@ -36,7 +41,7 @@ impl DataTypeExt for DataType {
         Field::new("", self, true)
     }
 
-    fn into_nullable_field_ref(self) -> Arc<Field> {
+    fn into_nullable_field_ref(self) -> FieldRef {
         Arc::new(Field::new("", self, true))
     }
 }
@@ -49,6 +54,8 @@ pub trait FieldExt {
     /// Return a new Field representing this Field as the item type of a FixedSizeList
     fn into_fixed_size_list(self, list_size: i32) -> Self;
 
+    /// Create a field with the default list field name ("item")
+    ///
     /// Note that lists are allowed to have an arbitrarily named field;
     /// however, a name other than 'item' will cause it to fail an
     /// == check against a more idiomatically created list in
@@ -65,9 +72,10 @@ impl FieldExt for Field {
         DataType::FixedSizeList(self.into_list_item().into(), list_size)
             .into_nullable_field()
     }
+
     fn into_list_item(self) -> Self {
-        if self.name() != "item" {
-            self.with_name("item")
+        if self.name() != Field::LIST_FIELD_DEFAULT_NAME {
+            self.with_name(Field::LIST_FIELD_DEFAULT_NAME)
         } else {
             self
         }
@@ -86,9 +94,12 @@ impl FieldExt for Arc<Field> {
             .into_nullable_field()
             .into()
     }
+
     fn into_list_item(self) -> Self {
-        if self.name() != "item" {
-            Arc::unwrap_or_clone(self).with_name("item").into()
+        if self.name() != Field::LIST_FIELD_DEFAULT_NAME {
+            Arc::unwrap_or_clone(self)
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME)
+                .into()
         } else {
             self
         }
