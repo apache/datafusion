@@ -1281,11 +1281,10 @@ impl Stream for RepartitionStream {
                         // All inputs finished, verify pool is finalized before waiting
                         // If not finalized, we may hang indefinitely
                         if !self.spill_pool.lock().is_finalized() {
-                            return Poll::Ready(Some(Err(
-                                datafusion_common::internal_err!(
+                            return Poll::Ready(Some(Err(DataFusionError::Internal(
                                 "Spill pool not finalized despite all inputs finishing"
-                            ),
-                            )));
+                                    .to_string(),
+                            ))));
                         }
                         // Pool is finalized, wait for spill stream to have more data or finish
                         return Poll::Pending;
